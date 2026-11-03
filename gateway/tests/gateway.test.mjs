@@ -10,7 +10,7 @@ function fixture(){
  const sql=new DatabaseSync(':memory:');sql.exec(readFileSync('drizzle/0000_biome_gateway.sql','utf8'));
  const DB={prepare(query){let args=[];const stmt=sql.prepare(query);return {bind(...values){args=values;return this},async first(){return stmt.get(...args)},async run(){return stmt.run(...args)},async all(){return {results:stmt.all(...args)}}}}};
  const deviceKey='f'.repeat(64);
- const env={DB,BIOME_OAUTH_ORIGIN:base,BIOME_OWNER_EMAIL:'owner@test.invalid',BIOME_BRIDGE_PIN:sha(sha(deviceKey)+'\n')};
+ const env={DB,BIOME_RECEIVER_WRAP_KEY:Buffer.alloc(32,33).toString('base64'),BIOME_OAUTH_ORIGIN:base,BIOME_OWNER_EMAIL:'owner@test.invalid',BIOME_BRIDGE_PIN:sha(sha(deviceKey)+'\n')};
  const owner={'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@test.invalid'};
  const send=(path,body,headers={})=>gateway.fetch(new Request(base+path,{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)}),env);
  const rpc=(method,params={})=>({jsonrpc:'2.0',id:1,method,params});
@@ -24,7 +24,7 @@ test('external discovery challenges, native tools enforce owner, a device cannot
  assert.equal((await send('/api/mcp',rpc('tools/list'),{Authorization:'Bearer '+deviceKey})).status,401);
  assert.equal((await send('/bridge/next',{})).status,401);
  assert.equal((await send('/mcp',rpc('initialize'),{Origin:'https://untrusted.test'})).status,403);
- const list=await (await send('/mcp',rpc('tools/list'))).json();assert.equal(list.result.tools.length,4);sql.close();
+ const list=await (await send('/mcp',rpc('tools/list'))).json();assert.deepEqual(list.result.tools.map(t=>t.name),['biome_status','biome_discover','biome_work_list','biome_invoke','biome_register_grok_webhook','biome_list_grok_webhooks','biome_unregister_grok_webhook']);sql.close();
 });
 test('controller claims and completes an authenticated OAuth call, same ID recovers a result',async()=>{
  const {sql,send,rpc,owner,deviceKey}=fixture();
@@ -63,5 +63,28 @@ test('MCP events are advertised on both handshakes; subscriptions and grant chec
  assert.equal((await (await send('/bridge/event-authorize',{owner:'owner',grant:null},h)).json()).allowed,true);
  assert.equal((await (await send('/bridge/event-authorize',{owner:'owner',grant:'revoked'},h)).json()).allowed,false);
  assert.equal((await (await send('/bridge/event-authorize',{owner:'impostor',grant:null},h)).json()).allowed,false);
+ sql.close();
+});
+
+test('Grok OAuth registration is sealed in transit storage and returned only to the authenticated Pi',async()=>{
+ const {sql,send,rpc,owner,deviceKey}=fixture();
+ await send('/mcp',rpc('tools/call',{name:'bad'}),owner);
+ const token='q'.repeat(43),hash=createHash('sha256').update(token).digest('base64url');
+ sql.prepare("INSERT INTO biome_oauth_tokens(hash,kind,grant_id,client_id,principal,resource,expires) VALUES(?,'access','grok-grant','client','owner',?,?)").run(hash,base+'/api/mcp',Date.now()/1000+60);
+ const args={receiver:'bot',url:'https://api2.cursor.sh/automations/webhook/opaque-example',key:'private-test-key',request_id:'register-1'};
+ const body=rpc('tools/call',{name:'biome_register_grok_webhook',arguments:args});
+ assert.equal((await send('/mcp',body)).status,403);
+ const pending=send('/api/mcp',body,{Authorization:'Bearer '+token});
+ let row;
+ for(let i=0;i<100&&!row;i++){await new Promise(r=>setTimeout(r,5));row=sql.prepare('SELECT request FROM bridge_jobs LIMIT 1').get();}
+ assert.ok(!row.request.includes(args.url)&&!row.request.includes(args.key));
+ assert.equal((await send('/bridge/next',{})).status,401);
+ const link={Authorization:'Bearer '+deviceKey};
+ const job=await (await send('/bridge/next',{},link)).json();
+ assert.equal(job.request.name,'grok_receiver_change');
+ assert.deepEqual(job.request.arguments,{owner:'owner',grant:'grok-grant',action:'register',args});
+ await send('/bridge/complete',{id:job.id,lease:job.lease,result:{content:[{type:'text',text:'registered'}]}},link);
+ assert.equal((await (await pending).json()).result.content[0].text,'registered');
+ assert.equal(sql.prepare('SELECT request FROM bridge_jobs').get().request,'{}');
  sql.close();
 });

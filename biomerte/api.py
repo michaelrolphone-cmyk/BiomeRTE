@@ -1,4 +1,5 @@
 """Runtime service directory and transaction-bound command dispatch."""
+import json
 import re
 from .store import Fault, digest, text, uid
 
@@ -139,6 +140,35 @@ def ack_message(tx, ctx, message):
         raise Fault('Other inbox', 403)
     msg['read'] = True
     return tx.put('messages', message, msg)
+
+
+@op('bus.event_page', 'topic:str after?:int limit?:int', False)
+def event_page(tx, ctx, topic, after=0, limit=32):
+    """Page a specific controller topic. scanned is the last inspected sequence."""
+    ident(topic)
+    if after < 0 or limit < 0:
+        raise Fault('Invalid event cursor')
+    high = tx.get('_meta', 'events', 0)
+    page = {'high': high, 'scanned': after, 'events': []}
+    for row in tx.db.execute("SELECT value FROM records WHERE kind='events' AND id>? ORDER BY id LIMIT ?",
+                             ('%020d' % after, min(limit, 64))):
+        event = json.loads(row[0])
+        page['scanned'] = event['seq']
+        if event['topic'] != topic:
+            continue
+        item = {'seq': event['seq'], 'id': event['id'], 'topic': topic}
+        if len(row[0].encode('utf-8')) <= 8192:
+            item['data'] = event['payload']
+        else:
+            item['data'] = {'payload_omitted': True}
+        page['events'].append(item)
+    return page
+
+
+@op('bus.event_get', 'sequence:int', False)
+def event_get(tx, ctx, sequence):
+    """Read the original controller event by its sequence in this realm."""
+    return tx.need('events', '%020d' % sequence)
 
 
 @op('bus.subscribe', 'name:str topic:str process?:str from_seq?:int')

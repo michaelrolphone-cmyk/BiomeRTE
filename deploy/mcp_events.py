@@ -109,10 +109,11 @@ def signed_post(send, url, sub_id, keys, event_id, event):
 
 
 class EventStore:
-    def __init__(self, path, feed, authorize, post=post_callback):
+    def __init__(self, path, feed, authorize, post=post_callback, topic_feed=None):
         self.db = sqlite3.connect(path, timeout=10)
         self.db.row_factory = sqlite3.Row
-        self.feed, self.authorize, self.post = feed, authorize, post
+        self.feed, self.authorize, self.post, self.topic_feed = feed, authorize, post, topic_feed
+        self.db.execute('CREATE TABLE IF NOT EXISTS receiver_receipts (id TEXT PRIMARY KEY, signature TEXT, result TEXT)')
         self.db.execute('''CREATE TABLE IF NOT EXISTS subscriptions (
           id TEXT PRIMARY KEY, owner TEXT, grant_id TEXT, url TEXT, args TEXT, key TEXT, old_key TEXT,
           rotate_until REAL, verified REAL, expires REAL, cursor INTEGER, failures INTEGER DEFAULT 0,
@@ -201,10 +202,14 @@ class EventStore:
                              (now,now)).fetchall()
         for sub in rows:
             args=json.loads(sub['args'])
-            events=self.feed(args['realm'],sub['cursor'],16)['events']
-            for item in events:
-                seq,data=item['seq'],item['data']
-                if args.get('workflow',data['workflow']) != data['workflow']:
+            grok = sub['id'].startswith('grok_')
+            topic = args.get('topic', EVENT)
+            page = (self.feed(args['realm'], sub['cursor'], 16) if topic == EVENT else
+                    self.topic_feed(args['realm'], topic, sub['cursor'], 32))
+            for item in page['events']:
+                seq, data = item['seq'], item['data']
+                if topic == EVENT and (item.get('target', 'chatgpt') != ('grok' if grok else 'chatgpt') or
+                                       args.get('workflow', data['workflow']) != data['workflow']):
                     self.advance(sub,seq)
                     continue
                 if not self.authorize(sub['owner'],sub['grant_id']):
@@ -215,20 +220,39 @@ class EventStore:
                 if not self.db.execute('SELECT 1 FROM subscriptions WHERE id=? AND generation=? AND expires>?',
                                        (sub['id'],sub['generation'],time.time())).fetchone():
                     break
-                eid='delegate_'+data['delegation_id']
-                event={'eventId':eid,'name':EVENT,'timestamp':item['timestamp'],'data':data,'cursor':str(seq)}
+                eid = 'delegate_' + data['delegation_id'] if topic == EVENT else item['id']
+                event = {'eventId':eid, 'name':topic, 'data':data, 'cursor':str(seq)}
+                if 'timestamp' in item:
+                    event['timestamp'] = item['timestamp']
+                if grok:
+                    event.update(realm=args['realm'], receiver=args['receiver'])
                 keys=[sub['key']]
                 if sub['old_key'] and sub['rotate_until']>time.time():
                     keys.append(sub['old_key'])
                 try:
-                    status,_=signed_post(self.post,sub['url'],sub['id'],keys,eid,event)
+                    if grok:
+                        from grok_receivers import send_grok
+                        status, _ = send_grok(self.post, sub, args, eid, event)
+                    else:
+                        status, _ = signed_post(self.post,sub['url'],sub['id'],keys,eid,event)
                 except (OSError, CallbackError, ValueError, http.client.HTTPException):
                     status=503
+                if grok and status in (401, 403, 404, 410):
+                    # An invalid key or retired endpoint needs re-registration. Preserve its cursor.
+                    with self.db:
+                        self.db.execute('UPDATE subscriptions SET next_try=?,last_error=? WHERE id=? AND generation=?',
+                                        (sub['expires'], 'receiver needs attention: HTTP '+str(status), sub['id'], sub['generation']))
+                    break
                 if status==410:
                     with self.db:
                         self.db.execute('DELETE FROM subscriptions WHERE id=? AND generation=?',(sub['id'],sub['generation']))
                     break
-                if 200<=status<300:
+                accepted = status == 200 if grok and args['auth_mode'] == 'bearer' else 200 <= status < 300
+                if accepted:
+                    if grok:
+                        with self.db:
+                            self.db.execute('UPDATE subscriptions SET verified=? WHERE id=? AND generation=?',
+                                            (time.time(),sub['id'],sub['generation']))
                     self.advance(sub,seq)
                     continue
                 attempt=sub['failures']+1
@@ -243,3 +267,8 @@ class EventStore:
                         self.db.execute('UPDATE subscriptions SET failures=?,next_try=?,last_error=? WHERE id=? AND generation=?',
                                         (attempt,time.time()+min(300,2**attempt),str(status),sub['id'],sub['generation']))
                 break
+            else:
+                # Advance over nonmatching controller topics without losing a pending retry.
+                scanned = page.get('scanned', sub['cursor'])
+                if scanned > sub['cursor'] and (not page['events'] or scanned > page['events'][-1]['seq']):
+                    self.advance(sub, scanned)

@@ -1,7 +1,8 @@
+import {grokAction,grokTools,sealGrokJob} from '../lib/grok.mjs';
 import {eventGrant,changeSubscription,delegationEvent} from '../lib/events.mjs';
 import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
-import {device,limitedJSON,reply,runTool,toolsList} from '../lib/bridge.mjs';
+import {device,limitedJSON,reply,runTool,toolsList,enqueue} from '../lib/bridge.mjs';
 
 const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 async function dispatch(req,env) {
@@ -28,7 +29,7 @@ async function dispatch(req,env) {
  if(method==='server/discover')return ok({resultType:'complete',supportedVersions:protocols,capabilities:{tools:{},events:{}}});
  if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{},events:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
  if(method==='ping')return ok({});
- if(method==='tools/list')return ok({tools:toolsList});
+ if(method==='tools/list')return ok({tools:[...toolsList,...grokTools]});
  if(method==='events/list')return ok({events:[delegationEvent]});
  if(method==='events/subscribe'||method==='events/unsubscribe'){
   const owner=bearerOwner||await ownerPrincipal(req,env);
@@ -37,7 +38,18 @@ async function dispatch(req,env) {
   return reply({jsonrpc:'2.0',id,...response});
  }
  if(method!=='tools/call')return reply({jsonrpc:'2.0',id,error:{code:-32601,message:'Unknown method'}});
- if(!external && !await ownerPrincipal(req,env))return reply({error:'Owner sign-in required'},403);
+ const owner=bearerOwner||await ownerPrincipal(req,env);
+ if(!owner)return reply({error:'Owner sign-in required'},403);
+ const action=grokAction(params.name);
+ if(action){
+  const grant=await eventGrant(req,env,external);
+  const key='event-grok-'+crypto.randomUUID();
+  const args=params.arguments??{};
+  if(typeof args!=='object'||Array.isArray(args)||JSON.stringify(args).length>12000)
+   return ok({isError:true,content:[{type:'text',text:'Invalid receiver parameters.'}]});
+  const sealed=await sealGrokJob(env,key,{owner,grant,action,args});
+  return ok(await enqueue(env,'sealed_grok_receiver',sealed,key));
+ }
  return ok(await runTool(env,params.name,params.arguments));
 }
 export default {async fetch(req,env){try{return await dispatch(req,env)}catch{return Response.json({error:'Controller gateway unavailable'},{status:503,headers:{'Cache-Control':'no-store'}})}}};

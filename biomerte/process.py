@@ -77,8 +77,8 @@ def validate_graph(g):
                                        n.get('operation') and n['operation'] not in INTERNAL):
             raise Fault('Service needs one contract or supported internal operation')
         if n['type'] == 'delegate':
-            if n.get('to') != 'chatgpt' or 'request' not in n:
-                raise Fault('A delegate node needs to=chatgpt and a request')
+            if n.get('to') not in ('chatgpt', 'grok') or 'request' not in n:
+                raise Fault('A delegate node needs a supported receiver and a request')
             schema(n.get('outputs', {}))
         if n['type'] == 'call':
             ident(n['process'])
@@ -314,15 +314,15 @@ def advance(tx, ctx, r, t, n, version):
                 context = ev(n.get('context', {}))
                 if not isinstance(context, dict) or len(json.dumps(context).encode('utf-8')) > 32000:
                     raise Fault('Delegation context must be an object of at most 32 kB')
-                w.update(to='chatgpt', question=request, context=context, workflow=r['name'],
+                w.update(to=n['to'], question=request, context=context, workflow=r['name'],
                          activity=t['at'], task=r['task'])
                 seq = tx.get('_meta', 'delegation_sequence', 0) + 1
                 data = {'delegation_id': wait_id, 'run_id': r['id'], 'workflow': r['name'],
                         'activity': t['at'], 'realm': ctx.scope}
-                tx.put('delegation_events', '%020d' % seq, {'seq': seq, 'data': data,
+                tx.put('delegation_events', '%020d' % seq, {'seq': seq, 'target': n['to'], 'data': data,
                        'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')})
                 tx.put('_meta', 'delegation_sequence', seq)
-                tx.emit('workflow.delegation.requested', data)
+                tx.emit('workflow.delegation.requested', dict(data, target=n['to']))
             t['wait'] = wait_id
             tx.put('waits', wait_id, w)
             tx.emit('wait.open', {'id': wait_id, 'run': r['id'], 'kind': kind})
@@ -485,7 +485,7 @@ def delegation_feed(tx, ctx, after=0, limit=16):
 def delegation(tx, key):
     w = tx.need('waits', key)
     if w['kind'] != 'delegate':
-        raise Fault('Not a ChatGPT delegation', 409)
+        raise Fault('Not a workflow delegation', 409)
     return w
 
 

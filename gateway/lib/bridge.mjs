@@ -1,3 +1,4 @@
+import {openGrokJob} from './grok.mjs';
 import {canDeliver} from './events.mjs';
 import {sameSecret} from './access.mjs';
 export const reply = (data, status=200) => Response.json(data, {status, headers:{'Cache-Control':'no-store'}});
@@ -39,7 +40,11 @@ export async function device(req, env, path) {
   const lease = crypto.randomUUID();
   const job = await db.prepare("UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=? WHERE id=(SELECT id FROM bridge_jobs WHERE deadline>=? AND (state='queued' OR (state='claimed' AND lease_until<?)) ORDER BY updated,id LIMIT 1) RETURNING id,request")
    .bind(lease,time+35,time,time,time).first();
-  return reply(job ? {id:job.id,lease,request:JSON.parse(job.request)} : {idle:true});
+  if (!job) return reply({idle:true});
+  let request=JSON.parse(job.request);
+  if (request.name==='sealed_grok_receiver')
+   request={name:'grok_receiver_change',arguments:await openGrokJob(env,job.id,request.arguments)};
+  return reply({id:job.id,lease,request});
  }
  if (path === '/bridge/complete') {
   const d = await limitedJSON(req,500000);

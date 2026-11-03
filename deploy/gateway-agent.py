@@ -69,10 +69,10 @@ def read_secret(path):
 
 
 def event_service(path, local, home, origin, token, site_access):
-    def feed(realm, after, limit):
+    def read_feed(realm, operation, arguments):
         with open(os.path.join(home, 'node.json')) as f:
             credential = json.load(f)['admin_token']
-        call = {'operation': 'delegation.feed', 'arguments': {'after': after, 'limit': limit}, 'realm': realm}
+        call = {'operation': operation, 'arguments': arguments, 'realm': realm}
         rpc = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'invoke', 'arguments': call}}
         result = fetch(local + '/mcp', rpc, credential)['result']
         if result.get('isError'):
@@ -82,7 +82,13 @@ def event_service(path, local, home, origin, token, site_access):
     def authorize(owner, grant):
         return fetch(origin + '/bridge/event-authorize', {'owner': owner, 'grant': grant}, token,
                      site_access=site_access)['allowed']
-    return EventStore(path, feed, authorize)
+    def feed(realm, after, limit):
+        return read_feed(realm, 'delegation.feed', {'after': after, 'limit': limit})
+
+    def topics(realm, topic, after, limit):
+        return read_feed(realm, 'bus.event_page', {'topic': topic, 'after': after, 'limit': limit})
+
+    return EventStore(path, feed, authorize, topic_feed=topics)
 
 
 def delivery_loop(factory):
@@ -149,7 +155,16 @@ def main():
                 time.sleep(4)
                 continue
             try:
-                if job['request']['name'] == 'mcp_event_change':
+                if job['request']['name'] == 'grok_receiver_change':
+                    from grok_receivers import mutate
+                    call = job['request']['arguments']
+                    try:
+                        value = mutate(events, call['action'], call['args'], call['owner'], call['grant'])
+                        result = {'content': [{'type': 'text', 'text': json.dumps(value)}]}
+                    except (ValueError, TypeError, KeyError):
+                        # Library exceptions can include the supplied URL or key.
+                        result = {'isError': True, 'content': [{'type':'text','text':'Invalid receiver settings, connection ownership or request ID.'}]}
+                elif job['request']['name'] == 'mcp_event_change':
                     result = event_change(events, job['request']['arguments'])
                 else:
                     with open(os.path.join(args.home, 'node.json')) as f:
