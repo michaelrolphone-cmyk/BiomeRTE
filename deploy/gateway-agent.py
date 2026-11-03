@@ -20,11 +20,13 @@ class NoRedirect(HTTPRedirectHandler):
 opener = build_opener(NoRedirect)
 
 
-def fetch(url, payload=None, token=None, timeout=18):
+def fetch(url, payload=None, token=None, timeout=18, site_access=None):
     data = None if payload is None else json.dumps(payload).encode('utf-8')
     headers = {'User-Agent': 'BiomeRTE-Controller-Link/1.0', 'Content-Type': 'application/json'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
+    if site_access:
+        headers['OAI-Sites-Authorization'] = 'Bearer ' + site_access
     req = Request(url, data=data, headers=headers)
     with opener.open(req, timeout=timeout) as res:
         body = res.read(470001)
@@ -82,10 +84,18 @@ def main():
         print(hashlib.sha256((first + '\n').encode('ascii')).hexdigest())
         return
     local = 'http://127.0.0.1:' + str(args.port)
+    site_access = None
+    access_file = os.path.join(os.path.dirname(args.key), 'site-access.json')
+    if os.path.exists(access_file):
+        with open(access_file) as f:
+            access = json.load(f)
+        if access.get('origin') != origin:
+            raise SystemExit('Private Site access belongs to a different origin')
+        site_access = access['token']
     pause = 2
     while True:
         try:
-            job = fetch(origin + '/bridge/next', {}, token)
+            job = fetch(origin + '/bridge/next', {}, token, site_access=site_access)
             pause = 2
             if job.get('idle'):
                 time.sleep(4)
@@ -96,7 +106,7 @@ def main():
             except Exception as exc:
                 result = {'isError': True, 'content': [{'type': 'text', 'text': 'Controller request failed: ' + str(exc)}]}
             try:
-                fetch(origin + '/bridge/complete', {'id': job['id'], 'lease': job['lease'], 'result': result}, token)
+                fetch(origin + '/bridge/complete', {'id': job['id'], 'lease': job['lease'], 'result': result}, token, site_access=site_access)
             except HTTPError as exc:
                 if exc.code != 409:
                     raise

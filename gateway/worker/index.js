@@ -1,0 +1,34 @@
+import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
+import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
+import {device,limitedJSON,reply,runTool,toolsList} from '../lib/bridge.mjs';
+
+const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
+async function dispatch(req,env) {
+ const url=new URL(req.url), path=url.pathname;
+ const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if (path.startsWith('/bridge/')) return device(req,env,path);
+ if (req.method==='GET' && ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/mcp','/.well-known/oauth-protected-resource/mcp'].includes(path)) return resourceMetadata(conf);
+ if (req.method==='GET' && path==='/.well-known/oauth-authorization-server') return serverMetadata(conf);
+ if (path.startsWith('/oauth/')) return oauth(req,conf,path.slice(7));
+ if (path==='/') return new Response('BiomeRTE controller MCP. Connect an OAuth client at /api/mcp. Manage authorized connections at /oauth/connections.',{headers:{'content-type':'text/plain','cache-control':'no-store'}});
+ if (!['/api/mcp','/mcp'].includes(path)) return reply({error:'Not found'},404);
+ const origin=req.headers.get('Origin');
+ if (origin && origin!==url.origin) return reply({error:'Untrusted origin'},403);
+ const external=path==='/api/mcp';
+ if(external && !await bearerPrincipal(req,conf)) return Response.json({error:'invalid_token'},{status:401,headers:{...privateHeaders,'WWW-Authenticate':challenge(conf)}});
+ if(req.method!=='POST') return new Response(null,{status:405,headers:{Allow:'POST'}});
+ let body;
+ try{body=await limitedJSON(req,125000)}catch{return reply({error:'Invalid JSON or oversized request'},400)}
+ if(!body || Array.isArray(body) || body.jsonrpc!=='2.0' || typeof body.method!=='string') return reply({jsonrpc:'2.0',id:null,error:{code:-32600,message:'Invalid request'}},400);
+ const {method,id,params={}}=body;
+ const ok=result=>reply({jsonrpc:'2.0',id,result});
+ if(method.startsWith('notifications/'))return new Response(null,{status:202});
+ if(method==='server/discover')return ok({supportedVersions:protocols,capabilities:{tools:{}}});
+ if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
+ if(method==='ping')return ok({});
+ if(method==='tools/list')return ok({tools:toolsList});
+ if(method!=='tools/call')return reply({jsonrpc:'2.0',id,error:{code:-32601,message:'Unknown method'}});
+ if(!external && !await ownerPrincipal(req,env))return reply({error:'Owner sign-in required'},403);
+ return ok(await runTool(env,params.name,params.arguments));
+}
+export default {async fetch(req,env){try{return await dispatch(req,env)}catch{return Response.json({error:'Controller gateway unavailable'},{status:503,headers:{'Cache-Control':'no-store'}})}}};

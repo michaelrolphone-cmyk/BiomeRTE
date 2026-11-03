@@ -31,3 +31,8 @@ Configure only the public verifier in the gateway's BIOME_BRIDGE_PIN setting.
 
 The same Python connector runs on macOS in an account with the controller,
 a private 64-hex-character link key and the configured HTTPS origin.
+
+For an owner-private Site, the agent can read a mode-0600 `site-access.json`
+beside its dedicated key. It contains the exact `origin` and that Site's
+platform service-access `token`. The agent sends the extra header only to that
+origin over HTTPS. Application-level device authentication is still required.
