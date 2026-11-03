@@ -47,7 +47,7 @@ def check_argv(argv, profile):
     return [exe] + argv[1:]
 
 
-def store_stream(path, remote):
+def store_stream(path, remote, chunk_bytes=256 * 1024):
     """Keep small replies readable and make every original byte retrievable."""
     whole = hashlib.sha256()
     chunks = []
@@ -55,7 +55,7 @@ def store_stream(path, remote):
     size = 0
     with open(path, 'rb') as stream:
         while True:
-            block = stream.read(256 * 1024)
+            block = stream.read(chunk_bytes)
             if not block:
                 break
             whole.update(block)

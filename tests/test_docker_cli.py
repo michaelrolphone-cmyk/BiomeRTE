@@ -59,6 +59,13 @@ class DockerCLI(unittest.TestCase):
         replay = self.call(argv=argv, stdin_chunks=stream['chunks'])
         self.assertEqual(replay['streams']['stdout'], stream)
 
+    def test_gateway_output_chunk_size(self):
+        self.config['chunk_bytes'] = 48 * 1024
+        out = self.call(argv=['-c', 'import sys; sys.stdout.buffer.write(b"x" * 100000)'])
+        stream = out['streams']['stdout']
+        self.assertEqual([c['size'] for c in stream['chunks']], [49152, 49152, 1696])
+        self.assertEqual(stream['total_bytes'], 100000)
+
     def test_invalid_input_cannot_launch(self):
         for args in [dict(argv=['bad\0arg']), dict(argv=[3]), dict(argv=[], cwd='/definitely/missing/pi-path'),
                      dict(argv=[], stdin='a', stdin_base64='b'), dict(argv=[], stdin_base64='!'),

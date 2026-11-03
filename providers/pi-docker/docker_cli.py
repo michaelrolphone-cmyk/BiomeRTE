@@ -153,7 +153,7 @@ def execute(cfg, args, remote):
         paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024)
         result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {}}
         for name, path in paths.items():
-            result[name], meta = store_stream(path, remote)
+            result[name], meta = store_stream(path, remote, cfg.get('chunk_bytes', 256 * 1024))
             meta.update(total_bytes=counts[name], truncated=counts[name] > meta['size'])
             result['streams'][name] = meta
         return result
