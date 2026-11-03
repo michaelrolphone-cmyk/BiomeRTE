@@ -34,7 +34,7 @@ The checked-in radio survey illustrates callable measurement, iteration, state a
 ./biome call routine.publish @examples/branching-survey.json
 ```
 
-A real receiver must offer these operations before the survey can finish. If no eligible provider exists, the process shows the unmet capability. The test suite uses a fixture receiver, including both capture and skip branches. `routine.learn` extracts successful provider commands from a run trace and replaces selected inputs with parameters. Edit the recipe to express intended conditions or loops. `routine.expose` publishes a pinned routine as a capability offer, so other callers use exactly the ordinary lease and invocation API.
+A real receiver must offer these operations before the survey can finish. If a contract or matching implementation is missing, the waiting activity links to a deduplicated construction task. When an implementation appears the same activity resumes. Temporary allocation conflicts wait for a resource without creating construction work. A try/catch block can recover from a failed subroutine while retaining successful readings. The composite example in `examples/survey-and-display.json` returns the survey and the display outcome separately. The test suite uses a fixture receiver, including both capture and skip branches. `routine.learn` extracts successful provider commands from a run trace and replaces selected inputs with parameters. Edit the recipe to express intended conditions or loops. `routine.expose` publishes a pinned routine as a capability offer, so other callers use exactly the ordinary lease and invocation API.
 
 ### Providers and agents
 

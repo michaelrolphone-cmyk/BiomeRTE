@@ -81,7 +81,7 @@ def validate_graph(g):
         pending.extend(targets(n))
         if 'on_error' in n:
             pending.append(n['on_error'])
-    if seen != set(nodes) or not any(n['type'] == 'end' for n in nodes.values()):
+    if seen != set(nodes) or not any(n['type'] in ('end', 'fail') for n in nodes.values()):
         raise Fault('Unreachable activity or missing end event')
 
 
@@ -113,23 +113,31 @@ def routine_graph(steps, inputs, outputs, result):
         nodes[key] = n
         return key
 
-    def sequence(items, after):
+    def sequence(items, after, handler=None):
         for item in reversed(items):
             item = dict(item)
+            if 'try' in item:
+                recovery = sequence(item['catch'], after, handler)
+                after = sequence(item['try'], after, recovery)
+                continue
             if 'if' in item:
-                yes = sequence(item.get('then', []), after)
-                no = sequence(item.get('else', []), after)
+                yes = sequence(item.get('then', []), after, handler)
+                no = sequence(item.get('else', []), after, handler)
                 after = add({'type': 'choose', 'cases': [
                             {'when': item['if'], 'to': yes}], 'default': no})
             elif 'each' in item:
                 key = add({'type': 'each', 'items': item['each'], 'as': item['as'], 'next': after})
-                nodes[key]['body'] = sequence(item['do'], key)
+                nodes[key]['body'] = sequence(item['do'], key, handler)
                 after = key
             else:
                 item['next'] = after
                 after = add(item)
+            if handler:
+                nodes[after]['on_error'] = handler
         return after
     start = sequence(steps, 'end')
+    if start != 'end' and not any('end' in targets(n) or n.get('on_error') == 'end' for n in nodes.values()):
+        del nodes['end']  # A routine may explicitly terminate with failure on every path.
     return {'nodes': nodes, 'start': start, 'inputs': inputs, 'outputs': outputs}
 
 
@@ -289,7 +297,7 @@ def advance(tx, ctx, r, t, n, version):
             return False
         del t['child']
         if child['state'] != 'completed':
-            raise Fault('Subroutine returned ' + child['state'])
+            raise Fault('Subroutine %s %s: %s' % (child['name'], child['state'], child['result'].get('error', 'no successful result')))
         result = child['result']
     elif kind in ('human', 'message'):
         if 'wait' not in t:
@@ -328,12 +336,17 @@ def advance(tx, ctx, r, t, n, version):
                     lease = providers.acquire(tx, ctx, r['task'] or r['id'], n['contract'],
                                               ev(n.get('resource', '')))
                 except Fault as e:
-                    if e.status == 409:
-                        from .extensions import prepare
-                        prepare(tx, ctx, n['contract'], ev(n.get('resource', '')))
-                        if t.get('blocked') == str(e):
+                    if e.status in (404, 409):
+                        from .extensions import prepare, demand
+                        resource = ev(n.get('resource', ''))
+                        status = prepare(tx, ctx, n['contract'], resource)
+                        waiting = str(e)
+                        if status['state'] == 'missing':
+                            need = demand(tx, ctx, n['contract'], resource, r['id'], t['at'])
+                            waiting = 'Waiting for capability work ' + need['id']
+                        if t.get('blocked') == waiting:
                             return False
-                        t['blocked'] = str(e)
+                        t['blocked'] = waiting
                         return True
                     raise
                 a = providers.dispatch(tx, ctx, lease['id'], inputs, uid())

@@ -161,7 +161,7 @@ def prepare(tx, ctx, contract, resource=''):
         tx.put('activations', a['id'], a)
         tx.emit('offer.activation_requested', a)
         return a
-    return {'state': 'unmet', 'contract': contract, 'resource': resource}
+    return {'state': 'unmet' if offers else 'missing', 'contract': contract, 'resource': resource}
 
 
 @op('cap.configured', 'provider:str activation:str success:bool evidence:obj')
@@ -180,3 +180,20 @@ def configured(tx, ctx, provider, activation, success, evidence):
     tx.put('activations', activation, a)
     tx.emit('offer.configured', {'id': activation, 'state': a['state']})
     return a
+
+
+def demand(tx, ctx, contract, resource, requester, activity):
+    """Create one actionable construction task for a missing contract/resource pair."""
+    from .work import create
+    key = 'cap-need-' + digest([contract, resource])[:24]
+    need = tx.get('demands', key)
+    reference = {'run': requester, 'activity': activity}
+    if need is None:
+        create(tx, ctx, 'task', 'Supply ' + contract, id=key,
+               criteria=['verified capability operation'], context=[reference])
+        need = {'id': key, 'contract': contract, 'resource': resource, 'requests': []}
+    if reference not in need['requests']:
+        need['requests'].append(reference)
+        tx.put('demands', key, need)
+        tx.emit('capability.needed', {'task': key, 'run': requester, 'contract': contract})
+    return need

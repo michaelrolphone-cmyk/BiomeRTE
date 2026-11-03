@@ -88,7 +88,8 @@ class Operations(unittest.TestCase):
                 r = self.call('process.get', {'run': r['id']})
                 if r['state'] != 'running':
                     break
-            self.assertEqual(r['result'], {'frequency': 102, 'peak': -47, 'capture': expected})
+            self.assertEqual(r['result'], {'frequency': 102,
+                             'peak': -47, 'capture': expected, 'errors': []})
 
     def test_subscription_local_delay_and_bus_inbox(self):
         self.call('routine.publish', {'name': 'on.event', 'inputs': {'event': 'obj'}, 'outputs': {'name': 'str'},
@@ -215,3 +216,32 @@ class Operations(unittest.TestCase):
         self.call('knowledge.merge', {'key': 'plan.survey', 'heads': heads})
         r = apply(self.a)
         self.assertEqual((r['priority'], r['title']), (3, 'Field survey'))
+
+    def test_missing_capability_is_actionable_and_wait_resumes(self):
+        self.call('routine.publish', {'name': 'needs-construction', 'inputs': {}, 'outputs': {},
+                  'steps': [{'type': 'service', 'contract': 'absent:1', 'args': {}}], 'result': {}})
+        run = self.call('process.start', {'name': 'needs-construction', 'inputs': {}})
+        self.drain()
+        tasks = self.call('work.list', {'kind': 'task'})
+        self.assertEqual([t['title'] for t in tasks], ['Supply absent:1'])
+        self.assertIn(tasks[0]['id'], self.call('process.get', {
+                      'run': run['id']})['tokens'][0]['blocked'])
+        self.call('cap.define', {'name': 'absent', 'inputs': {}, 'outputs': {}})
+        self.call('cap.offer', {'provider': 'new', 'contract': 'absent:1', 'resource': 'r'})
+        self.drain()
+        self.assertEqual(len(self.call('provider.poll', {'provider': 'new'})['fences']), 1)
+        self.assertEqual(len(self.call('work.list', {'kind': 'task'})), 1)
+
+    def test_nested_failure_returns_other_results(self):
+        self.call('routine.publish', {'name': 'bad', 'inputs': {}, 'outputs': {}, 'steps': [
+                  {'type': 'fail', 'reason': 'sample failed'}], 'result': {}})
+        args = {'name': 'survey', 'inputs': {}, 'outputs': {'errors': 'list', 'done': 'bool'}, 'steps': [
+            {'type': 'set', 'values': {'errors': []}},
+            {'each': [1, 2], 'as': 'frequency', 'do': [{'try': [{'type': 'call', 'process': 'bad'}],
+                                                        'catch': [{'type': 'set', 'values': {'errors': {'op': 'add', 'args': [{'$': 'errors'}, [{'$': 'frequency'}]]}}}]}]}],
+            'result': {'errors': {'$': 'errors'}, 'done': True}}
+        self.call('routine.publish', args)
+        run = self.call('process.start', {'name': 'survey', 'inputs': {}})
+        self.drain()
+        self.assertEqual(self.call('process.get', {'run': run['id']})[
+                         'result'], {'errors': [1, 2], 'done': True})

@@ -1,0 +1,11 @@
+{
+  "name": "survey.and-display",
+  "inputs": {"frequencies":"list", "threshold":"num", "capture":"bool"},
+  "outputs": {"survey":"obj", "display":"obj"},
+  "steps": [
+    {"type":"call","process":"survey.band","args":{"$":"input"},"save":"survey"},
+    {"try":[{"type":"service","contract":"display.show:1","args":{"survey":{"$":"survey"}},"save":"display"}],
+     "catch":[{"type":"set","values":{"display":{"error":{"$":"error"}}}}]}
+  ],
+  "result": {"survey":{"$":"survey"},"display":{"$":"display"}}
+}

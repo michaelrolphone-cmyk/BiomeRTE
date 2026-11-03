@@ -1,25 +1,192 @@
 {
   "name": "survey.band",
-  "inputs": {"frequencies": "list", "threshold": "num", "capture": "bool"},
-  "outputs": {"peak": "any", "frequency": "any", "capture": "any"},
+  "inputs": {
+    "frequencies": "list",
+    "threshold": "num",
+    "capture": "bool"
+  },
+  "outputs": {
+    "peak": "any",
+    "frequency": "any",
+    "capture": "any",
+    "errors": "list"
+  },
   "steps": [
-    {"type":"set","values":{"peak":null,"frequency":null,"capture_ref":null}},
-    {"each":{"$":"input.frequencies"},"as":"frequency_in","do":[
-      {"type":"call","process":"survey.measure","args":{"frequency":{"$":"frequency_in"}},"save":"reading"},
-      {"if":{"op":"eq","args":[{"$":"peak"},null]},"then":[
-        {"type":"set","values":{"peak":{"$":"reading.dbfs"},"frequency":{"$":"frequency_in"}}}
-      ],"else":[
-        {"if":{"op":"gt","args":[{"$":"reading.dbfs"},{"$":"peak"}]},"then":[
-          {"type":"set","values":{"peak":{"$":"reading.dbfs"},"frequency":{"$":"frequency_in"}}}
-        ]}
-      ]}
-    ]},
-    {"if":{"op":"ne","args":[{"$":"peak"},null]},"then":[
-      {"if":{"op":"and","args":[{"$":"input.capture"},{"op":"ge","args":[{"$":"peak"},{"$":"input.threshold"}]}]},"then":[
-        {"type":"service","contract":"radio.capture:1","args":{"frequency":{"$":"frequency"}},"save":"file"},
-        {"type":"set","values":{"capture_ref":{"$":"file.reference"}}}
-      ]}
-    ]}
+    {
+      "type": "set",
+      "values": {
+        "peak": null,
+        "frequency": null,
+        "capture_ref": null,
+        "errors": []
+      }
+    },
+    {
+      "each": {
+        "$": "input.frequencies"
+      },
+      "as": "frequency_in",
+      "do": [
+        {
+          "try": [
+            {
+              "type": "call",
+              "process": "survey.measure",
+              "args": {
+                "frequency": {
+                  "$": "frequency_in"
+                }
+              },
+              "save": "reading"
+            },
+            {
+              "if": {
+                "op": "eq",
+                "args": [
+                  {
+                    "$": "peak"
+                  },
+                  null
+                ]
+              },
+              "then": [
+                {
+                  "type": "set",
+                  "values": {
+                    "peak": {
+                      "$": "reading.dbfs"
+                    },
+                    "frequency": {
+                      "$": "frequency_in"
+                    }
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "if": {
+                    "op": "gt",
+                    "args": [
+                      {
+                        "$": "reading.dbfs"
+                      },
+                      {
+                        "$": "peak"
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "type": "set",
+                      "values": {
+                        "peak": {
+                          "$": "reading.dbfs"
+                        },
+                        "frequency": {
+                          "$": "frequency_in"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "catch": [
+            {
+              "type": "set",
+              "values": {
+                "errors": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "$": "errors"
+                    },
+                    [
+                      {
+                        "frequency": {
+                          "$": "frequency_in"
+                        },
+                        "error": {
+                          "$": "error"
+                        }
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "if": {
+        "op": "ne",
+        "args": [
+          {
+            "$": "peak"
+          },
+          null
+        ]
+      },
+      "then": [
+        {
+          "if": {
+            "op": "and",
+            "args": [
+              {
+                "$": "input.capture"
+              },
+              {
+                "op": "ge",
+                "args": [
+                  {
+                    "$": "peak"
+                  },
+                  {
+                    "$": "input.threshold"
+                  }
+                ]
+              }
+            ]
+          },
+          "then": [
+            {
+              "type": "service",
+              "contract": "radio.capture:1",
+              "args": {
+                "frequency": {
+                  "$": "frequency"
+                }
+              },
+              "save": "file"
+            },
+            {
+              "type": "set",
+              "values": {
+                "capture_ref": {
+                  "$": "file.reference"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
   ],
-  "result":{"peak":{"$":"peak"},"frequency":{"$":"frequency"},"capture":{"$":"capture_ref"}}
+  "result": {
+    "peak": {
+      "$": "peak"
+    },
+    "frequency": {
+      "$": "frequency"
+    },
+    "capture": {
+      "$": "capture_ref"
+    },
+    "errors": {
+      "$": "errors"
+    }
+  }
 }
