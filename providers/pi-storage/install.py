@@ -39,15 +39,15 @@ def open_volume(root, user, previous):
         raise ValueError('Copy the existing store to the mounted volume before switching')
     if not os.path.exists(directory):
         subprocess.check_call(['sudo', 'install', '-d', '-m', '0700', '-o', user, directory])
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, isolation_level=None)
     try:
         fresh = not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
         if fresh and previous:
             raise ValueError('Mounted database is empty; expected the existing store')
         if fresh:
-            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
-            db.execute('INSERT INTO volume VALUES(?)', (uuid.uuid4().hex,))
-            db.commit()
+            new_id = uuid.uuid4().hex
+            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA +
+                             "INSERT INTO volume VALUES('%s'); COMMIT;" % new_id)
         identity = db.execute('SELECT uuid FROM volume').fetchone()[0]
         if previous and previous != identity:
             raise ValueError('Volume identity differs from the configured store')

@@ -1,6 +1,7 @@
 """Transactional file operations for the separately mounted Pi storage volume."""
 import base64
 import binascii
+from contextlib import contextmanager
 import json
 import os
 import sqlite3
@@ -221,14 +222,25 @@ def reclaim(db):
             db.execute('DELETE FROM garbage WHERE node=? AND gen=?', row)
 
 
+@contextmanager
+def transaction(db):
+    # Explicit SQL also works on the Pi's pre-3.6 sqlite3 transaction driver.
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        yield
+        db.execute('COMMIT')
+    except BaseException:
+        if db.in_transaction:
+            db.execute('ROLLBACK')
+        raise
+
+
 def dispatch(db, op, args):
     db.execute('PRAGMA foreign_keys=ON')
     try:
-        with db:
-            db.execute('BEGIN IMMEDIATE')
+        with transaction(db):
             reclaim(db)
-        with db:
-            db.execute('BEGIN IMMEDIATE')
+        with transaction(db):
             return {'ok': True, 'result': apply(db, op, args)}
     except FileError as exc:
         return {'ok': False, 'error': str(exc)}
@@ -251,7 +263,7 @@ def main(config, op):
     # mode=rw prevents a missing or moved volume from creating a new database.
     from urllib.parse import quote
     uri = 'file:' + quote(os.path.join(root, 'biomerte-files', 'files.sqlite')) + '?mode=rw'
-    db = sqlite3.connect(uri, uri=True)
+    db = sqlite3.connect(uri, uri=True, isolation_level=None)
     try:
         fs = os.statvfs(root)
         page_size = db.execute('PRAGMA page_size').fetchone()[0]

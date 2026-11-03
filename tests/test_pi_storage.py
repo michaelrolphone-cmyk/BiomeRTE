@@ -19,7 +19,7 @@ class StorageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, 'files.sqlite')
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, isolation_level=None)
         self.db.executescript(storage['SCHEMA'])
 
     def tearDown(self):
@@ -42,7 +42,7 @@ class StorageTests(unittest.TestCase):
         self.ok('write', handle=h, offset=BLOCK-1, data=encode(b'!x'))
         self.ok('rename', path='dir', to='/moved')
         self.db.close()
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, isolation_level=None)
         got = self.ok('read', handle=h, offset=BLOCK-2, length=5)
         self.assertEqual(base64.b64decode(got['data']), data[-2:-1] + b'!xND')
         self.assertTrue(got['eof'])
