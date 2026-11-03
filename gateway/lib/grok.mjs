@@ -11,6 +11,7 @@ export const grokTools=[
   inputSchema:grokSchema({...grokFields,url:{type:'string',format:'uri'},key:{type:'string',description:'Private Grok routine webhook key or whsec_ signing secret.'},
    auth_mode:{type:'string',enum:['bearer','standard_webhooks'],description:'Default bearer for Grok Bot routines.'},
    topic:{type:'string',description:'Exact controller event topic. Defaults to workflow.delegation.requested, routed only for Grok.'},
+   reply_to:{type:'string',description:'Optional exact inbox address for lease.available.'},
    workflow:{type:'string',description:'Optional exact workflow filter for delegation events.'},
    from_cursor:{type:'integer',minimum:0,description:'Optional explicit replay from this sequence, excluding the supplied cursor.'}},['receiver','url','key','request_id'])},
  {name:'biome_list_grok_webhooks',description:'List your Grok receivers, filters, delivery cursors and last accepted time. Secrets and callback paths are redacted.',

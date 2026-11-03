@@ -111,6 +111,21 @@ class Delegation(unittest.TestCase):
         self.call('process.start',{'name':self.definition['name'],'inputs':{'observation':'another'}},'start2')
         self.tick();self.allowed=False;num=len(self.records);st.deliver();self.assertEqual(num,len(self.records));st.close()
 
+    def test_lease_available_delivery_is_addressed_and_signed(self):
+        st = self.store()
+        st.topic_feed = lambda realm, topic, after, limit: self.app.call(
+            'bus.event_page', {'topic':topic, 'after':after, 'limit':limit}, realm=realm)
+        self.params.update(name='lease.available', arguments={'reply_to':'my-inbox'})
+        st.change('events/subscribe', self.params, 'owner', None)
+        self.call('cap.acquire', {'task':'other', 'contract':'core.echo:1', 'reply_to':'other-inbox'}, 'grant-other')
+        lease = self.call('cap.acquire', {'task':'mine', 'contract':'core.echo:1', 'reply_to':'my-inbox'}, 'grant-mine')
+        st.deliver()
+        st.deliver()
+        delivered = [body for body, headers in self.records if body.get('name') == 'lease.available']
+        self.assertEqual([e['data']['id'] for e in delivered], [lease['id']])
+        self.assertEqual(delivered[0]['data']['realm'], 'site')
+        st.close()
+
     def test_verification_and_terminal_delivery(self):
         st=self.store()
         st.post=lambda *args:(200,b'{"challenge":"wrong"}')

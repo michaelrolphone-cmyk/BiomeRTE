@@ -20,8 +20,8 @@ def post(url, path, body, ca=None, token=None, timeout=30):
         headers['Authorization'] = 'Bearer ' + token
     req = Request(url.rstrip('/') + path, encode(body).encode(), headers)
     # HTTPSHandler supports the Jessie Python 3.4.2 API as well as current Python.
-    ctx = ssl.create_default_context(cafile=ca or None)
-    with build_opener(HTTPSHandler(context=ctx)).open(req, timeout=timeout) as r:
+    handlers = [HTTPSHandler(context=ssl.create_default_context(cafile=ca or None))] if parsed.scheme == 'https' else []
+    with build_opener(*handlers).open(req, timeout=timeout) as r:
         return json.loads(r.read().decode())['result']
 
 
@@ -41,7 +41,8 @@ class Remote:
 class Worker:
     def __init__(self, path, remote, offers, timeout=30):
         mkdir(os.path.dirname(os.path.abspath(path)))
-        self.db = sqlite3.connect(path, isolation_level=None)
+        self.path = path
+        self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('CREATE TABLE IF NOT EXISTS fences(resource TEXT PRIMARY KEY,gen INTEGER,holder TEXT);'
                               'CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY,signature TEXT,state TEXT,result TEXT,resource TEXT);')
@@ -57,21 +58,25 @@ class Worker:
 
     def advertise(self):
         for o in self.offers:
-            self.remote.call('cap.offer', {'provider': self.remote.node, 'contract': o['contract'],
-                                           'resource': o['resource'], 'service': o.get('service', ''), 'state': o.get('state', 'ready')})
+            args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
+                    'service': o.get('service', ''), 'state': o.get('state', 'ready')}
+            if 'capacity' in o:
+                args['capacity'] = o['capacity']
+            self.remote.call('cap.offer', args)
 
     def fence(self, l):
         resource, gen, holder = l['resource'], l['generation'], l['id']
+        guard = l.get('guard', resource)
         if resource not in self.physical:
             raise Fault('Unconfigured physical resource')
         with self.db:
             row = self.db.execute(
-                'SELECT gen,holder FROM fences WHERE resource=?', (resource,)).fetchone()
+                'SELECT gen,holder FROM fences WHERE resource=?', (guard,)).fetchone()
             if row and (row[0] > gen or (row[0] == gen and row[1] != holder)):
                 raise Fault('Stale fence', 409)
-            if self.db.execute("SELECT 1 FROM actions WHERE state='uncertain' AND resource=? LIMIT 1", (resource,)).fetchone():
+            if self.db.execute("SELECT 1 FROM actions WHERE state='uncertain' AND resource=? LIMIT 1", (guard,)).fetchone():
                 raise Fault('Reconcile uncertain hardware effect before a new fence', 409)
-            self.db.execute('INSERT OR REPLACE INTO fences VALUES(?,?,?)', (resource, gen, holder))
+            self.db.execute('INSERT OR REPLACE INTO fences VALUES(?,?,?)', (guard, gen, holder))
         self.remote.call('cap.fenced', {'provider': self.remote.node,
                          'lease': holder, 'generation': gen})
 
@@ -90,13 +95,15 @@ class Worker:
 
     def perform(self, a):
         args = {'provider': self.remote.node, 'operation': a['id'], 'generation': a['generation']}
+        guard = a.get('guard', a['resource'])
+        binding = self.db.execute(
+            'SELECT gen,holder FROM fences WHERE resource=?', (guard,)).fetchone()
+        if binding != (a['generation'], a['lease']):
+            # Repair an old caller-acknowledged fence before claiming work.
+            self.fence(dict(a, id=a['lease'], guard=guard))
         claimed = self.remote.call('provider.claim', args)
         if claimed['state'] != 'claimed':
             return
-        binding = self.db.execute(
-            'SELECT gen,holder FROM fences WHERE resource=?', (a['resource'],)).fetchone()
-        if binding != (a['generation'], a['lease']):
-            raise Fault('Missing or superseded local fence', 409)
         sig = digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']])
         row = self.db.execute(
             'SELECT signature,state,result FROM actions WHERE id=?', (a['id'],)).fetchone()
@@ -114,7 +121,7 @@ class Worker:
                 raise Fault('Expected absolute executable argv')
             out = {'reason': 'effect may have occurred; inspect resource before retry'}
             self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
-                            (a['id'], sig, 'uncertain', encode(out), a['resource']))
+                            (a['id'], sig, 'uncertain', encode(out), guard))
             state = 'uncertain'
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.PIPE,
@@ -141,7 +148,7 @@ class Worker:
         args.update(state=state, result=out)
         self.remote.call('provider.result', args)
 
-    def once(self):
+    def once(self, pool=None):
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
         for a in queue.get('activations', []):
             found = next((o for o in self.offers if digest(
@@ -150,9 +157,46 @@ class Worker:
                 self.configure(a, found['configure_argv'])
         for l in queue['fences']:
             self.fence(l)
+        if pool is not None:
+            return len(queue['fences']) + pool.dispatch(queue['actions'])
         for a in queue['actions']:
             self.perform(a)
         return len(queue['fences']) + len(queue['actions'])
+
+
+class ActionPool:
+    """A single poller and at most one active operation per fenced slot."""
+    def __init__(self, worker, limit):
+        from concurrent.futures import ThreadPoolExecutor
+        self.worker = worker
+        self.limit = limit
+        self.executor = ThreadPoolExecutor(max_workers=limit)
+        self.running = {}
+
+    def perform(self, action):
+        w = self.worker
+        child = Worker(w.path, w.remote, w.offers, w.timeout)
+        try:
+            child.perform(action)
+        finally:
+            child.db.close()
+
+    def dispatch(self, actions):
+        import logging
+        for guard, future in list(self.running.items()):
+            if future.done():
+                del self.running[guard]
+                if future.exception():
+                    logging.warning('Provider operation paused: %s', future.exception())
+        started = 0
+        for action in actions:
+            if len(self.running) >= self.limit:
+                break
+            guard = action.get('guard', action['resource'])
+            if guard not in self.running:
+                self.running[guard] = self.executor.submit(self.perform, action)
+                started += 1
+        return started
 
 
 def run_worker(directory, remote, cfg, once):
@@ -166,6 +210,8 @@ def run_worker(directory, remote, cfg, once):
             raise Fault('Another adapter is already enforcing this node’s resources', 409)
         w = Worker(os.path.join(directory, 'worker.sqlite'),
                    remote, cfg['offers'], cfg.get('timeout', 30))
+        parallelism = cfg.get('parallelism', 1)
+        pool = ActionPool(w, parallelism) if parallelism > 1 else None
         try:
             announced = False
             while True:
@@ -173,7 +219,7 @@ def run_worker(directory, remote, cfg, once):
                     if not announced:
                         w.advertise()
                         announced = True
-                    count = w.once()
+                    count = w.once(pool)
                     if once:
                         return 0
                     time.sleep(.1 if count else cfg.get('poll_seconds', 2))
@@ -183,6 +229,8 @@ def run_worker(directory, remote, cfg, once):
                     logging.warning('Provider paused: %s', err)
                     time.sleep(cfg.get('retry_seconds', 5))
         finally:
+            if pool is not None:
+                pool.executor.shutdown(wait=True)
             w.db.close()
 
 

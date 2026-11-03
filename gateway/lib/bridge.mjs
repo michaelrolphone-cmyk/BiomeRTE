@@ -65,9 +65,9 @@ function canonical(value) {
 export const toolError = message => ({isError:true,content:[{type:'text',text:message}]});
 export const toolsList = [
  {name:'biome_status',description:'Verify connectivity to the running physical controller and read its health.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
- {name:'biome_discover',description:'Read the live controller’s operations, argument schemas, and provider offers.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+ {name:'biome_discover',description:'Read live operations, capacity, offers, and the capability caller guide.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
  {name:'biome_work_list',description:'List work stored on the running controller.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
- {name:'biome_invoke',description:'Call a BiomeRTE operation. Choose a unique request_id and reuse it and the same arguments if the reply is lost.',inputSchema:{type:'object',properties:{operation:{type:'string'},arguments:{type:'object',additionalProperties:true},request_id:{type:'string',minLength:1,maxLength:128},realm:{type:'string',enum:['site','local']}},required:['operation','arguments','request_id'],additionalProperties:false}}
+ {name:'biome_invoke',description:'Acquire a lease, invoke with a unique command ID, then read cap.status using that ID. Follow next_call for current state. provider.poll is the worker inbox. Reuse a mutation request_id only for an identical retry.',inputSchema:{type:'object',properties:{operation:{type:'string'},arguments:{type:'object',additionalProperties:true},request_id:{type:'string',minLength:1,maxLength:128},realm:{type:'string',enum:['site','local']}},required:['operation','arguments','request_id'],additionalProperties:false}}
 ];
 export async function runTool(env, name, args={}) {
  if (!toolsList.some(t=>t.name===name)) return toolError('Unknown tool');
@@ -78,7 +78,10 @@ export async function runTool(env, name, args={}) {
       Object.keys(args).some(k=>!['operation','arguments','request_id','realm'].includes(k)) ||
       !['site','local'].includes(args.realm??'site')) return toolError('Expected operation, arguments, request_id and optional realm');
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
- const key = name==='biome_invoke' ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
+ // A status read must see later transitions even when a client repeats the
+ // exact next_call returned in a queued receipt. Mutation retries stay durable.
+ const liveRead=name==='biome_invoke' && ['cap.status','cap.lease','cap.leases','cap.discover','bus.inbox','provider.poll'].includes(args.operation);
+ const key = name==='biome_invoke' && !liveRead ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
  return enqueue(env,name,args,key);
 }
 export async function enqueue(env,name,args,key){

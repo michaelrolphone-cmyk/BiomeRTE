@@ -149,8 +149,7 @@ def prepare(tx, ctx, contract, resource=''):
             continue
         if not providers.admitted(tx, dict(off, state='ready')):
             continue
-        guard = tx.get('guards', off['resource'], {})
-        if guard.get('holder'):
+        if providers.active_on(tx, off['resource']):
             continue
         active = next((r for r in tx.rows('activations') if r['resource'] == off['resource'] and
                        r['state'] == 'pending'), None)

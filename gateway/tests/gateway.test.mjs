@@ -54,7 +54,7 @@ test('MCP events are advertised on both handshakes; subscriptions and grant chec
   assert.deepEqual((await (await send('/mcp',rpc(method))).json()).result.capabilities.events,{});
  }
  const list=await (await send('/mcp',rpc('events/list',{_meta:{progressToken:'scan'}}))).json();
- assert.equal(list.result.events[0].name,'workflow.delegation.requested');
+ assert.deepEqual(list.result.events.map(e=>e.name),['workflow.delegation.requested','lease.available']);
  assert.equal((await send('/mcp',rpc('events/subscribe'))).status,403);
  assert.equal((await send('/api/mcp',rpc('events/list'))).status,401);
  const bad=await (await send('/mcp',rpc('events/subscribe',{name:'bad'}),owner)).json();

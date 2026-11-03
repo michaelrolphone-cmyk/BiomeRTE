@@ -198,6 +198,11 @@ def listing(tx, ctx):
 
 
 def finish(tx, run, state, result):
+    for token in run['tokens']:
+        if token.get('queued_lease'):
+            waiting = tx.get('leases', token['queued_lease'])
+            if waiting and waiting['state'] != 'released':
+                providers.release(tx, waiting)
     run.update(state=state, result=result)
     if run['parent'].startswith('action:'):
         a = tx.need('actions', run['parent'][7:])
@@ -357,6 +362,9 @@ def advance(tx, ctx, r, t, n, version):
                 try:
                     lease = providers.acquire(tx, ctx, r['task'] or r['id'], n['contract'],
                                               ev(n.get('resource', '')))
+                    if lease['state'] == 'queued':
+                        t['queued_lease'] = lease['id']
+                        raise Fault('Waiting for queued lease ' + lease['id'], 409)
                 except Fault as e:
                     if e.status in (404, 409):
                         from .extensions import prepare, demand
@@ -371,6 +379,7 @@ def advance(tx, ctx, r, t, n, version):
                         t['blocked'] = waiting
                         return True
                     raise
+                t.pop('queued_lease', None)
                 a = providers.dispatch(tx, ctx, lease['id'], inputs, uid())
                 t['action'] = a['id']
                 t.pop('blocked', None)
@@ -393,6 +402,7 @@ def advance(tx, ctx, r, t, n, version):
 def tick(tx, ctx, budget=64):
     from .api import events_after
     budget = max(1, min(256, budget))
+    providers.promote(tx, ctx)
     moves = 0
     for sub in tx.rows('subscriptions'):
         if sub['process']:

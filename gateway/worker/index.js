@@ -1,5 +1,5 @@
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
-import {eventGrant,changeSubscription,delegationEvent} from '../lib/events.mjs';
+import {eventGrant,changeSubscription,delegationEvent,leaseEvent} from '../lib/events.mjs';
 import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
 import {device,limitedJSON,reply,runTool,toolsList,enqueue} from '../lib/bridge.mjs';
@@ -30,7 +30,7 @@ async function dispatch(req,env) {
  if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{},events:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
  if(method==='ping')return ok({});
  if(method==='tools/list')return ok({tools:[...toolsList,...grokTools]});
- if(method==='events/list')return ok({events:[delegationEvent]});
+ if(method==='events/list')return ok({events:[delegationEvent,leaseEvent]});
  if(method==='events/subscribe'||method==='events/unsubscribe'){
   const owner=bearerOwner||await ownerPrincipal(req,env);
   if(!owner)return reply({error:'Owner sign-in required'},403);
