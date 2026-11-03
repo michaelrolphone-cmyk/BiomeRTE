@@ -64,11 +64,14 @@ def main():
         source.db.close()
     profile, = [p for p in profiles if p['provider_id'] == 'linux.bash-terminal']
     check_argv([profile['executable']], profile)
-    limits = {k: profile.get(k, v) for k, v in
-              [('memory_bytes', 268435456), ('cpu_seconds', 60), ('duration_seconds', 60),
-               ('output_bytes', 1048576)]}
-    if any(type(v) is not int or v <= 0 for v in limits.values()):
-        raise ValueError('Invalid terminal execution limits')
+    # Carry the operator's enrolled Pi memory limit into Biome; other providers
+    # select their own policy.
+    limits = {}
+    if 'memory_bytes' in profile:
+        memory = profile['memory_bytes']
+        if type(memory) is not int or memory <= 0:
+            raise ValueError('Expected a positive Pi memory limit')
+        limits['memory_bytes'] = memory
     scoped_profile = {'executable': profile['executable'],
                       'executable_sha256': profile['executable_sha256'], 'limits': limits}
 
@@ -94,11 +97,12 @@ def main():
 
     manifest = os.path.join(home, 'manifest.json')
     adapter = os.path.join(home, 'terminal.py')
-    with open(os.path.join(here, 'terminal.py'), 'rb') as src:
-        replace(adapter, src.read())
+    for name in ('terminal.py', 'terminal_limits.py', 'terminal_supervisor.py'):
+        with open(os.path.join(here, name), 'rb') as src:
+            replace(os.path.join(home, name), src.read())
     cfg = terminal_pool(resource, scoped_profile, [sys.executable, adapter, manifest], args.slots)
     cfg.update(url=url, site=node['site'], supervisor_dir=runtime,
-               timeout=limits['duration_seconds'] + 300, terminal_profile=scoped_profile)
+               timeout=None, terminal_profile=scoped_profile)
     replace(manifest, json.dumps(cfg, indent=2).encode())
     unit = 'biomerte-terminal.service'
     # Jessie systemd needs the first ExecStart token to be an unquoted absolute path.

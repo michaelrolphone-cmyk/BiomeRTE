@@ -14,7 +14,6 @@ OUTPUTS = {'exit_code': 'int', 'stdout': 'str', 'stderr': 'str', 'streams': 'obj
 
 def terminal_usage(profile):
     exe = profile['executable']
-    limits = profile['limits']
     return {
         'before': 'Acquire one terminal slot per independent session. Commands on the same lease run serially.',
         'parameters': {'argv': 'An array of 1 to 32 strings, each at most 4096 characters. '
@@ -24,8 +23,7 @@ def terminal_usage(profile):
                        'The text previews cover the first 4096 bytes per stream. For complete output use artifact.get with each '
                        'result.streams.stdout or stderr chunk sha256, base64-decode in order and verify the stream digest.',
         'errors': 'Exit 126 with evidence.executed=false means the argv or executable digest check rejected the command. '
-                  'An executed program can return a nonzero exit code. This profile allows %d seconds and %d bytes per output file.'
-                  % (limits['duration_seconds'], limits['output_bytes'])
+                  'An executed program can return a nonzero exit code. Job limits are opt-in on the host.'
     }
 
 
@@ -87,7 +85,8 @@ def execute(cfg, home, request):
     # journal. No Channel Bus sessions, job rows or credentials are used here.
     sys.path.insert(0, cfg['supervisor_dir'])
     from sdk import Journal, monotonic
-    from supervisor import execute as supervise
+    from terminal_supervisor import execute as supervise
+    from terminal_limits import read_limits
     from biomerte.worker import Remote
     from agent import inventory
     profile = cfg['terminal_profile']
@@ -104,13 +103,19 @@ def execute(cfg, home, request):
     path = os.path.join(home, 'terminal.sqlite')
     journal = Journal(path)
     try:
-        body = {'argv': argv, 'limits': profile['limits'], 'workspace': work}
-        lease = monotonic() + profile['limits']['duration_seconds']
+        limits = read_limits(home)
+        if 'memory_bytes' in profile.get('limits', {}):
+            memory = profile['limits']['memory_bytes']
+            limits['memory_bytes'] = min(memory, limits.get('memory_bytes', memory))
+        body = {'argv': argv, 'limits': limits, 'workspace': work}
+        duration = limits.get('duration_seconds')
+        lease = None if duration is None else monotonic() + duration
         with journal.db:
             journal.db.execute('INSERT OR IGNORE INTO jobs VALUES(?,?,?,?,?,NULL)',
                                (op, json.dumps(body), 'queued', None, lease))
         existing = journal.db.execute('SELECT body FROM jobs WHERE id=?', (op,)).fetchone()
-        if json.loads(existing[0]) != body:
+        recorded = json.loads(existing[0])
+        if recorded['argv'] != argv or recorded['workspace'] != work:
             raise RuntimeError('Terminal operation identity conflict')
         supervise(path, op)
         row = journal.db.execute('SELECT body,state,result FROM jobs WHERE id=?', (op,)).fetchone()

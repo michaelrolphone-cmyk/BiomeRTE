@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import resource
 import signal
 import socket
 import subprocess
@@ -12,19 +11,17 @@ import time
 
 from mac_provider import ROOT, Remote
 from terminal import check_argv, store_stream
+from terminal_limits import apply_limits, read_limits
 
 
 def execute(request, cfg, remote):
     profile = cfg['terminal_profile']
-    limits = profile['limits']
+    limits = read_limits(ROOT)
     try:
         argv = check_argv(request['inputs']['argv'], profile)
     except ValueError as exc:
         return {'exit_code': 126, 'stdout': '', 'stderr': str(exc), 'streams': {},
                 'evidence': {'executed': False, 'quiescent': True, 'reason': 'argv_rejected'}}
-
-    def set_limits():
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limits['output_bytes'], limits['output_bytes']))
 
     start = time.monotonic()
     reason = 'exited'
@@ -32,9 +29,9 @@ def execute(request, cfg, remote):
         paths = {name: Path(directory) / name for name in ('stdout', 'stderr')}
         with paths['stdout'].open('wb') as out, paths['stderr'].open('wb') as err:
             child = subprocess.Popen(argv, cwd=Path.home(), stdin=subprocess.DEVNULL, stdout=out,
-                                     stderr=err, start_new_session=True, preexec_fn=set_limits)
+                                     stderr=err, start_new_session=True, preexec_fn=lambda: apply_limits(limits))
             try:
-                code = child.wait(timeout=limits['duration_seconds'])
+                code = child.wait(timeout=limits.get('duration_seconds'))
             except subprocess.TimeoutExpired:
                 reason, code = 'timeout', 124
             finally:

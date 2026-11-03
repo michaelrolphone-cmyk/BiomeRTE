@@ -160,10 +160,10 @@ def configure():
     from terminal import terminal_pool
     executable = os.path.realpath('/bin/bash')
     profile = dict(executable=executable, executable_sha256=hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
-                   limits=dict(duration_seconds=600, output_bytes=8 * 1024 * 1024))
+                   limits={})
     manifest = terminal_pool(resource, profile, [sys.executable, str(ROOT / 'terminal_adapter.py')])
     manifest.update(site=info['site'], realm='site', poll_seconds=2, retry_seconds=5,
-                    timeout=900, terminal_profile=profile)
+                    timeout=None, terminal_profile=profile)
     save_json(manifest_path, manifest)
     print('Provider:', node, '\nResource:', resource, '\nHost:', socket.gethostname(), flush=True)
 

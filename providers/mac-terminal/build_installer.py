@@ -13,7 +13,8 @@ repo = here.parents[1]
 
 def bundle():
     files = {p.name: p.read_bytes() for p in (here / 'mac_provider.py', here / 'terminal_adapter.py',
-                                               here.parent / 'pi-terminal/terminal.py')}
+                                               here.parent / 'pi-terminal/terminal.py',
+                                               here.parent / 'pi-terminal/terminal_limits.py')}
     for name in ('__init__', 'api', 'worker', 'store', 'identity'):
         p = repo / 'biomerte' / (name + '.py')
         files['runtime/biomerte/' + p.name] = p.read_bytes()
