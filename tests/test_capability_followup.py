@@ -1,4 +1,7 @@
+import base64
+import json
 import os
+import sys
 import tempfile
 import unittest
 
@@ -150,6 +153,48 @@ class CapabilityFollowup(unittest.TestCase):
         self.assertEqual(cb['request'], 'yes')
         self.assertEqual(cb['context']['caller_context'], {})
         self.assertEqual(cb['context']['outcome']['run_id'], run['run_id'])
+
+    def test_mcp_event_and_webhook_route_back_to_the_selected_caller(self):
+        sys.path.insert(0, os.path.join(ROOT, 'deploy'))
+        try:
+            from grok_receivers import mutate
+            from mcp_events import EventStore, EVENT
+        finally:
+            sys.path.pop(0)
+        received = {}
+        def post(url, headers, body):
+            event = json.loads(body.decode())
+            if event.get('type') == 'verification':
+                return 200, json.dumps({'challenge':event['challenge']}).encode()
+            received[url] = event['data']['delegation_id']
+            return 200, b''
+
+        store = EventStore(os.path.join(self.home, 'subscriptions.sqlite'),
+            lambda realm, after, limit: self.app.call('delegation.feed', {'after':after,'limit':limit}, realm=realm),
+            lambda owner, grant: True, post)
+        self.addCleanup(store.close)
+        urls = {'chatgpt':'https://chat.example/cb', 'grok':'https://api2.cursor.sh/automations/webhook/test'}
+        store.change('events/subscribe', {'name':EVENT, 'arguments':{}, 'delivery':{'mode':'webhook',
+            'url':urls['chatgpt'], 'secret':'whsec_' + base64.b64encode(b'x'*32).decode()}}, 'owner', None)
+        mutate(store, 'register', {'receiver':'qa-bot', 'url':urls['grok'], 'key':'test-key',
+                                   'request_id':'register-test'}, 'owner', 'grant')
+        runs = {}
+        for target in ('chatgpt','grok'):
+            name = 'qa.resume.' + target
+            self.call('routine.publish', dict(name=name, inputs={'request':'str','context':'obj'},
+                outputs={'result':'obj'}, steps=[{'type':'delegate','to':target,'request':{'$':'input.request'},
+                'context':{'$':'input.context'},'outputs':{'result':'obj'},'save':'reply'}],result={'$':'reply'}))
+            self.call('routine.expose', dict(name=name,capability=name,version=1))
+            runs[target] = self.call('cap.run_async', dict(contract='core.echo:1',arguments={'value':target},
+                caller=name+':1',success_prompt='resume '+target,failure_prompt='recover'))['run_id']
+        self.settle()
+        store.deliver()
+        self.assertEqual(set(received), set(urls.values()))
+        for target, url in urls.items():
+            wait = self.call('delegation.get', {'id':received[url]})
+            self.assertEqual(wait['question'], 'resume '+target)
+            self.assertEqual(wait['context']['outcome']['run_id'], runs[target])
+            self.assertEqual(wait['context']['outcome']['result'], {'value':target})
 
     def test_invalid_callback_does_not_start_work(self):
         with self.assertRaises(Fault):
