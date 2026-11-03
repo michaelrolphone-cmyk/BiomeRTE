@@ -35,22 +35,25 @@ def generate(path):
 
 
 def fingerprint(pem):
-    if not isinstance(pem,str) or len(pem)>8192 or 'BEGIN PUBLIC KEY' not in pem:
+    if not isinstance(pem, str) or len(pem) > 8192 or 'BEGIN PUBLIC KEY' not in pem:
         raise Fault('Expected PEM public key')
-    der = openssl(['rsa','-pubin','-outform','DER','-pubout'],pem.encode('ascii'))
+    der = openssl(['rsa', '-pubin', '-outform', 'DER', '-pubout'], pem.encode('ascii'))
     return hashlib.sha256(der).hexdigest()
 
 
 def sign(key, payload):
-    return b64(openssl(['dgst','-sha256','-sign',key],encode(payload).encode()))
+    return b64(openssl(['dgst', '-sha256', '-sign', key], encode(payload).encode()))
 
 
 def verify(pem, signature, payload):
     with tempfile.NamedTemporaryFile() as pub, tempfile.NamedTemporaryFile() as sig:
-        pub.write(pem.encode('ascii'));pub.flush()
-        sig.write(un64(signature));sig.flush()
-        openssl(['dgst','-sha256','-verify',pub.name,'-signature',sig.name],encode(payload).encode())
+        pub.write(pem.encode('ascii'))
+        pub.flush()
+        sig.write(un64(signature))
+        sig.flush()
+        openssl(['dgst', '-sha256', '-verify', pub.name,
+                '-signature', sig.name], encode(payload).encode())
 
 
 def signed(key, payload):
-    return {'payload':payload,'signature':sign(key,payload)}
+    return {'payload': payload, 'signature': sign(key, payload)}

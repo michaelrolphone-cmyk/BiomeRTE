@@ -106,9 +106,9 @@ def publish(tx, ctx, topic, payload):
     """Publish a named application event. System topics are reserved for domain handlers."""
     if not topic.startswith('user.'):
         raise Fault('External events use user.* topics')
-    event=tx.emit(text(topic),payload)
+    event = tx.emit(text(topic), payload)
     from .knowledge import put
-    put(tx,ctx,'event.'+event['id'],event,type='bus_event')
+    put(tx, ctx, 'event.' + event['id'], event, type='bus_event')
     return event
 
 
@@ -119,7 +119,7 @@ def send(tx, ctx, to, body, correlation=''):
            'correlation': correlation, 'read': False}
     tx.put('messages', msg['id'], msg)
     from .knowledge import put
-    put(tx,ctx,'message.'+msg['id'],msg,type='mail')
+    put(tx, ctx, 'message.' + msg['id'], msg, type='mail')
     tx.emit('message.received', {'message': msg['id'], 'to': to})
     return msg
 

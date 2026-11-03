@@ -39,7 +39,7 @@ def create(tx, ctx, kind, title, id='', parent='', priority=0, sequence=0, depen
             'assigned': '', 'attempts': [], 'evidence': {}}
     tx.put('work', key, item)
     from .extensions import record_plan
-    record_plan(tx,ctx,item)
+    record_plan(tx, ctx, item)
     tx.emit('work.created', {'id': key})
     return item
 
@@ -60,7 +60,8 @@ def update(tx, ctx, id, revision, changes):
     item['revision'] += 1
     tx.put('work', id, item)
     from .extensions import record_plan, PLAN_FIELDS
-    if any(k in changes for k in PLAN_FIELDS):record_plan(tx,ctx,item)
+    if any(k in changes for k in PLAN_FIELDS):
+        record_plan(tx, ctx, item)
     tx.emit('work.updated', {'id': id, 'revision': item['revision']})
     return item
 
@@ -76,8 +77,8 @@ def accept(tx, ctx, id, revision, evidence):
     item = tx.need('work', id)
     if revision != item['revision']:
         raise Fault('Stale work revision', 409)
-    if item['state'] in ('running','delegated'):
-        raise Fault('Attempt or delegated work outstanding',409)
+    if item['state'] in ('running', 'delegated'):
+        raise Fault('Attempt or delegated work outstanding', 409)
     if not evidence or any(not isinstance(v, str) or not v.strip() for v in evidence.values()):
         raise Fault('Acceptance needs evidence')
     if set(item['criteria']) - set(evidence):
@@ -110,17 +111,18 @@ def mission(tx, ctx, budget, services, restore_margin=None, stable_samples=1):
         for i, mode in enumerate(modes):
             text(mode['name'])
             if not numbers(mode['cost']) or any(v > mode['cost'].get(k, 0) for k, v in
-                                               (modes[i-1]['cost'].items() if i else [])):
+                                                (modes[i - 1]['cost'].items() if i else [])):
                 raise Fault('Modes must have nondecreasing costs')
         catalog[key] = s
     order = sorted(catalog, key=lambda i: (-catalog[i]['priority'], i))
     if not numbers(restore_margin or {}) or not 1 <= stable_samples <= 1000:
         raise Fault('Invalid recovery policy')
-    previous=tx.get('mission','current',{})
-    previous_modes=previous.get('allocation',{}) if previous.get('services')==services else {}
-    streaks=dict(previous.get('recovery_samples',{})) if previous_modes else {}
+    previous = tx.get('mission', 'current', {})
+    previous_modes = previous.get('allocation', {}) if previous.get('services') == services else {}
+    streaks = dict(previous.get('recovery_samples', {})) if previous_modes else {}
     remaining = dict(budget)
     active = {}
+
     def closure(key, visiting, found):
         if key in visiting or key not in catalog:
             raise Fault('Unknown or cyclic service dependency')
@@ -128,8 +130,10 @@ def mission(tx, ctx, budget, services, restore_margin=None, stable_samples=1):
             for dep in catalog[key].get('needs', []):
                 closure(dep, visiting | {key}, found)
             found.add(key)
+
     def fits(cost):
         return all(v <= remaining.get(k, 0) for k, v in cost.items())
+
     def spend(cost):
         for k, v in cost.items():
             remaining[k] = remaining.get(k, 0) - v
@@ -152,32 +156,39 @@ def mission(tx, ctx, budget, services, restore_margin=None, stable_samples=1):
                 continue
             modes = catalog[key]['modes']
             for i in range(active[key] + 1, len(modes)):
-                delta = {k: v - modes[i-1]['cost'].get(k, 0) for k, v in modes[i]['cost'].items()}
+                delta = {k: v - modes[i - 1]['cost'].get(k, 0) for k, v in modes[i]['cost'].items()}
                 if not fits(delta):
                     break
                 spend(delta)
                 active[key] = i
     # Decreases take effect immediately. Withhold an upgrade until there is sustained headroom.
     for key in order:
-        modes=catalog[key]['modes']
-        previous_index=next((i for i,m in enumerate(modes) if m['name']==previous_modes.get(key)),-1)
-        index=active.get(key,-1)
-        if key not in previous_modes or index<=previous_index:
-            streaks[key]=0
+        modes = catalog[key]['modes']
+        previous_index = next((i for i, m in enumerate(
+            modes) if m['name'] == previous_modes.get(key)), -1)
+        index = active.get(key, -1)
+        if key not in previous_modes or index <= previous_index:
+            streaks[key] = 0
             continue
-        margin_ok=all(remaining.get(k,0)>=amount for k,amount in (restore_margin or {}).items())
-        streaks[key]=(streaks.get(key,0)+1) if margin_ok else 0
-        if streaks[key]<stable_samples:
-            if previous_index<0:active.pop(key,None)
-            else:active[key]=previous_index
+        margin_ok = all(remaining.get(k, 0) >= amount for k,
+                        amount in (restore_margin or {}).items())
+        streaks[key] = (streaks.get(key, 0) + 1) if margin_ok else 0
+        if streaks[key] < stable_samples:
+            if previous_index < 0:
+                active.pop(key, None)
+            else:
+                active[key] = previous_index
     # A recovering dependency may still be held below admission.
     for unused in range(len(active)):
-        removed=[k for k in active if any(d not in active for d in catalog[k].get('needs',[]))]
-        if not removed:break
-        for k in removed:del active[k]
-    remaining=dict(budget)
-    for k,index in active.items():spend(catalog[k]['modes'][index]['cost'])
-    result = {'budget': budget, 'remaining': remaining, 'services': services, 'recovery_samples':streaks,
+        removed = [k for k in active if any(d not in active for d in catalog[k].get('needs', []))]
+        if not removed:
+            break
+        for k in removed:
+            del active[k]
+    remaining = dict(budget)
+    for k, index in active.items():
+        spend(catalog[k]['modes'][index]['cost'])
+    result = {'budget': budget, 'remaining': remaining, 'services': services, 'recovery_samples': streaks,
               'allocation': {k: catalog[k]['modes'][active[k]]['name'] if k in active else None for k in order},
               'unmet': [k for k in order if k not in active]}
     tx.put('mission', 'current', result)

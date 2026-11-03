@@ -29,19 +29,29 @@ async function refresh(){
   try {state=await call('system.snapshot');} catch(e) {if(el('realm').value!=='site')throw e;state=await call('system.snapshot',{},true);say('Showing last synchronized site view. Select Local for offline work.');} el('identity').textContent=state.site.realm+' · '+state.site.shared_backend+' · '+state.site.site;
   const parent=el('parent');parent.textContent='';option(parent,'','No parent');state.work.filter(x=>x.kind!=='task').forEach(x=>option(parent,x.id,x.kind+' · '+x.title));
   const inspect=x=>['Inspect',()=>detail(x)];
-  rows('work-list',state.work,x=>x.kind+' · '+x.title+' · '+x.state,x=>[inspect(x),['Accept',()=>prepare('work.accept',{id:x.id,revision:x.revision,evidence:Object.fromEntries((x.criteria.length?x.criteria:['outcome']).map(k=>[k,'']))})]]);
-  rows('def-list',state.process.definitions,x=>x.id,x=>[['Start',()=>prepare('process.start',{name:x.id,inputs:Object.fromEntries(Object.keys(x.inputs).map(k=>[k,'']))})],inspect(x)]);
+  const byId=new Map(state.work.map(w=>[w.id,w]));
+  const workLabel=w=>{const parents=[];let p=byId.get(w.parent);while(p && parents.length<4){parents.unshift(p.title);p=byId.get(p.parent);}
+    return parents.concat(w.title).join(' › ')+' · '+w.kind+' · '+(w.ready?'ready':w.state);};
+  const modes=(state.mission||{}).allocation||{};el('mission').textContent=Object.keys(modes).length?'Mission services: '+Object.keys(modes).map(k=>k+' = '+(modes[k]||'minimum unmet')).join(' · '):'';
+  rows('work-list',state.work,workLabel,x=>{
+    const controls=[inspect(x)];
+    if(x.ready && x.kind==='task' && state.process.definitions.length) controls.push(['Run',()=>chooseProcess(x)]);
+    if(x.state==='open' || x.state==='review')controls.push(['Accept',()=>acceptWork(x)]);
+    return controls;
+  });
+  rows('def-list',state.process.definitions,x=>x.id,x=>[['Start',()=>startProcess(x)],inspect(x)]);
   rows('run-list',state.process.runs,x=>x.name+' · '+x.state+' · '+x.steps+' steps',x=>[['Trace',async()=>detail(await call('process.get',{run:x.id}))]]);
   rows('offer-list',state.capabilities.offers,x=>x.contract+' · '+x.provider+' · '+x.state,x=>[inspect(x)]);
   rows('lease-list',state.leases.filter(x=>x.state!=='released'),x=>x.contract+' · '+x.state,x=>[inspect(x)]);
-  rows('doc-list',state.documents,x=>x.id+(x.conflict?' · concurrent edits':''),x=>[['Read',async()=>detail(await call('knowledge.get',{key:x.id}))]]);
-  rows('wait-list',state.waits,x=>x.name+' · '+x.question,x=>[['Answer',()=>prepare('process.answer',{wait:x.id,answer:Object.fromEntries(Object.keys(x.answer_schema).map(k=>[k,'']))})]]);
+  rows('doc-list',state.documents,x=>x.id+(x.conflict?' · concurrent edits':''),x=>[['Read',async()=>detail(await call('knowledge.get',{key:x.id}))],['Edit',async()=>{const doc=await call('knowledge.get',{key:x.id});el('doc-key').value=x.id;const body=doc.revisions[0].body;el('doc-body').value=typeof body==='string'?body:JSON.stringify(body,null,2);el('doc-body').focus();}]]);
+  rows('wait-list',state.waits,x=>x.name+' · '+x.question,x=>[['Answer',()=>editFields(x.question||x.name,x.answer_schema,answer=>call('process.answer',{wait:x.id,answer}))]]);
   rows('message-list',state.inbox,x=>x.from+' → '+x.to,x=>[inspect(x)]);
   rows('candidate-list',state.candidates,x=>x.label+' · '+x.state,x=>[inspect(x),['Commission',()=>prepare('pair.approve',{fingerprint:x.id,scopes:[]})]]);
 }
 el('login').onsubmit=action(async()=>{token=el('token').value;operations=await call('bus.discover',{},true);await refresh();el('token').value='';
   el('operation').textContent='';operations.forEach(o=>option(el('operation'),o.name,o.name));help();el('login').hidden=true;el('workspace').hidden=false;showTab('work');});
 el('logout').onclick=()=>location.reload();
+el('cluster').onclick=action(async()=>detail(await call('cluster.status',{},true)));
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 el('refresh').onclick=action(refresh);el('realm').onchange=action(refresh);el('operation').onchange=help;
 el('new-work').onsubmit=action(async()=>{detail(await call('work.create',{kind:el('kind').value,title:el('title').value,parent:el('parent').value}));el('title').value='';await refresh();});
@@ -50,3 +60,57 @@ el('new-doc').onsubmit=action(async()=>{const key=el('doc-key').value,prior=stat
   detail(await call('knowledge.put',{key,body:el('doc-body').value,parents:prior?prior.heads:[]}));await refresh();});
 el('demo').onclick=action(async()=>{const result=await call('demo.run');detail(result);await refresh();say('Started. Open Processes to inspect the attempt.');});
 el('call').onsubmit=action(async()=>{detail(await call(el('operation').value,JSON.parse(el('args').value)));await refresh();});
+
+function editFields(title,schema,submit,defaults={}) {
+  const dialog=el('editor'), fields=el('fields'), readers=[];
+  fields.textContent='';el('edit-title').textContent=title;el('edit-error').textContent='';
+  for(const [name,definition] of Object.entries(schema)){
+    const label=document.createElement('label');label.textContent=name;
+    let input,type=Array.isArray(definition)?'choice':definition.replace(/\?$/,'');
+    const optional=typeof definition==='string'&&definition.endsWith('?');
+    if(type==='choice'||type==='bool'){
+      input=document.createElement('select');
+      (type==='choice'?definition:['true','false']).forEach(v=>option(input,v,v));
+    } else {
+      input=document.createElement(['list','obj','any'].includes(type)?'textarea':'input');
+      input.required=!optional;
+      if(['int','num'].includes(type)){input.type='number';input.step=type==='int'?'1':'any';}
+      if(type==='obj')input.placeholder='{}';if(type==='list')input.placeholder='[]';
+      if(type==='any')input.placeholder='JSON value';
+    }
+    if(defaults[name]!==undefined)input.value=defaults[name];
+    label.appendChild(input);fields.appendChild(label);
+    readers.push(values=>{
+      if(input.value==='' && optional)return;
+      values[name]=['bool','list','obj','any'].includes(type)?JSON.parse(input.value):
+        ['int','num'].includes(type)?Number(input.value):input.value;
+    });
+  }
+  el('edit-form').onsubmit=async e=>{
+    e.preventDefault();
+    try{const values={};readers.forEach(read=>read(values));const next=await submit(values);
+      if(next && next.nextForm)return;
+      detail(next);dialog.close();await refresh();
+    }catch(err){el('edit-error').textContent=err.message;}
+  };
+  if(!dialog.open)dialog.showModal();
+}
+function startProcess(def,task=''){
+  editFields('Run '+def.id,def.inputs,inputs=>call('process.start',{name:def.id,inputs,task}));
+}
+function chooseProcess(task){
+  editFields('Choose a procedure for '+task.title,{procedure:state.process.definitions.map(d=>d.id)},values=>{
+    startProcess(state.process.definitions.find(d=>d.id===values.procedure),task.id);
+    return {nextForm:true};
+  });
+}
+async function acceptWork(item){
+  const criteria=item.criteria.length?item.criteria:['outcome'];
+  const schema=Object.fromEntries(criteria.map(k=>[k,'str'])), defaults={};
+  if(criteria.includes('stored result') && item.attempts.length){
+    const attempt=await call('process.get',{run:item.attempts[item.attempts.length-1]});
+    if(attempt.state==='completed' && attempt.result.revision)defaults['stored result']=attempt.result.revision;
+  }
+  editFields('Acceptance evidence for '+item.title,schema,evidence=>call('work.accept',{id:item.id,revision:item.revision,evidence}),defaults);
+}
+el('dismiss').onclick=()=>el('editor').close();

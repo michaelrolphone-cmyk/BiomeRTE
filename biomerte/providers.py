@@ -25,17 +25,18 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
 def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None):
     """Publish or revise an offer. Shared physical resources use the same resource ID."""
     owner(ctx, provider)
-    if ctx.permissions is not None and provider in ('builtin','routine'):
+    if ctx.permissions is not None and provider in ('builtin', 'routine'):
         raise Fault('Reserved provider', 403)
-    if ctx.permissions is not None and ('offer:'+contract not in ctx.permissions or 'resource:'+resource not in ctx.permissions):
-        raise Fault('Offer or resource outside provider grant',403)
+    if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
+        raise Fault('Offer or resource outside provider grant', 403)
     tx.need('contracts', contract)
     if state not in ('ready', 'available_after_setup', 'offline'):
         raise Fault('Invalid offer state')
-    if provider not in ('builtin','routine'):
-        authority=tx.get('_enforcers',resource)
-        if authority and authority!=provider:raise Fault('Resource has another enforcement point',409)
-        tx.put('_enforcers',resource,provider)
+    if provider not in ('builtin', 'routine'):
+        authority = tx.get('_enforcers', resource)
+        if authority and authority != provider:
+            raise Fault('Resource has another enforcement point', 409)
+        tx.put('_enforcers', resource, provider)
     key = digest([provider, contract, resource])
     rec = {'id': key, 'provider': ident(provider), 'contract': contract, 'resource': ident(resource),
            'state': state, 'service': service, 'configuration': configuration or {}}
@@ -53,9 +54,9 @@ def discover(tx, ctx, contract=''):
 def admitted(tx, off):
     policy = tx.get('mission', 'current', {}).get('allocation', {})
     mode = policy.get(off['service'])
-    accepted_modes = off.get('configuration',{}).get('modes',[])
+    accepted_modes = off.get('configuration', {}).get('modes', [])
     return off['state'] == 'ready' and (off['service'] not in policy or
-            (mode is not None and (not accepted_modes or mode in accepted_modes)))
+                                        (mode is not None and (not accepted_modes or mode in accepted_modes)))
 
 
 @op('cap.acquire', 'task:str contract:str resource?:str')
@@ -65,19 +66,22 @@ def acquire(tx, ctx, task, contract, resource=''):
     key = digest([task, contract, resource])
     old = tx.get('leases', key)
     if old and old['state'] in ('bound', 'fencing'):
-        if admitted(tx, tx.need('offers',old['offer'])) or not release(tx,old):
+        if admitted(tx, tx.need('offers', old['offer'])) or not release(tx, old):
             return old
     for of in tx.rows('offers'):
         if of['contract'] != contract or not admitted(tx, of) or (resource and resource != of['resource']):
             continue
-        guard_key = (of['resource']+':'+key) if of['provider'] in ('builtin','routine') else of['resource']
+        if any(a['resource'] == of['resource'] and a['state'] == 'pending' for a in tx.rows('activations')):
+            continue
+        guard_key = (of['resource'] + ':' + key) if of['provider'] in ('builtin',
+                                                                       'routine') else of['resource']
         guard = tx.get('guards', guard_key, {'generation': 0, 'holder': ''})
         if guard['holder']:
             continue
         gen = guard['generation'] + 1
         lease = {'id': key, 'task': task, 'contract': contract, 'offer': of['id'],
                  'provider': of['provider'], 'resource': of['resource'], 'generation': gen,
-                 'guard': guard_key, 'state': 'bound' if of['provider'] in ('builtin','routine') else 'fencing'}
+                 'guard': guard_key, 'state': 'bound' if of['provider'] in ('builtin', 'routine') else 'fencing'}
         tx.put('guards', guard_key, {'generation': gen, 'holder': key})
         tx.put('leases', key, lease)
         tx.emit('lease.acquired', {'lease': key, 'generation': gen})
@@ -119,7 +123,8 @@ def release_task(tx, task):
 @op('cap.release', 'lease:str')
 def release_lease(tx, ctx, lease):
     l = tx.need('leases', lease)
-    if ctx.permissions is not None:raise Fault('Lease release is controlled by the task owner',403)
+    if ctx.permissions is not None:
+        raise Fault('Lease release is controlled by the task owner', 403)
     if not release(tx, l):
         raise Fault('Reconcile outstanding operation before release', 409)
     return l
@@ -144,9 +149,9 @@ def dispatch(tx, ctx, lease, inputs, operation):
         a.update(state='succeeded', result={'value': inputs['value']})
     if l['provider'] == 'routine':
         from .process import new_run
-        spec = tx.need('offers',l['offer'])['configuration']
-        child = new_run(tx,spec['process'],inputs,parent='action:'+key,pin=spec['revision'])
-        a.update(state='claimed',child=child['id'])
+        spec = tx.need('offers', l['offer'])['configuration']
+        child = new_run(tx, spec['process'], inputs, parent='action:' + key, pin=spec['revision'])
+        a.update(state='claimed', child=child['id'])
     tx.put('actions', key, a)
     tx.emit('operation.' + a['state'], {'id': key})
     return a
@@ -158,8 +163,9 @@ def pending(tx, ctx, provider):
     leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
     actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
                ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
-    activations=[a for a in tx.rows('activations') if a['provider']==provider and a['state']=='pending']
-    return {'fences': leases, 'actions': actions[:64], 'activations':activations}
+    activations = [a for a in tx.rows('activations') if a['provider']
+                   == provider and a['state'] == 'pending']
+    return {'fences': leases, 'actions': actions[:64], 'activations': activations}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')
@@ -176,7 +182,7 @@ def claim(tx, ctx, provider, operation, generation):
             raise Fault('Dispatch paused by availability or mission', 409)
         a['state'] = 'claimed'
         tx.put('actions', operation, a)
-    return a
+    return dict(a, output_schema=tx.need('contracts', a['contract'])['outputs'])
 
 
 @op('provider.result', 'provider:str operation:str generation:int state:str result:obj')
@@ -203,8 +209,8 @@ def result(tx, ctx, provider, operation, generation, state, result):
 
 @op('cap.status', 'operation:str', False)
 def status(tx, ctx, operation):
-    a=tx.need('actions',operation)
-    owner(ctx,a['provider'])
+    a = tx.need('actions', operation)
+    owner(ctx, a['provider'])
     return a
 
 

@@ -74,32 +74,42 @@ def artifact_get(tx, ctx, sha256):
     return tx.need('artifacts', sha256)
 
 
-@op('knowledge.merge','key:str heads:list resolutions?:obj')
-def merge(tx,ctx,key,heads,resolutions=None):
+@op('knowledge.merge', 'key:str heads:list resolutions?:obj')
+def merge(tx, ctx, key, heads, resolutions=None):
     """Three-way merge sibling object edits. Resolve a conflicting field by choosing a head revision."""
-    doc=tx.need('documents',key)
-    if len(heads)<2 or set(doc['heads'])!=set(heads):raise Fault('Concurrent heads changed',409)
-    records=[tx.need('revisions',h) for h in heads]
-    parents=records[0]['parents']
-    if len(parents)!=1 or any(r['parents']!=parents for r in records):
-        raise Fault('Use knowledge.put with all heads for a multi-generation merge',409)
-    base=tx.need('revisions',parents[0])['body']
-    if not isinstance(base,dict) or any(not isinstance(r['body'],dict) for r in records):
-        raise Fault('Use an explicit merged body for non-object contents',409)
-    missing=object();body={};conflicts=[]
-    fields=set(base)
-    for r in records:fields.update(r['body'])
+    doc = tx.need('documents', key)
+    if len(heads) < 2 or set(doc['heads']) != set(heads):
+        raise Fault('Concurrent heads changed', 409)
+    records = [tx.need('revisions', h) for h in heads]
+    parents = records[0]['parents']
+    if len(parents) != 1 or any(r['parents'] != parents for r in records):
+        raise Fault('Use knowledge.put with all heads for a multi-generation merge', 409)
+    base = tx.need('revisions', parents[0])['body']
+    if not isinstance(base, dict) or any(not isinstance(r['body'], dict) for r in records):
+        raise Fault('Use an explicit merged body for non-object contents', 409)
+    missing = object()
+    body = {}
+    conflicts = []
+    fields = set(base)
+    for r in records:
+        fields.update(r['body'])
     for field in fields:
-        before=base.get(field,missing);changed=[]
+        before = base.get(field, missing)
+        changed = []
         for r in records:
-            value=r['body'].get(field,missing)
-            if value!=before and value not in changed:changed.append(value)
-        if len(changed)>1:
-            choice=(resolutions or {}).get(field)
+            value = r['body'].get(field, missing)
+            if value != before and value not in changed:
+                changed.append(value)
+        if len(changed) > 1:
+            choice = (resolutions or {}).get(field)
             if choice not in heads:
-                conflicts.append(field);continue
-            value=tx.need('revisions',choice)['body'].get(field,missing)
-        else:value=changed[0] if changed else before
-        if value is not missing:body[field]=value
-    if conflicts:return {'state':'conflict','fields':sorted(conflicts),'heads':heads}
-    return put(tx,ctx,key,body,heads,records[0]['links'],records[0]['type'])
+                conflicts.append(field)
+                continue
+            value = tx.need('revisions', choice)['body'].get(field, missing)
+        else:
+            value = changed[0] if changed else before
+        if value is not missing:
+            body[field] = value
+    if conflicts:
+        return {'state': 'conflict', 'fields': sorted(conflicts), 'heads': heads}
+    return put(tx, ctx, key, body, heads, records[0]['links'], records[0]['type'])

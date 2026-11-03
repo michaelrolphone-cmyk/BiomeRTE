@@ -98,6 +98,7 @@ class Records:
 
 class Etcd:
     """etcd v3 JSON gateway. The cluster operates membership and elections."""
+
     def __init__(self, settings, site):
         self.urls = settings['endpoints']
         if not self.urls:
@@ -105,7 +106,7 @@ class Etcd:
         for url in self.urls:
             parsed = urlparse(url)
             if parsed.scheme != 'https' and not (parsed.scheme == 'http' and
-                    parsed.hostname in ('localhost', '127.0.0.1', '::1')):
+                                                 parsed.hostname in ('localhost', '127.0.0.1', '::1')):
                 raise Fault('Use TLS for remote etcd endpoints')
         self.prefix = '/biomerte/' + text(site, 'site') + '/'
         self.context = ssl.create_default_context(cafile=settings.get('ca') or None)
@@ -115,9 +116,12 @@ class Etcd:
         self.timeout = settings.get('timeout', 4)
 
     def rpc(self, path, payload):
+        return self.gateway('kv/' + path, payload, self.urls)
+
+    def gateway(self, path, payload, endpoints):
         errors = []
-        for url in self.urls:
-            req = Request(url.rstrip('/') + '/v3/kv/' + path, encode(payload).encode(),
+        for url in endpoints:
+            req = Request(url.rstrip('/') + '/v3/' + path, encode(payload).encode(),
                           {'Content-Type': 'application/json', 'Authorization': self.auth})
             try:
                 with build_opener(HTTPSHandler(context=self.context)).open(req, timeout=self.timeout) as response:
@@ -147,6 +151,7 @@ class Etcd:
             compare.update(target='VERSION', version='0')
         else:
             compare.update(target='MOD', mod_revision=expected)
+
         def put(key, value):
             return {'requestPut': {'key': self.key(key), 'value': b64(encode(value).encode())}}
         key = 'log/%020d' % number
@@ -209,7 +214,8 @@ class Store:
                     if len(encode(entry).encode()) > 900000:
                         raise Fault('Command exceeds shared transaction size. Split the work.', 413)
                     head = self.remote.append(version, entry)
-                    db.execute('UPDATE position SET seq=?,hash=? WHERE id=1', (head['seq'], head['hash']))
+                    db.execute('UPDATE position SET seq=?,hash=? WHERE id=1',
+                               (head['seq'], head['hash']))
                 db.commit()
                 return result
             except BaseException:

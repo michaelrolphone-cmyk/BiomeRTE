@@ -3,20 +3,20 @@ import copy
 import json
 import operator
 import time
-import xml.etree.ElementTree as ET
 from .api import op, ident, schema, validate, invoke
 from .store import Fault, uid, digest, text
 from . import providers
 from .work import ready
 
 TYPES = set('start end fail set choose fork join service call human message timer each select'.split())
-INTERNAL = set('knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list'.split())
+INTERNAL = set(
+    'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list'.split())
 
 
 def val(expr, variables, depth=0):
     if depth > 32:
         raise Fault('Expression too deep')
-    ev = lambda x: val(x, variables, depth+1)
+    ev = lambda x: val(x, variables, depth + 1)
     if isinstance(expr, list):
         return [ev(e) for e in expr]
     if not isinstance(expr, dict):
@@ -35,7 +35,7 @@ def val(expr, variables, depth=0):
         args = [ev(e) for e in expr['args']]
         ops = {'eq': operator.eq, 'ne': operator.ne, 'gt': operator.gt, 'ge': operator.ge,
                'lt': operator.lt, 'le': operator.le, 'add': operator.add, 'sub': operator.sub,
-               'and': lambda a,b: bool(a and b), 'or': lambda a,b: bool(a or b),
+               'and': lambda a, b: bool(a and b), 'or': lambda a, b: bool(a or b),
                'not': operator.not_, 'len': len}
         if expr['op'] not in ops:
             raise Fault('Unsupported expression')
@@ -74,7 +74,7 @@ def validate_graph(g):
         if n['type'] == 'fork' and (len(n['branches']) < 2 or len(set(n['branches'])) != len(n['branches'])):
             raise Fault('Parallel split needs distinct branches')
         if n['type'] == 'service' and (bool(n.get('contract')) == bool(n.get('operation')) or
-                                      n.get('operation') and n['operation'] not in INTERNAL):
+                                       n.get('operation') and n['operation'] not in INTERNAL):
             raise Fault('Service needs one contract or supported internal operation')
         if n['type'] == 'call':
             ident(n['process'])
@@ -107,17 +107,20 @@ def publish(tx, ctx, name, graph):
 def routine_graph(steps, inputs, outputs, result):
     """Compile sequential, branching and looping steps into a process graph."""
     nodes = {'end': {'type': 'end', 'result': result}}
+
     def add(n):
         key = 'n' + str(len(nodes))
         nodes[key] = n
         return key
+
     def sequence(items, after):
         for item in reversed(items):
             item = dict(item)
             if 'if' in item:
                 yes = sequence(item.get('then', []), after)
                 no = sequence(item.get('else', []), after)
-                after = add({'type': 'choose', 'cases': [{'when': item['if'], 'to': yes}], 'default': no})
+                after = add({'type': 'choose', 'cases': [
+                            {'when': item['if'], 'to': yes}], 'default': no})
             elif 'each' in item:
                 key = add({'type': 'each', 'items': item['each'], 'as': item['as'], 'next': after})
                 nodes[key]['body'] = sequence(item['do'], key)
@@ -165,7 +168,7 @@ def start(tx, ctx, name, inputs, task=''):
     r = new_run(tx, name, inputs, task)
     if task:
         item['attempts'].append(r['id'])
-        item.update(state='running', revision=item['revision']+1)
+        item.update(state='running', revision=item['revision'] + 1)
         tx.put('work', task, item)
     tx.emit('process.started', {'run': r['id'], 'name': name})
     return r
@@ -179,20 +182,21 @@ def get(tx, ctx, run):
 @op('process.list', write=False)
 def listing(tx, ctx):
     return {'definitions': tx.rows('definitions'), 'runs': [
-        {k: r[k] for k in ('id','name','task','parent','state','steps','rev')} for r in tx.rows('runs')]}
+        {k: r[k] for k in ('id', 'name', 'task', 'parent', 'state', 'steps', 'rev')} for r in tx.rows('runs')]}
 
 
 def finish(tx, run, state, result):
     run.update(state=state, result=result)
     if run['parent'].startswith('action:'):
-        a = tx.need('actions',run['parent'][7:])
-        a.update(state='succeeded' if state=='completed' else 'failed',result=result)
-        tx.put('actions',a['id'],a)
-        tx.emit('operation.'+a['state'],{'id':a['id']})
+        a = tx.need('actions', run['parent'][7:])
+        a.update(state='succeeded' if state == 'completed' else 'failed', result=result)
+        tx.put('actions', a['id'], a)
+        tx.emit('operation.' + a['state'], {'id': a['id']})
     if not run['parent'] and run['task']:
         item = tx.need('work', run['task'])
         if item['state'] == 'running':
-            item.update(state='review' if state == 'completed' else 'open', revision=item['revision']+1)
+            item.update(state='review' if state == 'completed' else 'open',
+                        revision=item['revision'] + 1)
             tx.put('work', item['id'], item)
     if not run['task']:
         providers.release_task(tx, run['id'])
@@ -236,11 +240,12 @@ def advance(tx, ctx, r, t, n, version):
             del t['loops'][t['at']]
     elif kind == 'fork':
         group = uid()
-        r['joins'][group] = {'expected': len(n['branches']), 'arrived': [], 'base': copy.deepcopy(variables)}
+        r['joins'][group] = {'expected': len(n['branches']), 'arrived': [
+        ], 'base': copy.deepcopy(variables)}
         r['tokens'].remove(t)
         for branch in n['branches']:
             child = copy.deepcopy(t)
-            child.update(id=uid(), at=branch, groups=t['groups']+[group])
+            child.update(id=uid(), at=branch, groups=t['groups'] + [group])
             r['tokens'].append(child)
         return True
     elif kind == 'join':
@@ -267,15 +272,15 @@ def advance(tx, ctx, r, t, n, version):
         t['vars'] = variables
         del r['joins'][group]
     elif kind == 'select':
-        candidates = [x for x in tx.rows('work') if x['kind']=='task' and ready(tx, x)]
+        candidates = [x for x in tx.rows('work') if x['kind'] == 'task' and ready(tx, x)]
         if not candidates:
             return False
-        item = sorted(candidates, key=lambda x:(-x['priority'], x['sequence'], x['id']))[0]
+        item = sorted(candidates, key=lambda x: (-x['priority'], x['sequence'], x['id']))[0]
         result = start(tx, ctx, n['process'], ev(n.get('args', {})), item['id'])['id']
     elif kind == 'call':
         if 'child' not in t:
             child = new_run(tx, n['process'], ev(n.get('args', {})), r['task'], r['id'],
-                            version['calls'][n['process']], r['depth']+1)
+                            version['calls'][n['process']], r['depth'] + 1)
             t['child'] = child['id']
             r['children'].append(child['id'])
             return True
@@ -290,8 +295,8 @@ def advance(tx, ctx, r, t, n, version):
         if 'wait' not in t:
             t['wait'] = uid()
             tx.put('waits', t['wait'], {'id': t['wait'], 'run': r['id'], 'kind': kind,
-                    'name': n.get('name', t['at']), 'question': ev(n.get('question', '')),
-                    'answer_schema': n.get('outputs', {}), 'state': 'open'})
+                                        'name': n.get('name', t['at']), 'question': ev(n.get('question', '')),
+                                        'answer_schema': n.get('outputs', {}), 'state': 'open'})
             tx.emit('wait.open', {'id': t['wait'], 'run': r['id'], 'kind': kind})
             return True
         wait = tx.need('waits', t['wait'])
@@ -302,16 +307,16 @@ def advance(tx, ctx, r, t, n, version):
     elif kind == 'timer':
         if 'delay_id' not in t:
             seconds = ev(n['seconds'])
-            if not isinstance(seconds,(int,float)) or seconds < 0:
+            if not isinstance(seconds, (int, float)) or seconds < 0:
                 raise Fault('Invalid delay')
-            t['delay_id'],t['seconds'] = uid(),seconds
+            t['delay_id'], t['seconds'] = uid(), seconds
             ctx.app.timer_anchors[t['delay_id']] = time.monotonic()
             return True
         # A replacement controller starts a conservative local delay if it never observed this wait.
-        anchor=ctx.app.timer_anchors.setdefault(t['delay_id'],time.monotonic())
-        if time.monotonic()-anchor < t['seconds']:
+        anchor = ctx.app.timer_anchors.setdefault(t['delay_id'], time.monotonic())
+        if time.monotonic() - anchor < t['seconds']:
             return False
-        ctx.app.timer_anchors.pop(t.pop('delay_id'),None)
+        ctx.app.timer_anchors.pop(t.pop('delay_id'), None)
         del t['seconds']
     elif kind == 'service':
         inputs = ev(n.get('args', {}))
@@ -325,7 +330,7 @@ def advance(tx, ctx, r, t, n, version):
                 except Fault as e:
                     if e.status == 409:
                         from .extensions import prepare
-                        prepare(tx,ctx,n['contract'],ev(n.get('resource','')))
+                        prepare(tx, ctx, n['contract'], ev(n.get('resource', '')))
                         if t.get('blocked') == str(e):
                             return False
                         t['blocked'] = str(e)
@@ -336,7 +341,7 @@ def advance(tx, ctx, r, t, n, version):
                 t.pop('blocked', None)
                 return True
             a = tx.need('actions', t['action'])
-            if a['state'] in ('queued','claimed','uncertain'):
+            if a['state'] in ('queued', 'claimed', 'uncertain'):
                 return False
             if a['state'] != 'succeeded':
                 raise Fault('Provider failed: ' + str(a.get('result')))
@@ -357,16 +362,16 @@ def tick(tx, ctx, budget=64):
     for sub in tx.rows('subscriptions'):
         if sub['process']:
             # Starting and acknowledging are atomic. An event filter prevents accidental self-triggers.
-            for e in events_after(tx, sub['cursor'], sub['topic'], min(8,budget-moves)):
+            for e in events_after(tx, sub['cursor'], sub['topic'], min(8, budget - moves)):
                 new_run(tx, sub['process'], {'event': e})
                 sub['cursor'] = e['seq']
                 tx.put('subscriptions', sub['id'], sub)
                 moves += 1
                 if moves == budget:
                     return moves
-    runs = [r for r in tx.rows('runs') if r['state']=='running']
-    cursor = tx.get('_meta','last_run','')
-    runs.sort(key=lambda r:(r['id'] <= cursor,r['id']))
+    runs = [r for r in tx.rows('runs') if r['state'] == 'running']
+    cursor = tx.get('_meta', 'last_run', '')
+    runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
         version = tx.need('process_versions', r['rev'])
         for t in list(r['tokens']):
@@ -385,26 +390,26 @@ def tick(tx, ctx, budget=64):
                 tx.db.execute('ROLLBACK TO activity')
                 tx.changes = change_backup
                 r = backup
-                failed = next(v for v in r['tokens'] if v['id']==t['id'])
+                failed = next(v for v in r['tokens'] if v['id'] == t['id'])
                 if 'on_error' in n:
                     failed.update(at=n['on_error'])
-                    for pending in ('action','child','wait','due','blocked'):
-                        failed.pop(pending,None)
+                    for pending in ('action', 'child', 'wait', 'due', 'blocked'):
+                        failed.pop(pending, None)
                     failed['vars']['error'] = str(exc)
                 else:
-                    finish(tx, r, 'failed', {'error':str(exc),'activity':failed['at']})
+                    finish(tx, r, 'failed', {'error': str(exc), 'activity': failed['at']})
                 changed = True
                 tx.db.execute('RELEASE activity')
                 r['steps'] += 1
                 tx.put('runs', r['id'], r)
-                tx.put('_meta','last_run',r['id'])
+                tx.put('_meta', 'last_run', r['id'])
                 moves += 1
                 break
             tx.db.execute('RELEASE activity')
             if changed:
                 r['steps'] += 1
                 tx.put('runs', r['id'], r)
-                tx.put('_meta','last_run',r['id'])
+                tx.put('_meta', 'last_run', r['id'])
                 moves += 1
         if moves >= budget:
             break
@@ -421,37 +426,37 @@ def answer(tx, ctx, wait, answer):
     w = tx.need('waits', wait)
     if w['state'] == 'answered':
         if w['answer'] != answer:
-            raise Fault('Wait already answered differently',409)
+            raise Fault('Wait already answered differently', 409)
         return w
-    if tx.need('runs',w['run'])['state'] != 'running':
-        raise Fault('Run already terminal',409)
-    validate(schema(w['answer_schema']),answer)
-    w.update(state='answered',answer=answer,actor=ctx.actor)
-    return tx.put('waits',wait,w)
+    if tx.need('runs', w['run'])['state'] != 'running':
+        raise Fault('Run already terminal', 409)
+    validate(schema(w['answer_schema']), answer)
+    w.update(state='answered', answer=answer, actor=ctx.actor)
+    return tx.put('waits', wait, w)
 
 
 @op('process.waits', 'run?:str', False)
 def waits(tx, ctx, run=''):
-    return [w for w in tx.rows('waits') if w['state']=='open' and
-            (not run or w['run']==run) and tx.need('runs',w['run'])['state']=='running']
+    return [w for w in tx.rows('waits') if w['state'] == 'open' and
+            (not run or w['run'] == run) and tx.need('runs', w['run'])['state'] == 'running']
 
 
 @op('process.cancel', 'run:str')
 def cancel(tx, ctx, run):
-    r = tx.need('runs',run)
-    if r['state']=='running':
+    r = tx.need('runs', run)
+    if r['state'] == 'running':
         for child in r['children']:
             cancel(tx, ctx, child)
         for t in r['tokens']:
             if 'action' in t:
-                a = tx.need('actions',t['action'])
-                if a['state']=='queued':
-                    a.update(state='failed',result={'cancelled': True})
-                elif a['state']=='claimed':
-                    a.update(state='uncertain',result={'reason':'cancelled after dispatch'})
-                tx.put('actions',a['id'],a)
-        finish(tx,r,'cancelled',{})
-        tx.put('runs',run,r)
+                a = tx.need('actions', t['action'])
+                if a['state'] == 'queued':
+                    a.update(state='failed', result={'cancelled': True})
+                elif a['state'] == 'claimed':
+                    a.update(state='uncertain', result={'reason': 'cancelled after dispatch'})
+                tx.put('actions', a['id'], a)
+        finish(tx, r, 'cancelled', {})
+        tx.put('runs', run, r)
     return r
 
 
@@ -464,16 +469,16 @@ def learn(tx, ctx, run, name, bindings=None):
     steps, inputs = [], {}
     for a in r['trace']:
         args = dict(a['inputs'])
-        for field, param in (bindings or {}).get(a['activity'],{}).items():
-            typ = tx.need('contracts',a['contract'])['inputs'][field]['type']
+        for field, param in (bindings or {}).get(a['activity'], {}).items():
+            typ = tx.need('contracts', a['contract'])['inputs'][field]['type']
             inputs[ident(param)] = typ
-            args[field] = {'$':'input.'+param}
-        steps.append({'type':'service','contract':a['contract'],'args':args,'save':'last'})
-    return routine(tx,ctx,name,steps,inputs,{'last':'obj'}, {'last':{'$':'last'}})
+            args[field] = {'$': 'input.' + param}
+        steps.append({'type': 'service', 'contract': a['contract'], 'args': args, 'save': 'last'})
+    return routine(tx, ctx, name, steps, inputs, {'last': 'obj'}, {'last': {'$': 'last'}})
 
 
 @op('bpmn.import', 'name:str xml:str')
 def import_bpmn(tx, ctx, name, xml):
     """Import one executable BPMN process. Biome extension attributes use urn:biomerte:v1."""
     from .xmlprofile import compile_xml
-    return publish(tx,ctx,name,compile_xml(xml))
+    return publish(tx, ctx, name, compile_xml(xml))
