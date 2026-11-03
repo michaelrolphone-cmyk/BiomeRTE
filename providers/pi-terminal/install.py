@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from terminal import CONTRACT, OUTPUTS, check_argv, read_json, terminal_usage
+from terminal import CONTRACT, DEFAULT_SLOTS, OUTPUTS, check_argv, read_json, terminal_pool
 
 
 def replace(path, data):
@@ -40,7 +40,7 @@ def main():
     parser.add_argument('--checkout', default=os.path.join(here, '..', '..'))
     parser.add_argument('--controller-home', default=os.environ.get(
         'BIOME_HOME', os.path.join(base, '.local/share/biomerte')))
-    parser.add_argument('--slots', type=int, default=16,
+    parser.add_argument('--slots', type=int, default=DEFAULT_SLOTS,
                         help='maximum simultaneous BiomeRTE terminal sessions (default 16)')
     parser.add_argument('--port', type=int, help='override the controller loopback port')
     args = parser.parse_args()
@@ -96,10 +96,9 @@ def main():
     adapter = os.path.join(home, 'terminal.py')
     with open(os.path.join(here, 'terminal.py'), 'rb') as src:
         replace(adapter, src.read())
-    offer = {'contract': CONTRACT, 'resource': resource, 'service': 'terminal', 'capacity': args.slots,
-             'argv': [sys.executable, adapter, manifest], 'usage': terminal_usage(scoped_profile)}
-    cfg = {'url': url, 'site': node['site'], 'offers': [offer], 'parallelism': args.slots, 'supervisor_dir': runtime,
-           'timeout': limits['duration_seconds'] + 300, 'terminal_profile': scoped_profile}
+    cfg = terminal_pool(resource, scoped_profile, [sys.executable, adapter, manifest], args.slots)
+    cfg.update(url=url, site=node['site'], supervisor_dir=runtime,
+               timeout=limits['duration_seconds'] + 300, terminal_profile=scoped_profile)
     replace(manifest, json.dumps(cfg, indent=2).encode())
     unit = 'biomerte-terminal.service'
     # Jessie systemd needs the first ExecStart token to be an unquoted absolute path.

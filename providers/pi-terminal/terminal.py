@@ -7,6 +7,7 @@ import socket
 import sys
 
 CONTRACT = 'host.terminal.run:1'
+DEFAULT_SLOTS = 16
 OUTPUTS = {'exit_code': 'int', 'stdout': 'str', 'stderr': 'str', 'streams': 'obj',
            'evidence': 'obj'}
 
@@ -19,13 +20,21 @@ def terminal_usage(profile):
         'parameters': {'argv': 'An array of 1 to 32 strings, each at most 4096 characters. '
                                'Start with the enrolled executable ' + exe + '. Pass -c and one script string for shell syntax.'},
         'example_inputs': {'argv': [exe, '-c', 'hostname']},
-        'read_result': 'On succeeded, read result.exit_code and result.stdout/stderr. For hostname, stdout is the Pi host name. '
+        'read_result': 'On succeeded, read result.exit_code and result.stdout/stderr. For hostname, stdout is the selected host name. '
                        'The text previews cover the first 4096 bytes per stream. For complete output use artifact.get with each '
                        'result.streams.stdout or stderr chunk sha256, base64-decode in order and verify the stream digest.',
         'errors': 'Exit 126 with evidence.executed=false means the argv or executable digest check rejected the command. '
                   'An executed program can return a nonzero exit code. This profile allows %d seconds and %d bytes per output file.'
                   % (limits['duration_seconds'], limits['output_bytes'])
     }
+
+
+def terminal_pool(resource, profile, adapter_argv, slots=DEFAULT_SLOTS):
+    if type(slots) is not int or slots < 1:
+        raise ValueError('Terminal slots must be a positive integer')
+    offer = {'contract': CONTRACT, 'resource': resource, 'service': 'terminal',
+             'capacity': slots, 'argv': adapter_argv, 'usage': terminal_usage(profile)}
+    return {'offers': [offer], 'parallelism': slots}
 
 
 def read_json(path):
