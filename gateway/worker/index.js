@@ -1,4 +1,4 @@
-import {grokAction,grokTools,sealGrokJob} from '../lib/grok.mjs';
+import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
 import {eventGrant,changeSubscription,delegationEvent} from '../lib/events.mjs';
 import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
@@ -40,12 +40,12 @@ async function dispatch(req,env) {
  if(method!=='tools/call')return reply({jsonrpc:'2.0',id,error:{code:-32601,message:'Unknown method'}});
  const owner=bearerOwner||await ownerPrincipal(req,env);
  if(!owner)return reply({error:'Owner sign-in required'},403);
- const action=grokAction(params.name);
- if(action){
+ const grok=grokCall(params);
+ if(grok){
   const grant=await eventGrant(req,env,external);
   const key='event-grok-'+crypto.randomUUID();
-  const args=params.arguments??{};
-  if(typeof args!=='object'||Array.isArray(args)||JSON.stringify(args).length>12000)
+  const {action,args}=grok;
+  if(!args||typeof args!=='object'||Array.isArray(args)||JSON.stringify(args).length>12000)
    return ok({isError:true,content:[{type:'text',text:'Invalid receiver parameters.'}]});
   const sealed=await sealGrokJob(env,key,{owner,grant,action,args});
   return ok(await enqueue(env,'sealed_grok_receiver',sealed,key));

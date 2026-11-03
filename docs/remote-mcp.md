@@ -84,6 +84,11 @@ The URL path and key are omitted from management receipts.
 | `biome_list_grok_webhooks` | No arguments. Returns filters, origin, cursor, last accepted delivery time, and last error for this connection. |
 | `biome_unregister_grok_webhook` | The same `receiver` and `realm`, and a new `request_id`. |
 
+Clients that already cached the original tool list can also call `biome_invoke`
+with `grok.receiver.register`, `grok.receiver.list`, or
+`grok.receiver.unregister`. For these aliases, pass the normal outer `realm`
+and `request_id`. They use the same authorization and protected receiver store.
+
 The default mode, `bearer`, sends Grok Bot's `Authorization: Bearer` header.
 The separate Grok Automations product issues a `whsec_` signing secret;
 specify `auth_mode: "standard_webhooks"` for that trigger. Always use the

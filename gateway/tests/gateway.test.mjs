@@ -88,3 +88,11 @@ test('Grok OAuth registration is sealed in transit storage and returned only to 
  assert.equal(sql.prepare('SELECT request FROM bridge_jobs').get().request,'{}');
  sql.close();
 });
+
+test('cached clients reach the same receiver registration through biome_invoke',async()=>{
+ const {grokCall}=await import('../lib/grok.mjs');
+ const settings={receiver:'field',url:'https://unit.test/entry',key:'test'};
+ const outer={operation:'grok.receiver.register',realm:'local',request_id:'new',arguments:settings};
+ assert.deepEqual(grokCall({name:'biome_invoke',arguments:outer}),{action:'register',args:{...settings,realm:'local',request_id:'new'}});
+ assert.equal(grokCall({name:'biome_invoke',arguments:{operation:'work.list',arguments:{}}}),null);
+});

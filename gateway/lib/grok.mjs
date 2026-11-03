@@ -19,6 +19,19 @@ export const grokTools=[
 ];
 const grokActions = new Map(grokTools.map((tool,i)=>[tool.name,['register','list','unregister'][i]]));
 export function grokAction(name){return grokActions.get(name);}
+const grokOperations=new Map([['grok.receiver.register','register'],['grok.receiver.list','list'],['grok.receiver.unregister','unregister']]);
+export function grokCall(params){
+ const direct=grokAction(params.name);
+ if(direct)return {action:direct,args:params.arguments??{}};
+ if(params.name!=='biome_invoke')return null;
+ const envelope=params.arguments??{};
+ const action=grokOperations.get(envelope.operation);
+ if(!action)return null;
+ const supplied=envelope.arguments;
+ if(!supplied||typeof supplied!=='object'||Array.isArray(supplied))return {action,args:null};
+ if(action==='list')return {action,args:supplied};
+ return {action,args:{...supplied,realm:envelope.realm??'site',request_id:envelope.request_id}};
+}
 const toB64=bytes=>btoa(Array.from(bytes,byte=>String.fromCharCode(byte)).join(''));
 const fromB64=str=>Uint8Array.from(atob(str),c=>c.charCodeAt(0));
 async function wrappingKey(env){
