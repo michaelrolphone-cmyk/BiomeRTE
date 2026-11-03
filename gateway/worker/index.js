@@ -1,3 +1,4 @@
+import {eventGrant,changeSubscription,delegationEvent} from '../lib/events.mjs';
 import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
 import {device,limitedJSON,reply,runTool,toolsList} from '../lib/bridge.mjs';
@@ -15,7 +16,8 @@ async function dispatch(req,env) {
  const origin=req.headers.get('Origin');
  if (origin && origin!==url.origin) return reply({error:'Untrusted origin'},403);
  const external=path==='/api/mcp';
- if(external && !await bearerPrincipal(req,conf)) return Response.json({error:'invalid_token'},{status:401,headers:{...privateHeaders,'WWW-Authenticate':challenge(conf)}});
+ const bearerOwner=external ? await bearerPrincipal(req,conf) : null;
+ if(external && !bearerOwner) return Response.json({error:'invalid_token'},{status:401,headers:{...privateHeaders,'WWW-Authenticate':challenge(conf)}});
  if(req.method!=='POST') return new Response(null,{status:405,headers:{Allow:'POST'}});
  let body;
  try{body=await limitedJSON(req,125000)}catch{return reply({error:'Invalid JSON or oversized request'},400)}
@@ -23,10 +25,17 @@ async function dispatch(req,env) {
  const {method,id,params={}}=body;
  const ok=result=>reply({jsonrpc:'2.0',id,result});
  if(method.startsWith('notifications/'))return new Response(null,{status:202});
- if(method==='server/discover')return ok({supportedVersions:protocols,capabilities:{tools:{}}});
- if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
+ if(method==='server/discover')return ok({resultType:'complete',supportedVersions:protocols,capabilities:{tools:{},events:{}}});
+ if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{},events:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
  if(method==='ping')return ok({});
  if(method==='tools/list')return ok({tools:toolsList});
+ if(method==='events/list')return ok({events:[delegationEvent]});
+ if(method==='events/subscribe'||method==='events/unsubscribe'){
+  const owner=bearerOwner||await ownerPrincipal(req,env);
+  if(!owner)return reply({error:'Owner sign-in required'},403);
+  const response=await changeSubscription(env,method,params,owner,await eventGrant(req,env,external));
+  return reply({jsonrpc:'2.0',id,...response});
+ }
  if(method!=='tools/call')return reply({jsonrpc:'2.0',id,error:{code:-32601,message:'Unknown method'}});
  if(!external && !await ownerPrincipal(req,env))return reply({error:'Owner sign-in required'},403);
  return ok(await runTool(env,params.name,params.arguments));

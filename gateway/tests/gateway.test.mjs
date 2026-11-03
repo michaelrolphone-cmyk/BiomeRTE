@@ -47,3 +47,21 @@ test('controller claims and completes an authenticated OAuth call, same ID recov
  assert.deepEqual(await (await send('/bridge/next',{},link)).json(),{idle:true});
  sql.close();
 });
+
+test('MCP events are advertised on both handshakes; subscriptions and grant checks enforce ownership',async()=>{
+ const {sql,send,rpc,owner,deviceKey}=fixture();
+ for(const method of ['initialize','server/discover']){
+  assert.deepEqual((await (await send('/mcp',rpc(method))).json()).result.capabilities.events,{});
+ }
+ const list=await (await send('/mcp',rpc('events/list',{_meta:{progressToken:'scan'}}))).json();
+ assert.equal(list.result.events[0].name,'workflow.delegation.requested');
+ assert.equal((await send('/mcp',rpc('events/subscribe'))).status,403);
+ assert.equal((await send('/api/mcp',rpc('events/list'))).status,401);
+ const bad=await (await send('/mcp',rpc('events/subscribe',{name:'bad'}),owner)).json();
+ assert.equal(bad.error.code,-32602);
+ const h={Authorization:'Bearer '+deviceKey};
+ assert.equal((await (await send('/bridge/event-authorize',{owner:'owner',grant:null},h)).json()).allowed,true);
+ assert.equal((await (await send('/bridge/event-authorize',{owner:'owner',grant:'revoked'},h)).json()).allowed,false);
+ assert.equal((await (await send('/bridge/event-authorize',{owner:'impostor',grant:null},h)).json()).allowed,false);
+ sql.close();
+});

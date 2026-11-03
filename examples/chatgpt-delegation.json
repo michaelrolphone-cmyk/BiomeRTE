@@ -1,0 +1,10 @@
+{
+  "name": "review-observation",
+  "inputs": {"observation": "str"},
+  "outputs": {"summary": "str"},
+  "steps": [
+    {"type":"delegate","to":"chatgpt","request":"Summarize the supplied observation in one sentence.",
+     "context":{"observation":{"$":"input.observation"}},"outputs":{"summary":"str"},"save":"review"}
+  ],
+  "result":{"summary":{"$":"review.summary"}}
+}

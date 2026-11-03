@@ -8,7 +8,7 @@ from .store import Fault, uid, digest, text
 from . import providers
 from .work import ready
 
-TYPES = set('start end fail set choose fork join service call human message timer each select'.split())
+TYPES = set('start end fail set choose fork join service call human message delegate timer each select'.split())
 INTERNAL = set(
     'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list'.split())
 
@@ -76,6 +76,10 @@ def validate_graph(g):
         if n['type'] == 'service' and (bool(n.get('contract')) == bool(n.get('operation')) or
                                        n.get('operation') and n['operation'] not in INTERNAL):
             raise Fault('Service needs one contract or supported internal operation')
+        if n['type'] == 'delegate':
+            if n.get('to') != 'chatgpt' or 'request' not in n:
+                raise Fault('A delegate node needs to=chatgpt and a request')
+            schema(n.get('outputs', {}))
         if n['type'] == 'call':
             ident(n['process'])
         pending.extend(targets(n))
@@ -299,15 +303,33 @@ def advance(tx, ctx, r, t, n, version):
         if child['state'] != 'completed':
             raise Fault('Subroutine %s %s: %s' % (child['name'], child['state'], child['result'].get('error', 'no successful result')))
         result = child['result']
-    elif kind in ('human', 'message'):
+    elif kind in ('human', 'message', 'delegate'):
         if 'wait' not in t:
-            t['wait'] = uid()
-            tx.put('waits', t['wait'], {'id': t['wait'], 'run': r['id'], 'kind': kind,
-                                        'name': n.get('name', t['at']), 'question': ev(n.get('question', '')),
-                                        'answer_schema': n.get('outputs', {}), 'state': 'open'})
-            tx.emit('wait.open', {'id': t['wait'], 'run': r['id'], 'kind': kind})
+            wait_id = uid()
+            w = {'id': wait_id, 'run': r['id'], 'kind': kind, 'name': n.get('name', t['at']),
+                 'question': ev(n.get('question', '')), 'answer_schema': n.get('outputs', {}), 'state': 'open'}
+            if kind == 'delegate':
+                from datetime import datetime, timezone
+                request = text(ev(n['request']), 'delegated request', 8000)
+                context = ev(n.get('context', {}))
+                if not isinstance(context, dict) or len(json.dumps(context).encode('utf-8')) > 32000:
+                    raise Fault('Delegation context must be an object of at most 32 kB')
+                w.update(to='chatgpt', question=request, context=context, workflow=r['name'],
+                         activity=t['at'], task=r['task'])
+                seq = tx.get('_meta', 'delegation_sequence', 0) + 1
+                data = {'delegation_id': wait_id, 'run_id': r['id'], 'workflow': r['name'],
+                        'activity': t['at'], 'realm': ctx.scope}
+                tx.put('delegation_events', '%020d' % seq, {'seq': seq, 'data': data,
+                       'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')})
+                tx.put('_meta', 'delegation_sequence', seq)
+                tx.emit('workflow.delegation.requested', data)
+            t['wait'] = wait_id
+            tx.put('waits', wait_id, w)
+            tx.emit('wait.open', {'id': wait_id, 'run': r['id'], 'kind': kind})
             return True
         wait = tx.need('waits', t['wait'])
+        if wait['state'] == 'failed':
+            raise Fault(wait['error'])
         if wait['state'] != 'answered':
             return False
         result = wait['answer']
@@ -437,6 +459,8 @@ def pump(tx, ctx, budget=64):
 @op('process.answer', 'wait:str answer:obj')
 def answer(tx, ctx, wait, answer):
     w = tx.need('waits', wait)
+    if w['kind'] == 'delegate':
+        raise Fault('Use delegation.complete with the current claim', 409)
     if w['state'] == 'answered':
         if w['answer'] != answer:
             raise Fault('Wait already answered differently', 409)
@@ -446,6 +470,73 @@ def answer(tx, ctx, wait, answer):
     validate(schema(w['answer_schema']), answer)
     w.update(state='answered', answer=answer, actor=ctx.actor)
     return tx.put('waits', wait, w)
+
+
+@op('delegation.feed', 'after?:int limit?:int', False)
+def delegation_feed(tx, ctx, after=0, limit=16):
+    """Ordered immutable request references. A zero limit reads the current watermark."""
+    if after < 0 or limit < 0:
+        raise Fault('Invalid delegation cursor')
+    rows = tx.db.execute("SELECT value FROM records WHERE kind='delegation_events' AND id>? ORDER BY id LIMIT ?",
+                         ('%020d' % after, min(64, limit)))
+    return {'events': [json.loads(row[0]) for row in rows], 'high': tx.get('_meta', 'delegation_sequence', 0)}
+
+
+def delegation(tx, key):
+    w = tx.need('waits', key)
+    if w['kind'] != 'delegate':
+        raise Fault('Not a ChatGPT delegation', 409)
+    return w
+
+
+@op('delegation.get', 'id:str', False)
+def delegation_get(tx, ctx, id):
+    """Read the authoritative request, context, expected output and current state."""
+    w = delegation(tx, id)
+    return dict(w, run_state=tx.need('runs', w['run'])['state'])
+
+
+@op('delegation.claim', 'id:str claimant:str')
+def delegation_claim(tx, ctx, id, claimant):
+    """Acquire the right to work this request. Reuse the claimant after an interrupted call."""
+    ident(claimant)
+    w = delegation(tx, id)
+    if w['state'] != 'open' or tx.need('runs', w['run'])['state'] != 'running':
+        raise Fault('Delegation is no longer open', 409)
+    if w.get('claimant') and w['claimant'] != claimant:
+        raise Fault('Delegation already claimed', 409)
+    w['claimant'] = claimant
+    return tx.put('waits', id, w)
+
+
+@op('delegation.release', 'id:str claimant:str')
+def delegation_release(tx, ctx, id, claimant):
+    """Release a claim after reconciling any external effects."""
+    w = delegation(tx, id)
+    if w['state'] != 'open' or w.get('claimant') != claimant:
+        raise Fault('Not the active delegation claim', 409)
+    del w['claimant']
+    return tx.put('waits', id, w)
+
+
+@op('delegation.complete', 'id:str claimant:str result?:obj error?:str')
+def delegation_complete(tx, ctx, id, claimant, result=None, error=None):
+    """Return the claimed result or failure; a matched retry has no further effect."""
+    w = delegation(tx, id)
+    if w.get('claimant') != claimant or (result is None) == (error is None):
+        raise Fault('Supply the current claimant and exactly one result or error', 409)
+    if w['state'] != 'open':
+        if (result is not None and w.get('answer') == result) or (error is not None and w.get('error') == error):
+            return w
+        raise Fault('Delegation already resolved', 409)
+    if tx.need('runs', w['run'])['state'] != 'running':
+        raise Fault('Workflow no longer running', 409)
+    if result is not None:
+        validate(schema(w['answer_schema']), result)
+        w.update(state='answered', answer=result)
+    else:
+        w.update(state='failed', error=text(error, 'error', 4000))
+    return tx.put('waits', id, w)
 
 
 @op('process.waits', 'run?:str', False)

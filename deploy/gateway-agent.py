@@ -7,6 +7,8 @@ import os
 import socket
 import sys
 import time
+import threading
+from mcp_events import EventStore, CallbackError
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
@@ -66,6 +68,46 @@ def read_secret(path):
     return secret
 
 
+def event_service(path, local, home, origin, token, site_access):
+    def feed(realm, after, limit):
+        with open(os.path.join(home, 'node.json')) as f:
+            credential = json.load(f)['admin_token']
+        call = {'operation': 'delegation.feed', 'arguments': {'after': after, 'limit': limit}, 'realm': realm}
+        rpc = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'invoke', 'arguments': call}}
+        result = fetch(local + '/mcp', rpc, credential)['result']
+        if result.get('isError'):
+            raise ValueError('Controller delegation feed unavailable')
+        return json.loads(result['content'][0]['text'])
+
+    def authorize(owner, grant):
+        return fetch(origin + '/bridge/event-authorize', {'owner': owner, 'grant': grant}, token,
+                     site_access=site_access)['allowed']
+    return EventStore(path, feed, authorize)
+
+
+def delivery_loop(factory):
+    store = factory()
+    while True:
+        try:
+            if store.active():
+                store.deliver()
+        except Exception as exc:
+            # Callback URLs and signing secrets must never reach logs.
+            print('Event delivery retry: ' + type(exc).__name__, file=sys.stderr, flush=True)
+        time.sleep(2)
+
+
+def event_change(store, args):
+    try:
+        result = store.change(args['method'], args['params'], args['owner'], args['grant'])
+        body = {'result': result}
+    except CallbackError as exc:
+        body = {'error': {'code': -32015, 'message': 'Callback verification failed', 'data': {'reason': str(exc)}}}
+    except (ValueError, TypeError, KeyError):
+        body = {'error': {'code': -32602, 'message': 'Invalid subscription parameters'}}
+    return {'content': [{'type': 'text', 'text': json.dumps(body)}]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--origin', required=True)
@@ -92,6 +134,12 @@ def main():
         if access.get('origin') != origin:
             raise SystemExit('Private Site access belongs to a different origin')
         site_access = access['token']
+    events_file = os.path.join(os.path.dirname(args.key), 'events.sqlite')
+    factory = lambda: event_service(events_file, local, args.home, origin, token, site_access)
+    events = factory()
+    thread = threading.Thread(target=delivery_loop, args=(factory,))
+    thread.daemon = True
+    thread.start()
     pause = 2
     while True:
         try:
@@ -101,8 +149,11 @@ def main():
                 time.sleep(4)
                 continue
             try:
-                with open(os.path.join(args.home, 'node.json')) as f:
-                    result = dispatch(job, local, json.load(f))
+                if job['request']['name'] == 'mcp_event_change':
+                    result = event_change(events, job['request']['arguments'])
+                else:
+                    with open(os.path.join(args.home, 'node.json')) as f:
+                        result = dispatch(job, local, json.load(f))
             except Exception as exc:
                 result = {'isError': True, 'content': [{'type': 'text', 'text': 'Controller request failed: ' + str(exc)}]}
             try:

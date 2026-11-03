@@ -36,3 +36,36 @@ For an owner-private Site, the agent can read a mode-0600 `site-access.json`
 beside its dedicated key. It contains the exact `origin` and that Site's
 platform service-access `token`. The agent sends the extra header only to that
 origin over HTTPS. Application-level device authentication is still required.
+
+## Delegate a workflow step to ChatGPT
+
+Add a `delegate` step with `to: "chatgpt"` where the workflow needs judgment.
+The step binds its `request` and `context` using the normal workflow expressions,
+declares a typed `outputs` object, and saves the returned object with `save`.
+A BPMN `serviceTask` can use `biome:delegate="chatgpt"` with the same bindings.
+See [the complete routine](../examples/chatgpt-delegation.json).
+
+Subscribe in ChatGPT to **workflow.delegation.requested**. An optional
+`workflow` filter selects an exact workflow name. The `realm` defaults to
+`site`; use `local` for isolated work. A new subscription enumerates requests
+from the beginning unless a cursor is provided. State on the controller is
+authoritative, so skip requests that are already resolved or cancelled.
+
+For each event use `biome_invoke` in its realm:
+
+1. Read `delegation.get` with the event's `delegation_id` as `id`. Read the
+   request, context, and expected result, and check that the run is still active.
+2. Call `delegation.claim` with `id` and a unique `claimant` for the worker
+   execution. Reuse that identity across retries. If another worker has claimed
+   the step, leave it there.
+3. Perform the requested work with the user's existing permissions. Return
+   `delegation.complete` with `id`, the same `claimant`, and the typed `result`,
+   or a nonempty `error` to take the workflow's error branch. The engine resumes
+   from the correlated wait. `delegation.release` allows deliberate reassignment
+   after an interrupted worker's effects have been reconciled.
+
+The gateway advertises events on both MCP transports. The host persists
+subscriptions and cursors alongside its outbound link key. It verifies callback
+ownership and signs webhook deliveries. Transient failures retry with the same
+event ID; the receiver's successful HTTP response acknowledges delivery only.
+The workflow continues to wait for the result.

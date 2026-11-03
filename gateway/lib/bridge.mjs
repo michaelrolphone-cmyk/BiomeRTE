@@ -1,3 +1,4 @@
+import {canDeliver} from './events.mjs';
 import {sameSecret} from './access.mjs';
 export const reply = (data, status=200) => Response.json(data, {status, headers:{'Cache-Control':'no-store'}});
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -24,6 +25,10 @@ export async function device(req, env, path) {
  if (!token || !env.BIOME_BRIDGE_PIN || !sameSecret(await hexHash(await hexHash(token)+'\n'), env.BIOME_BRIDGE_PIN))
   return reply({error:'Invalid device credential'},401);
  if (req.method !== 'POST') return reply({error:'Use POST'},405);
+ if (path === '/bridge/event-authorize') {
+  const {owner,grant}=await limitedJSON(req,2048);
+  return reply({allowed:await canDeliver(env.DB,owner,grant)});
+ }
  if (path === '/bridge/check') {
   // A device can verify its own round trip. This credential cannot choose an
   // operation or use the client MCP endpoint.
@@ -40,7 +45,7 @@ export async function device(req, env, path) {
   const d = await limitedJSON(req,500000);
   if (typeof d.id !== 'string' || typeof d.lease !== 'string' || !Array.isArray(d.result?.content))
    return reply({error:'Invalid controller result'},400);
-  const row = await db.prepare("UPDATE bridge_jobs SET state='done',result=?,updated=? WHERE id=? AND lease=? AND state='claimed' RETURNING id")
+  const row = await db.prepare("UPDATE bridge_jobs SET state='done',request=CASE WHEN id LIKE 'event-%' THEN '{}' ELSE request END,result=?,updated=? WHERE id=? AND lease=? AND state='claimed' RETURNING id")
    .bind(JSON.stringify(d.result),time,d.id,d.lease).first();
   return reply({accepted:!!row},row?200:409);
  }
@@ -69,6 +74,9 @@ export async function runTool(env, name, args={}) {
       !['site','local'].includes(args.realm??'site')) return toolError('Expected operation, arguments, request_id and optional realm');
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
  const key = name==='biome_invoke' ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
+ return enqueue(env,name,args,key);
+}
+export async function enqueue(env,name,args,key){
  const payload=JSON.stringify(canonical({name,arguments:args})), time=epoch(), db=env.DB;
  if(payload.length>96000) return toolError('Request too large');
  await db.prepare('DELETE FROM bridge_jobs WHERE updated<?').bind(time-3600).run();
@@ -76,7 +84,7 @@ export async function runTool(env, name, args={}) {
   .bind(key,payload,time+22,time,time).run();
  let row=await db.prepare('SELECT request,state,result,deadline FROM bridge_jobs WHERE id=?').bind(key).first();
  if(!row) return toolError('Controller queue is busy. Retry with the same request_id.');
- if(row.request!==payload) return toolError('request_id already belongs to a different request.');
+ if(key.startsWith('invoke-') && row.request!==payload) return toolError('request_id already belongs to a different request.');
  if(row.state==='done') return JSON.parse(row.result);
  if(row.deadline<time) await db.prepare("UPDATE bridge_jobs SET deadline=?,updated=? WHERE id=? AND state!='done'").bind(time+22,time,key).run();
  for(let turn=0;turn<20;turn++){

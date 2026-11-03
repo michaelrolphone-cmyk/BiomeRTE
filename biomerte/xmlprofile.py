@@ -52,6 +52,9 @@ def compile_xml(xml):
             n['type'] = 'start'
         elif tag == 'endEvent':
             n.update(type='end', result=json.loads(e.get(X + 'result', '{}')))
+        elif tag == 'serviceTask' and e.get(X + 'delegate'):
+            n.update(type='delegate', to=e.get(X + 'delegate'), request=e.get(X + 'request', e.get('name', key)),
+                     context=json.loads(e.get(X + 'context', '{}')), outputs=json.loads(e.get(X + 'outputs', '{}')))
         elif tag == 'serviceTask':
             n.update(type='service', args=json.loads(e.get(X + 'args', '{}')))
             if e.get(X + 'contract'):
