@@ -4,8 +4,8 @@ import {enqueue} from './bridge.mjs';
 const name='workflow.delegation.requested';
 const properties={delegation_id:{type:'string'},run_id:{type:'string'},workflow:{type:'string'},
  activity:{type:'string'},realm:{type:'string',enum:['site','local']}};
-export const delegationEvent={name,description:'An explicit workflow step has requested work from ChatGPT. Read and claim the referenced delegation on its controller before acting.',
- delivery:['webhook'],inputSchema:{type:'object',properties:{workflow:{type:'string',description:'Exact workflow name; omit for all workflows.'},realm:{type:'string',enum:['site','local'],description:'Defaults to site.'}},additionalProperties:false},
+export const delegationEvent={name,description:'An explicit workflow step has requested work from the selected agent. Read and claim the referenced delegation on its controller before acting.',
+ delivery:['webhook'],inputSchema:{type:'object',properties:{target:{type:'string',description:'Delegation recipient. Defaults to chatgpt.'},workflow:{type:'string',description:'Exact workflow name; omit for all workflows.'},realm:{type:'string',enum:['site','local'],description:'Defaults to site.'}},additionalProperties:false},
  payloadSchema:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}};
 
 const leaseFields={id:{type:'string'},task:{type:'string'},contract:{type:'string'},resource:{type:'string'},

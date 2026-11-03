@@ -128,10 +128,12 @@ class EventStore:
         if not owner or topic not in (EVENT, LEASE_EVENT) or not isinstance(params.get('arguments'), dict):
             raise ValueError('Unknown event or arguments')
         args = params['arguments']
-        allowed = {'realm', 'workflow'} if topic == EVENT else {'realm', 'reply_to'}
+        allowed = {'realm', 'workflow', 'target'} if topic == EVENT else {'realm', 'reply_to'}
         if set(args) - allowed or args.get('realm','site') not in ('site','local'):
             raise ValueError('Invalid event filters')
         args = dict(args, realm=args.get('realm','site'))
+        if 'target' in args and (not isinstance(args['target'], str) or not re.match(r'^[A-Za-z0-9_.:-]{1,128}\Z', args['target'])):
+            raise ValueError('Invalid delegation target')
         if 'workflow' in args and (not isinstance(args['workflow'],str) or
                                     not re.match(r'^[A-Za-z0-9_.:-]{1,128}\Z',args['workflow'])):
             raise ValueError('Invalid workflow filter')
@@ -217,7 +219,7 @@ class EventStore:
                     self.topic_feed(args['realm'], topic, sub['cursor'], 32))
             for item in page['events']:
                 seq, data = item['seq'], item['data']
-                if topic == EVENT and (item.get('target', 'chatgpt') != ('grok' if grok else 'chatgpt') or
+                if topic == EVENT and (item.get('target', 'chatgpt') != ('grok' if grok else args.get('target', 'chatgpt')) or
                                        args.get('workflow', data['workflow']) != data['workflow']):
                     self.advance(sub,seq)
                     continue

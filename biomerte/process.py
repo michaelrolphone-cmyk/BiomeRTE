@@ -91,8 +91,9 @@ def validate_graph(g):
             if 'success_equals' in n and not n.get('capture_outcome'):
                 raise Fault('A success condition requires outcome capture')
         if n['type'] == 'delegate':
-            if n.get('to') not in ('chatgpt', 'grok') or 'request' not in n:
+            if not isinstance(n.get('to'), str) or 'request' not in n:
                 raise Fault('A delegate node needs a supported receiver and a request')
+            ident(n['to'])
             schema(n.get('outputs', {}))
         if n['type'] == 'call':
             ident(n['process'])

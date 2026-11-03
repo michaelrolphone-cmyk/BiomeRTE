@@ -96,3 +96,21 @@ test('cached clients reach the same receiver registration through biome_invoke',
  assert.deepEqual(grokCall({name:'biome_invoke',arguments:outer}),{action:'register',args:{...settings,realm:'local',request_id:'new'}});
  assert.equal(grokCall({name:'biome_invoke',arguments:{operation:'work.list',arguments:{}}}),null);
 });
+
+test('private receiver verifies challenge, deduplicates signed deliveries and acknowledges only its inbox',async()=>{
+ const {sql,send,rpc,owner}=fixture();
+ await send('/mcp',rpc('tools/call',{name:'bad'}),owner);
+ const token='a'.repeat(43), hash=createHash('sha256').update(token).digest('base64url');
+ sql.prepare("INSERT INTO biome_oauth_tokens VALUES (?,'access','mac-grant','mac','owner',?,?)").run(hash,base+'/api/mcp',Date.now()/1000+300);
+ const auth={Authorization:'Bearer '+token},root='/agent-events/lmstudio/';
+ assert.equal((await send(root+'connect',{})).status,401);
+ const {url,secret}=await (await send(root+'connect',{},auth)).json(),path=new URL(url).pathname;
+ const key=Buffer.from(secret.slice(6),'base64'),ts=String(Math.floor(Date.now()/1000));
+ async function post(id,body){const {createHmac}=await import('node:crypto');return send(path,body,{'webhook-id':id,'webhook-timestamp':ts,'webhook-signature':'v1,'+createHmac('sha256',key).update(id+'.'+ts+'.'+JSON.stringify(body)).digest('base64')})}
+ assert.deepEqual(await (await post('verify_1',{type:'verification',challenge:'hello'})).json(),{challenge:'hello'});
+ const ev={eventId:'delegate_1',name:'workflow.delegation.requested',data:{delegation_id:'1'}};
+ assert.equal((await send(path,ev)).status,401);await post(ev.eventId,ev);await post(ev.eventId,ev);
+ const next=async(p=root)=>await (await send(p+'next',{},auth)).json();
+ assert.deepEqual((await next()).events,[ev]);assert.deepEqual((await next('/agent-events/grok/')).events,[]);
+ await send(root+'ack',{}, {...auth,'x-event-id':ev.eventId});assert.deepEqual((await next()).events,[]);sql.close();
+});
