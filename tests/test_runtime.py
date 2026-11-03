@@ -46,6 +46,26 @@ class Runtime(unittest.TestCase):
         self.call('peer.trust', {
                   'public_key': other.config['public_key'], 'label': 'test peer', 'scopes': scopes}, realm=realm, app=who)
 
+    def test_selective_registry_deletion(self):
+        cid = self.call('cap.define', {'name': 'sample', 'inputs': {}, 'outputs': {}})['id']
+        args = {'provider': 'sample', 'resource': 'slot', 'contract': cid}
+        oid = self.call('cap.offer', args)['id']
+        lease = self.call('cap.acquire', {'task': 'test', 'contract': cid})
+        delete_contract = {'contract': cid, 'delete_contract': True}
+        with self.assertRaises(Fault):
+            self.call('cap.delete', {'offer': oid})
+        with self.assertRaises(Fault):
+            self.call('cap.delete', delete_contract)
+        self.call('cap.release', {'lease': lease['id']})
+        receipt = self.call('cap.delete', {'offer': oid}, 'delete-once')
+        self.assertEqual(receipt, self.call('cap.delete', {'offer': oid}, 'delete-once'))
+        self.assertTrue(receipt['audit_event'])
+        self.assertEqual([], self.call('cap.discover', {'contract': cid})['offers'])
+        self.call('cap.delete', delete_contract)
+        self.assertEqual([], self.call('cap.discover', {'contract': cid})['contracts'])
+        with self.assertRaises(Fault):
+            self.call('cap.delete', {'contract': 'core.echo:1', 'delete_contract': True})
+
     def test_demo_restart_and_accept(self):
         ids = self.call('demo.run', {'message': 'first'})
         self.a.tick('site')

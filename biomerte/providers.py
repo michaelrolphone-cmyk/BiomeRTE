@@ -15,7 +15,7 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
         raise Fault('Invalid contract version')
     record = {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
               'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
-    prior = tx.get('contracts', key)
+    prior = tx.get('contracts', key) or tx.get('_retired_contracts', key)
     if prior and prior != record:
         raise Fault('Contract version is immutable', 409)
     return tx.put('contracts', key, record)
@@ -43,6 +43,45 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     tx.put('offers', key, rec)
     tx.emit('offer.updated', {'offer': key, 'state': state})
     return rec
+
+
+
+@op('cap.delete', 'offer?:str contract?:str delete_contract?:bool allow_system?:bool')
+def delete(tx, ctx, offer='', contract='', delete_contract=False, allow_system=False):
+    """Delete an offer by ID. To separately delete an unused contract, supply contract and delete_contract=true."""
+    if ctx.permissions is not None:
+        raise Fault('Registry deletion requires operator access', 403)
+    if not ((offer and not contract and not delete_contract) or
+            (contract and delete_contract and not offer)):
+        raise Fault('Identify exactly one offer, or one contract with delete_contract=true')
+    kind, key = ('offers', offer) if offer else ('contracts', contract)
+    record = tx.need(kind, key)
+    cid = record['contract'] if offer else key
+    if (cid.startswith('core.') or record.get('provider') in ('builtin', 'routine') or
+            tx.get('_builtin_contracts', cid)) and not allow_system:
+        raise Fault('System entry requires allow_system=true', 403)
+    if contract and any(o['contract'] == cid for o in tx.rows('offers')):
+        raise Fault('Delete associated offers first', 409)
+    if any(l['contract'] == cid and l['state'] in ('queued', 'bound', 'fencing') and
+           (not offer or l.get('offer') == offer or
+            (l['state'] == 'queued' and l.get('requested_resource', '') in ('', record['resource'])))
+           for l in tx.rows('leases')):
+        raise Fault('Capability has active or queued leases', 409)
+    if offer and any(a['offer'] == offer and a['state'] == 'pending' for a in tx.rows('activations')):
+        raise Fault('Offer activation is pending', 409)
+    if contract and any(node.get('contract') == cid for version in tx.rows('process_versions')
+                        for node in version['graph']['nodes'].values()):
+        raise Fault('A published workflow references this contract', 409)
+    if offer and record.get('provider') in ('builtin', 'routine'):
+        tx.put('_builtin_contracts', cid, True)
+    if contract:
+        tx.put('_retired_contracts', cid, record)
+    usage_kind = '_offer_usage' if offer else '_contract_usage'
+    if tx.get(usage_kind, key) is not None:
+        tx.drop(usage_kind, key)
+    tx.drop(kind, key)
+    event = tx.emit('capability.deleted', {'kind': kind, 'id': key, 'contract': cid, 'actor': ctx.actor})
+    return {'deleted': key, 'kind': kind, 'audit_event': event['id']}
 
 
 @op('cap.discover', 'contract?:str', False)
