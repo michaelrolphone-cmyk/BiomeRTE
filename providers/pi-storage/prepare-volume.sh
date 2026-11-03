@@ -10,12 +10,20 @@ if [ ! -e "$image" ]; then
     tmp=$(sudo mktemp "$root/volume.XXXXXXXX")
     trap 'sudo rm -f -- "$tmp"' EXIT
     sudo fallocate -l 2147483648 "$tmp"
-    sudo /sbin/mkfs.ext4 -q -F -m 0 -L biome-files "$tmp"
+    sudo /sbin/mkfs.ext4 -q -F -E nodiscard -m 0 -L biome-files "$tmp"
     sudo ln "$tmp" "$image"
     sudo rm -f "$tmp"
     trap - EXIT
 fi
 [ "$(sudo stat -c %s "$image")" = 2147483648 ] || { echo "Unexpected existing image size" >&2; exit 1; }
+# Formatting a loop image can discard extents on some systems. Plain fallocate
+# preserves existing bytes and backs any missing extents on an older image.
+blocks=$(sudo stat -c %b "$image")
+if [ "$((blocks * 512))" -lt 2147483648 ]; then
+    sudo fallocate -l 2147483648 "$image"
+    blocks=$(sudo stat -c %b "$image")
+    [ "$((blocks * 512))" -ge 2147483648 ] || { echo "Volume is not fully allocated" >&2; exit 1; }
+fi
 sudo mkdir -p "$mountpoint"
 if ! mountpoint -q "$mountpoint"; then
     [ -z "$(sudo ls -A "$mountpoint")" ] || { echo "Storage mount point is not empty" >&2; exit 1; }
