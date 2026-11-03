@@ -57,10 +57,25 @@ def compile_xml(xml):
                      context=json.loads(e.get(X + 'context', '{}')), outputs=json.loads(e.get(X + 'outputs', '{}')))
         elif tag == 'serviceTask':
             n.update(type='service', args=json.loads(e.get(X + 'args', '{}')))
-            if e.get(X + 'contract'):
+            contract_ref = e.get(X + 'contractRef')
+            if contract_ref:
+                if e.get(X + 'operation') or e.get(X + 'contract'):
+                    raise Fault('Choose one service binding at ' + key)
+                n['contract'] = {'$': contract_ref}
+            elif e.get(X + 'contract'):
                 n['contract'] = e.get(X + 'contract')
             else:
                 n['operation'] = e.get(X + 'operation')
+            if e.get(X + 'resourceRef'):
+                n['resource'] = {'$': e.get(X + 'resourceRef')}
+            elif e.get(X + 'resource'):
+                n['resource'] = e.get(X + 'resource')
+            if e.get(X + 'leaseScope'):
+                n['lease_scope'] = e.get(X + 'leaseScope')
+            if e.get(X + 'captureOutcome') == 'true':
+                n['capture_outcome'] = True
+            if e.get(X + 'successEqualsRef'):
+                n['success_equals'] = {'$': e.get(X + 'successEqualsRef')}
         elif tag in ('userTask', 'manualTask', 'receiveTask'):
             n.update(type='message' if tag == 'receiveTask' else 'human', name=e.get('name', key),
                      question=e.get(X + 'question', e.get('name', key)), outputs=json.loads(e.get(X + 'outputs', '{}')))
