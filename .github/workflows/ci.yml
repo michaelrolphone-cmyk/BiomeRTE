@@ -1,0 +1,30 @@
+name: BiomeRTE qualification
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -v
+      - name: Start a fresh clone and run an actual work cycle
+        run: |
+          export BIOME_HOME="$RUNNER_TEMP/biome-node"
+          ./biome init > "$RUNNER_TEMP/public-identity.json"
+          ./biome demo
+  replicated-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f deploy/etcd-lab.yml up -d
+      - run: python3 -m tests.cluster_qualification
+      - if: always()
+        run: docker compose -f deploy/etcd-lab.yml down -v
