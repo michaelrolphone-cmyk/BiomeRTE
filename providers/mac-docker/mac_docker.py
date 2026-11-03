@@ -35,7 +35,9 @@ class Remote:
 
 def offer(cfg, state):
     guide = usage()
-    guide['before'] += ' This offer runs on ' + cfg['host'] + ' using its local Docker socket.'
+    guide['before'] += (' This offer runs on %s with %d concurrent CLI leases. Detached containers '
+                        'continue running after the CLI returns and the lease is released.'
+                        % (cfg['host'], cfg['slots']))
     return dict(provider=cfg['provider'], contract=CONTRACT, resource=cfg['resource'],
                 service='docker-cli', capacity=cfg['slots'], state=state, usage=guide)
 
@@ -99,9 +101,13 @@ def install():
     parser = argparse.ArgumentParser()
     parser.add_argument('--socket', default=str(HOME / '.docker/run/docker.sock'))
     parser.add_argument('--executable', default='/usr/local/bin/docker')
-    parser.add_argument('--slots', type=int, default=4)
+    parser.add_argument('--slots', type=int, help='Concurrent CLI calls (preserves the installed setting on update)')
     parser.add_argument('--external-engine', action='store_true')
     args = parser.parse_args(sys.argv[2:])
+    previous = STATE / 'manifest.json'
+    prior = json.loads(previous.read_text()) if previous.exists() else {}
+    if args.slots is None:
+        args.slots = prior.get('slots', min(64, 4 * (os.cpu_count() or 1)))
     if sys.platform != 'darwin' or not 1 <= args.slots <= 64:
         parser.error('Expected macOS and 1–64 slots')
     if not Path(args.executable).is_absolute() or not os.access(args.executable, os.X_OK):
@@ -120,15 +126,15 @@ def install():
         directory = STATE / key
         directory.mkdir(mode=0o700, exist_ok=True)
         cfg[key] = str(directory)
-    previous = STATE / 'manifest.json'
-    if previous.exists() and json.loads(previous.read_text())['site'] != site:
+    if prior and prior['site'] != site:
         raise SystemExit('Controller site identity changed; reconcile the existing ledger before installation')
     target = 'gui/' + str(os.getuid())
     job = target + '/' + LABEL
     plist = HOME / 'Library/LaunchAgents' / (LABEL + '.plist')
     plist.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['/bin/launchctl', 'print', target], capture_output=True, check=True)
-    if subprocess.run(['/bin/launchctl', 'print', job], capture_output=True).returncode == 0:
+    replacing = subprocess.run(['/bin/launchctl', 'print', job], capture_output=True).returncode == 0
+    if replacing:
         subprocess.run(['/bin/launchctl', 'bootout', job], check=True)
     gateway.save_json(previous, cfg)
     spec = dict(Label=LABEL, ProgramArguments=[sys.executable, str(HERE / 'mac_docker.py'), 'serve'],
@@ -139,7 +145,16 @@ def install():
     tmp.write_bytes(plistlib.dumps(spec))
     os.replace(tmp, plist)
     subprocess.run(['/bin/launchctl', 'enable', job], check=True)
-    subprocess.run(['/bin/launchctl', 'bootstrap', target, str(plist)], check=True)
+    # bootout can return before launchd has finished removing the old job.
+    deadline = time.monotonic() + 30
+    while True:
+        result = subprocess.run(['/bin/launchctl', 'bootstrap', target, str(plist)], capture_output=True)
+        if result.returncode == 0:
+            break
+        if not replacing or result.returncode != 5 or time.monotonic() >= deadline:
+            sys.stderr.buffer.write(result.stderr)
+            result.check_returncode()
+        time.sleep(1)
     print(cfg['resource'], 'slots', cfg['slots'])
 
 
