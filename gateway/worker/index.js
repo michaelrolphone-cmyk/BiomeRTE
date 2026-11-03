@@ -9,6 +9,38 @@ async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
  if (path.startsWith('/bridge/')) return device(req,env,path);
+ // Outbound providers reach the physical controller through the existing bridge.
+ // No owner MCP token, LAN connectivity, or inbound provider port is required.
+ if (path.startsWith('/provider/v1/')) {
+  if (req.method !== 'POST') return reply({error:'Use POST'},405);
+  if (!['/provider/v1/pair/begin','/provider/v1/pair/finish','/provider/v1/call'].includes(path))
+   return reply({error:'Unknown provider operation'},404);
+  let body;
+  try { body=await limitedJSON(req,16000); } catch { return reply({error:'Invalid provider request'},400); }
+  if (!body || typeof body!=='object' || Array.isArray(body)) return reply({error:'Invalid provider request'},400);
+  if (path.endsWith('/pair/begin')) {
+   if (typeof body.public_key!=='string' || body.public_key.length>4096 ||
+       typeof body.label!=='string' || body.label.length>200) return reply({error:'Invalid pairing request'},400);
+  } else if (path.endsWith('/pair/finish')) {
+   if (typeof body.key!=='string' || typeof body.signature!=='string' ||
+       typeof body.challenge!=='string' || typeof body.site!=='string')
+    return reply({error:'Invalid pairing proof'},400);
+  } else if (typeof body.operation!=='string' || typeof body.id!=='string' ||
+             !body.auth || typeof body.auth.actor!=='string' ||
+             typeof body.auth.signature!=='string' ||
+             !['site','local'].includes(body.realm??'site') ||
+             !body.arguments || typeof body.arguments!=='object' || Array.isArray(body.arguments))
+   return reply({error:'Signed provider operation required'},401);
+  // The controller verifies each device signature and pair approval.
+  // The public gateway only transports requests; it grants no authority.
+  const encoded=JSON.stringify({path:path.slice('/provider'.length),body});
+  const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(encoded));
+  const key='provider-'+Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');
+  const result=await enqueue(env,'provider_request',{path:path.slice('/provider'.length),body},key);
+  if (result.isError) return reply({error:result.content?.[0]?.text||'Controller not ready'},503);
+  try {return reply(JSON.parse(result.content[0].text));}
+  catch {return reply({error:'Invalid controller response'},502);}
+ }
  if (req.method==='GET' && ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/mcp','/.well-known/oauth-protected-resource/mcp'].includes(path)) return resourceMetadata(conf);
  if (req.method==='GET' && path==='/.well-known/oauth-authorization-server') return serverMetadata(conf);
  if (path.startsWith('/oauth/')) return oauth(req,conf,path.slice(7));
