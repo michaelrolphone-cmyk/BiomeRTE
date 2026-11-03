@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:b="urn:biomerte:v1" targetNamespace="urn:biomerte:examples">
+  <process id="review" isExecutable="true" b:inputs='{"item":"str"}' b:outputs='{"accepted":"bool"}'>
+    <startEvent id="start"/><sequenceFlow id="a" sourceRef="start" targetRef="reviewer"/>
+    <userTask id="reviewer" name="Review the proposed item" b:outputs='{"accepted":"bool"}' b:save="reply"/>
+    <sequenceFlow id="b" sourceRef="reviewer" targetRef="end"/>
+    <endEvent id="end" b:result='{"accepted":{"$":"reply.accepted"}}'/>
+  </process>
+</definitions>

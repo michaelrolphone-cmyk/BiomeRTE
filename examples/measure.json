@@ -1,0 +1,1 @@
+{"name":"survey.measure","inputs":{"frequency":"num"},"outputs":{"dbfs":"num"},"steps":[{"type":"service","contract":"radio.measure:1","args":{"frequency":{"$":"input.frequency"}},"save":"sample"}],"result":{"dbfs":{"$":"sample.dbfs"}}}

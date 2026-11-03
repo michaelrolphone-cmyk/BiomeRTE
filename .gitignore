@@ -3,3 +3,9 @@ __pycache__/
 .biome/
 .venv/
 coverage.xml
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+node.key
+node.json
+pair-pending.json

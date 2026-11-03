@@ -1,0 +1,35 @@
+# Loopback-only three-voter failure lab. Run a production cluster on independent hosts.
+x-common: &common
+  image: quay.io/coreos/etcd:v3.5.17
+  entrypoint: /usr/local/bin/etcd
+  environment: &env
+    ETCD_INITIAL_CLUSTER: a=http://a:2380,b=http://b:2380,c=http://c:2380
+    ETCD_INITIAL_CLUSTER_TOKEN: biomerte-local-lab
+    ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+    ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+    ETCD_DATA_DIR: /etcd-data
+services:
+  a:
+    <<: *common
+    ports: ["127.0.0.1:23791:2379"]
+    environment:
+      <<: *env
+      ETCD_NAME: a
+      ETCD_ADVERTISE_CLIENT_URLS: http://a:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://a:2380
+  b:
+    <<: *common
+    ports: ["127.0.0.1:23792:2379"]
+    environment:
+      <<: *env
+      ETCD_NAME: b
+      ETCD_ADVERTISE_CLIENT_URLS: http://b:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://b:2380
+  c:
+    <<: *common
+    ports: ["127.0.0.1:23793:2379"]
+    environment:
+      <<: *env
+      ETCD_NAME: c
+      ETCD_ADVERTISE_CLIENT_URLS: http://c:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://c:2380
