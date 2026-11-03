@@ -9,6 +9,7 @@ import sys
 import tempfile
 import uuid
 from storage import OPERATIONS, OUTPUTS, SCHEMA
+from usage import file_usage
 
 
 def write_atomic(path, body):
@@ -95,12 +96,16 @@ def main():
     scopes = ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim', 'provider.result',
               'cap.status', 'resource:' + resource]
     offers = []
+    supports_usage = any(o['name'] == 'cap.define' and 'usage' in o['inputs']
+                         for o in admin.call('bus.discover', {}))
     for op in sorted(OPERATIONS):
         inputs, description = OPERATIONS[op]
         name = 'storage.file.' + op
         contract = name + ':1'
-        admin.call('cap.define', {'name': name, 'inputs': inputs, 'outputs': OUTPUTS,
-                                  'description': description})
+        definition = {'name': name, 'inputs': inputs, 'outputs': OUTPUTS, 'description': description}
+        if supports_usage:
+            definition['usage'] = file_usage(op)
+        admin.call('cap.define', definition)
         scopes.append('offer:' + contract)
         offers.append({'contract': contract, 'resource': resource, 'service': 'file-storage',
                        'argv': [sys.executable, adapter, manifest, op]})
