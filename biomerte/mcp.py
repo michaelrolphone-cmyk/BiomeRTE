@@ -4,6 +4,7 @@ from .store import Fault, encode, digest
 
 
 CALLER_GUIDE = {
+    'capability_usage': 'Read the selected offer.usage for its prerequisites, argument example, call sequence and result interpretation. A contract.usage applies across providers.',
     'caller': ['cap.discover', 'cap.acquire', 'cap.lease', 'cap.invoke', 'cap.status', 'cap.release'],
     'provider_only': ['provider.poll', 'cap.fenced', 'provider.claim', 'provider.result'],
     'lease': 'Use a distinct task ID per session. Queued means waiting for capacity; fencing means the provider is preparing the slot; bound means usable. Subscribe to lease.available using the reply_to inbox supplied to cap.acquire.',

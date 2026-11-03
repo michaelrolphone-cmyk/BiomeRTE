@@ -1,5 +1,6 @@
 """Capability contracts, mutable offers, leases, fences and durable dispatch."""
 from .api import op, ident, validate, schema
+from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
 
 
@@ -8,8 +9,9 @@ def owner(ctx, provider):
         raise Fault('Provider identity mismatch', 403)
 
 
-@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool')
-def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False):
+@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool usage?:obj')
+def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False, usage=None):
+    """Define an immutable executable schema; optionally publish revisable caller instructions and example_inputs."""
     key = ident(name) + ':' + str(version)
     if version < 1:
         raise Fault('Invalid contract version')
@@ -18,18 +20,20 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
     prior = tx.get('contracts', key)
     if prior and prior != record:
         raise Fault('Contract version is immutable', 409)
+    if usage is not None:
+        tx.put('_contract_usage', key, published_usage(record, usage))
     return tx.put('contracts', key, record)
 
 
-@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int')
-def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None):
+@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj')
+def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None, usage=None):
     """Publish or revise an offer. Shared physical resources use the same resource ID."""
     owner(ctx, provider)
     if ctx.permissions is not None and provider in ('builtin', 'routine'):
         raise Fault('Reserved provider', 403)
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
-    tx.need('contracts', contract)
+    definition = tx.need('contracts', contract)
     if state not in ('ready', 'available_after_setup', 'offline'):
         raise Fault('Invalid offer state')
     if provider not in ('builtin', 'routine'):
@@ -44,6 +48,8 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
         if capacity < 0:
             raise Fault('Capacity must be 1 (exclusive), a positive slot count, or 0 (unbounded)')
         tx.put('_capacity', resource, capacity)
+    if usage is not None:
+        tx.put('_offer_usage', key, published_usage(definition, usage))
     tx.put('offers', key, rec)
     tx.emit('offer.updated', {'offer': key, 'state': state})
     return dict(rec, capacity=capacity_of(tx, rec))
@@ -51,9 +57,23 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
 
 @op('cap.discover', 'contract?:str', False)
 def discover(tx, ctx, contract=''):
-    return {'contracts': [r for r in tx.rows('contracts') if not contract or r['id'] == contract],
-            'offers': [dict(r, capacity=capacity_of(tx, r)) for r in tx.rows('offers')
-                       if not contract or r['contract'] == contract]}
+    """List capabilities with per-contract and provider-specific call examples, prerequisites and result paths."""
+    definitions = {d['id']: d for d in tx.rows('contracts') if not contract or d['id'] == contract}
+    guides = {key: tx.get('_contract_usage', key, {}) for key in definitions}
+    contracts = [dict(definitions[key], usage=caller_usage(definitions[key], guides[key])) for key in sorted(definitions)]
+    offers = []
+    for off in tx.rows('offers'):
+        key = off['contract']
+        if key not in definitions:
+            continue
+        guide = dict(guides[key])
+        override = tx.get('_offer_usage', off['id'], {})
+        guide.update(override)
+        if 'parameters' in override:
+            guide['parameters'] = dict(guides[key].get('parameters', {}), **override['parameters'])
+        offers.append(dict(off, capacity=capacity_of(tx, off),
+                           usage=caller_usage(definitions[key], guide, off['resource'])))
+    return {'contracts': contracts, 'offers': offers}
 
 
 def admitted(tx, off):
@@ -216,6 +236,7 @@ def release_task(tx, task):
 
 @op('cap.release', 'lease:str')
 def release_lease(tx, ctx, lease):
+    """Release a held lease after work settles, or cancel a queued request. Results remain available via cap.status."""
     l = tx.need('leases', lease)
     if ctx.permissions is not None:
         raise Fault('Lease release is controlled by the task owner', 403)

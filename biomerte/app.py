@@ -35,6 +35,10 @@ def initialize(directory, site=None):
 
 
 def seed(tx):
+    # Backfill this built-in's guide for existing realms as well as fresh nodes.
+    if tx.get('_contract_usage', 'core.echo:1') is None:
+        from .capability_usage import ECHO_USAGE
+        tx.put('_contract_usage', 'core.echo:1', ECHO_USAGE)
     if not tx.get('_meta', 'initialized'):
         ctx = Context(None)
         providers.define(tx, ctx, 'core.echo', {'value': 'any'}, {

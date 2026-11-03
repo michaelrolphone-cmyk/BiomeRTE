@@ -60,8 +60,9 @@ class Worker:
         for o in self.offers:
             args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
                     'service': o.get('service', ''), 'state': o.get('state', 'ready')}
-            if 'capacity' in o:
-                args['capacity'] = o['capacity']
+            for field in ('capacity', 'usage'):
+                if field in o:
+                    args[field] = o[field]
             self.remote.call('cap.offer', args)
 
     def fence(self, l):

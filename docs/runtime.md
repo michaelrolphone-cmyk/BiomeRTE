@@ -52,6 +52,18 @@ For a terminal probe use a new ID such as `docker-check-001` and inputs `{"argv"
 
 The optional `capacity` on `cap.offer` applies across contracts sharing the same physical resource. Use 1 for exclusive, a positive count for a pool, or 0 for unbounded concurrent leases. Existing external resources default to 1; built-in and routine offers default to unbounded. Local execution capacity remains under the provider's control. `cap.acquire` queues by default when no eligible slot is available. `enqueue:false` requests an immediate conflict instead. Releasing a holder, restoring availability, or increasing capacity admits the oldest eligible waiting requests. Each queued request receives a durable `lease.available` message at `reply_to` (default for operator calls: the task ID), once the lease is usable. Read it with `bus.inbox` or subscribe to the grant event. An explicit reply address also requests a notice for immediate grants.
 
+### Advertising how callers use a capability
+
+Both `biome_discover` and `cap.discover` return `usage` with each contract and offer. Use the offer's guide when selecting a specific implementation. Its acquire call pins that resource, and its invoke call contains the inputs for that capability. Replace angle-bracket bindings with IDs or handles returned by earlier calls. Check `inputs_kind`: `example` means the publisher supplied a schema-checked example; `template` means the controller generated required parameter slots. The offer's `before`, `parameters`, `read_result` and `errors` explain the prerequisites, parameter meanings, returned values and expected failures when supplied.
+
+Publish instructions using the optional `usage` object on `cap.define`. For example, a sensor with a string input named `channel` could publish the following guide.
+
+```json
+{"parameters":{"channel":"Use the identifier printed on the probe."},"example_inputs":{"channel":"ambient"},"read_result":"On succeeded, result.celsius contains the measured temperature."}
+```
+
+Use the same fields on `cap.offer` or in a worker manifest offer for provider-specific instructions. Offer fields override the contract defaults, and parameter descriptions merge by input name. Republish documentation without changing the executable schema or contract version. Omitting usage preserves earlier documentation; passing an empty object clears that layer. Published examples describe calls, never execution evidence.
+
 ### Providers and agents
 
 1. Initialize the worker using a private `BIOME_HOME`; run `./biome identity` on the device. Its fingerprint identifies its public key.

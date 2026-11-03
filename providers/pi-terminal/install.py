@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from terminal import CONTRACT, OUTPUTS, check_argv, read_json
+from terminal import CONTRACT, OUTPUTS, check_argv, read_json, terminal_usage
 
 
 def replace(path, data):
@@ -81,7 +81,11 @@ def main():
     # Only the local installer uses the controller's operator identity.
     controller.call('cap.define', {'name': CONTRACT.rsplit(':', 1)[0], 'version': 1,
                     'description': 'Run the Pi terminal worker\'s digest-pinned Bash argv.',
-                    'inputs': {'argv': 'list'}, 'outputs': OUTPUTS})
+                    'inputs': {'argv': 'list'}, 'outputs': OUTPUTS,
+                    'usage': {'example_inputs': {'argv': ['/bin/bash', '-c', 'hostname']},
+                              'before': 'Use the executable specified by the selected terminal offer.',
+                              'parameters': {'argv': 'Pass the argument vector accepted by the selected terminal offer.'},
+                              'read_result': 'Check result.exit_code and read result.stdout and result.stderr.'}})
     controller.call('peer.trust', {'public_key': provider['public_key'],
                     'label': socket.gethostname() + ' terminal',
                     'scopes': ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim',
@@ -93,7 +97,7 @@ def main():
     with open(os.path.join(here, 'terminal.py'), 'rb') as src:
         replace(adapter, src.read())
     offer = {'contract': CONTRACT, 'resource': resource, 'service': 'terminal', 'capacity': args.slots,
-             'argv': [sys.executable, adapter, manifest]}
+             'argv': [sys.executable, adapter, manifest], 'usage': terminal_usage(scoped_profile)}
     cfg = {'url': url, 'site': node['site'], 'offers': [offer], 'parallelism': args.slots, 'supervisor_dir': runtime,
            'timeout': limits['duration_seconds'] + 300, 'terminal_profile': scoped_profile}
     replace(manifest, json.dumps(cfg, indent=2).encode())
