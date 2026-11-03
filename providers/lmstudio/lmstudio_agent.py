@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Accept BiomeRTE MCP Events on a private Mac and answer with its LM Studio model."""
-import hashlib
 import json
 import os
 import sqlite3
@@ -74,7 +73,8 @@ def model_ready():
         subprocess.run([LMS,'server','start','--port','1234'],check=True,stdout=subprocess.DEVNULL)
         models=api('/api/v1/models')['models']
     for m in models:
-        if m.get('key')==MODEL and any(i.get('id')==MODEL for i in m.get('loaded_instances',[])):
+        if (m.get('key')==MODEL and m.get('quantization',{}).get('name')=='Q4_K_M'
+                and any(i.get('id')==MODEL for i in m.get('loaded_instances',[]))):
             return
     subprocess.run([LMS,'load',GGUF,'--identifier',MODEL],check=True,stdout=subprocess.DEVNULL)
 
@@ -87,24 +87,36 @@ def infer(wait):
           {'role':'user','content':prompt+'\n\nContext (JSON):\n'+json.dumps(data,ensure_ascii=False)}]
     body={'model':MODEL,'messages':msgs,'stream':False}
     wrapper = fields == {'result':'obj'}
-    if not wrapper:
-        props={}; required=[]
-        for name,spec in fields.items():
-            typ=spec if isinstance(spec,str) else spec['type']
-            optional=typ.endswith('?') if isinstance(spec,str) else not spec.get('required',True)
-            typ=typ.rstrip('?')
-            props[name]={'type':TYPES[typ]} if typ in TYPES else {}
-            if not optional: required.append(name)
-        schema={'type':'object','properties':props,'required':required,'additionalProperties':False}
-        body['response_format']={'type':'json_schema','json_schema':{'name':'delegation_result','strict':True,'schema':schema}}
-        msgs[0]['content']+=' Return one JSON object matching this schema: '+json.dumps(schema)
+    props={}; required=[]
+    for name,spec in ({'text':'str'} if wrapper else fields).items():
+        typ=spec if isinstance(spec,str) else spec['type']
+        optional=typ.endswith('?') if isinstance(spec,str) else not spec.get('required',True)
+        typ=typ.rstrip('?')
+        props[name]={'type':TYPES[typ]} if typ in TYPES else {}
+        if not optional: required.append(name)
+    schema={'type':'object','properties':props,'required':required,'additionalProperties':False}
+    body['response_format']={'type':'json_schema','json_schema':{'name':'delegation_result','strict':True,'schema':schema}}
+    msgs[0]['content']+=' Return one JSON object matching this schema: '+json.dumps(schema)
+    if wrapper: msgs[0]['content']+=' Put the final answer to the task in text.'
     response=api('/v1/chat/completions',body)
     choice=response['choices'][0]
     if choice.get('finish_reason') not in ('stop',None):
         raise ValueError('LM Studio finish reason: '+str(choice.get('finish_reason')))
     content=choice['message']['content']
     if not isinstance(content,str) or not content.strip(): raise ValueError('LM Studio returned empty content')
-    return {'result':{'text':content,'model':response['model']}} if wrapper else json.loads(content)
+    # This Qwen template can prefill <think> and return its end tag in content.
+    # A valid JSON result takes precedence, preserving literal tags in answers.
+    try:
+        parsed=json.loads(content)
+    except json.JSONDecodeError:
+        _,end,answer=content.partition('</think>')
+        if not end: raise
+        parsed=json.loads(answer.strip())
+    if wrapper:
+        if not isinstance(parsed.get('text'),str) or not parsed['text'].strip():
+            raise ValueError('LM Studio returned an empty final answer')
+        return {'result':{'text':parsed['text'],'model':response['model']}}
+    return parsed
 
 def handle(db,event):
     ref=event['data']; wid=ref['delegation_id']
