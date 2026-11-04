@@ -1,0 +1,24 @@
+[
+  {
+    "name": "linux-basic",
+    "version": "1",
+    "base": "debian:bookworm-slim",
+    "platform": "linux/arm64",
+    "description": "Basic Linux environment agents can customize",
+    "dockerfile": "FROM ${BASE}\nRUN apt-get update && apt-get install -y --no-install-recommends bash git curl ca-certificates python3 python3-venv python3-pip jq tar gzip xz-utils unzip zip build-essential openssh-client && rm -rf /var/lib/apt/lists/*\nWORKDIR /workspace\n",
+    "probe": "git --version && python3 --version && curl --version && jq --version"
+  },
+  {
+    "name": "esp-idf",
+    "version": "2",
+    "base": "espressif/idf:v5.5.1",
+    "platform": "linux/amd64",
+    "description": "ESP-IDF 5.5.1 with Espressif Xtensa and RISC-V QEMU; amd64 on Mac Docker emulation",
+    "targets": [
+      "esp32",
+      "esp32c3"
+    ],
+    "dockerfile": "FROM ${BASE}\nRUN apt-get update && apt-get install -y --no-install-recommends jq ca-certificates libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0 && rm -rf /var/lib/apt/lists/*\nSHELL [\"/bin/bash\", \"-c\"]\nRUN . $IDF_PATH/export.sh && python $IDF_PATH/tools/idf_tools.py install qemu-xtensa qemu-riscv32\nWORKDIR /workspace\n",
+    "probe": ". $IDF_PATH/export.sh >/dev/null && idf.py --version && qemu-system-xtensa --version && qemu-system-riscv32 --version && cp -a $IDF_PATH/examples/get-started/hello_world /tmp/hello && cd /tmp/hello && idf.py set-target esp32 && idf.py build"
+  }
+]
