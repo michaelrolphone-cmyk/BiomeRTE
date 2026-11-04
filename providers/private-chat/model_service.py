@@ -86,7 +86,7 @@ def switch_model(model, opener, state):
                 continue
             target = _resolve(key, _models(opener, state))
             if not target.get('loaded_instances'):
-                _cli('load', key, '--identifier', key, '--no-engine-config-file')
+                _cli('load', key, '--identifier', key)
             target = _resolve(key, _models(opener, state))
             if not target.get('loaded_instances'):
                 raise ModelSwitchError('model_load_failed')
