@@ -70,6 +70,23 @@ class ImageTests(unittest.TestCase):
         manifest=store_bytes(image,remote)
         self.assertEqual(b"".join(remote.chunks[x["sha256"]] for x in manifest["chunks"]),image)
 
+    def test_successful_empty_cleanup_http_response(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import threading
+        class Cleanup(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200); self.end_headers()
+            def log_message(self, *args): pass
+        server = HTTPServer(("127.0.0.1",0),Cleanup)
+        thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            backend = ComfyBackend()
+            backend.url = "http://127.0.0.1:"+str(server.server_port)
+            self.assertEqual(backend.api("/history",{"delete":["synthetic"]}),{})
+            self.assertEqual(backend.api("/free",{"unload_models":True}),{})
+        finally:
+            server.shutdown();server.server_close();thread.join()
+
     def test_user_graph_or_shell_is_never_accepted(self):
         backend=ComfyBackend()
         for spec in ({"prompt":"test","workflow":{}},{"prompt":"test","command":"rm -rf /"},{"prompt":"x","width":513},{"prompt":"x","steps":0}):

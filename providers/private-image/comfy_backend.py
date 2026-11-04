@@ -23,7 +23,8 @@ class ComfyBackend:
         payload = None if data is None else json.dumps(data).encode()
         req = Request(self.url + path, payload, {"Content-Type": "application/json"}, method=method)
         with self.http.open(req) as response:
-            return json.load(response)
+            body = response.read()
+            return json.loads(body) if body.strip() else {}
 
     def specification(self, messages):
         text = next(m["content"] for m in reversed(messages) if m["role"] == "user")
