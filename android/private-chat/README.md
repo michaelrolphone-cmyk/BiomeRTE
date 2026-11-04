@@ -92,3 +92,15 @@ reopening collects encrypted results into the originating thread, once, at the
 saved prompt anchor. Network interruptions reconnect automatically. Explicitly
 failed operations remain visible for a deliberate restart, to avoid duplicate work.
 Model rows merge exact IDs and loaded flags; distinct quantizations stay separate.
+
+0.11.0: Tap the info button on an assistant response for its requested model,
+resolved loaded instance and LM Studio-reported model. A verified label requires
+all authenticated provenance fields to agree. Older responses show their saved
+label with verification unavailable; the selected model is never substituted
+for a missing actual model. Inspect the immutable instructions/messages sent for
+that response, queue/model preparation and inference timing, token counts, finish
+reason and request/session IDs. Internal model templates/truncation are not
+captured. Metadata and context live only inside the encrypted phone vault and
+are projected out of future inference messages. Deleting a message removes saved
+context snapshots in that thread and redacts pending response snapshots. Info
+windows are secure and close when the vault locks.

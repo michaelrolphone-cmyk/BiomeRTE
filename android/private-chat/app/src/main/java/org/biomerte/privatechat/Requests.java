@@ -23,7 +23,7 @@ final class Requests {
   if(!anchor.isEmpty())for(int i=0;i<messages.length();i++)if(anchor.equals(messages.getJSONObject(i).optString("id"))){at=i+1;break;}
   if(pending.optBoolean("image"))images.put(new JSONObject().put("request_id",id).put("prompt",pending.optString("image_prompt")).put("images",reply.getJSONArray("images")).put("after_message",at).put("expanded",false));
   else{
-   JSONObject response=new JSONObject().put("role","assistant").put("content",reply.getString("text")).put("model",reply.optString("model",pending.optString("selected_model"))).put("request_id",id);
+   JSONObject response=new JSONObject().put("role","assistant").put("content",reply.getString("text")).put("model",reply.optString("model")).put("request_id",id).put("info",ResponseInfo.capture(pending,reply));
    for(int i=messages.length();i>at;i--)messages.put(i,messages.get(i-1));messages.put(at,response);
    for(int i=0;i<images.length();i++){JSONObject image=images.getJSONObject(i);if(image.optInt("after_message")>=at)image.put("after_message",image.optInt("after_message")+1);}
   }

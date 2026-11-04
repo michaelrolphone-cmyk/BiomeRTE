@@ -73,6 +73,7 @@ final class Conversations {
  static void deleteMessage(JSONObject data,int index)throws JSONException{
   ensure(data);JSONArray messages=data.getJSONArray("messages");
   if(index<0||index>=messages.length())throw new JSONException("Message unavailable");
+  ResponseInfo.clearContexts(data,current(data).getString("id"));
   messages.remove(index);JSONArray images=data.optJSONArray("images");
   if(images!=null)for(int i=0;i<images.length();i++){
    JSONObject image=images.getJSONObject(i);int at=image.optInt("after_message",messages.length()+1);

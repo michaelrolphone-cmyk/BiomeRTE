@@ -138,10 +138,10 @@ class AdapterTests(unittest.TestCase):
         tree=ast.parse(Path(__file__).with_name('private_chat.py').read_text())
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='inference')
         def inference(messages,model):
-            self.assertEqual(['llm'],active);self.assertEqual('exact-instance',model);return 'answer'
-        env={'ModelRuntime':Runtime,'ModelError':ValueError,'_inference':inference}
+            self.assertEqual(['llm'],active);self.assertEqual('exact-instance',model);return {'text':'answer','diagnostics':{}}
+        env={'time':time,'ModelRuntime':Runtime,'ModelError':ValueError,'_inference':inference}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'<isolated inference>','exec'),env)
-        self.assertEqual('answer',env['inference']([], 'selected'));self.assertEqual([],active)
+        self.assertEqual('answer',env['inference']([], 'selected')['text']);self.assertEqual([],active)
         with self.assertRaises(ValueError):env['inference']([],None)
         import comfy_backend
         with patch.object(comfy_backend,'ModelRuntime',Runtime):

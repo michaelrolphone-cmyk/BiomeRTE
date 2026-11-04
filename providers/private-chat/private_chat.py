@@ -63,8 +63,13 @@ def handle_request(data):
 def inference(messages, model=None):
     if not isinstance(model,str) or not model:
         raise ModelError('selected_model_required')
+    started=time.monotonic()
     with ModelRuntime().slot('llm',model) as instance:
-        return _inference(messages,instance)
+        admitted=time.monotonic()
+        answer=_inference(messages,instance)
+        answer['diagnostics'].update(requested_model=model,resolved_model=instance,
+                                     model_verified=True,admission_ms=round((admitted-started)*1000))
+        return answer
 
 def _inference(messages, model):
     privacy_ready()
@@ -77,8 +82,10 @@ def _inference(messages, model):
     if token_file.exists():
         headers['Authorization'] = 'Bearer ' + token_file.read_text().strip()
     req = Request('http://127.0.0.1:1234/v1/chat/completions', json.dumps(body).encode(), headers)
+    started=time.monotonic()
     with LOCAL.open(req) as response:
         result = json.load(response)
+    inference_ms=round((time.monotonic()-started)*1000)
     if result.get('model') != model:
         raise ModelError('model_response_mismatch')
     if 'response_id' in result:
@@ -89,7 +96,12 @@ def _inference(messages, model):
     text = choice['message']['content']
     if not isinstance(text, str) or not text:
         raise RuntimeError('Empty completion')
-    return {'text': text, 'model': model}
+    usage=result.get('usage',{})
+    usage={key:usage[key] for key in ('prompt_tokens','completion_tokens','total_tokens')
+           if isinstance(usage,dict) and type(usage.get(key)) is int and usage[key]>=0}
+    diagnostics={'v':1,'response_model':result['model'],'finish_reason':choice.get('finish_reason'),
+                 'inference_ms':inference_ms,'usage':usage}
+    return {'text': text, 'model': result['model'], 'diagnostics':diagnostics}
 class Remote:
     realm = 'site'
     def __init__(self, cfg):
