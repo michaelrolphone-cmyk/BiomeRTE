@@ -92,7 +92,7 @@ public final class MainActivity extends Activity {
   chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);
   LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
   messageList=new LinearLayout(this);messageList.setOrientation(LinearLayout.VERTICAL);content.addView(messageList);
-  imageHistory=new LinearLayout(this);imageHistory.setOrientation(LinearLayout.VERTICAL);content.addView(imageHistory);chatScroll.addView(content);root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
+  imageHistory=new LinearLayout(this);imageHistory.setOrientation(LinearLayout.VERTICAL);chatScroll.addView(content);root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
   retryButton=action("Pending requests",this::pendingRequests,false);retryButton.setVisibility(View.GONE);root.addView(retryButton,new LinearLayout.LayoutParams(-1,dp(44)));
   LinearLayout modes=new LinearLayout(this);modes.setPadding(0,dp(8),0,dp(8));
   chatModeButton=action("Chat",()->switchMode(false),false);imageModeButton=action("Image",()->switchMode(true),false);
@@ -106,27 +106,32 @@ public final class MainActivity extends Activity {
   if(data.has("pending"))status.setText("Request saved. Resume it or return to chat.");
  }
  private void render(){
-  if(messageList==null)return;messageList.removeAllViews();JSONArray messages=data.optJSONArray("messages");
-  if(messages==null||messages.length()==0){LinearLayout empty=new LinearLayout(this);empty.setOrientation(LinearLayout.VERTICAL);empty.setGravity(Gravity.CENTER);empty.setPadding(dp(24),dp(40),dp(24),dp(32));
+  if(messageList==null)return;messageList.removeAllViews();clearBitmaps();
+  try{if(Timeline.pinLegacyImages(data))save();}catch(Exception e){status.setText("Could not save image order.");}
+  JSONArray events=Timeline.items(data);
+  if(events.length()==0){LinearLayout empty=new LinearLayout(this);empty.setOrientation(LinearLayout.VERTICAL);empty.setGravity(Gravity.CENTER);empty.setPadding(dp(24),dp(40),dp(24),dp(32));
    TextView title=text("Start a conversation",22,0xffe9ede4);title.setTypeface(null,android.graphics.Typeface.BOLD);title.setGravity(Gravity.CENTER);empty.addView(title);space(empty,10);TextView hint=text("Choose a model, then write a message.\nSwitch to Image to create something visual.",15,0xffcad9c5);hint.setGravity(Gravity.CENTER);empty.addView(hint);messageList.addView(empty);
-  }else for(int i=0;i<messages.length();i++){
-   JSONObject message=messages.optJSONObject(i);if(message==null)continue;boolean mine=message.optString("role").equals("user");
+  }else for(int i=0;i<events.length();i++){
+   JSONObject event=events.optJSONObject(i),message=event.optJSONObject("value");if(message==null)continue;
+   if(event.optString("kind").equals("image")){renderImage(message);continue;}
+   boolean mine=message.optString("role").equals("user");
    LinearLayout row=new LinearLayout(this);row.setGravity(mine?Gravity.RIGHT:Gravity.LEFT);row.setPadding(mine?dp(30):0,dp(4),mine?0:dp(24),dp(10));
    LinearLayout bubble=new LinearLayout(this);bubble.setOrientation(LinearLayout.VERTICAL);bubble.setPadding(dp(14),dp(11),dp(14),dp(12));bubble.setBackground(surface(mine?0xff36533e:0xff21362b,18));
    TextView who=text(mine?"You":modelName(message.optString("model")),11,0xffb6cbb0);who.setTypeface(null,android.graphics.Typeface.BOLD);bubble.addView(who);space(bubble,4);bubble.addView(text(message.optString("content"),16,0xffe9ede4));row.addView(bubble,new LinearLayout.LayoutParams(-1,-2));messageList.addView(row);
   }
-  renderImages();if(chatScroll!=null)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
+  if(chatScroll!=null)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
  }
- private void renderImages(){
-  clearBitmaps();JSONArray entries=data.optJSONArray("images");if(entries==null||imageHistory==null)return;
-  for(int i=0;i<entries.length();i++)try{
-   JSONObject entry=entries.getJSONObject(i);TextView title=new TextView(this);title.setText(entry.getString("prompt"));title.setTextColor(0xffe9ede4);imageHistory.addView(title);
+ private void renderImage(JSONObject entry){
+  try{
+   LinearLayout group=new LinearLayout(this);group.setOrientation(LinearLayout.VERTICAL);group.setPadding(0,dp(8),0,dp(12));
+   TextView title=text(entry.getString("prompt"),16,0xffe9ede4);group.addView(title);
    JSONArray images=entry.getJSONArray("images");
    for(int j=0;j<images.length();j++){
     byte[] png=Vault.unb64(images.getJSONObject(j).getString("data"));
     android.graphics.Bitmap bitmap;try{bitmap=android.graphics.BitmapFactory.decodeByteArray(png,0,png.length);}finally{Crypto.wipe(png);}
-    if(bitmap==null)throw new Exception();bitmaps.add(bitmap);ImageView view=new ImageView(this);view.setAdjustViewBounds(true);view.setImageBitmap(bitmap);imageHistory.addView(view,new LinearLayout.LayoutParams(-1,-2));
+    if(bitmap==null)throw new Exception();bitmaps.add(bitmap);ImageView view=new ImageView(this);view.setAdjustViewBounds(true);view.setImageBitmap(bitmap);group.addView(view,new LinearLayout.LayoutParams(-1,-2));
    }
+   messageList.addView(group);
   }catch(Exception e){status.setText("An encrypted image could not be displayed.");}
  }
 
@@ -301,7 +306,7 @@ public final class MainActivity extends Activity {
       JSONArray images=reply.getJSONArray("images");
       for(int i=0;i<images.length();i++){JSONObject item=images.getJSONObject(i);byte[] png=Vault.unb64(item.getString("data"));try{if(!Biome.hex(Crypto.hash(png)).equals(item.getString("sha256")))throw new Exception();}finally{Crypto.wipe(png);}}
       JSONArray entries=data.optJSONArray("images");if(entries==null){entries=new JSONArray();data.put("images",entries);}
-      entries.put(new JSONObject().put("prompt",pending.getString("image_prompt")).put("images",images));
+      entries.put(new JSONObject().put("prompt",pending.getString("image_prompt")).put("images",images).put("after_message",data.getJSONArray("messages").length()));
      }else data.getJSONArray("messages").put(new JSONObject().put("role","assistant").put("content",reply.getString("text")).put("model",reply.optString("model",pending.optString("selected_model"))));data.remove("pending");save();busy=false;render();status.setText("Ready · Encrypted history saved");updateControls();
     }catch(Exception e){fail();}});
    }catch(Exception e){runOnUiThread(()->{if(g!=epoch)return;if(e instanceof Biome.RequestFailed){try{data.remove("pending");save();busy=false;status.setText("Your Mac could not finish. You can send a new message.");updateControls();}catch(Exception ignored){fail();}}else fail();});}});
