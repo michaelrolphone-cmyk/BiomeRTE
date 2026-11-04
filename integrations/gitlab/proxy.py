@@ -99,7 +99,7 @@ def compact(out):
  if len(raw)<=48000:return out
  chunks=[];g=gateway()
  for offset in range(0,len(raw),32768):
-  part=raw[offset:offset+32768];r=g.invoke("artifact.put",{"data":base64.b64encode(part).decode()});chunks.append({"sha256":r["id"],"size":len(part)})
+  part=raw[offset:offset+32768];r=g.invoke("artifact.put",{"data":base64.b64encode(part).decode()});chunks.append({"sha256":r.get("sha256") or r["id"],"size":len(part)})
  return {"ok":out["ok"],"result":{"artifact":{"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw),"chunks":chunks},"encoding":"json"}}
 def rest(args):
  cfg=settings();path=args.get("path","")

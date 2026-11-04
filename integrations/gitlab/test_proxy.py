@@ -27,6 +27,16 @@ class ProxyTests(unittest.TestCase):
    self.assertIn("Initial commit",p.cli("git.log",dict(a,options=["--oneline"]))["result"]["stdout"])
    self.assertTrue(p.cli("git.clone",{"namespace":"demo","path":"copy","url":str(repo)})["ok"])
    self.assertEqual("hello\n",(repo.parent/"copy/hello.txt").read_text())
+ def test_large_results_artifact_chunks_round_trip(self):
+  import base64,hashlib
+  parts={}
+  class Gateway:
+   def invoke(self,name,args):
+    self.assert_name=name;raw=base64.b64decode(args["data"]);sha=hashlib.sha256(raw).hexdigest();parts[sha]=raw;return {"sha256":sha,"size":len(raw)}
+  result={"content":[{"type":"text","text":"café"*20000}]}
+  with patch.object(p,"gateway",return_value=Gateway()):out=p.compact({"ok":True,"result":result})
+  artifact=out["result"]["artifact"];raw=b"".join(parts[c["sha256"]] for c in artifact["chunks"])
+  self.assertEqual(artifact["sha256"],hashlib.sha256(raw).hexdigest());self.assertEqual(result,json.loads(raw));self.assertGreater(len(artifact["chunks"]),1)
  def test_mcp_error_is_not_success(self):
   raw={"isError":True,"content":[{"type":"text","text":"Project not found"}]}
   with patch.object(p,"GitLabMCP") as cls,patch("sys.stdin",__import__("io").StringIO(json.dumps({"inputs":{"arguments":{}}}))),patch("sys.stdout",new_callable=__import__("io").StringIO) as output:
