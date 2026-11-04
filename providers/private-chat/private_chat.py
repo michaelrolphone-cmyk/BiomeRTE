@@ -49,6 +49,8 @@ def privacy_ready():
     if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
         raise RuntimeError('LM Studio sensitive logging must be disabled')
 from model_service import ModelError, model_catalog, selected_model
+sys.path.insert(0,str(HOME/'.local/share/biome-model-runtime'))
+from model_runtime import ModelRuntime
 
 def handle_request(data):
     privacy_ready()
@@ -59,10 +61,16 @@ def handle_request(data):
     return inference(data['messages'], data.get('model'))
 
 def inference(messages, model=None):
+    if not isinstance(model,str) or not model:
+        raise ModelError('selected_model_required')
+    with ModelRuntime().slot('llm',model) as instance:
+        return _inference(messages,instance)
+
+def _inference(messages, model):
     privacy_ready()
     messages = conversation_messages(messages)
     # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    model = selected_model(model, LOCAL, LM)
+    # Admission already unloaded competitors and resolved the exact instance.
     body = dict(model=model, messages=messages, stream=False, store=False)
     headers = {'Content-Type': 'application/json'}
     token_file = LM / 'api-token'

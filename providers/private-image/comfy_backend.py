@@ -8,6 +8,9 @@ import uuid
 import threading
 import asyncio
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path.home()/'.local/share/biome-model-runtime'))
+from model_runtime import ModelRuntime
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 class NoRedirect(HTTPRedirectHandler):
@@ -107,6 +110,12 @@ class ComfyBackend:
         except Exception:pass  # Progress transport never changes generation outcome.
 
     def generate(self, messages, progress=None):
+        # Validation precedes admission; no prompt or image bytes enter the queue.
+        self.specification(messages)
+        with ModelRuntime().slot('image',progress=progress):
+            return self._generate(messages,progress)
+
+    def _generate(self, messages, progress=None):
         spec = self.specification(messages)
         token = str(uuid.uuid4())
         prompt_id = None
