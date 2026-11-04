@@ -5,7 +5,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import javax.net.ssl.HttpsURLConnection;
-public final class Biome {
+public class Biome {
  public static final String ORIGIN="https://biomerte-controller.cantikash.chatgpt.site", RESOURCE=ORIGIN+"/api/mcp";
  public static final class RequestFailed extends IOException {}
  private volatile HttpsURLConnection connection;
@@ -51,7 +51,19 @@ public final class Biome {
  }
  static String hex(byte[] b){StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return s.toString();}
  public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
-  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
+  String id=envelope.getString("id");
+  // A finished request stays collectible after its original lease was released.
+  JSONObject prior=null;try{prior=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());}catch(IOException unavailable){}
+  if(prior!=null){
+   String state=prior.optString("state");
+   if(state.equals("succeeded")){
+    try{return resolveEnvelope(token,prior.getJSONObject("result").getJSONObject("envelope"));}
+    finally{if(prior.has("lease"))try{invoke(token,"cap.release",new JSONObject().put("lease",prior.getString("lease")),id+"-release");}catch(Exception ignored){}}
+   }
+   if(state.equals("failed"))throw new RequestFailed();
+   if(state.equals("uncertain"))throw new IOException("Request needs reconciliation");
+  }
+  JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
   String lid=lease.getString("id");boolean settled=false;
   try{
    while(!lease.getString("state").equals("bound")){if(!active.getAsBoolean())throw new InterruptedException();Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());}
