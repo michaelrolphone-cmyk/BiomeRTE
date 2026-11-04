@@ -1,6 +1,6 @@
 plugins { id 'com.android.application' }
 android { namespace 'org.biomerte.privatechat'; compileSdk 35
- defaultConfig { applicationId 'org.biomerte.privatechat'; minSdk 26; targetSdk 35; versionCode 6; versionName '0.6.0'; multiDexEnabled true }
+ defaultConfig { applicationId 'org.biomerte.privatechat'; minSdk 26; targetSdk 35; versionCode 7; versionName '0.6.1'; multiDexEnabled true }
  testOptions { unitTests.includeAndroidResources = true }
  buildTypes {
   debug { debuggable false; minifyEnabled true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') }
@@ -9,3 +9,16 @@ android { namespace 'org.biomerte.privatechat'; compileSdk 35
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 dependencies { implementation 'org.bouncycastle:bcprov-jdk15to18:1.86'; testImplementation 'junit:junit:4.13.2'; testImplementation 'org.robolectric:robolectric:4.14.1' }
+
+def biomeBrandingRes = layout.buildDirectory.dir('generated/biome-branding/res')
+android.sourceSets.main.res.srcDir(biomeBrandingRes)
+def generateBiomeBranding = tasks.register('generateBiomeBranding') {
+ inputs.file('src/main/branding/biome_mark.png.b64')
+ outputs.dir(biomeBrandingRes)
+ doLast {
+  def png = new File(biomeBrandingRes.get().asFile, 'drawable/biome_mark.png')
+  png.parentFile.mkdirs()
+  png.bytes = file('src/main/branding/biome_mark.png.b64').text.trim().decodeBase64()
+ }
+}
+tasks.named('preBuild').configure { dependsOn(generateBiomeBranding) }
