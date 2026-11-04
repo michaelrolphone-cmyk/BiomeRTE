@@ -64,7 +64,8 @@ def tool_contract(name):
 def workspace(args):
  ns=args.get("namespace","default")
  if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}",ns):raise ValueError("Invalid workspace namespace")
- root=(ROOT/"workspaces"/ns).resolve();root.mkdir(parents=True,exist_ok=True)
+ cfg=settings() if (ROOT/"config.json").exists() else {}
+ root=(Path(cfg.get("workspace_root",ROOT/"workspaces"))/ns).resolve();root.mkdir(parents=True,exist_ok=True)
  target=(root/args.get("path",".")).resolve()
  if not target.is_relative_to(root):raise ValueError("path must be inside the workspace namespace")
  return root,target

@@ -7,7 +7,10 @@ shutil.copy2(src/"proxy.py",root/"proxy.py")
 shutil.copy2(src/"agent_tools.py",root/"agent_tools.py")
 shutil.copytree(src.parent.parent/"biomerte",root/"runtime/biomerte",dirs_exist_ok=True)
 url="https://Micahels-Mac-mini.local:8443"
-(root/"config.json").write_text(json.dumps({"url":url,"ca":str(root/"tls/gitlab.crt")}))
+coding_config=pathlib.Path.home()/".local/share/biome-lmstudio/coding-config.json"
+workspace_root=pathlib.Path(json.loads(coding_config.read_text())["workspace"])/"git" if coding_config.exists() else root/"workspaces"
+workspace_root.mkdir(parents=True,exist_ok=True)
+(root/"config.json").write_text(json.dumps({"url":url,"ca":str(root/"tls/gitlab.crt"),"workspace_root":str(workspace_root)}))
 python=sys.executable
 (root/"credential_helper.sh").write_text('#!/bin/sh\n[ "$1" = get ] || exit 0\nexec '+__import__('shlex').quote(python)+' '+__import__('shlex').quote(str(root/"proxy.py"))+' credential\n')
 (root/"credential_helper.sh").chmod(0o700)
