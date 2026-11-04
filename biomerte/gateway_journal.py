@@ -23,7 +23,8 @@ class GatewayJournal:
             token = handle.read().strip()
         request = Request(self.origin + '/bridge/ha/' + path,
                           encode(payload).encode('utf-8'),
-                          {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
+                          {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
+                           'User-Agent': 'BiomeRTE-Controller-Link/1.0'})
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode('utf-8'))
