@@ -36,8 +36,22 @@ public final class Biome {
   if(reply.has("structuredContent")&&!reply.isNull("structuredContent"))return reply.getJSONObject("structuredContent");
   return new JSONObject(reply.getJSONArray("content").getJSONObject(0).getString("text"));
  }
- public JSONObject exchange(String token,String resource,JSONObject envelope,java.util.function.BooleanSupplier active)throws Exception{
-  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract","chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
+ private JSONObject resolveEnvelope(String token,JSONObject value)throws Exception{
+  if(!value.optString("kind").equals("artifact"))return value;
+  ByteArrayOutputStream out=new ByteArrayOutputStream();JSONArray chunks=value.getJSONArray("chunks");
+  for(int i=0;i<chunks.length();i++){
+   JSONObject item=chunks.getJSONObject(i),r=invoke(token,"artifact.get",new JSONObject().put("sha256",item.getString("sha256")),UUID.randomUUID().toString());
+   byte[] bytes=Vault.unb64(r.getString("data"));
+   if(bytes.length!=item.getInt("size")||!hex(Crypto.hash(bytes)).equals(item.getString("sha256")))throw new IOException("Image transfer failed");
+   out.write(bytes);Crypto.wipe(bytes);
+  }
+  byte[] all=out.toByteArray();
+  if(all.length!=value.getLong("size")||!hex(Crypto.hash(all)).equals(value.getString("sha256")))throw new IOException("Image transfer failed");
+  return new JSONObject(new String(all,StandardCharsets.UTF_8));
+ }
+ static String hex(byte[] b){StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return s.toString();}
+ public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
+  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
   String lid=lease.getString("id");boolean settled=false;
   try{
    while(!lease.getString("state").equals("bound")){if(!active.getAsBoolean())throw new InterruptedException();Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());}
@@ -45,7 +59,7 @@ public final class Biome {
    while(active.getAsBoolean()){
     JSONObject status=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());
     String state=status.getString("state");
-    if(state.equals("succeeded")){settled=true;return status.getJSONObject("result").getJSONObject("envelope");}
+    if(state.equals("succeeded")){settled=true;return resolveEnvelope(token,status.getJSONObject("result").getJSONObject("envelope"));}
     if(state.equals("failed")){settled=true;throw new RequestFailed();}
     if(state.equals("uncertain"))throw new IOException("Request needs reconciliation");
     Thread.sleep(1500);

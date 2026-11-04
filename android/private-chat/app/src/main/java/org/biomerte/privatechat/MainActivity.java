@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
- private LinearLayout root; private TextView status,history; private EditText composer;
+ private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
  private final ExecutorService executor=Executors.newSingleThreadExecutor();
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
@@ -43,19 +43,32 @@ public final class MainActivity extends Activity {
    finally{Arrays.fill(chars,'\0');}
   });
  }
- private void lock(){epoch++;biome.cancel();busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
+ private void clearBitmaps(){if(imageHistory!=null)imageHistory.removeAllViews();for(android.graphics.Bitmap b:bitmaps)b.recycle();bitmaps.clear();}
+ private void lock(){clearBitmaps();imageHistory=null;epoch++;biome.cancel();busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
  private void save()throws Exception{vault.save(data,vaultKey,salt);}
  private void fail(){if(status!=null)status.setText("Operation did not finish. Unlock and retry to resume the same encrypted request.");busy=false;}
  private void chat(){
   base("Biome Private Chat");status.setText("Encrypted on this phone • unlocked");
-  ScrollView scroll=new ScrollView(this);history=new TextView(this);history.setTextColor(0xffe9ede4);history.setTextSize(17);history.setTextIsSelectable(false);history.setSaveEnabled(false);scroll.addView(history);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+  ScrollView scroll=new ScrollView(this);history=new TextView(this);history.setTextColor(0xffe9ede4);history.setTextSize(17);history.setTextIsSelectable(false);history.setSaveEnabled(false);LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.addView(history);imageHistory=new LinearLayout(this);imageHistory.setOrientation(LinearLayout.VERTICAL);content.addView(imageHistory);scroll.addView(content);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));}}catch(Exception e){status.setText("Could not import pairing file.");}}
   render();composer=field("Message",false);
-  button("Send",this::send);button("Resume pending request",this::resume);
+  button("Send",this::send);button("Generate image",()->send(true));button("Resume pending request",this::resume);
   button("Pair Mac / connection",this::settings);button("Lock",this::lock);
-  button("Clear conversation",()->new AlertDialog.Builder(this).setMessage("Delete encrypted conversation history from this app?").setPositiveButton("Delete",(d,w)->{try{if(data.has("pending")){status.setText("Resolve the pending request first.");return;}data.put("messages",new JSONArray());save();render();}catch(Exception e){fail();}}).setNegativeButton("Cancel",null).show());
+  button("Clear conversation",()->new AlertDialog.Builder(this).setMessage("Delete encrypted conversation history from this app?").setPositiveButton("Delete",(d,w)->{try{if(data.has("pending")){status.setText("Resolve the pending request first.");return;}data.put("messages",new JSONArray());data.remove("images");save();render();}catch(Exception e){fail();}}).setNegativeButton("Cancel",null).show());
  }
- private void render(){StringBuilder s=new StringBuilder();JSONArray a=data.optJSONArray("messages");if(a!=null)for(int i=0;i<a.length();i++){JSONObject m=a.optJSONObject(i);s.append(m.optString("role").equals("user")?"You\n":"LM Studio\n").append(m.optString("content")).append("\n\n");}history.setText(s);}
+ private void render(){StringBuilder s=new StringBuilder();JSONArray a=data.optJSONArray("messages");if(a!=null)for(int i=0;i<a.length();i++){JSONObject m=a.optJSONObject(i);s.append(m.optString("role").equals("user")?"You\n":"LM Studio\n").append(m.optString("content")).append("\n\n");}history.setText(s);renderImages();}
+ private void renderImages(){
+  clearBitmaps();JSONArray entries=data.optJSONArray("images");if(entries==null||imageHistory==null)return;
+  for(int i=0;i<entries.length();i++)try{
+   JSONObject entry=entries.getJSONObject(i);TextView title=new TextView(this);title.setText(entry.getString("prompt"));title.setTextColor(0xffe9ede4);imageHistory.addView(title);
+   JSONArray images=entry.getJSONArray("images");
+   for(int j=0;j<images.length();j++){
+    byte[] png=Vault.unb64(images.getJSONObject(j).getString("data"));
+    android.graphics.Bitmap bitmap;try{bitmap=android.graphics.BitmapFactory.decodeByteArray(png,0,png.length);}finally{Crypto.wipe(png);}
+    if(bitmap==null)throw new Exception();bitmaps.add(bitmap);ImageView view=new ImageView(this);view.setAdjustViewBounds(true);view.setImageBitmap(bitmap);imageHistory.addView(view,new LinearLayout.LayoutParams(-1,-2));
+   }
+  }catch(Exception e){status.setText("An encrypted image could not be displayed.");}
+ }
  private void settings(){
   base("Private connection");status.setText("Import the pairing JSON directly from your Mac. Keep it private. Biome receives only encrypted chat.");
   button("Import Mac pairing file",()->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("application/json");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,41);});
@@ -87,40 +100,43 @@ public final class MainActivity extends Activity {
    }catch(Exception e){runOnUiThread(()->{if(g==epoch)fail();});}});
   }catch(Exception e){status.setText("Callback did not match this connection attempt.");}
  }
- private JSONObject startSession()throws Exception{
+ private JSONObject startSession(boolean image,String prompt)throws Exception{
+  WireCrypto wire=new WireCrypto(image);
   if(!data.has("phone_identity"))data.put("phone_identity",Vault.b64(Crypto.random(32)));
   byte[] identity=Vault.unb64(data.getString("phone_identity")),ephemeral=Crypto.random(32),nonce=Crypto.random(32);
   String sid=UUID.randomUUID().toString(),helloId=UUID.randomUUID().toString(),requestId=UUID.randomUUID().toString();
   try{
-   byte[] pub=Crypto.edPublic(identity),eph=Crypto.xPublic(ephemeral),transcript=Crypto.clientTranscript(helloId,sid,pub,eph,nonce);
+   byte[] pub=Crypto.edPublic(identity),eph=Crypto.xPublic(ephemeral),transcript=wire.clientTranscript(helloId,sid,pub,eph,nonce);
    JSONObject hello=new JSONObject().put("v",2).put("kind","hello").put("id",helloId).put("sid",sid).put("client_identity",Vault.b64(pub)).put("client_ephemeral",Vault.b64(eph)).put("client_nonce",Vault.b64(nonce)).put("signature",Vault.b64(Crypto.sign(identity,transcript)));
-   return new JSONObject().put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId);
+   return new JSONObject().put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId).put("image",image).put("image_prompt",image?prompt:"");
   }finally{Crypto.wipe(identity);Crypto.wipe(ephemeral);}
  }
  private void finishSession(JSONObject reply)throws Exception{
   JSONObject pending=data.getJSONObject("pending"),hello=pending.getJSONObject("hello"),pairing=data.getJSONObject("pairing");
+  WireCrypto wire=new WireCrypto(pending.optBoolean("image"));
   if(reply.getInt("v")!=2||!reply.getString("kind").equals("hello")||!reply.getString("id").equals(hello.getString("id"))||!reply.getString("sid").equals(hello.getString("sid")))throw new Exception();
-  byte[] identity=Vault.unb64(pairing.getString("server_identity")),client=Crypto.clientTranscript(hello.getString("id"),hello.getString("sid"),Vault.unb64(hello.getString("client_identity")),Vault.unb64(hello.getString("client_ephemeral")),Vault.unb64(hello.getString("client_nonce")));
-  byte[] whole=Crypto.serverTranscript(client,Vault.unb64(reply.getString("server_ephemeral")),Vault.unb64(reply.getString("server_nonce")),identity);
+  byte[] identity=Vault.unb64(pairing.getString("server_identity")),client=wire.clientTranscript(hello.getString("id"),hello.getString("sid"),Vault.unb64(hello.getString("client_identity")),Vault.unb64(hello.getString("client_ephemeral")),Vault.unb64(hello.getString("client_nonce")));
+  byte[] whole=wire.serverTranscript(client,Vault.unb64(reply.getString("server_ephemeral")),Vault.unb64(reply.getString("server_nonce")),identity);
   Crypto.verify(identity,whole,Vault.unb64(reply.getString("signature")));
   byte[] ephemeral=Vault.unb64(pending.getString("client_private")),shared=null,requestKey=null,responseKey=null,clear=null;
   try{
    shared=Crypto.shared(ephemeral,Vault.unb64(reply.getString("server_ephemeral")));byte[] hash=Crypto.hash(whole);
-   requestKey=Crypto.traffic(shared,hash,"request");responseKey=Crypto.traffic(shared,hash,"response");
-   JSONObject body=new JSONObject().put("messages",data.getJSONArray("messages"));
+   requestKey=wire.traffic(shared,hash,"request");responseKey=wire.traffic(shared,hash,"response");
+   JSONObject body=new JSONObject().put("messages",pending.optBoolean("image")?new JSONArray().put(new JSONObject().put("role","user").put("content",pending.getString("image_prompt"))):data.getJSONArray("messages"));
    if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
    clear=body.toString().getBytes(StandardCharsets.UTF_8);byte[] nonce=Crypto.random(12);String sid=hello.getString("sid"),id=pending.getString("request_id");
-   JSONObject envelope=new JSONObject().put("v",2).put("kind","request").put("id",id).put("sid",sid).put("nonce",Vault.b64(nonce)).put("ct",Vault.b64(Crypto.crypt(true,requestKey,nonce,Crypto.sessionAAD("request",sid,id,hash),clear)));
+   JSONObject envelope=new JSONObject().put("v",2).put("kind","request").put("id",id).put("sid",sid).put("nonce",Vault.b64(nonce)).put("ct",Vault.b64(Crypto.crypt(true,requestKey,nonce,wire.sessionAAD("request",sid,id,hash),clear)));
    if(envelope.toString().getBytes(StandardCharsets.UTF_8).length>60000)throw new Exception("Request too large");
-   data.put("pending",new JSONObject().put("stage","message").put("envelope",envelope).put("response_key",Vault.b64(responseKey)).put("transcript_hash",Vault.b64(hash)));
+   data.put("pending",new JSONObject().put("stage","message").put("envelope",envelope).put("response_key",Vault.b64(responseKey)).put("transcript_hash",Vault.b64(hash)).put("image",pending.optBoolean("image")).put("image_prompt",pending.optString("image_prompt")));
    save();
   }finally{Crypto.wipe(ephemeral);Crypto.wipe(shared);Crypto.wipe(requestKey);Crypto.wipe(responseKey);Crypto.wipe(clear);}
  }
- private void send(){
+ private void send(){send(false);}
+ private void send(boolean image){
   if(busy||data.has("pending")){status.setText("Resume the pending request first.");return;}
   try{if(!data.has("pairing")||data.getJSONObject("pairing").optInt("v")!=2||!data.has("oauth")){settings();return;}String text=composer.getText().toString();if(text.trim().isEmpty())return;
-   JSONArray messages=data.getJSONArray("messages");messages.put(new JSONObject().put("role","user").put("content",text));
-   JSONObject encrypted=startSession();
+   JSONArray messages=image?new JSONArray():data.getJSONArray("messages");messages.put(new JSONObject().put("role","user").put("content",text));
+   JSONObject encrypted=startSession(image,text);
    if(new JSONObject().put("messages",messages).toString().getBytes(StandardCharsets.UTF_8).length>44000){messages.remove(messages.length()-1);status.setText("Conversation exceeds Biome request size. Start a new conversation.");return;}
    data.put("pending",encrypted);save();composer.setText("");render();resume();
   }catch(Exception e){fail();}
@@ -132,18 +148,25 @@ public final class MainActivity extends Activity {
    if(auth.optBoolean("refresh_pending")){status.setText("Connection refresh was interrupted. Reconnect Biome.");return;}
    if(System.currentTimeMillis()>=auth.getLong("expires_at")){refresh(auth);return;}
    String token=auth.getString("access_token"),resource=data.getJSONObject("pairing").getString("resource");JSONObject pending=new JSONObject(data.getJSONObject("pending").toString());
+   boolean image=pending.optBoolean("image");if(image)resource=resource.replace("privatechat.mac.","image.mac.");final String targetResource=resource;
    boolean isHello=pending.getString("stage").equals("hello");JSONObject outbound=pending.getJSONObject(isHello?"hello":"envelope");
    int g=epoch;busy=true;status.setText("Encrypted request in progress…");
-   executor.execute(()->{try{JSONObject response=biome.exchange(token,resource,outbound,()->g==epoch&&!Thread.currentThread().isInterrupted());
+   executor.execute(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted());
     runOnUiThread(()->{if(g!=epoch)return;try{
      if(isHello){finishSession(response);busy=false;resume();return;}
+     WireCrypto wire=new WireCrypto(image);
      String id=outbound.getString("id"),sid=outbound.getString("sid");
      if(response.getInt("v")!=2||!response.getString("kind").equals("response")||!id.equals(response.getString("id"))||!sid.equals(response.getString("sid")))throw new Exception();
      byte[] key=Vault.unb64(pending.getString("response_key")),clear=null;
-     JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),Crypto.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
+     JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),wire.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
      data.getJSONObject("pairing").remove("enrollment_token");
      if(reply.has("error")){status.setText("Mac could not complete private inference.");data.remove("pending");save();busy=false;return;}
-     data.getJSONArray("messages").put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));data.remove("pending");save();busy=false;render();status.setText("Encrypted history saved");
+     if(image){
+      JSONArray images=reply.getJSONArray("images");
+      for(int i=0;i<images.length();i++){JSONObject item=images.getJSONObject(i);byte[] png=Vault.unb64(item.getString("data"));try{if(!Biome.hex(Crypto.hash(png)).equals(item.getString("sha256")))throw new Exception();}finally{Crypto.wipe(png);}}
+      JSONArray entries=data.optJSONArray("images");if(entries==null){entries=new JSONArray();data.put("images",entries);}
+      entries.put(new JSONObject().put("prompt",pending.getString("image_prompt")).put("images",images));
+     }else data.getJSONArray("messages").put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));data.remove("pending");save();busy=false;render();status.setText("Encrypted history saved");
     }catch(Exception e){fail();}});
    }catch(Exception e){runOnUiThread(()->{if(g!=epoch)return;if(e instanceof Biome.RequestFailed){try{data.remove("pending");save();busy=false;status.setText("Mac could not finish this request. You can send a new message.");}catch(Exception ignored){fail();}}else fail();});}});
   }catch(Exception e){fail();}
