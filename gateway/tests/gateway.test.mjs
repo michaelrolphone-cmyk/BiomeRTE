@@ -147,7 +147,7 @@ test('shared journal CAS, preferred routing, overflow, takeover and return',asyn
  assert.equal((await send('/bridge/ha/configure',config,pi)).status,200);
  const heartbeat={position:0,ready:true,load:0,host:'test'};
  await send('/bridge/ha/heartbeat',heartbeat,pi);await send('/bridge/ha/heartbeat',heartbeat,mac);
- const entry=JSON.stringify({seq:1,prev:'',changes:[['state','x',{value:1}]]});
+ const entry='{"seq":1,"prev":"","changes":[["state","x",{"value":1.0,"big":9007199254740993}]]}';
  assert.equal((await send('/bridge/ha/append',{expected:0,entry},pi)).status,200);
  assert.equal((await send('/bridge/ha/append',{expected:0,entry},mac)).status,200);
  assert.equal((await send('/bridge/ha/append',{expected:0,entry:entry.replace('value":1','value":2')},mac)).status,409);

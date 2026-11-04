@@ -58,3 +58,23 @@ class HA(unittest.TestCase):
             with patch('time.time',return_value=1061):
                 for _ in range(10):app.tick('site')
             self.assertEqual(app.call('process.get',{'run':run['id']})['state'],'completed')
+
+    def test_head_fetch_does_not_hold_local_writer_lock(self):
+        with tempfile.TemporaryDirectory() as home:
+            initialize(home);app=Application(home);journal=Journal()
+            app.stores['site'].remote=journal
+            app.call('work.create',{'kind':'task','title':'Shared','id':'shared'},'create')
+            barrier=threading.Barrier(2,timeout=3)
+            original=journal.read
+            def read(name):
+                if name=='head':barrier.wait()
+                return original(name)
+            journal.read=read
+            errors=[]
+            def query():
+                try:app.call('work.list')
+                except Exception as exc:errors.append(exc)
+            threads=[threading.Thread(target=query) for _ in range(2)]
+            for thread in threads:thread.start()
+            for thread in threads:thread.join()
+            self.assertEqual(errors,[])
