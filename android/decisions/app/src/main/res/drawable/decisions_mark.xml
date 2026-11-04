@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+ android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+ <!-- Biome's nested layers carry a checked decision diamond. Keep within adaptive-icon safe zone. -->
+ <path android:fillColor="#00000000" android:strokeColor="#9BE2C2" android:strokeWidth="4"
+  android:strokeLineJoin="round" android:strokeLineCap="round"
+  android:pathData="M28,57 L54,73 L80,57 M28,68 L54,84 L80,68"/>
+ <path android:fillColor="#BDB0EC" android:pathData="M54,24 L82,44 L54,64 L26,44 Z"/>
+ <path android:fillColor="#00000000" android:strokeColor="#18282B" android:strokeWidth="5"
+  android:strokeLineJoin="round" android:strokeLineCap="round"
+  android:pathData="M43,44 L51,51 L65,36"/>
+</vector>
