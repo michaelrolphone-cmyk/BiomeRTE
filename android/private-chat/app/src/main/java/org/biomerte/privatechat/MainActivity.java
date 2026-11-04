@@ -282,7 +282,7 @@ public final class MainActivity extends Activity {
    String token=auth.getString("access_token"),resource=data.getJSONObject("pairing").getString("resource");JSONObject pending=new JSONObject(data.getJSONObject("pending").toString());
    boolean image=pending.optBoolean("image");if(image)resource=resource.replace("privatechat.mac.","image.mac.");final String targetResource=resource;
    boolean isHello=pending.getString("stage").equals("hello");JSONObject outbound=pending.getJSONObject(isHello?"hello":"envelope");
-   int g=epoch;busy=true;status.setText(isHello?"Connecting securely…":pending.optString("action").equals("models")?"Loading models from your Mac…":image?"Generating image on your Mac…":"Waiting for your model…");updateControls();
+   int g=epoch;busy=true;status.setText(isHello?"Connecting securely…":pending.optString("action").equals("select_model")?"Switching the loaded Mac model…":pending.optString("action").equals("models")?"Loading models from your Mac…":image?"Generating image on your Mac…":"Waiting for your model…");updateControls();
    transport=executor.submit(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted());
     runOnUiThread(()->{if(g!=epoch)return;try{
      if(isHello){finishSession(response);busy=false;resume();return;}
@@ -292,7 +292,7 @@ public final class MainActivity extends Activity {
      byte[] key=Vault.unb64(pending.getString("response_key")),clear=null;
      JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),wire.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
      data.getJSONObject("pairing").remove("enrollment_token");
-     if(reply.has("error")){status.setText("Your Mac could not finish. Try again or choose another model.");data.remove("pending");save();busy=false;updateControls();return;}
+     if(reply.has("error")){status.setText(reply.optString("error").equals("model_memory_unavailable")?"Mac could not load this model: insufficient available memory.":reply.optString("error").startsWith("model_")?"Mac could not load the selected model. Your selection has not changed.":"Your Mac could not finish. Try again or choose another model.");if(reply.has("models"))data.put("models",reply.getJSONArray("models"));data.remove("pending");save();busy=false;updateControls();return;}
      if(pending.optString("action").equals("select_model")){
       data.put("selected_model",reply.getString("model"));data.put("models",reply.getJSONArray("models"));
       data.remove("pending");save();busy=false;modelButton.setText("Model · "+modelName(data.getString("selected_model")));
