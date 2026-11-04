@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
- private Button modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog; private boolean imageMode=false,connectionScreen=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
+ private Button modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog; private boolean imageMode=false,connectionScreen=false,returnToConnection=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
  private final ExecutorService executor=Executors.newSingleThreadExecutor();
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
@@ -67,7 +67,7 @@ public final class MainActivity extends Activity {
      if(chars.length<12||!password.getText().toString().equals(confirm.getText().toString())){status.setText("Use at least 12 characters and matching passphrases.");return;}
      salt=Crypto.random(32);vaultKey=Crypto.derive(chars,salt);data=new JSONObject().put("messages",new JSONArray());save();
     }else{byte[][] keys=new byte[2][];data=vault.unlock(chars,keys);vaultKey=keys[0];salt=keys[1];}
-    password.setText("");if(confirm!=null)confirm.setText("");chat();
+    password.setText("");if(confirm!=null)confirm.setText("");if(returnToConnection){returnToConnection=false;settings();}else chat();
    }catch(Exception e){Crypto.wipe(vaultKey);vaultKey=null;data=null;status.setText("Could not unlock vault. Check your passphrase.");}
    finally{Arrays.fill(chars,'\0');}
   });
@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
  private void chat(){
   connectionScreen=false;
   base("Biome Chat");
-  Button more=action("⋮",()->menu(toolbar),false);more.setContentDescription("Conversation options");toolbar.addView(more,new LinearLayout.LayoutParams(dp(48),dp(44)));
+  Button more=action("⋮",()->{},false);more.setOnClickListener(this::menu);more.setContentDescription("Conversation options");toolbar.addView(more,new LinearLayout.LayoutParams(dp(48),dp(44)));
   boolean connected=data.has("pairing")&&data.has("oauth");
   status.setText(connected?"Ready · Encrypted on this phone":"Connect your Mac to start");
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));Toast.makeText(this,"Mac pairing imported",Toast.LENGTH_SHORT).show();}}catch(Exception e){status.setText("Pairing import failed. Open Connection to try again.");}}
@@ -94,7 +94,7 @@ public final class MainActivity extends Activity {
   chatModeButton=action("Chat",()->switchMode(false),false);imageModeButton=action("Image",()->switchMode(true),false);
   LinearLayout.LayoutParams chip=new LinearLayout.LayoutParams(dp(92),dp(40));chip.rightMargin=dp(8);modes.addView(chatModeButton,chip);modes.addView(imageModeButton,new LinearLayout.LayoutParams(dp(92),dp(40)));root.addView(modes);
   LinearLayout dock=new LinearLayout(this);dock.setGravity(Gravity.BOTTOM);
-  composer=input("Message…",false);composer.setMinLines(1);composer.setMaxLines(5);composer.setContentDescription("Message or image prompt");
+  composer=input("Message…",false);composer.setMinLines(1);composer.setMaxLines(5);composer.setMinHeight(dp(52));composer.setContentDescription("Message or image prompt");
   LinearLayout.LayoutParams edit=new LinearLayout.LayoutParams(0,-2,1);edit.rightMargin=dp(8);dock.addView(composer,edit);
   sendButton=action("↑",()->send(imageMode),true);sendButton.setTextSize(24);dock.addView(sendButton,new LinearLayout.LayoutParams(dp(52),dp(52)));root.addView(dock);
   composer.setText(data.optString("draft"));composer.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){updateControls();}public void afterTextChanged(android.text.Editable e){}});
@@ -163,7 +163,7 @@ public final class MainActivity extends Activity {
    String state=UUID.randomUUID().toString(),challenge=android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)),11);
    JSONObject pending=new JSONObject().put("client_id",reg.getString("client_id")).put("verifier",verifier).put("state",state);
    Uri url=Uri.parse(Biome.ORIGIN+"/oauth/authorize").buildUpon().appendQueryParameter("client_id",reg.getString("client_id")).appendQueryParameter("response_type","code").appendQueryParameter("redirect_uri",REDIRECT).appendQueryParameter("code_challenge",challenge).appendQueryParameter("code_challenge_method","S256").appendQueryParameter("state",state).appendQueryParameter("scope","biomerte offline_access").appendQueryParameter("resource",Biome.RESOURCE).build();
-   runOnUiThread(()->{if(g!=epoch)return;try{data.put("oauth_pending",pending);save();busy=false;startActivity(new Intent(Intent.ACTION_VIEW,url));}catch(Exception e){fail();}});
+   runOnUiThread(()->{if(g!=epoch)return;try{data.put("oauth_pending",pending);save();busy=false;returnToConnection=true;startActivity(new Intent(Intent.ACTION_VIEW,url));}catch(Exception e){fail();}});
   }catch(Exception e){runOnUiThread(()->{if(g==epoch)fail();});}});
  }
  private void finishAuthorization(String callback){
