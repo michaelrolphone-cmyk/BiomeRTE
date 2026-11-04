@@ -15,11 +15,28 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m unittest discover -v
+      - name: Qualify the LM Studio coding adapter
+        run: python3 -S -m unittest discover -s providers/lmstudio -p 'test_coding.py' -v
       - name: Start a fresh clone and run an actual work cycle
         run: |
           export BIOME_HOME="$RUNNER_TEMP/biome-node"
           ./biome init > "$RUNNER_TEMP/public-identity.json"
           ./biome demo
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test tests/*.test.mjs
+        working-directory: gateway
+      - run: |
+          mkdir -p .openai
+          cp hosting.example.json .openai/hosting.json
+          npm run build
+          npm run validate
+        working-directory: gateway
   replicated-recovery:
     runs-on: ubuntu-latest
     steps:

@@ -53,6 +53,11 @@ The Work tab shows plan hierarchy, readiness and acceptance. Processes shows def
 
 Inputs may also be read from `@file.json`. Durable mutations have request IDs. Reuse an ID with the same arguments after a lost response. Reuse with different arguments is rejected. Scheduled work, human answers and callbacks are dispatched by the process runner. Its background loop advances only runnable BPMN-compatible instances and their subscriptions. The local realm has its own worker thread so a partitioned site backend does not stall local work.
 
+* [Current source and deployment provenance](docs/source-reconciliation.md) records the integrated `main` baseline and qualified Mac startup repair.
+* [LM Studio coding service](providers/lmstudio/README.md) provides filesystem tools and durable terminal commands to the local coding agent.
+* [Pi Docker CLI](providers/pi-docker/README.md) exposes a single argument-vector passthrough to Docker.
+* [Pi terminal provider](providers/pi-terminal/README.md) installs the optional 16-session Bash terminal.
+* [Pi file storage](providers/pi-storage/README.md) installs an optional 2 GiB file service with a movable storage volume.
 * [Processes, routines and providers](docs/runtime.md) covers BPMN, data bindings, enrollment, physical effects and adapter construction.
 * [Multiple hosts and disconnected work](docs/deployment.md) covers quorum-backed control, offline grants, conflict resolution, boot services and recovery.
 * [Qualification](docs/qualification.md) maps the specification’s scenarios to implementation checks.

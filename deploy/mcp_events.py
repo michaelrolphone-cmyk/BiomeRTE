@@ -16,6 +16,7 @@ import uuid
 from urllib.parse import urlsplit
 
 EVENT = 'workflow.delegation.requested'
+LEASE_EVENT = 'lease.available'
 DAY = 86400
 class CallbackError(Exception):
     pass
@@ -123,21 +124,30 @@ class EventStore:
         self.db.close()
 
     def change(self, method, params, owner, grant):
-        if not owner or params.get('name') != EVENT or not isinstance(params.get('arguments'), dict):
+        topic = params.get('name')
+        if not owner or topic not in (EVENT, LEASE_EVENT) or not isinstance(params.get('arguments'), dict):
             raise ValueError('Unknown event or arguments')
         args = params['arguments']
-        if set(args) - {'realm', 'workflow'} or args.get('realm','site') not in ('site','local'):
+        allowed = {'realm', 'workflow', 'target'} if topic == EVENT else {'realm', 'reply_to'}
+        if set(args) - allowed or args.get('realm','site') not in ('site','local'):
             raise ValueError('Invalid event filters')
         args = dict(args, realm=args.get('realm','site'))
+        if 'target' in args and (not isinstance(args['target'], str) or not re.match(r'^[A-Za-z0-9_.:-]{1,128}\Z', args['target'])):
+            raise ValueError('Invalid delegation target')
         if 'workflow' in args and (not isinstance(args['workflow'],str) or
                                     not re.match(r'^[A-Za-z0-9_.:-]{1,128}\Z',args['workflow'])):
             raise ValueError('Invalid workflow filter')
+        if topic == LEASE_EVENT:
+            address = args.get('reply_to')
+            if not isinstance(address, str) or not 1 <= len(address) <= 160:
+                raise ValueError('An exact reply_to inbox is required')
+            args['topic'] = topic
         dest = params.get('delivery') or {}
         if dest.get('mode') != 'webhook':
             raise ValueError('Webhook delivery required')
         url = dest.get('url')
         destination(url)
-        sub = 'sub_' + hashlib.sha256(compact([owner, EVENT, args, url]).encode()).hexdigest()
+        sub = 'sub_' + hashlib.sha256(compact([owner, topic, args, url]).encode()).hexdigest()
         old = self.db.execute('SELECT * FROM subscriptions WHERE id=?', (sub,)).fetchone()
         if method == 'events/unsubscribe':
             with self.db:
@@ -155,7 +165,8 @@ class EventStore:
         value = params.get('cursor')
         if value is not None and (not isinstance(value,str) or not re.match(r'^[0-9]{1,16}\Z',value)):
             raise ValueError('Invalid cursor')
-        high = self.feed(args['realm'], 0, 0)['high']
+        feed = self.feed(args['realm'], 0, 0) if topic == EVENT else self.topic_feed(args['realm'], topic, 0, 0)
+        high = feed['high']
         if value is not None and int(value)>high:
             raise ValueError('Cursor exceeds current history')
         if old and old['expires']>now:
@@ -208,10 +219,15 @@ class EventStore:
                     self.topic_feed(args['realm'], topic, sub['cursor'], 32))
             for item in page['events']:
                 seq, data = item['seq'], item['data']
-                if topic == EVENT and (item.get('target', 'chatgpt') != ('grok' if grok else 'chatgpt') or
+                if topic == EVENT and (item.get('target', 'chatgpt') != ('grok' if grok else args.get('target', 'chatgpt')) or
                                        args.get('workflow', data['workflow']) != data['workflow']):
                     self.advance(sub,seq)
                     continue
+                if topic == LEASE_EVENT and 'reply_to' in args and data.get('reply_to') != args['reply_to']:
+                    self.advance(sub, seq)
+                    continue
+                if topic == LEASE_EVENT:
+                    data = dict(data, realm=args['realm'])
                 if not self.authorize(sub['owner'],sub['grant_id']):
                     with self.db:
                         self.db.execute('DELETE FROM subscriptions WHERE id=? AND generation=?',(sub['id'],sub['generation']))

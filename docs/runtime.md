@@ -36,6 +36,34 @@ The checked-in radio survey illustrates callable measurement, iteration, state a
 
 A real receiver must offer these operations before the survey can finish. If a contract or matching implementation is missing, the waiting activity links to a deduplicated construction task. When an implementation appears the same activity resumes. Temporary allocation conflicts wait for a resource without creating construction work. A try/catch block can recover from a failed subroutine while retaining successful readings. The composite example in `examples/survey-and-display.json` returns the survey and the display outcome separately. The test suite uses a fixture receiver, including both capture and skip branches. `routine.learn` extracts successful provider commands from a run trace and replaces selected inputs with parameters. Edit the recipe to express intended conditions or loops. `routine.expose` publishes a pinned routine as a capability offer, so other callers use exactly the ordinary lease and invocation API.
 
+### Calling a capability
+
+| Caller operation | What to do with the reply |
+|---|---|
+| `cap.acquire` | Pass a distinct `task` per independent session, a `contract`, optional `resource` and optional `reply_to` inbox. Follow `next_call` while queued or fencing. Only the provider acknowledges its fence. |
+| `cap.lease` | Read the lease by ID. A bound lease is ready to accept commands. |
+| `cap.invoke` | Pass the lease, contract inputs and a unique **operation ID per command**. A queued receipt acknowledges submission. |
+| `cap.status` | Pass `{"operation":"<command ID>"}`. This returns the execution state and retained result. Inspect the command's exit code or the storage result's `ok` flag. Repeating the returned status query refreshes the observation. |
+| `cap.release` | Release an idle holder or cancel a queued request. The command result remains retrievable afterward. |
+
+For a terminal probe use a new ID such as `docker-check-001` and inputs `{"argv":["/bin/bash","-c","command -v docker && docker --version || echo 'docker missing'"]}`. Read `cap.status` for that ID to see stdout, stderr and exit code. For `storage.file.exists:1`, invoke with a new ID such as `root-exists-001` and `{"path":"/"}`. The successful storage reply includes `{"ok":true,"result":{"exists":true,"type":"directory"}}`.
+
+`provider.poll` is a worker's outstanding work inbox. Completed actions disappear from it. A bound lease can outlive many commands, and an empty inbox says nothing about their results.
+
+The optional `capacity` on `cap.offer` applies across contracts sharing the same physical resource. Use 1 for exclusive, a positive count for a pool, or 0 for unbounded concurrent leases. Existing external resources default to 1; built-in and routine offers default to unbounded. Local execution capacity remains under the provider's control. `cap.acquire` queues by default when no eligible slot is available. `enqueue:false` requests an immediate conflict instead. Releasing a holder, restoring availability, or increasing capacity admits the oldest eligible waiting requests. Each queued request receives a durable `lease.available` message at `reply_to` (default for operator calls: the task ID), once the lease is usable. Read it with `bus.inbox` or subscribe to the grant event. An explicit reply address also requests a notice for immediate grants.
+
+### Advertising how callers use a capability
+
+Both `biome_discover` and `cap.discover` return `usage` with each contract and offer. Use the offer's guide when selecting a specific implementation. Its acquire call pins that resource, and its invoke call contains the inputs for that capability. Replace angle-bracket bindings with IDs or handles returned by earlier calls. Check `inputs_kind`: `example` means the publisher supplied a schema-checked example; `template` means the controller generated required parameter slots. The offer's `before`, `parameters`, `read_result` and `errors` explain the prerequisites, parameter meanings, returned values and expected failures when supplied.
+
+Publish instructions using the optional `usage` object on `cap.define`. For example, a sensor with a string input named `channel` could publish the following guide.
+
+```json
+{"parameters":{"channel":"Use the identifier printed on the probe."},"example_inputs":{"channel":"ambient"},"read_result":"On succeeded, result.celsius contains the measured temperature."}
+```
+
+Use the same fields on `cap.offer` or in a worker manifest offer for provider-specific instructions. Offer fields override the contract defaults, and parameter descriptions merge by input name. Republish documentation without changing the executable schema or contract version. Omitting usage preserves earlier documentation; passing an empty object clears that layer. Published examples describe calls, never execution evidence.
+
 ### Providers and agents
 
 1. Initialize the worker using a private `BIOME_HOME`; run `./biome identity` on the device. Its fingerprint identifies its public key.

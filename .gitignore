@@ -9,3 +9,6 @@ coverage.xml
 node.key
 node.json
 pair-pending.json
+gateway/.openai/
+gateway/dist/
+providers/lmstudio/coding-deps/node_modules/

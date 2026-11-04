@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh sacred storage metadata after provider re-registration
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target

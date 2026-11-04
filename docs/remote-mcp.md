@@ -121,3 +121,7 @@ For a separately hosted gateway, configure `BIOME_RECEIVER_WRAP_KEY` as a Site
 secret containing a base64-encoded random 32-byte AES key. It protects
 registration arguments in the gateway's transient queue. The destination
 credential is stored in the controller user's private receiver database.
+
+## Receiving a lease grant
+
+For ChatGPT, subscribe to the `lease.available` MCP event with an exact `reply_to` address and optional realm. For Grok, register a receiver for topic `lease.available` with the same optional inbox filter. Set that address on `cap.acquire` before waiting; the data contains the lease ID (`id`), task, contract, resource and generation. Re-read `cap.lease` on wake before invoking. Read `cap.status` with the subsequent command ID for its result. See the [capability caller guide](runtime.md#calling-a-capability).

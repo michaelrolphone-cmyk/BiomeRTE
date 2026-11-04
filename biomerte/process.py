@@ -5,12 +5,12 @@ import operator
 import time
 from .api import op, ident, schema, validate, invoke
 from .store import Fault, uid, digest, text
-from . import providers
+from . import providers, continuation
 from .work import ready
 
 TYPES = set('start end fail set choose fork join service call human message delegate timer each select'.split())
 INTERNAL = set(
-    'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list'.split())
+    'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list continuation.prepare'.split())
 
 
 def val(expr, variables, depth=0):
@@ -41,6 +41,15 @@ def val(expr, variables, depth=0):
             raise Fault('Unsupported expression')
         return ops[expr['op']](*args)
     return {key: ev(v) for key, v in expr.items()}
+
+
+def failed_address(binding, variables):
+    # A missing dynamic binding still takes the BPMN error branch.
+    try:
+        value = val(binding, variables)
+        return value if isinstance(value, str) else None
+    except (Fault, IndexError, TypeError, AttributeError):
+        return None
 
 
 def targets(n):
@@ -76,9 +85,15 @@ def validate_graph(g):
         if n['type'] == 'service' and (bool(n.get('contract')) == bool(n.get('operation')) or
                                        n.get('operation') and n['operation'] not in INTERNAL):
             raise Fault('Service needs one contract or supported internal operation')
+        if n.get('capture_outcome') or n.get('lease_scope') or 'success_equals' in n:
+            if n['type'] != 'service' or not n.get('contract') or n.get('lease_scope') != 'activity':
+                raise Fault('Outcome capture and activity leases require a capability service task')
+            if 'success_equals' in n and not n.get('capture_outcome'):
+                raise Fault('A success condition requires outcome capture')
         if n['type'] == 'delegate':
-            if n.get('to') not in ('chatgpt', 'grok') or 'request' not in n:
+            if not isinstance(n.get('to'), str) or 'request' not in n:
                 raise Fault('A delegate node needs a supported receiver and a request')
+            ident(n['to'])
             schema(n.get('outputs', {}))
         if n['type'] == 'call':
             ident(n['process'])
@@ -198,6 +213,12 @@ def listing(tx, ctx):
 
 
 def finish(tx, run, state, result):
+    for token in run['tokens']:
+        held = token.get('activity_lease') or token.get('queued_lease')
+        if held:
+            waiting = tx.get('leases', held)
+            if waiting and waiting['state'] != 'released':
+                providers.release(tx, waiting)
     run.update(state=state, result=result)
     if run['parent'].startswith('action:'):
         a = tx.need('actions', run['parent'][7:])
@@ -340,47 +361,70 @@ def advance(tx, ctx, r, t, n, version):
             if not isinstance(seconds, (int, float)) or seconds < 0:
                 raise Fault('Invalid delay')
             t['delay_id'], t['seconds'] = uid(), seconds
+            t['deadline'] = time.time() + seconds
             ctx.app.timer_anchors[t['delay_id']] = time.monotonic()
             return True
-        # A replacement controller starts a conservative local delay if it never observed this wait.
-        anchor = ctx.app.timer_anchors.setdefault(t['delay_id'], time.monotonic())
-        if time.monotonic() - anchor < t['seconds']:
+        if 'deadline' not in t:
+            # Legacy waits retain the elapsed time observed by their running owner.
+            anchor = ctx.app.timer_anchors.get(t['delay_id'], time.monotonic())
+            t['deadline'] = time.time() + max(0, t['seconds'] - (time.monotonic() - anchor))
+            return True
+        if time.time() < t['deadline']:
             return False
         ctx.app.timer_anchors.pop(t.pop('delay_id'), None)
         del t['seconds']
+        del t['deadline']
     elif kind == 'service':
         inputs = ev(n.get('args', {}))
         if 'operation' in n:
             result = invoke(tx, ctx, n['operation'], inputs)
         else:
+            contract = ev(n['contract'])
+            resource = ev(n.get('resource', ''))
+            scoped = n.get('lease_scope') == 'activity'
             if 'action' not in t:
+                if scoped:
+                    if not isinstance(contract, str) or not isinstance(resource, str):
+                        raise Fault('Invalid capability address')
+                    definition = tx.need('contracts', ident(contract))
+                    validate(definition['inputs'], inputs)
+                holder = digest([r['id'], t['id'], t['at']]) if scoped else (r['task'] or r['id'])
                 try:
-                    lease = providers.acquire(tx, ctx, r['task'] or r['id'], n['contract'],
-                                              ev(n.get('resource', '')))
+                    lease = providers.acquire(tx, ctx, holder, contract, resource)
+                    if lease['state'] == 'queued':
+                        t['queued_lease'] = lease['id']
+                        raise Fault('Waiting for queued lease ' + lease['id'], 409)
                 except Fault as e:
                     if e.status in (404, 409):
                         from .extensions import prepare, demand
-                        resource = ev(n.get('resource', ''))
-                        status = prepare(tx, ctx, n['contract'], resource)
+                        status = prepare(tx, ctx, contract, resource)
                         waiting = str(e)
                         if status['state'] == 'missing':
-                            need = demand(tx, ctx, n['contract'], resource, r['id'], t['at'])
+                            need = demand(tx, ctx, contract, resource, r['id'], t['at'])
                             waiting = 'Waiting for capability work ' + need['id']
                         if t.get('blocked') == waiting:
                             return False
                         t['blocked'] = waiting
                         return True
                     raise
+                t.pop('queued_lease', None)
                 a = providers.dispatch(tx, ctx, lease['id'], inputs, uid())
                 t['action'] = a['id']
+                if scoped:
+                    t['activity_lease'] = lease['id']
                 t.pop('blocked', None)
                 return True
             a = tx.need('actions', t['action'])
             if a['state'] in ('queued', 'claimed', 'uncertain'):
                 return False
-            if a['state'] != 'succeeded':
+            if n.get('capture_outcome'):
+                result = continuation.outcome(r, t, ctx.scope, contract, resource, a, ev(n.get('success_equals')))
+            elif a['state'] == 'succeeded':
+                result = a['result']
+            else:
                 raise Fault('Provider failed: ' + str(a.get('result')))
-            result = a['result']
+            if scoped:
+                providers.release(tx, tx.need('leases', t.pop('activity_lease')))
             r['trace'].append({'activity': t['at'], 'contract': a['contract'], 'inputs': inputs,
                                'operation': a['id'], 'resource': a['resource'], 'result': result})
             del t['action']
@@ -393,6 +437,7 @@ def advance(tx, ctx, r, t, n, version):
 def tick(tx, ctx, budget=64):
     from .api import events_after
     budget = max(1, min(256, budget))
+    providers.promote(tx, ctx)
     moves = 0
     for sub in tx.rows('subscriptions'):
         if sub['process']:
@@ -426,7 +471,18 @@ def tick(tx, ctx, budget=64):
                 tx.changes = change_backup
                 r = backup
                 failed = next(v for v in r['tokens'] if v['id'] == t['id'])
-                if 'on_error' in n:
+                if n.get('lease_scope') == 'activity':
+                    held = failed.pop('activity_lease', None) or failed.pop('queued_lease', None)
+                    if held:
+                        providers.release(tx, tx.need('leases', held))
+                if n.get('capture_outcome') and 'action' not in failed:
+                    if 'save' in n:
+                        failed['vars'][n['save']] = continuation.outcome(
+                            r, failed, ctx.scope, failed_address(n['contract'], failed['vars']),
+                            failed_address(n.get('resource', ''), failed['vars']), error=str(exc))
+                    failed.pop('blocked', None)
+                    failed['at'] = n['next']
+                elif 'on_error' in n:
                     failed.update(at=n['on_error'])
                     for pending in ('action', 'child', 'wait', 'due', 'blocked'):
                         failed.pop(pending, None)

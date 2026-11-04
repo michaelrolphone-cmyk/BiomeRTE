@@ -1,0 +1,75 @@
+#!/bin/bash
+# BiomeRTE Mac terminal provider. All networking is outbound HTTPS to the deployed MCP gateway.
+set -euo pipefail
+umask 077
+if [ "$(uname -s)" != Darwin ]; then echo 'This installer requires macOS.' >&2; exit 1; fi
+if [ "$(id -u)" = 0 ]; then echo 'Run as your normal Mac user, without sudo. The installer requests sudo for the boot service.' >&2; exit 1; fi
+PYTHON="$(command -v python3 || true)"
+if [ -z "$PYTHON" ]; then echo 'Python 3.8 or newer is required. Install Python 3, then run this script again.' >&2; exit 1; fi
+"$PYTHON" -c 'import sys; assert sys.version_info >= (3,8), "Python 3.8 or newer required"'
+PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"
+APP="$HOME/.local/share/biome-mac-terminal"
+LABEL=org.biomerte.mac-terminal
+PLIST="/Library/LaunchDaemons/$LABEL.plist"
+MODE="${1:-install}"
+if [ "$MODE" = '--status' ]; then
+  sudo launchctl print "system/$LABEL"
+  [ ! -f "$APP/health.json" ] || cat "$APP/health.json"
+  exit 0
+fi
+if [ "$MODE" = '--stop' ]; then sudo launchctl bootout "system/$LABEL"; exit 0; fi
+if [ "$MODE" != install ] && [ "$MODE" != '--reauthorize' ]; then echo 'Usage: bash install-biome-mac-terminal-v4.sh [--status|--stop|--reauthorize]'; exit 1; fi
+mkdir -p "$APP"
+chmod 700 "$APP"
+echo 'Installing the boot service as your user. macOS may request your administrator password.'
+sudo -v
+# Stop old v1/v2 login services and an existing boot service before touching OAuth or the ledger.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+sudo launchctl bootout "system/$LABEL" 2>/dev/null || true
+"$PYTHON" - "$0" "$APP" <<'UNPACK'
+import base64, hashlib, io, json, os, pathlib, sys, zipfile
+source, app = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+payload = source.read_bytes().split(b'\n__BIOME_PAYLOAD__\n', 1)[1]
+raw = base64.b64decode(payload)
+archive = zipfile.ZipFile(io.BytesIO(raw))
+checks = json.loads(archive.read('SHA256SUMS.json'))
+for name, expected in checks.items():
+    path = pathlib.PurePosixPath(name)
+    if path.is_absolute() or '..' in path.parts:
+        raise SystemExit('Invalid bundled path')
+    data = archive.read(name)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise SystemExit('Bundled file checksum mismatch: ' + name)
+    target = app.joinpath(*path.parts)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + '.installing')
+    tmp.write_bytes(data)
+    tmp.chmod(0o600)
+    os.replace(tmp, target)
+print('Installed bundled worker; existing identity and execution history preserved.')
+UNPACK
+if [ "$MODE" = '--reauthorize' ]; then "$PYTHON" "$APP/mac_provider.py" authorize; fi
+"$PYTHON" "$APP/mac_provider.py" setup
+echo 'Checking a real terminal command through BiomeRTE...'
+"$PYTHON" "$APP/mac_provider.py" verify
+"$PYTHON" - "$APP" "$PYTHON" "$(id -un)" "$HOME" "$LABEL" <<'PLIST_PY'
+import os, pathlib, plistlib, sys
+app, python, user, home, label = sys.argv[1:]
+obj = {'Label': label, 'UserName': user,
+       'ProgramArguments': ['/usr/bin/caffeinate', '-is', python, app + '/mac_provider.py', 'worker'],
+       'WorkingDirectory': app, 'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 15,
+       'StandardOutPath': app + '/worker.log', 'StandardErrorPath': app + '/worker-error.log',
+       'EnvironmentVariables': {'HOME': home, 'USER': user, 'LOGNAME': user, 'PATH': os.path.dirname(python) + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', 'PYTHONUNBUFFERED': '1'}}
+with open(app + '/service.plist', 'wb') as f:
+    plistlib.dump(obj, f)
+PLIST_PY
+sudo install -o root -g wheel -m 644 "$APP/service.plist" "$PLIST"
+sudo launchctl bootstrap system "$PLIST"
+sudo launchctl kickstart -k "system/$LABEL"
+sudo launchctl print "system/$LABEL"
+echo
+echo 'Installed and terminal command verified. You can close Terminal and disconnect the display.'
+echo 'Starts at boot as your user; prevents idle sleep while running; reconnects automatically.'
+echo 'After a FileVault-protected restart, unlock the startup disk once so macOS can boot.'
+echo "Logs: $APP/worker-error.log"
+exit 0

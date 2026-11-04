@@ -1,5 +1,6 @@
 """Capability contracts, mutable offers, leases, fences and durable dispatch."""
 from .api import op, ident, validate, schema
+from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
 
 
@@ -8,28 +9,31 @@ def owner(ctx, provider):
         raise Fault('Provider identity mismatch', 403)
 
 
-@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool')
-def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False):
+@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool usage?:obj')
+def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False, usage=None):
+    """Define an immutable executable schema; optionally publish revisable caller instructions and example_inputs."""
     key = ident(name) + ':' + str(version)
     if version < 1:
         raise Fault('Invalid contract version')
     record = {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
               'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
-    prior = tx.get('contracts', key)
+    prior = tx.get('contracts', key) or tx.get('_retired_contracts', key)
     if prior and prior != record:
         raise Fault('Contract version is immutable', 409)
+    if usage is not None:
+        tx.put('_contract_usage', key, published_usage(record, usage))
     return tx.put('contracts', key, record)
 
 
-@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj')
-def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None):
+@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj')
+def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None, usage=None):
     """Publish or revise an offer. Shared physical resources use the same resource ID."""
     owner(ctx, provider)
     if ctx.permissions is not None and provider in ('builtin', 'routine'):
         raise Fault('Reserved provider', 403)
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
-    tx.need('contracts', contract)
+    definition = tx.need('contracts', contract)
     if state not in ('ready', 'available_after_setup', 'offline'):
         raise Fault('Invalid offer state')
     if provider not in ('builtin', 'routine'):
@@ -40,15 +44,75 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     key = digest([provider, contract, resource])
     rec = {'id': key, 'provider': ident(provider), 'contract': contract, 'resource': ident(resource),
            'state': state, 'service': service, 'configuration': configuration or {}}
+    if capacity is not None:
+        if capacity < 0:
+            raise Fault('Capacity must be 1 (exclusive), a positive slot count, or 0 (unbounded)')
+        tx.put('_capacity', resource, capacity)
+    if usage is not None:
+        tx.put('_offer_usage', key, published_usage(definition, usage))
     tx.put('offers', key, rec)
     tx.emit('offer.updated', {'offer': key, 'state': state})
-    return rec
+    return dict(rec, capacity=capacity_of(tx, rec))
+
+
+
+@op('cap.delete', 'offer?:str contract?:str delete_contract?:bool allow_system?:bool')
+def delete(tx, ctx, offer='', contract='', delete_contract=False, allow_system=False):
+    """Delete an offer by ID. To separately delete an unused contract, supply contract and delete_contract=true."""
+    if ctx.permissions is not None:
+        raise Fault('Registry deletion requires operator access', 403)
+    if not ((offer and not contract and not delete_contract) or
+            (contract and delete_contract and not offer)):
+        raise Fault('Identify exactly one offer, or one contract with delete_contract=true')
+    kind, key = ('offers', offer) if offer else ('contracts', contract)
+    record = tx.need(kind, key)
+    cid = record['contract'] if offer else key
+    if (cid.startswith('core.') or record.get('provider') in ('builtin', 'routine') or
+            tx.get('_builtin_contracts', cid)) and not allow_system:
+        raise Fault('System entry requires allow_system=true', 403)
+    if contract and any(o['contract'] == cid for o in tx.rows('offers')):
+        raise Fault('Delete associated offers first', 409)
+    if any(l['contract'] == cid and l['state'] in ('queued', 'bound', 'fencing') and
+           (not offer or l.get('offer') == offer or
+            (l['state'] == 'queued' and l.get('requested_resource', '') in ('', record['resource'])))
+           for l in tx.rows('leases')):
+        raise Fault('Capability has active or queued leases', 409)
+    if offer and any(a['offer'] == offer and a['state'] == 'pending' for a in tx.rows('activations')):
+        raise Fault('Offer activation is pending', 409)
+    if contract and any(node.get('contract') == cid for version in tx.rows('process_versions')
+                        for node in version['graph']['nodes'].values()):
+        raise Fault('A published workflow references this contract', 409)
+    if offer and record.get('provider') in ('builtin', 'routine'):
+        tx.put('_builtin_contracts', cid, True)
+    if contract:
+        tx.put('_retired_contracts', cid, record)
+    usage_kind = '_offer_usage' if offer else '_contract_usage'
+    if tx.get(usage_kind, key) is not None:
+        tx.drop(usage_kind, key)
+    tx.drop(kind, key)
+    event = tx.emit('capability.deleted', {'kind': kind, 'id': key, 'contract': cid, 'actor': ctx.actor})
+    return {'deleted': key, 'kind': kind, 'audit_event': event['id']}
 
 
 @op('cap.discover', 'contract?:str', False)
 def discover(tx, ctx, contract=''):
-    return {'contracts': [r for r in tx.rows('contracts') if not contract or r['id'] == contract],
-            'offers': [r for r in tx.rows('offers') if not contract or r['contract'] == contract]}
+    """List capabilities with per-contract and provider-specific call examples, prerequisites and result paths."""
+    definitions = {d['id']: d for d in tx.rows('contracts') if not contract or d['id'] == contract}
+    guides = {key: tx.get('_contract_usage', key, {}) for key in definitions}
+    contracts = [dict(definitions[key], usage=caller_usage(definitions[key], guides[key])) for key in sorted(definitions)]
+    offers = []
+    for off in tx.rows('offers'):
+        key = off['contract']
+        if key not in definitions:
+            continue
+        guide = dict(guides[key])
+        override = tx.get('_offer_usage', off['id'], {})
+        guide.update(override)
+        if 'parameters' in override:
+            guide['parameters'] = dict(guides[key].get('parameters', {}), **override['parameters'])
+        offers.append(dict(off, capacity=capacity_of(tx, off),
+                           usage=caller_usage(definitions[key], guide, off['resource'])))
+    return {'contracts': contracts, 'offers': offers}
 
 
 def admitted(tx, off):
@@ -59,49 +123,138 @@ def admitted(tx, off):
                                         (mode is not None and (not accepted_modes or mode in accepted_modes)))
 
 
-@op('cap.acquire', 'task:str contract:str resource?:str')
-def acquire(tx, ctx, task, contract, resource=''):
-    tx.need('contracts', contract)
-    # A logical task handle can survive a safe rebind.
-    key = digest([task, contract, resource])
-    old = tx.get('leases', key)
-    if old and old['state'] in ('bound', 'fencing'):
-        if admitted(tx, tx.need('offers', old['offer'])) or not release(tx, old):
-            return old
+def capacity_of(tx, offer):
+    return tx.get('_capacity', offer['resource'], 0 if offer['provider'] in ('builtin', 'routine') else 1)
+
+
+def active_on(tx, resource):
+    return [l for l in tx.rows('leases') if l['resource'] == resource and l['state'] in ('fencing', 'bound')]
+
+
+def notify_bound(tx, ctx, lease):
+    if lease.get('reply_to') and not lease.get('notified'):
+        from .api import send, Context
+        body = {k: lease[k] for k in ('id', 'task', 'contract', 'resource', 'generation', 'reply_to')}
+        body.update(type='lease.available', state='bound')
+        send(tx, Context(ctx.app, actor='controller', scope=ctx.scope), lease['reply_to'], body, lease['id'])
+        tx.emit('lease.available', body)
+        lease['notified'] = True
+
+
+def bind(tx, ctx, request):
     for of in tx.rows('offers'):
-        if of['contract'] != contract or not admitted(tx, of) or (resource and resource != of['resource']):
+        resource = of['resource']
+        if of['contract'] != request['contract'] or not admitted(tx, of):
             continue
-        if any(a['resource'] == of['resource'] and a['state'] == 'pending' for a in tx.rows('activations')):
+        if request['requested_resource'] and request['requested_resource'] != resource:
             continue
-        guard_key = (of['resource'] + ':' + key) if of['provider'] in ('builtin',
-                                                                       'routine') else of['resource']
+        if any(a['resource'] == resource and a['state'] == 'pending' for a in tx.rows('activations')):
+            continue
+        capacity = capacity_of(tx, of)
+        if capacity:
+            active = active_on(tx, resource)
+            if len(active) >= capacity:
+                continue
+            # Slot zero uses the original guard and on-device fence key.
+            held = {l['guard'] for l in active}
+            for slot in range(len(active) + 1):
+                guard_key = resource if slot == 0 else '!slot:%s:%d' % (resource, slot)
+                if guard_key not in held:
+                    break
+        else:
+            guard_key = '!shared:' + digest([resource, request['id']])
         guard = tx.get('guards', guard_key, {'generation': 0, 'holder': ''})
         if guard['holder']:
             continue
-        gen = guard['generation'] + 1
-        lease = {'id': key, 'task': task, 'contract': contract, 'offer': of['id'],
-                 'provider': of['provider'], 'resource': of['resource'], 'generation': gen,
-                 'guard': guard_key, 'state': 'bound' if of['provider'] in ('builtin', 'routine') else 'fencing'}
-        tx.put('guards', guard_key, {'generation': gen, 'holder': key})
-        tx.put('leases', key, lease)
-        tx.emit('lease.acquired', {'lease': key, 'generation': gen})
+        generation = max(guard['generation'], request.get('generation', 0)) + 1
+        lease = dict(request, offer=of['id'], provider=of['provider'], resource=resource,
+                     generation=generation, guard=guard_key,
+                     state='bound' if of['provider'] in ('builtin', 'routine') else 'fencing')
+        tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id']})
+        if lease.get('queue_key'):
+            tx.drop('_lease_queue', lease.pop('queue_key'))
+        tx.emit('lease.acquired', {'lease': lease['id'], 'generation': generation})
+        if lease['state'] == 'bound':
+            notify_bound(tx, ctx, lease)
+        return tx.put('leases', lease['id'], lease)
+
+
+def promote(tx, ctx):
+    # Keys follow committed event order. An unavailable resource does not
+    # prevent an unrelated resource from serving its own oldest eligible waiter.
+    granted = 0
+    for key in tx.rows('_lease_queue'):
+        if bind(tx, ctx, tx.need('leases', key)):
+            granted += 1
+            if granted == 32:
+                return True  # Continue next tick within the replicated transaction budget.
+    return False
+
+
+@op('cap.acquire', 'task:str contract:str resource?:str enqueue?:bool reply_to?:str')
+def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
+    """Acquire or queue. Use distinct task IDs for independent sessions. The worker fences automatically."""
+    tx.need('contracts', contract)
+    text(task, 'task')
+    if reply_to:
+        text(reply_to, 'reply_to')
+    key = digest([task, contract, resource])
+    batch_full = promote(tx, ctx)
+    old = tx.get('leases', key, {})
+    if old.get('state') == 'queued':
+        return old
+    if old.get('state') in ('bound', 'fencing'):
+        if admitted(tx, tx.need('offers', old['offer'])) or not release(tx, old):
+            return old
+        batch_full = promote(tx, ctx)
+    req = {'id': key, 'task': task, 'contract': contract, 'resource': resource,
+           'requested_resource': resource, 'generation': old.get('generation', 0),
+           'provider': '', 'reply_to': reply_to}
+    lease = None if batch_full else bind(tx, ctx, req)
+    if lease:
         return lease
-    raise Fault('No compatible available resource', 409)
+    if not enqueue:
+        raise Fault('No compatible available resource', 409)
+    event = tx.emit('lease.queued', {'lease': key, 'task': task, 'contract': contract})
+    req.update(state='queued', queue_key='%020d' % event['seq'],
+               reply_to=reply_to or (ctx.actor if ctx.permissions is not None else task))
+    tx.put('_lease_queue', req['queue_key'], key)
+    return tx.put('leases', key, req)
+
+
+@op('cap.lease', 'lease:str', False)
+def lease_status(tx, ctx, lease):
+    """Read the current lease, including queued requests, independently of its original receipt."""
+    return tx.need('leases', lease)
+
+
+def executor(tx, ctx, provider):
+    owner(ctx, provider)
+    if ctx.permissions is None and tx.get('peers', provider):
+        raise Fault('This operation must be signed by the enrolled provider. Callers use cap.status.', 403)
 
 
 @op('cap.fenced', 'provider:str lease:str generation:int')
 def fenced(tx, ctx, provider, lease, generation):
     """Acknowledge durable installation of the fence at the actual enforcement point."""
-    owner(ctx, provider)
+    executor(tx, ctx, provider)
     l = tx.need('leases', lease)
     guard = tx.need('guards', l['guard'])
     if (l['provider'], guard['holder'], guard['generation']) != (provider, lease, generation):
         raise Fault('Superseded fence', 409)
     l['state'] = 'bound'
+    notify_bound(tx, ctx, l)
     return tx.put('leases', lease, l)
 
 
 def release(tx, l):
+    if l['state'] == 'released':
+        return True
+    if l['state'] == 'queued':
+        tx.drop('_lease_queue', l.pop('queue_key'))
+        l['state'] = 'released'
+        tx.put('leases', l['id'], l)
+        return True
     if any(a['lease'] == l['id'] and a['state'] in ('queued', 'claimed', 'uncertain')
            for a in tx.rows('actions')):
         return False
@@ -122,16 +275,19 @@ def release_task(tx, task):
 
 @op('cap.release', 'lease:str')
 def release_lease(tx, ctx, lease):
+    """Release a held lease after work settles, or cancel a queued request. Results remain available via cap.status."""
     l = tx.need('leases', lease)
     if ctx.permissions is not None:
         raise Fault('Lease release is controlled by the task owner', 403)
     if not release(tx, l):
         raise Fault('Reconcile outstanding operation before release', 409)
+    promote(tx, ctx)
     return l
 
 
 @op('cap.invoke', 'lease:str inputs:obj operation:str')
 def dispatch(tx, ctx, lease, inputs, operation):
+    """Submit once with a unique operation ID. Read cap.status with that ID for the result; the lease remains held until released."""
     l = tx.need('leases', lease)
     key = ident(operation)
     prev = tx.get('actions', key)
@@ -144,7 +300,8 @@ def dispatch(tx, ctx, lease, inputs, operation):
     if l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer'])):
         raise Fault('Lease unavailable', 409)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l['provider'],
-         'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs}
+         'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs, 'guard': l['guard'],
+         'status_query': {'operation': 'cap.status', 'arguments': {'operation': key}}}
     if l['provider'] == 'builtin' and l['contract'] == 'core.echo:1':
         a.update(state='succeeded', result={'value': inputs['value']})
     if l['provider'] == 'routine':
@@ -159,21 +316,27 @@ def dispatch(tx, ctx, lease, inputs, operation):
 
 @op('provider.poll', 'provider:str', False)
 def pending(tx, ctx, provider):
+    """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
     owner(ctx, provider)
     leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
     actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
                ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
     activations = [a for a in tx.rows('activations') if a['provider']
                    == provider and a['state'] == 'pending']
-    return {'fences': leases, 'actions': actions[:64], 'activations': activations}
+    first, rest, seen = [], [], set()
+    for a in actions:
+        guard = a.get('guard', a['resource'])
+        (rest if guard in seen else first).append(a)
+        seen.add(guard)
+    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')
 def claim(tx, ctx, provider, operation, generation):
-    owner(ctx, provider)
+    executor(tx, ctx, provider)
     a = tx.need('actions', operation)
     l = tx.need('leases', a['lease'])
-    g = tx.need('guards', a['resource'])
+    g = tx.need('guards', l['guard'])
     if (a['provider'], l['state'], a['generation'], g['holder'], g['generation']) != (
             provider, 'bound', generation, a['lease'], generation):
         raise Fault('Stale resource generation', 409)
@@ -187,7 +350,7 @@ def claim(tx, ctx, provider, operation, generation):
 
 @op('provider.result', 'provider:str operation:str generation:int state:str result:obj')
 def result(tx, ctx, provider, operation, generation, state, result):
-    owner(ctx, provider)
+    executor(tx, ctx, provider)
     a = tx.need('actions', operation)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
@@ -209,6 +372,7 @@ def result(tx, ctx, provider, operation, generation, state, result):
 
 @op('cap.status', 'operation:str', False)
 def status(tx, ctx, operation):
+    """Read action state and the provider result, including after the lease is released."""
     a = tx.need('actions', operation)
     owner(ctx, a['provider'])
     return a

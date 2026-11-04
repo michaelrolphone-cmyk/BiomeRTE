@@ -1,13 +1,16 @@
+import {agentInbox} from '../lib/agent-inbox.mjs';
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
-import {eventGrant,changeSubscription,delegationEvent} from '../lib/events.mjs';
+import {eventGrant,changeSubscription,delegationEvent,leaseEvent} from '../lib/events.mjs';
 import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
+import {discoverPage} from '../lib/discovery.mjs';
 import {device,limitedJSON,reply,runTool,toolsList,enqueue} from '../lib/bridge.mjs';
 
 const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if (path.startsWith('/agent-events/')) return agentInbox(req,conf,path);
  if (path.startsWith('/bridge/')) return device(req,env,path);
  if (req.method==='GET' && ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/mcp','/.well-known/oauth-protected-resource/mcp'].includes(path)) return resourceMetadata(conf);
  if (req.method==='GET' && path==='/.well-known/oauth-authorization-server') return serverMetadata(conf);
@@ -30,7 +33,7 @@ async function dispatch(req,env) {
  if(method==='initialize')return ok({protocolVersion:protocols.includes(params.protocolVersion)?params.protocolVersion:'2025-03-26',capabilities:{tools:{},events:{}},serverInfo:{name:'BiomeRTE Controller',version:'1.0.0'}});
  if(method==='ping')return ok({});
  if(method==='tools/list')return ok({tools:[...toolsList,...grokTools]});
- if(method==='events/list')return ok({events:[delegationEvent]});
+ if(method==='events/list')return ok({events:[delegationEvent,leaseEvent]});
  if(method==='events/subscribe'||method==='events/unsubscribe'){
   const owner=bearerOwner||await ownerPrincipal(req,env);
   if(!owner)return reply({error:'Owner sign-in required'},403);
@@ -40,6 +43,9 @@ async function dispatch(req,env) {
  if(method!=='tools/call')return reply({jsonrpc:'2.0',id,error:{code:-32601,message:'Unknown method'}});
  const owner=bearerOwner||await ownerPrincipal(req,env);
  if(!owner)return reply({error:'Owner sign-in required'},403);
+ const args=params.arguments??{};
+ if(params.name==='biome_discover' && (external || Object.keys(args).length))return ok(await discoverPage(env,args));
+ if(params.name==='biome_invoke' && args.operation==='discovery.page')return ok(await discoverPage(env,args.arguments??{}));
  const grok=grokCall(params);
  if(grok){
   const grant=await eventGrant(req,env,external);
