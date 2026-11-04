@@ -1,0 +1,20 @@
+<resources>
+ <color name="canvas">#F4F5F1</color>
+ <color name="surface">#FFFFFF</color>
+ <color name="ink">#192C2A</color>
+ <color name="muted">#62736E</color>
+ <color name="accent">#146653</color>
+ <color name="on_accent">#FFFFFF</color>
+ <color name="accent_soft">#E5F1EA</color>
+ <color name="outline">#DDE5DF</color>
+ <color name="warning">#8A491D</color>
+ <color name="warning_soft">#FFF0DE</color>
+ <color name="disabled">#E7EBE7</color>
+ <color name="on_disabled">#7B8982</color>
+ <color name="hero">#183E35</color>
+ <color name="on_hero">#FFFFFF</color>
+ <color name="hero_muted">#C8DED3</color>
+ <bool name="light_system_bars">true</bool>
+ <color name="launcher_background">#18282B</color>
+ <color name="biome_background">#18282B</color>
+</resources>

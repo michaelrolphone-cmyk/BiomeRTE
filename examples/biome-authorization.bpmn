@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:b="urn:biomerte:v1" targetNamespace="urn:biomerte:workflows">
+ <process id="biome-authorization" name="Reusable proposal-bound human authorization" isExecutable="true"
+  b:inputs='{"request_id":"str","workflow_instance_id":"str","proposal":"obj","question":"str","supporting":"obj?"}'
+  b:outputs='{"outcome":"str","request_id":"str","authorization_id":"str"}'>
+  <startEvent id="start"/>
+  <sequenceFlow id="f1" sourceRef="start" targetRef="check"/>
+  <serviceTask id="check" name="Check explicit existing coverage" b:operation="authorization.prepare" b:args='{"$":"input"}' b:save="permission"/>
+  <sequenceFlow id="f2" sourceRef="check" targetRef="route"/>
+  <exclusiveGateway id="route" name="New permission needed?" default="existing"/>
+  <sequenceFlow id="ask" sourceRef="route" targetRef="decision"><conditionExpression>{"op":"eq","args":[{"$":"permission.outcome"},"decision_required"]}</conditionExpression></sequenceFlow>
+  <sequenceFlow id="existing" sourceRef="route" targetRef="done"/>
+  <serviceTask id="decision" name="Wait durably for authenticated phone decision" b:contract="human.decision:1" b:resource="human.decisions" b:leaseScope="activity" b:args='{"request":{"$":"permission.decision_request"}}' b:save="reply"/>
+  <sequenceFlow id="f3" sourceRef="decision" targetRef="resolve"/>
+  <serviceTask id="resolve" name="Interpret response and record explicit authorization" b:operation="authorization.resolve" b:args='{"request_id":{"$":"input.request_id"},"decision":{"$":"reply.decision"}}' b:save="permission"/>
+  <sequenceFlow id="f4" sourceRef="resolve" targetRef="done"/>
+  <endEvent id="done" b:result='{"outcome":{"$":"permission.outcome"},"request_id":{"$":"permission.request_id"},"authorization_id":{"$":"permission.authorization_id"}}'/>
+ </process>
+</definitions>

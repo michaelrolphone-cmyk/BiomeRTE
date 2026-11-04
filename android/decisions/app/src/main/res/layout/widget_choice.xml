@@ -1,0 +1,4 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="wrap_content">
+ <Button android:id="@+id/widget_choice" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:textAllCaps="false" android:textSize="15sp" android:gravity="center_vertical|start" android:background="@drawable/widget_choice_background" android:backgroundTint="@null" android:stateListAnimator="@null" android:textColor="@color/accent" android:fontFamily="sans-serif-medium" android:focusable="false" android:focusableInTouchMode="false" android:paddingTop="10dp" android:paddingBottom="10dp" android:paddingStart="12dp" android:paddingEnd="12dp"/>
+
+</FrameLayout>

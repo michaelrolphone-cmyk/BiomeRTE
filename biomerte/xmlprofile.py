@@ -57,6 +57,8 @@ def compile_xml(xml):
                      context=json.loads(e.get(X + 'context', '{}')), outputs=json.loads(e.get(X + 'outputs', '{}')))
         elif tag == 'serviceTask':
             n.update(type='service', args=json.loads(e.get(X + 'args', '{}')))
+            if e.get(X + 'authorization'):
+                n['authorization'] = json.loads(e.get(X + 'authorization'))
             contract_ref = e.get(X + 'contractRef')
             if contract_ref:
                 if e.get(X + 'operation') or e.get(X + 'contract'):
