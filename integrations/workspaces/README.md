@@ -1,0 +1,25 @@
+# Workflow workspaces
+
+Mac-bound Biome provider, durable worker and lifecycle monitor. The shared template cache and each run's private environment have independent lifetimes. Linux basic and ESP-IDF templates build on first use; later instances reuse the validated immutable image. Images are published into the Mac Docker image store and a SHA-256-verified compressed image archive on persistent host storage. Remote OCI registry replication and additional execution providers are future extensions; current placement is explicitly the Mac.
+
+## Calling
+
+Coding MCP exposes workspace_tools, workspace_start and workspace_status alongside existing file/terminal/Git tools. Discovery returns exact argument schemas. Direct Biome callers use workspace.<operation>:1 with inputs {arguments:{...}}. Use cap.submit with the advertised resource for automatic acquire/fence/dispatch/release, retain the operation ID and inspect result.ok. Worker lifecycle succeeded alone is insufficient.
+
+Operations: template.list/get/publish/ensure_image; provision/list/status/acquire/checkpoint/suspend/handoff/dispose/reconcile; exec/git/file.read/file.write. See schemas.json. provision requires a real running Biome process run_id. Its run_id + name identifies an instance idempotently. acquire returns holder and generation; every file/Git/exec/checkpoint/handoff call must supply those exact values. Handoff checkpoints and stops old processes before granting the next writer. A workflow passes workspace_id between agents and steps; capabilities execute in the workspace container.
+
+Example: provision {run_id,template:"linux-basic@1"}; acquire {workspace_id,holder:"coding-agent"}; exec {workspace_id,holder,generation,argv:["bash","-lc","echo hello > /workspace/hello"]}; suspend {workspace_id,holder,generation}. file.write uses base64 bytes; file.read returns base64 in stdout. All calls return ok/result. Command nonzero exit produces ok=false and preserves stdout/stderr.
+
+## Lifecycle
+
+Snapshots stop writers, commit the container filesystem, save a compressed image and separate compressed volume, hash both, then atomically publish the checkpoint. The container and working volume are removed only after the checkpoint is saved. Restore verifies both archives and recreates runtime networking; no RAM/process resurrection is claimed. Credentials are injected only into tmpfs and excluded from Docker commits. GitLab's canonical hostname maps to Docker host-gateway, with its CA installed; authenticated git ls-remote from the container must succeed before acquisition completes.
+
+Each workspace is serialized with a host file lock. A command journals active_operation before dispatch; service failure leaves explicit unresolved state. reconcile stops the container, confirms it stopped, records the caller's reason and checkpoints without rerunning the uncertain command. A build failure has a failed template record and build log; a successful image is reused by exact template revision and platform. Template versions are immutable.
+
+The monitor queries the authoritative Biome process state. It suspends quiescent workspaces when all run tokens wait for human/message/delegate/timer input. auto_suspend=false is available for steps that intentionally hold an interactive environment. It disposes workspaces on completed/failed/cancelled after children finish, retries cleanup failures, and preserves shared template images. Publish desired outputs to GitLab or external artifact storage before ending the run: all private workspace files/checkpoints are disposable. Paused or running processes are never deleted based on age.
+
+LaunchAgents org.biomerte.workspace-worker and org.biomerte.workspace-monitor start on Mac login. Owner-only state is ~/.local/share/biome-workspaces. No artificial command timeout. Optional resources.memory/cpus apply Docker limits; volume storage uses available Mac Docker capacity with no invented fixed quota. Suspended archives occupy host disk until run disposal. Backups/replication outside the Mac are not yet configured.
+
+The ESP-IDF 5.5.1 template currently uses linux/amd64 under Docker Desktop emulation, pins its resolved upstream image digest, installs Espressif QEMU Xtensa/RISC-V, validates tool versions and builds hello_world for esp32. Declared emulator targets are esp32/esp32c3; broader peripheral/hardware equivalence is not claimed. The installed SDK supports additional compiler targets independently of emulator support.
+
+Run test_manager.py for state/fencing/cache/corruption/cleanup tests, and qualify.py for actual Biome lifecycle qualification. Qualification receipts retain original command IDs; retrying the qualifier does not blindly repeat completed effects. After terminal cleanup, start a new qualification record for a new run.
