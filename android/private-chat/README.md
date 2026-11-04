@@ -1,4 +1,4 @@
-# Biome Private Chat 0.3.0
+# Biome Private Chat 0.6.2
 
 Android 8+ app and isolated Mac LM Studio provider. Keychain is not used.
 
@@ -29,8 +29,8 @@ The APK is app/build/outputs/apk/debug/app-debug.apk. It uses the retained devel
 
 1. Install the updated APK. Existing password-encrypted history and Biome OAuth credentials remain compatible.
 2. Transfer ~/.local/share/biome-private-chat/pairing.json directly from the Mac to the phone, such as by USB. Do not send this enrollment file through Biome or chat.
-3. Unlock the app, select Pair Mac / connection, and Import Mac pairing file. Returning from the file picker requires unlocking again.
-4. If not already connected, select Connect Biome; allow access in the browser, copy the Continue link, return and unlock, then paste the link to finish OAuth.
+3. Unlock the app, select Pair Mac / connection, and Import Mac pairing file. The unlocked session stays available while using the file picker.
+4. If not already connected, select Connect Biome; allow access in the browser, copy the Continue link, return to the app, then paste the link to finish OAuth.
 5. Send a message. Biome receives public handshake metadata and encrypted message envelopes only. Use Resume pending request after an interruption.
 
 ## Privacy
@@ -42,3 +42,6 @@ No artificial inference timeouts or CPU/memory limits are imposed. Core dumps ar
 
 ## Encrypted image generation
 Generate image uses the separate image.private.exchange:1 capability backed by Fluxed Up GGUF Q8_0 on the Mac. Image prompts and PNG replies are encrypted before dispatch and before leaving the Mac; image history stays in the password-encrypted phone vault. Existing chat, OAuth and pairing remain compatible. Images display only while unlocked and are cleared from the view on lock. Generic Biome callers separately use image.generate:1. Physical phone lock/resume/display qualification remains pending until tested on the device.
+
+## Multitasking
+Switching to another app and returning keeps the current unlocked session and any in-flight request. Drafts are saved in the encrypted vault on backgrounding. Lock explicitly from the app menu when desired. Closing/destroying the activity or an Android process restart clears the in-memory key; reopening requires the passphrase. No password or unlocked vault key is persisted for this behavior.
