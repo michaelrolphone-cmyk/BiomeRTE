@@ -49,7 +49,8 @@ def open_message(key, kind, sid, operation, thash, value):
         raise ValueError('Invalid envelope')
     return json.loads(AESGCM(key).decrypt(raw(value['nonce'],12), base64.b64decode(value['ct'],validate=True), aad(kind,sid,operation,thash)))
 class SessionServer:
-    def __init__(self, identity, enrollment_hash=None, phone_identity=None, enrolled=None):
+    def __init__(self, identity, enrollment_hash=None, phone_identity=None, enrolled=None, request_handler=None):
+        self.request_handler = request_handler
         self.identity = identity
         self.enrollment_hash = enrollment_hash
         self.phone_identity = phone_identity
@@ -70,7 +71,7 @@ class SessionServer:
         data = open_message(session['keys']['request'],'request',sid,operation,session['hash'],envelope)
         # Authenticate and validate before removing the one-use session.
         messages = data.get('messages')
-        if not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages):
+        if not (self.request_handler and data.get('action') == 'models') and (not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages)):
             raise ValueError('Invalid conversation')
         phone = session['phone']
         if self.phone_identity != phone:
@@ -83,7 +84,7 @@ class SessionServer:
             self.enrollment_hash = None
         self.sessions.pop(sid)
         try:
-            answer = infer(messages)
+            answer = self.request_handler(data) if self.request_handler else infer(messages)
         except Exception:
             answer = {'error':'private_inference_unavailable'}
         return seal(session['keys']['response'],'response',sid,operation,session['hash'],answer)

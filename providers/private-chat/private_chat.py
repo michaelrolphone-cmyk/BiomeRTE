@@ -48,14 +48,25 @@ def privacy_ready():
     server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
     if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
         raise RuntimeError('LM Studio sensitive logging must be disabled')
-def inference(messages):
+from model_service import model_catalog, selected_model, lm_headers
+
+def handle_request(data):
+    privacy_ready()
+    if data.get('action') == 'models':
+        return {'models': model_catalog(LOCAL, LM)}
+    if data.get('action') not in (None, ''):
+        raise ValueError('Invalid private action')
+    return inference(data['messages'], data.get('model'))
+
+def inference(messages, model=None):
     privacy_ready()
     if not isinstance(messages, list) or not messages:
         raise ValueError('Invalid conversation')
     if any(not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str) for m in messages):
         raise ValueError('Invalid message')
     # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    body = dict(model='qwen3.5-9b', messages=messages, stream=False, store=False)
+    model = selected_model(model, LOCAL, LM)
+    body = dict(model=model, messages=messages, stream=False, store=False)
     headers = {'Content-Type': 'application/json'}
     token_file = LM / 'api-token'
     if token_file.exists():
@@ -71,7 +82,7 @@ def inference(messages):
     text = choice['message']['content']
     if not isinstance(text, str) or not text:
         raise RuntimeError('Empty completion')
-    return {'text': text}
+    return {'text': text, 'model': model}
 class Remote:
     realm = 'site'
     def __init__(self, cfg):
@@ -149,7 +160,7 @@ def serve():
         (STATE / 'pairing.json').unlink(missing_ok=True)
     protocol = SessionServer(identity_key(),
         raw(cfg['enrollment_hash'],32) if cfg.get('enrollment_hash') else None,
-        raw(cfg['phone_identity'],32) if cfg.get('phone_identity') else None, enrolled)
+        raw(cfg['phone_identity'],32) if cfg.get('phone_identity') else None, enrolled, request_handler=handle_request)
     with open(STATE / 'worker.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         worker = PrivateWorker(str(STATE / 'worker-v2.sqlite'), remote, [offer], None,
