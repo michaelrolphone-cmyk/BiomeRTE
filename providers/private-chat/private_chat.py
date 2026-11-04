@@ -12,8 +12,9 @@ import subprocess
 import sys
 import time
 from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
-import keyring
-from crypto_wire import seal, open_envelope, b64, unb64
+from session_protocol import SessionServer, b64, raw, public
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
 HOME = Path.home()
 STATE = HOME / '.local/share/biome-private-chat'
@@ -24,21 +25,21 @@ import mac_provider as gateway
 from biomerte.worker import Worker
 from biomerte.store import digest, encode
 SERVICE = 'org.biomerte.private-chat'
-ACCOUNT = 'transport-v1'
-CONTRACT = 'chat.private.exchange:1'
+CONTRACT = 'chat.private.exchange:2'
 LABEL = 'org.biomerte.private-chat'
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise RuntimeError('Local redirect refused')
 LOCAL = build_opener(ProxyHandler({}), NoRedirect())
-def transport_key():
-    # Refuse file-backed or fallback keyring backends.
-    if not keyring.get_keyring().__class__.__module__.startswith('keyring.backends.macOS'):
-        raise RuntimeError('macOS Keychain is required')
-    value = keyring.get_password(SERVICE, ACCOUNT)
-    if not value:
-        raise RuntimeError('Pairing is unavailable')
-    return unb64(value)
+def identity_key():
+    path = STATE / 'identity.ed25519'
+    stat = path.stat()
+    if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
+        raise RuntimeError('Identity file must be owner-only')
+    value = path.read_bytes()
+    if len(value) != 32:
+        raise RuntimeError('Invalid identity')
+    return Ed25519PrivateKey.from_private_bytes(value)
 def privacy_ready():
     """An operator must validate LM Studio logging before enabling private inference."""
     cfg = json.loads((STATE / 'privacy.json').read_text())
@@ -71,18 +72,6 @@ def inference(messages):
     if not isinstance(text, str) or not text:
         raise RuntimeError('Empty completion')
     return {'text': text}
-def execute(request):
-    master = transport_key()
-    envelope = request['inputs']['envelope']
-    # Do not echo unauthenticated data or exception text.
-    data = open_envelope(master, 'request', envelope)
-    if envelope['id'] != request['operation']:
-        raise ValueError('Identity mismatch')
-    try:
-        answer = inference(data['messages'])
-    except Exception:
-        answer = {'error': 'private_inference_unavailable'}
-    return {'envelope': seal(master, 'response', envelope['id'], answer)}
 class Remote:
     realm = 'site'
     def __init__(self, cfg):
@@ -91,9 +80,30 @@ class Remote:
         return gateway.invoke(name, args, rid, self.realm)
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
-    def __init__(self, *args):
+    def __init__(self, *args, handler=None):
         super().__init__(*args)
         self.pending = {}
+        self.handler = handler
+    def reconcile(self):
+        # Recover metadata after a lost provider.result reply or process restart.
+        for operation,signature in self.db.execute("SELECT id,signature FROM actions WHERE state='uncertain'").fetchall():
+            action = self.remote.call('cap.status',{'operation':operation})
+            expected = digest([action['contract'],action['inputs'],action['resource'],action['generation'],action['lease']])
+            if action['provider'] != self.remote.node or signature != expected:
+                raise ValueError('Reconciliation identity mismatch')
+            if action['state'] in ('succeeded','failed'):
+                state = action['state']
+            elif action['state'] in ('claimed','uncertain'):
+                state,out = self.pending.get(operation,('failed',{'reason':'interrupted_private_request_send_new_request'}))
+                self.remote.call('provider.result',dict(provider=self.remote.node,operation=operation,
+                                 generation=action['generation'],state=state,result=out))
+            else:
+                raise ValueError('Unexpected interrupted state')
+            self.db.execute("UPDATE actions SET state=?,result='{}' WHERE id=?",(state,operation))
+            self.pending.pop(operation,None)
+    def once(self, pool=None):
+        self.reconcile()
+        return super().once(pool)
     def perform(self, action):
         args = dict(provider=self.remote.node, operation=action['id'], generation=action['generation'])
         guard = action.get('guard', action['resource'])
@@ -115,13 +125,11 @@ class PrivateWorker(Worker):
                 state, out = 'failed', {'reason': 'interrupted_private_request_send_new_request'}
             else:
                 self.db.execute("INSERT INTO actions VALUES(?,?,?,?,?)", (action['id'], signature, 'uncertain', '{}', guard))
-                adapter = next(o for o in self.offers if o['contract'] == action['contract'])
-                proc = subprocess.run(adapter['argv'], input=encode({'operation':action['id'],'inputs':action['inputs']}).encode(),
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                if proc.returncode:
-                    state, out = 'failed', {'reason': 'private_adapter_unavailable'}
-                else:
-                    state, out = 'succeeded', json.loads(proc.stdout)
+                try:
+                    out = self.handler(action)
+                    state = 'succeeded'
+                except Exception:
+                    state, out = 'failed', {'reason': 'private_request_unavailable'}
             self.pending[action['id']] = (state, out)
         state, out = self.pending[action['id']]
         self.remote.call('provider.result', dict(args, state=state, result=out))
@@ -133,11 +141,19 @@ def serve():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     cfg = json.loads((STATE / 'manifest.json').read_text())
     remote = Remote(cfg)
-    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat',
-                 argv=[sys.executable, str(Path(__file__).resolve()), 'execute'])
+    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat')
+    def enrolled(phone):
+        cfg['phone_identity'] = b64(phone)
+        cfg.pop('enrollment_hash', None)
+        gateway.save_json(STATE / 'manifest.json', cfg)
+        (STATE / 'pairing.json').unlink(missing_ok=True)
+    protocol = SessionServer(identity_key(),
+        raw(cfg['enrollment_hash'],32) if cfg.get('enrollment_hash') else None,
+        raw(cfg['phone_identity'],32) if cfg.get('phone_identity') else None, enrolled)
     with open(STATE / 'worker.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        worker = PrivateWorker(str(STATE / 'worker.sqlite'), remote, [offer], None)
+        worker = PrivateWorker(str(STATE / 'worker-v2.sqlite'), remote, [offer], None,
+            handler=lambda action: {'envelope': protocol.handle(action['inputs']['envelope'], action['id'], inference)})
         while True:
             try:
                 privacy_ready()
@@ -156,35 +172,39 @@ def install():
     os.umask(0o077)
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     cfg_path = STATE / 'manifest.json'
-    if cfg_path.exists():
-        cfg = json.loads(cfg_path.read_text())
-        transport_key()
-    else:
-        if not keyring.get_keyring().__class__.__module__.startswith('keyring.backends.macOS'):
-            raise RuntimeError('macOS Keychain is required')
-        master = secrets.token_bytes(32)
-        try:
-            keyring.set_password(SERVICE, ACCOUNT, b64(master))
-        except keyring.errors.PasswordSetError:
-            raise SystemExit('Mac login Keychain refused key storage. Unlock it locally, then rerun installation; no pairing key was saved.')
-        site = json.loads((TERMINAL / 'terminal-manifest.json').read_text())['site']
-        provider = hashlib.sha256(('private-chat/' + secrets.token_hex(32)).encode()).hexdigest()
-        cfg = dict(provider=provider, resource='privatechat.mac.' + provider[:20], site=site)
-        gateway.save_json(cfg_path, cfg)
-    gateway.invoke('cap.define', dict(name='chat.private.exchange', version=1,
-        description='Opaque authenticated ciphertext for private LM Studio conversations; never send plaintext.',
-        inputs={'envelope': 'obj'}, outputs={'envelope': 'obj'}))
-    # The pairing secret stays on the Mac; never print it or put it in Biome.
-    pairing = STATE / 'pairing.json'
-    gateway.save_json(pairing, dict(v=1, key=b64(transport_key()), resource=cfg['resource']))
-    spec = dict(Label=LABEL, ProgramArguments=[sys.executable, str(Path(__file__).resolve()), 'serve'],
-                RunAtLoad=True, KeepAlive=True, WorkingDirectory=str(STATE),
-                StandardOutPath='/dev/null', StandardErrorPath='/dev/null',
-                EnvironmentVariables={'HOME': str(HOME), 'PATH': os.environ['PATH']})
-    plist = HOME / 'Library/LaunchAgents' / (LABEL + '.plist')
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    site = json.loads((TERMINAL / 'terminal-manifest.json').read_text())['site']
+    if cfg.get('site',site) != site:
+        raise RuntimeError('Existing provider belongs to another site')
+    identity_path = STATE / 'identity.ed25519'
+    if not identity_path.exists():
+        private = Ed25519PrivateKey.generate().private_bytes(Encoding.Raw,PrivateFormat.Raw,NoEncryption())
+        fd = os.open(identity_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'wb') as out:
+            out.write(private); out.flush(); os.fsync(out.fileno())
+    identity = identity_key()
+    if '--reset-pairing' in sys.argv:
+        cfg.pop('phone_identity', None)
+    provider = cfg.get('provider') or hashlib.sha256(('private-chat/' + secrets.token_hex(32)).encode()).hexdigest()
+    cfg.update(v=2,provider=provider,resource=cfg.get('resource','privatechat.mac.'+provider[:20]),site=site)
+    pairing = dict(v=2,server_identity=b64(public(identity)),resource=cfg['resource'])
+    if not cfg.get('phone_identity'):
+        token = secrets.token_bytes(32)
+        cfg['enrollment_hash'] = b64(hashlib.sha256(token).digest())
+        pairing['enrollment_token'] = b64(token)
+    gateway.save_json(cfg_path,cfg)
+    gateway.invoke('cap.define',dict(name='chat.private.exchange',version=2,
+        description='Authenticated ephemeral X25519 sessions; no chat key persists on Mac.',
+        inputs={'envelope':'obj'},outputs={'envelope':'obj'}))
+    gateway.save_json(STATE/'pairing.json',pairing)
+    spec = dict(Label=LABEL,ProgramArguments=[sys.executable,str(Path(__file__).resolve()),'serve'],
+                RunAtLoad=True,KeepAlive=True,WorkingDirectory=str(STATE),
+                StandardOutPath='/dev/null',StandardErrorPath='/dev/null',
+                EnvironmentVariables={'HOME':str(HOME),'PATH':os.environ['PATH']})
+    plist = HOME/'Library/LaunchAgents'/(LABEL+'.plist')
     plist.write_bytes(plistlib.dumps(spec))
-    print('Installed private bridge. Pairing file:', pairing)
-    print('Inference remains disabled until LM Studio logging is qualified.')
+    print('Installed protocol v2. Pairing file:',STATE/'pairing.json')
+    print('Only the signing identity persists; conversation keys are RAM-only.')
 if __name__ == '__main__':
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -192,8 +212,3 @@ if __name__ == '__main__':
         install()
     elif sys.argv[1] == 'serve':
         serve()
-    elif sys.argv[1] == 'execute':
-        try:
-            json.dump(execute(json.load(sys.stdin)), sys.stdout)
-        except Exception:
-            sys.exit(1)

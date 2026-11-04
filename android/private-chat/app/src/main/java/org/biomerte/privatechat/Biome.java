@@ -37,7 +37,7 @@ public final class Biome {
   return new JSONObject(reply.getJSONArray("content").getJSONObject(0).getString("text"));
  }
  public JSONObject exchange(String token,String resource,JSONObject envelope,java.util.function.BooleanSupplier active)throws Exception{
-  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract","chat.private.exchange:1").put("resource",resource).put("task",id),id+"-acquire");
+  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract","chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
   String lid=lease.getString("id");boolean settled=false;
   try{
    while(!lease.getString("state").equals("bound")){if(!active.getAsBoolean())throw new InterruptedException();Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());}

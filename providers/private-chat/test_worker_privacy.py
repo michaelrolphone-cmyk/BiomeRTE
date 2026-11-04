@@ -31,7 +31,8 @@ class PrivateLedgerTests(unittest.TestCase):
         remote = Remote()
         adapter = [sys.executable, '-c', 'import json,sys;json.load(sys.stdin);json.dump({"envelope":{"ct":"response-cipher-canary"}},sys.stdout)']
         worker = PrivateWorker(str(Path(directory)/'worker.sqlite'), remote,
-                               [dict(contract='chat.private.exchange:1',resource='privatechat.test',argv=adapter)], None)
+                               [dict(contract='chat.private.exchange:1',resource='privatechat.test',argv=adapter)], None,
+                               handler=lambda action: {'envelope':{'ct':'response-cipher-canary'}})
         worker.db.execute('INSERT INTO fences VALUES(?,?,?)',('privatechat.test',1,'test-lease'))
         return worker, remote
     def test_response_never_persisted(self):
@@ -53,6 +54,28 @@ class PrivateLedgerTests(unittest.TestCase):
             worker.perform(a)
             self.assertEqual(remote.results[0]['state'],'failed')
             self.assertNotIn('envelope',remote.results[0]['result'])
+            worker.db.close()
+    def test_lost_completion_ack_recovers_without_result_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, remote = self.worker(directory)
+            a=self.action();a.update(provider=remote.node,state='succeeded')
+            signature=digest([a['contract'],a['inputs'],a['resource'],a['generation'],a['lease']])
+            worker.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',(a['id'],signature,'uncertain','{}',a['resource']))
+            remote.call=lambda operation,args,rid=None: a if operation=='cap.status' else self.fail('unexpected replay')
+            worker.reconcile()
+            self.assertEqual(worker.db.execute('SELECT state,result FROM actions').fetchone(),('succeeded','{}'))
+            worker.db.close()
+    def test_restart_fails_claimed_request_before_next_fence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, remote = self.worker(directory)
+            a=self.action();a.update(provider=remote.node,state='claimed')
+            signature=digest([a['contract'],a['inputs'],a['resource'],a['generation'],a['lease']])
+            worker.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',(a['id'],signature,'uncertain','{}',a['resource']))
+            original=remote.call
+            remote.call=lambda op,args,rid=None: a if op=='cap.status' else original(op,args,rid)
+            worker.reconcile()
+            self.assertEqual(remote.results[0]['state'],'failed')
+            self.assertEqual(worker.db.execute('SELECT state,result FROM actions').fetchone(),('failed','{}'))
             worker.db.close()
 if __name__ == '__main__':
     unittest.main()

@@ -64,7 +64,7 @@ public final class MainActivity extends Activity {
   button("Finish connection",()->finishAuthorization(callback.getText().toString()));
   button("Back",this::chat);
  }
- private void savePairing(String text)throws Exception{if(data.has("pending"))throw new Exception();JSONObject p=new JSONObject(text);if(p.getInt("v")!=1||Vault.unb64(p.getString("key")).length!=32||!p.getString("resource").startsWith("privatechat.mac."))throw new Exception();data.put("pairing",p);save();}
+ private void savePairing(String text)throws Exception{if(data.has("pending"))throw new Exception();JSONObject p=new JSONObject(text);if(p.getInt("v")!=2||Vault.unb64(p.getString("server_identity")).length!=32||!p.getString("resource").startsWith("privatechat.mac."))throw new Exception();data.put("pairing",p);save();}
  @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(request==41&&result==RESULT_OK&&intent!=null)pairingUri=intent.getData();}
  private void authorize(){
   if(busy)return;busy=true;final int g=epoch;
@@ -87,17 +87,41 @@ public final class MainActivity extends Activity {
    }catch(Exception e){runOnUiThread(()->{if(g==epoch)fail();});}});
   }catch(Exception e){status.setText("Callback did not match this connection attempt.");}
  }
- private JSONObject seal(JSONObject plain)throws Exception{
-  String id=UUID.randomUUID().toString();byte[] key=Crypto.direction(Vault.unb64(data.getJSONObject("pairing").getString("key")),"request"),nonce=Crypto.random(12),bytes=plain.toString().getBytes(StandardCharsets.UTF_8);
-  try{return new JSONObject().put("v",1).put("id",id).put("nonce",Vault.b64(nonce)).put("ct",Vault.b64(Crypto.crypt(true,key,nonce,Crypto.aad("request",id),bytes)));}
-  finally{Crypto.wipe(key);Crypto.wipe(bytes);}
+ private JSONObject startSession()throws Exception{
+  if(!data.has("phone_identity"))data.put("phone_identity",Vault.b64(Crypto.random(32)));
+  byte[] identity=Vault.unb64(data.getString("phone_identity")),ephemeral=Crypto.random(32),nonce=Crypto.random(32);
+  String sid=UUID.randomUUID().toString(),helloId=UUID.randomUUID().toString(),requestId=UUID.randomUUID().toString();
+  try{
+   byte[] pub=Crypto.edPublic(identity),eph=Crypto.xPublic(ephemeral),transcript=Crypto.clientTranscript(helloId,sid,pub,eph,nonce);
+   JSONObject hello=new JSONObject().put("v",2).put("kind","hello").put("id",helloId).put("sid",sid).put("client_identity",Vault.b64(pub)).put("client_ephemeral",Vault.b64(eph)).put("client_nonce",Vault.b64(nonce)).put("signature",Vault.b64(Crypto.sign(identity,transcript)));
+   return new JSONObject().put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId);
+  }finally{Crypto.wipe(identity);Crypto.wipe(ephemeral);}
+ }
+ private void finishSession(JSONObject reply)throws Exception{
+  JSONObject pending=data.getJSONObject("pending"),hello=pending.getJSONObject("hello"),pairing=data.getJSONObject("pairing");
+  if(reply.getInt("v")!=2||!reply.getString("kind").equals("hello")||!reply.getString("id").equals(hello.getString("id"))||!reply.getString("sid").equals(hello.getString("sid")))throw new Exception();
+  byte[] identity=Vault.unb64(pairing.getString("server_identity")),client=Crypto.clientTranscript(hello.getString("id"),hello.getString("sid"),Vault.unb64(hello.getString("client_identity")),Vault.unb64(hello.getString("client_ephemeral")),Vault.unb64(hello.getString("client_nonce")));
+  byte[] whole=Crypto.serverTranscript(client,Vault.unb64(reply.getString("server_ephemeral")),Vault.unb64(reply.getString("server_nonce")),identity);
+  Crypto.verify(identity,whole,Vault.unb64(reply.getString("signature")));
+  byte[] ephemeral=Vault.unb64(pending.getString("client_private")),shared=null,requestKey=null,responseKey=null,clear=null;
+  try{
+   shared=Crypto.shared(ephemeral,Vault.unb64(reply.getString("server_ephemeral")));byte[] hash=Crypto.hash(whole);
+   requestKey=Crypto.traffic(shared,hash,"request");responseKey=Crypto.traffic(shared,hash,"response");
+   JSONObject body=new JSONObject().put("messages",data.getJSONArray("messages"));
+   if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
+   clear=body.toString().getBytes(StandardCharsets.UTF_8);byte[] nonce=Crypto.random(12);String sid=hello.getString("sid"),id=pending.getString("request_id");
+   JSONObject envelope=new JSONObject().put("v",2).put("kind","request").put("id",id).put("sid",sid).put("nonce",Vault.b64(nonce)).put("ct",Vault.b64(Crypto.crypt(true,requestKey,nonce,Crypto.sessionAAD("request",sid,id,hash),clear)));
+   if(envelope.toString().getBytes(StandardCharsets.UTF_8).length>60000)throw new Exception("Request too large");
+   data.put("pending",new JSONObject().put("stage","message").put("envelope",envelope).put("response_key",Vault.b64(responseKey)).put("transcript_hash",Vault.b64(hash)));
+   save();
+  }finally{Crypto.wipe(ephemeral);Crypto.wipe(shared);Crypto.wipe(requestKey);Crypto.wipe(responseKey);Crypto.wipe(clear);}
  }
  private void send(){
   if(busy||data.has("pending")){status.setText("Resume the pending request first.");return;}
-  try{if(!data.has("pairing")||!data.has("oauth")){settings();return;}String text=composer.getText().toString();if(text.trim().isEmpty())return;
+  try{if(!data.has("pairing")||data.getJSONObject("pairing").optInt("v")!=2||!data.has("oauth")){settings();return;}String text=composer.getText().toString();if(text.trim().isEmpty())return;
    JSONArray messages=data.getJSONArray("messages");messages.put(new JSONObject().put("role","user").put("content",text));
-   JSONObject encrypted=seal(new JSONObject().put("messages",messages));
-   if(encrypted.toString().getBytes(StandardCharsets.UTF_8).length>60000){messages.remove(messages.length()-1);status.setText("Conversation exceeds the Biome request size. Start a new conversation.");return;}
+   JSONObject encrypted=startSession();
+   if(new JSONObject().put("messages",messages).toString().getBytes(StandardCharsets.UTF_8).length>44000){messages.remove(messages.length()-1);status.setText("Conversation exceeds Biome request size. Start a new conversation.");return;}
    data.put("pending",encrypted);save();composer.setText("");render();resume();
   }catch(Exception e){fail();}
  }
@@ -108,12 +132,16 @@ public final class MainActivity extends Activity {
    if(auth.optBoolean("refresh_pending")){status.setText("Connection refresh was interrupted. Reconnect Biome.");return;}
    if(System.currentTimeMillis()>=auth.getLong("expires_at")){refresh(auth);return;}
    String token=auth.getString("access_token"),resource=data.getJSONObject("pairing").getString("resource");JSONObject pending=new JSONObject(data.getJSONObject("pending").toString());
+   boolean isHello=pending.getString("stage").equals("hello");JSONObject outbound=pending.getJSONObject(isHello?"hello":"envelope");
    int g=epoch;busy=true;status.setText("Encrypted request in progress…");
-   executor.execute(()->{try{JSONObject response=biome.exchange(token,resource,pending,()->g==epoch&&!Thread.currentThread().isInterrupted());
+   executor.execute(()->{try{JSONObject response=biome.exchange(token,resource,outbound,()->g==epoch&&!Thread.currentThread().isInterrupted());
     runOnUiThread(()->{if(g!=epoch)return;try{
-     String id=pending.getString("id");if(response.getInt("v")!=1||!id.equals(response.getString("id")))throw new Exception();
-     byte[] key=Crypto.direction(Vault.unb64(data.getJSONObject("pairing").getString("key")),"response"),clear=null;
-     JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),Crypto.aad("response",id),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
+     if(isHello){finishSession(response);busy=false;resume();return;}
+     String id=outbound.getString("id"),sid=outbound.getString("sid");
+     if(response.getInt("v")!=2||!response.getString("kind").equals("response")||!id.equals(response.getString("id"))||!sid.equals(response.getString("sid")))throw new Exception();
+     byte[] key=Vault.unb64(pending.getString("response_key")),clear=null;
+     JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),Crypto.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
+     data.getJSONObject("pairing").remove("enrollment_token");
      if(reply.has("error")){status.setText("Mac could not complete private inference.");data.remove("pending");save();busy=false;return;}
      data.getJSONArray("messages").put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));data.remove("pending");save();busy=false;render();status.setText("Encrypted history saved");
     }catch(Exception e){fail();}});

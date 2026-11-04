@@ -1,32 +1,41 @@
-# Biome Private Chat (Android 8+)
+# Biome Private Chat 0.2.0
 
-Native Android app and isolated Mac provider for encrypted conversations through the existing Biome capability transport.
+Android 8+ app and isolated Mac LM Studio provider. Keychain is not used.
 
-## Build
+## Keys and storage
+| Material | Phone | Mac |
+|---|---|---|
+| Password-derived vault key | Memory while unlocked | Never received |
+| Phone signing identity | Password-encrypted vault | Public key only |
+| Mac signing identity | Pinned public key in encrypted vault | Owner-only identity.ed25519 file; authenticates handshakes only |
+| Ephemeral X25519/session keys | Pending state encrypted in vault; removed after reply | RAM only; never written to ledger |
+| Conversation history | Password-encrypted vault | Never saved by bridge |
+
+The Mac signing key is not a chat encryption key. Keeping it permits authenticated reconnection after Mac restarts without re-pairing. It is protected by file permissions, not Keychain or application-level file encryption.
+
+## Protocol v2
+Every message/reply exchange gets fresh X25519 keys, HKDF-SHA256 directional traffic keys and AES-256-GCM. The phone signs its client hello with Ed25519; the Mac signs a transcript binding both public ephemeral keys, both nonces, both identities and session/request identifiers. The phone verifies the Mac signature against its directly paired public key before dispatching encrypted conversation data.
+
+Initial enrollment uses a random one-use 256-bit token transferred directly with the pinned Mac public key. The token is sent only inside authenticated session encryption. The Mac retains a token hash until enrollment, then replaces it with the phone's public signing key and deletes the Mac pairing file. Subsequent exchanges authenticate the paired phone without sending an enrollment token.
+
+Sessions are consumed once. Replayed ciphertext cannot rerun inference. Mac restarts lose incomplete sessions; completed encrypted replies remain retrievable through Biome using the phone's encrypted pending state. Interrupted operations fail without automatic inference replay.
+
+This is a project-specific handshake using maintained cryptographic implementations, not an implementation of HPKE or Noise. Test vectors cover Java/Python interoperability; physical phone and independent security review remain separate qualification.
+
+## Build and install
 Build the Dockerfile in this directory, then run its image with the repository mounted at /source:
 `gradle -p android/private-chat --no-daemon testDebugUnitTest assembleDebug`.
-Install app/build/outputs/apk/debug/app-debug.apk. The debug build is signed with a development key but has debugging disabled. Keep that signing key for updates; distribution signing is not yet configured.
+The APK is app/build/outputs/apk/debug/app-debug.apk. It uses the retained development signing key with debugging disabled. Keep that signing volume for updates.
 
-## First use
-1. Install and qualify the Mac bridge per providers/private-chat/README.md.
-2. Create your phone passphrase (12+ characters; a long unique passphrase is recommended).
-3. Tap Pair Mac / connection. Transfer the Mac pairing.json directly by USB or another trusted local method and select Import Mac pairing file. Do not send it through Biome, chat, email, or cloud storage. Delete the transfer copy afterward.
-4. Tap Connect Biome. In the browser allow access, long-press “Continue to your app” and copy its link. Return to the app, unlock it, open connection settings, paste the link, and finish the connection. This uses the gateway's existing exact HTTPS redirect and PKCE support without changing its OAuth policy.
-5. Send a message. Returning to another app locks this app immediately. Unlock and use Resume pending request to retrieve the same response.
+1. Install the updated APK. Existing password-encrypted history and Biome OAuth credentials remain compatible.
+2. Transfer ~/.local/share/biome-private-chat/pairing.json directly from the Mac to the phone, such as by USB. Do not send this enrollment file through Biome or chat.
+3. Unlock the app, select Pair Mac / connection, and Import Mac pairing file. Returning from the file picker requires unlocking again.
+4. If not already connected, select Connect Biome; allow access in the browser, copy the Continue link, return and unlock, then paste the link to finish OAuth.
+5. Send a message. Biome receives public handshake metadata and encrypted message envelopes only. Use Resume pending request after an interruption.
 
-Your password encrypts the phone vault, which includes phone history, pairing key and OAuth credentials. It is never transmitted. Forgetting it loses access to the vault. No recovery or biometric bypass is included. Automatic backup, screenshots, recents previews, UI state saving and personalized keyboard learning are disabled. A third-party keyboard can still observe input; use a trusted keyboard.
+## Privacy
+History, phone signing key, OAuth credentials and pending transport state share the password-encrypted vault. The passphrase never leaves the phone. The vault uses PBKDF2-HMAC-SHA256 (600,000 iterations, 256-bit random salt), AES-GCM and atomic ciphertext-only writes. Automatic backup, screenshots/recents previews, UI state saving and keyboard personalized learning are disabled. A third-party keyboard still sees input.
 
-## Protocol and privacy
-AES-256-GCM encrypts authenticated request/response envelopes before capability dispatch; Biome stores ciphertext and routing metadata. A 256-bit random pairing key lives in the Mac Keychain and the phone's password-encrypted vault. HMAC-SHA256 derives independent direction keys. AAD binds protocol version, direction and UUID operation ID. Every encryption uses a fresh 96-bit random nonce. Phone history uses an independent PBKDF2-HMAC-SHA256 key (600,000 iterations, random 256-bit salt), AES-GCM and atomic ciphertext-only writes.
+The Mac ledger stores only operation hashes, fencing/status metadata and generic failures. Request/response ciphertext retries live in RAM until Biome acknowledges them. Plaintext passes only in memory to localhost LM Studio, with store:false, no coding integrations and runtime guards requiring sensitive/incoming-token logging disabled. LM Studio retention must be qualified on the installed version.
 
-The Mac worker ledger contains opaque operation IDs, hashes and fence/status metadata only. Responses are retained in RAM until Biome acknowledges them, then discarded; they are not stored in the Mac ledger. The adapter passes plaintext in memory to localhost LM Studio, with storage disabled and no coding tools/checkpoints. It sends encrypted responses to Biome. App/bridge code does not log conversation text. Existing LM Studio logging must be qualified before the bridge can advertise availability.
-
-This is a shared pairing-key protocol, not a forward-secret ratchet. Compromise of that key permits decryption of retained Biome ciphertext. Neither Android nor Python guarantees zeroization of immutable strings, runtime copies, swap, model KV caches or OS diagnostic memory; a complete device-forensics guarantee is outside this app's control.
-
-## Qualification status
-Source is a first implementation. Do not treat it as security-audited. Device lock/unlock, OAuth browser return, Android backup exclusion, ciphertext-only persistence, LM Studio request logging and a full physical phone-to-Mac conversation require observed qualification before release.
-
-## Observed checks (2026-11-03 America/Denver)
-Android APK build, three Java cryptography tests and five Python envelope/retention tests passed in Mac Docker. Two synthetic LM Studio requests left no canary text in inspected storage; conversation and API-prediction-history stores did not change. Server metadata logging changed without canary text. Final physical phone lifecycle/OAuth/end-to-end qualification is pending.
-
-Mac bridge installation is blocked: login Keychain returned -61 (write permissions), and macOS security reported user interaction is not allowed. The encryption key was not stored and the private provider is not enabled. Unlock the login keychain locally on the Mac, then rerun the installer and complete pairing; no password should be sent in chat.
+No artificial inference timeouts or CPU/memory limits are imposed. Core dumps are disabled for the bridge. Runtime copies, OS swap, model KV caches and device compromise are outside a no-forensic-remnants guarantee.
