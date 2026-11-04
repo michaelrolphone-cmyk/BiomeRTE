@@ -23,3 +23,7 @@ assert.equal(
 );
 
 console.log("Artifact is valid ESM and exports default.fetch");
+const decisionProbe = await workerModule.default.fetch(new Request('https://biome.test/api/decisions', {
+  method: 'POST', headers: {'content-type': 'application/json'}, body: '{"command":"not-a-decision-command"}'
+}), {});
+assert.equal(decisionProbe.status, 400, 'Built decision ingress must reject arbitrary commands without reaching a controller');
