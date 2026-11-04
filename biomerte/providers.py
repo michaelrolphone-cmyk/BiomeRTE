@@ -1,4 +1,6 @@
 """Capability contracts, mutable offers, leases, fences and durable dispatch."""
+import math
+import time
 from .api import op, ident, validate, schema
 from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
@@ -34,6 +36,14 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
     definition = tx.need('contracts', contract)
+    policy = (configuration or {}).get('reservation_policy', {})
+    if not isinstance(policy, dict):
+        raise Fault('Invalid reservation policy')
+    idle = policy.get('idle_seconds', 0)
+    if isinstance(idle, bool) or not isinstance(idle, (int, float)) or not math.isfinite(idle) or idle < 0:
+        raise Fault('Reservation idle seconds must be a nonnegative finite number')
+    if 'release_after_result' in policy and not isinstance(policy['release_after_result'], bool):
+        raise Fault('Reservation release_after_result must be boolean')
     if state not in ('ready', 'available_after_setup', 'offline'):
         raise Fault('Invalid offer state')
     if provider not in ('builtin', 'routine'):
@@ -131,6 +141,53 @@ def active_on(tx, resource):
     return [l for l in tx.rows('leases') if l['resource'] == resource and l['state'] in ('fencing', 'bound')]
 
 
+def reservation_policy(tx, lease):
+    offer = tx.get('offers', lease.get('offer', ''), {})
+    return offer.get('configuration', {}).get('reservation_policy', {})
+
+
+def touch_reservation(tx, lease):
+    # Only opt-in, pre-dispatch reservations have an idle clock. This is never
+    # an operation deadline: queued/claimed/uncertain work retains its fence.
+    if lease['state'] in ('fencing', 'bound') and reservation_policy(tx, lease).get('idle_seconds', 0) > 0:
+        tx.put('_reservation_activity', lease['id'], {'generation': lease['generation'], 'at': time.time()})
+
+
+def recover_reservations(tx, ctx):
+    now = time.time()
+    actions = {}
+    for action in tx.rows('actions'):
+        actions.setdefault(action['lease'], []).append(action)
+    recovered = 0
+    for lease in tx.rows('leases'):
+        if lease['state'] not in ('bound', 'fencing'):
+            continue
+        policy = reservation_policy(tx, lease)
+        if not policy:
+            continue
+        work = [a for a in actions.get(lease['id'], []) if a['generation'] == lease['generation']]
+        if any(a['state'] not in ('succeeded', 'failed') for a in work):
+            continue
+        # Combined submissions retain enough information to repair dispatch.
+        if tx.get('_submission_leases', lease['id']) and not work:
+            start_submission(tx, ctx, lease)
+            continue
+        reason = None
+        if work and policy.get('release_after_result'):
+            reason = 'settled_exchange'
+        elif not work and policy.get('idle_seconds', 0) > 0:
+            activity = tx.get('_reservation_activity', lease['id'])
+            if not activity or activity.get('generation') != lease['generation']:
+                # Older retained reservations get a full grace period on upgrade.
+                touch_reservation(tx, lease)
+            elif now - activity['at'] >= policy['idle_seconds']:
+                reason = 'unused_reservation_idle'
+        if reason and release(tx, lease):
+            recovered += 1
+            tx.emit('lease.recovered', {'lease': lease['id'], 'generation': lease['generation'], 'reason': reason})
+    return recovered
+
+
 def notify_bound(tx, ctx, lease):
     if lease.get('reply_to') and not lease.get('notified'):
         from .api import send, Context
@@ -177,6 +234,7 @@ def bind(tx, ctx, request):
         if lease['state'] == 'bound':
             notify_bound(tx, ctx, lease)
         tx.put('leases', lease['id'], lease)
+        touch_reservation(tx, lease)
         start_submission(tx, ctx, lease)
         return lease
 
@@ -224,10 +282,12 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     return tx.put('leases', key, req)
 
 
-@op('cap.lease', 'lease:str', False)
+@op('cap.lease', 'lease:str')
 def lease_status(tx, ctx, lease):
     """Read the current lease, including queued requests, independently of its original receipt."""
-    return tx.need('leases', lease)
+    value = tx.need('leases', lease)
+    touch_reservation(tx, value)
+    return value
 
 
 def executor(tx, ctx, provider):
@@ -370,6 +430,9 @@ def result(tx, ctx, provider, operation, generation, state, result):
     tx.put('actions', operation, a)
     tx.emit('operation.' + state, {'id': operation})
     finish_submission(tx, ctx, operation)
+    if state in ('succeeded', 'failed') and reservation_policy(tx, tx.need('leases', a['lease'])).get('release_after_result'):
+        if release(tx, tx.need('leases', a['lease'])):
+            promote(tx, ctx)
     return a
 
 
@@ -451,3 +514,6 @@ def settle_submissions(tx, ctx):
     # completed combined requests; uncertain commands keep their original fence.
     for submission in tx.rows('_submission_active'):
         finish_submission(tx, ctx, submission['id'])
+    if recover_reservations(tx, ctx):
+        promote(tx, ctx)
+
