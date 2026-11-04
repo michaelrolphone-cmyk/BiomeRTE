@@ -53,4 +53,16 @@ public class ChatUiTest {
  @Test public void lockingClearsVisibleMessagesAndDraftStaysEncrypted()throws Exception{
   ((EditText)get("composer")).setText("synthetic draft");call("lock");assertNull(get("data"));assertNull(get("vaultKey"));assertNull(get("messageList"));draw(1280,"locked.png");
  }
+ @Test public void imageStartsCollapsedAndTogglePersistsVisibility()throws Exception{
+  JSONObject d=(JSONObject)get("data");Bitmap bitmap=Bitmap.createBitmap(2,2,Bitmap.Config.ARGB_8888);ByteArrayOutputStream out=new ByteArrayOutputStream();bitmap.compress(Bitmap.CompressFormat.PNG,100,out);bitmap.recycle();
+  JSONObject image=new JSONObject().put("prompt","test image").put("after_message",1).put("images",new JSONArray().put(new JSONObject().put("data",Vault.b64(out.toByteArray()))));d.getJSONArray("images").put(image);call("render");
+  assertEquals(0,((java.util.List<?>)get("bitmaps")).size());View toggle=findDescription((LinearLayout)get("messageList"),"Expand image");assertNotNull(toggle);toggle.performClick();assertTrue(image.getBoolean("expanded"));assertEquals(1,((java.util.List<?>)get("bitmaps")).size());
+  findDescription((LinearLayout)get("messageList"),"Collapse image").performClick();assertFalse(image.getBoolean("expanded"));assertEquals(0,((java.util.List<?>)get("bitmaps")).size());
+ }
+ @Test public void creatingThreadPreservesOldHistoryAndDraft()throws Exception{
+  JSONObject d=(JSONObject)get("data");String id=d.getString("active_thread");((EditText)get("composer")).setText("original draft");call("newConversation");assertEquals(2,d.getJSONArray("threads").length());assertEquals(0,d.getJSONArray("messages").length());
+  Method select=MainActivity.class.getDeclaredMethod("selectConversation",String.class);select.setAccessible(true);select.invoke(activity,id);assertEquals(2,d.getJSONArray("messages").length());assertEquals("original draft",((EditText)get("composer")).getText().toString());
+ }
+ static View findDescription(View view,String description){if(description.contentEquals(view.getContentDescription()==null?"":view.getContentDescription()))return view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View found=findDescription(group.getChildAt(i),description);if(found!=null)return found;}}return null;}
 }
+

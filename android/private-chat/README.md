@@ -42,3 +42,23 @@ No artificial inference timeouts or CPU/memory limits are imposed. Core dumps ar
 
 ## Encrypted image generation
 Generate image uses the separate image.private.exchange:1 capability backed by Fluxed Up GGUF Q8_0 on the Mac. Image prompts and PNG replies are encrypted before dispatch and before leaving the Mac; image history stays in the password-encrypted phone vault. Existing chat, OAuth and pairing remain compatible. Images display only while unlocked and are cleared from the view on lock. Generic Biome callers separately use image.generate:1. Physical phone lock/resume/display qualification remains pending until tested on the device.
+
+
+## Conversation controls (0.8.0)
+The conversation selector creates and switches threads; each thread retains its own
+messages, images, draft and selected model inside the existing encrypted vault.
+Existing history migrates into Conversation 1 without changing pairing or OAuth.
+Rename the current thread from its selector or the conversation menu.
+
+Use the menu on a message to delete it. Image cards start collapsed; Show/Hide
+controls persist their visibility. Delete removes the whole result, or expand a
+multi-image result to delete an individual image. Deletion affects local encrypted
+history and future inference context; an already dispatched request can still
+contain the earlier message. Image positions are adjusted when earlier text is deleted.
+
+Switching threads parks an in-flight request for explicit resumption. Every saved
+request retains its originating thread; its result is added there even if resumed
+from another thread. Terminal failures are retained in Pending requests; starting
+one again requires an explicit action because a previous lost result may have
+already run. Transport interruptions continue to resume the same operation.
+Assistant model labels remain display metadata and are excluded from chat context.

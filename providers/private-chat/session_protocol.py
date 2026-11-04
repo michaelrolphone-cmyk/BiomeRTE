@@ -48,6 +48,19 @@ def open_message(key, kind, sid, operation, thash, value):
     if set(value) != {'v','kind','sid','id','nonce','ct'} or value['v'] != 2 or value['kind'] != kind or value['sid'] != sid or value['id'] != operation:
         raise ValueError('Invalid envelope')
     return json.loads(AESGCM(key).decrypt(raw(value['nonce'],12), base64.b64decode(value['ct'],validate=True), aad(kind,sid,operation,thash)))
+def conversation_messages(messages):
+    if not isinstance(messages, list) or not messages:
+        raise ValueError('Invalid conversation')
+    result = []
+    for message in messages:
+        if (not isinstance(message, dict) or not {'role','content'} <= set(message)
+                or set(message) - {'role','content','model'}
+                or message['role'] not in ('user','assistant')
+                or not isinstance(message['content'], str)
+                or ('model' in message and (message['role'] != 'assistant' or not isinstance(message['model'], str)))):
+            raise ValueError('Invalid conversation')
+        result.append({'role': message['role'], 'content': message['content']})
+    return result
 class SessionServer:
     def __init__(self, identity, enrollment_hash=None, phone_identity=None, enrolled=None, request_handler=None):
         self.request_handler = request_handler
@@ -71,8 +84,9 @@ class SessionServer:
         data = open_message(session['keys']['request'],'request',sid,operation,session['hash'],envelope)
         # Authenticate and validate before removing the one-use session.
         messages = data.get('messages')
-        if not (self.request_handler and data.get('action') == 'models') and (not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages)):
-            raise ValueError('Invalid conversation')
+        if not (self.request_handler and data.get('action') == 'models'):
+            messages = conversation_messages(messages)
+            data['messages'] = messages
         phone = session['phone']
         if self.phone_identity != phone:
             token = raw(data.get('enrollment_token',''),32)
