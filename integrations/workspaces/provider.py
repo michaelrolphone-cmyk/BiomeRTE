@@ -30,7 +30,12 @@ def main():
  if mode=='adapter':
   payload=json.load(sys.stdin)
   try:
-   result=m.handle(sys.argv[2],payload['inputs']['arguments'],payload['operation']);out={'ok':result.get('exit_code',0)==0,'result':result}
+   operation=sys.argv[2];args=payload['inputs']['arguments'];schema=m.read(m.ROOT/'schemas.json')[operation]
+   if any(k not in args for k in schema['required']) or any(k not in schema['properties'] for k in args):raise ValueError('Arguments do not match workspace schema')
+   types={'string':str,'integer':int,'boolean':bool,'array':list,'object':dict}
+   for key,value in args.items():
+    if type(value) is not types[schema['properties'][key]['type']]:raise ValueError('Invalid type for '+key)
+   result=m.handle(operation,args,payload['operation']);out={'ok':result.get('exit_code',0)==0,'result':result}
   except (ValueError,RuntimeError,FileNotFoundError,AssertionError) as e:out={'ok':False,'result':{'error':str(e),'kind':type(e).__name__}}
   sys.path.insert(0,str(m.GITROOT));import proxy
   print(json.dumps(proxy.compact(out)))

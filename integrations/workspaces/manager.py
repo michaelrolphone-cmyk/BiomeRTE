@@ -14,7 +14,7 @@ def save(p,x):
 def gateway():
  sys.path.insert(0,str(TERMINAL));import mac_provider;return mac_provider
 def identifier(x):
- if not isinstance(x,str) or not re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',x):raise ValueError('Invalid identifier')
+ if not isinstance(x,str) or not re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_@.-]{0,127}',x):raise ValueError('Invalid identifier')
  return x
 @contextlib.contextmanager
 def lock(name,blocking=True):
