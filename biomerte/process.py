@@ -10,7 +10,7 @@ from .work import ready
 
 TYPES = set('start end fail set choose fork join service call human message delegate timer each select'.split())
 INTERNAL = set(
-    'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list continuation.prepare'.split())
+    'knowledge.put knowledge.get knowledge.search bus.send bus.publish artifact.put artifact.get work.list continuation.prepare authorization.prepare authorization.resolve'.split())
 
 
 def val(expr, variables, depth=0):
@@ -408,7 +408,12 @@ def advance(tx, ctx, r, t, n, version):
                         return True
                     raise
                 t.pop('queued_lease', None)
-                a = providers.dispatch(tx, ctx, lease['id'], inputs, uid())
+                if n.get('authorization'):
+                    from .authorization import on_lease
+                    auth = ev(n['authorization'])
+                    a = on_lease(tx, ctx, lease, inputs, auth['operation'], auth['id'], auth['proposal'])
+                else:
+                    a = providers.dispatch(tx, ctx, lease['id'], inputs, uid())
                 t['action'] = a['id']
                 if scoped:
                     t['activity_lease'] = lease['id']
@@ -613,8 +618,19 @@ def cancel(tx, ctx, run):
                 if a['state'] == 'queued':
                     a.update(state='failed', result={'cancelled': True})
                 elif a['state'] == 'claimed':
-                    a.update(state='uncertain', result={'reason': 'cancelled after dispatch'})
+                    if a['contract'] == 'human.decision:1' and a['provider'] == 'builtin':
+                        a.update(state='failed', result={'cancelled': True})
+                    else:
+                        a.update(state='uncertain', result={'reason': 'cancelled after dispatch'})
                 tx.put('actions', a['id'], a)
+                if a.get('decision_id'):
+                    from .decisions import close
+                    row = tx.need('decisions', a['decision_id'])
+                    if row['state'] == 'pending' and not any(
+                            tx.need('actions', key)['state'] == 'claimed' for key in row['actions']):
+                        close(tx, ctx, row, 'withdrawn')
+                from .authorization import observe
+                observe(tx, a['id'], a['state'], a.get('result'))
         finish(tx, r, 'cancelled', {})
         tx.put('runs', run, r)
     return r

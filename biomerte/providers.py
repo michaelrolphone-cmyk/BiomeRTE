@@ -301,17 +301,23 @@ def dispatch(tx, ctx, lease, inputs, operation):
     validate(contract['inputs'], inputs)
     if l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer'])):
         raise Fault('Lease unavailable', 409)
+    from .authorization import guard, observe
+    guard(tx, key, l['contract'], l['resource'], inputs)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l['provider'],
          'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs, 'guard': l['guard'],
          'status_query': {'operation': 'cap.status', 'arguments': {'operation': key}}}
     if l['provider'] == 'builtin' and l['contract'] == 'core.echo:1':
         a.update(state='succeeded', result={'value': inputs['value']})
+    if l['provider'] == 'builtin' and l['contract'] == 'human.decision:1':
+        from .decisions import start_action
+        start_action(tx, ctx, a)
     if l['provider'] == 'routine':
         from .process import new_run
         spec = tx.need('offers', l['offer'])['configuration']
         child = new_run(tx, spec['process'], inputs, parent='action:' + key, pin=spec['revision'])
         a.update(state='claimed', child=child['id'])
     tx.put('actions', key, a)
+    observe(tx, key, a['state'], a.get('result'))
     tx.emit('operation.' + a['state'], {'id': key})
     return a
 
@@ -343,10 +349,20 @@ def claim(tx, ctx, provider, operation, generation):
             provider, 'bound', generation, a['lease'], generation):
         raise Fault('Stale resource generation', 409)
     if a['state'] == 'queued':
+        from .authorization import guard, observe
+        try:
+            guard(tx, operation, a['contract'], a['resource'], a['inputs'])
+        except Fault as error:
+            a.update(state='failed', result={'authorization_blocked': True, 'reason': str(error)})
+            tx.put('actions', operation, a)
+            observe(tx, operation, 'failed', a['result'])
+            finish_submission(tx, ctx, operation)
+            return a
         if not admitted(tx, tx.need('offers', l['offer'])):
             raise Fault('Dispatch paused by availability or mission', 409)
         a['state'] = 'claimed'
         tx.put('actions', operation, a)
+        observe(tx, operation, 'claimed')
     return dict(a, output_schema=tx.need('contracts', a['contract'])['outputs'])
 
 
@@ -368,6 +384,8 @@ def result(tx, ctx, provider, operation, generation, state, result):
         validate(tx.need('contracts', a['contract'])['outputs'], result)
     a.update(state=state, result=result)
     tx.put('actions', operation, a)
+    from .authorization import observe
+    observe(tx, operation, state, result)
     tx.emit('operation.' + state, {'id': operation})
     finish_submission(tx, ctx, operation)
     return a

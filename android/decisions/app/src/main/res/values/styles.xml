@@ -1,0 +1,11 @@
+<resources>
+ <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+  <item name="android:fontFamily">sans-serif</item><item name="android:colorAccent">@color/accent</item>
+  <item name="android:windowBackground">@color/canvas</item><item name="android:colorBackground">@color/canvas</item>
+  <item name="android:textColorPrimary">@color/ink</item><item name="android:textColorSecondary">@color/muted</item>
+  <item name="android:windowLightStatusBar">@bool/light_system_bars</item><item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
+  <item name="android:statusBarColor">@color/canvas</item><item name="android:navigationBarColor">@color/canvas</item>
+  <item name="android:windowActionModeOverlay">true</item><item name="android:windowSoftInputMode">adjustResize</item>
+ </style>
+ <string name="app_name">Biome Decisions</string>
+</resources>

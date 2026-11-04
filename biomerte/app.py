@@ -8,7 +8,7 @@ from .api import Context, OPERATIONS, command, op, ident
 from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
 from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
-from . import knowledge, work, process, providers, exchange, extensions
+from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization
 
 
 def read_json(path):
@@ -36,6 +36,7 @@ def initialize(directory, site=None):
 
 
 def seed(tx):
+    decisions.seed(tx, Context(None))
     # Backfill this built-in's guide for existing realms as well as fresh nodes.
     if tx.get('_contract_usage', 'core.echo:1') is None:
         from .capability_usage import ECHO_USAGE
