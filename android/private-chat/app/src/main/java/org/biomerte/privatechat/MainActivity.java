@@ -117,7 +117,7 @@ public final class MainActivity extends Activity {
      if(reply.has("error")){status.setText("Mac could not complete private inference.");data.remove("pending");save();busy=false;return;}
      data.getJSONArray("messages").put(new JSONObject().put("role","assistant").put("content",reply.getString("text")));data.remove("pending");save();busy=false;render();status.setText("Encrypted history saved");
     }catch(Exception e){fail();}});
-   }catch(Exception e){runOnUiThread(()->{if(g==epoch)fail();});}});
+   }catch(Exception e){runOnUiThread(()->{if(g!=epoch)return;if(e instanceof Biome.RequestFailed){try{data.remove("pending");save();busy=false;status.setText("Mac could not finish this request. You can send a new message.");}catch(Exception ignored){fail();}}else fail();});}});
   }catch(Exception e){fail();}
  }
  private void refresh(JSONObject auth)throws Exception{

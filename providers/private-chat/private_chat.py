@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import resource
 import secrets
+import subprocess
 import sys
 import time
 from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
@@ -21,6 +22,7 @@ LM = HOME / '.local/share/biome-lmstudio'
 sys.path[:0] = [str(TERMINAL), str(TERMINAL / 'runtime')]
 import mac_provider as gateway
 from biomerte.worker import Worker
+from biomerte.store import digest, encode
 SERVICE = 'org.biomerte.private-chat'
 ACCOUNT = 'transport-v1'
 CONTRACT = 'chat.private.exchange:1'
@@ -42,6 +44,9 @@ def privacy_ready():
     cfg = json.loads((STATE / 'privacy.json').read_text())
     if cfg != {'lmstudio_request_logging_disabled': True, 'qualification': 'verified'}:
         raise RuntimeError('LM Studio privacy qualification required')
+    server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
+    if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
+        raise RuntimeError('LM Studio sensitive logging must be disabled')
 def inference(messages):
     privacy_ready()
     if not isinstance(messages, list) or not messages:
@@ -84,6 +89,45 @@ class Remote:
         self.node, self.site = cfg['provider'], cfg['site']
     def call(self, name, args, rid=None):
         return gateway.invoke(name, args, rid, self.realm)
+class PrivateWorker(Worker):
+    """Disk ledger retains hashes and state only; response retries live in RAM."""
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.pending = {}
+    def perform(self, action):
+        args = dict(provider=self.remote.node, operation=action['id'], generation=action['generation'])
+        guard = action.get('guard', action['resource'])
+        binding = self.db.execute('SELECT gen,holder FROM fences WHERE resource=?', (guard,)).fetchone()
+        if binding != (action['generation'], action['lease']):
+            self.fence(dict(action, id=action['lease'], guard=guard))
+        claimed = self.remote.call('provider.claim', args)
+        if claimed['state'] != 'claimed':
+            self.pending.pop(action['id'], None)
+            self.db.execute("UPDATE actions SET state=?,result='{}' WHERE id=?", (claimed['state'], action['id']))
+            return
+        signature = digest([action['contract'], action['inputs'], action['resource'], action['generation'], action['lease']])
+        row = self.db.execute('SELECT signature,state FROM actions WHERE id=?', (action['id'],)).fetchone()
+        if row and row[0] != signature:
+            raise ValueError('Operation conflict')
+        if action['id'] not in self.pending:
+            if row:
+                # A crash must not reconstruct history or silently replay inference.
+                state, out = 'failed', {'reason': 'interrupted_private_request_send_new_request'}
+            else:
+                self.db.execute("INSERT INTO actions VALUES(?,?,?,?,?)", (action['id'], signature, 'uncertain', '{}', guard))
+                adapter = next(o for o in self.offers if o['contract'] == action['contract'])
+                proc = subprocess.run(adapter['argv'], input=encode({'operation':action['id'],'inputs':action['inputs']}).encode(),
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if proc.returncode:
+                    state, out = 'failed', {'reason': 'private_adapter_unavailable'}
+                else:
+                    state, out = 'succeeded', json.loads(proc.stdout)
+            self.pending[action['id']] = (state, out)
+        state, out = self.pending[action['id']]
+        self.remote.call('provider.result', dict(args, state=state, result=out))
+        self.db.execute("UPDATE actions SET state=?,result='{}' WHERE id=?", (state, action['id']))
+        self.pending.pop(action['id'], None)
+
 def serve():
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -93,7 +137,7 @@ def serve():
                  argv=[sys.executable, str(Path(__file__).resolve()), 'execute'])
     with open(STATE / 'worker.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        worker = Worker(str(STATE / 'worker.sqlite'), remote, [offer], None)
+        worker = PrivateWorker(str(STATE / 'worker.sqlite'), remote, [offer], None)
         while True:
             try:
                 privacy_ready()
@@ -119,7 +163,10 @@ def install():
         if not keyring.get_keyring().__class__.__module__.startswith('keyring.backends.macOS'):
             raise RuntimeError('macOS Keychain is required')
         master = secrets.token_bytes(32)
-        keyring.set_password(SERVICE, ACCOUNT, b64(master))
+        try:
+            keyring.set_password(SERVICE, ACCOUNT, b64(master))
+        except keyring.errors.PasswordSetError:
+            raise SystemExit('Mac login Keychain refused key storage. Unlock it locally, then rerun installation; no pairing key was saved.')
         site = json.loads((TERMINAL / 'terminal-manifest.json').read_text())['site']
         provider = hashlib.sha256(('private-chat/' + secrets.token_hex(32)).encode()).hexdigest()
         cfg = dict(provider=provider, resource='privatechat.mac.' + provider[:20], site=site)

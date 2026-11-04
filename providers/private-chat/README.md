@@ -1,6 +1,6 @@
 # Private LM Studio chat bridge
 
-This provider is separate from the coding agent. It receives only `chat.private.exchange:1` ciphertext. The normal worker retains only ciphertext and operation metadata. No plaintext is placed in the controller, tool logs or coding checkpoints.
+This provider is separate from the coding agent. It receives only `chat.private.exchange:1` ciphertext. The private worker retains only operation IDs, hashes and fence/status metadata on disk. Response retry ciphertext exists in RAM only until Biome acknowledges it. Interrupted requests fail without replaying inference. No plaintext is placed in the controller, tool logs or coding checkpoints.
 
 ## Install on Mac mini
 Use a checkout of this repository and the existing authenticated Mac terminal transport.

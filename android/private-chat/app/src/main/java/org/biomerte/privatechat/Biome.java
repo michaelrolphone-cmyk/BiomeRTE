@@ -7,6 +7,7 @@ import java.util.UUID;
 import javax.net.ssl.HttpsURLConnection;
 public final class Biome {
  public static final String ORIGIN="https://biomerte-controller.cantikash.chatgpt.site", RESOURCE=ORIGIN+"/api/mcp";
+ public static final class RequestFailed extends IOException {}
  private volatile HttpsURLConnection connection;
  public void cancel(){HttpsURLConnection c=connection;if(c!=null)c.disconnect();}
  public JSONObject request(String path,String text,String type,String token)throws Exception{
@@ -16,7 +17,7 @@ public final class Biome {
   if(token!=null)c.setRequestProperty("Authorization","Bearer "+token);
   c.setDoOutput(true);
   try{try(OutputStream o=c.getOutputStream()){o.write(text.getBytes(StandardCharsets.UTF_8));}
-   if(c.getResponseCode()!=200)throw new IOException("Connection rejected");
+   int code=c.getResponseCode();if(code<200||code>=300)throw new IOException("Connection rejected");
    try(InputStream in=c.getInputStream()){return new JSONObject(new String(readBytes(in),StandardCharsets.UTF_8));}
   }finally{c.disconnect();if(connection==c)connection=null;}
  }
@@ -45,7 +46,8 @@ public final class Biome {
     JSONObject status=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());
     String state=status.getString("state");
     if(state.equals("succeeded")){settled=true;return status.getJSONObject("result").getJSONObject("envelope");}
-    if(state.equals("failed")||state.equals("uncertain")){settled=true;throw new IOException("Request needs reconciliation");}
+    if(state.equals("failed")){settled=true;throw new RequestFailed();}
+    if(state.equals("uncertain"))throw new IOException("Request needs reconciliation");
     Thread.sleep(1500);
    }
    throw new InterruptedException();
