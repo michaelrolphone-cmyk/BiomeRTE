@@ -5,11 +5,14 @@ import {privateHeaders,ownerPrincipal} from '../lib/access.mjs';
 import {bearerPrincipal,challenge,oauth,resourceMetadata,serverMetadata} from '../lib/oauth.mjs';
 import {discoverPage} from '../lib/discovery.mjs';
 import {device,limitedJSON,reply,runTool,toolsList,enqueue} from '../lib/bridge.mjs';
+import {exchangeStream,providerSocket} from '../lib/transport.mjs';
 
 const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05'];
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if(path==='/api/exchange')return exchangeStream(req,env,conf);
+ if(path==='/api/provider/connect')return providerSocket(req,env,conf);
  if (path.startsWith('/agent-events/')) return agentInbox(req,conf,path);
  if (path.startsWith('/bridge/')) return device(req,env,path);
  if (req.method==='GET' && ['/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/mcp','/.well-known/oauth-protected-resource/mcp'].includes(path)) return resourceMetadata(conf);

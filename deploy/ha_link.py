@@ -43,8 +43,14 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     local = 'http://127.0.0.1:' + str(args.port)
     status = {'primary': None, 'ready': False}
     event_lock = threading.Lock()
+    from persistent_link import ControllerLink
+    persistent = ControllerLink(origin, token, site_access)
 
     def call(path, body):
+        if path == 'complete':
+            acknowledged = persistent.complete(body)
+            if acknowledged is not None:
+                return acknowledged
         return fetch(origin + '/bridge/' + path, body, token, timeout=45, site_access=site_access)
 
     def heartbeat():
@@ -150,11 +156,14 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
                 time.sleep(.1)
                 continue
             try:
-                job = call('next', {})
+                job = persistent.next()
+                if job is None:
+                    job = call('next', {})
                 if job.get('id'):
                     active.add(pool.submit(process, job))
                 else:
-                    time.sleep(.4)
+                    time.sleep(.05 if persistent.socket is not None else .4)
             except Exception as exc:
                 print('HA link retry: ' + type(exc).__name__, flush=True)
                 time.sleep(2)
+

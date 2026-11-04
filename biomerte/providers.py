@@ -176,7 +176,9 @@ def bind(tx, ctx, request):
         tx.emit('lease.acquired', {'lease': lease['id'], 'generation': generation})
         if lease['state'] == 'bound':
             notify_bound(tx, ctx, lease)
-        return tx.put('leases', lease['id'], lease)
+        tx.put('leases', lease['id'], lease)
+        start_submission(tx, ctx, lease)
+        return lease
 
 
 def promote(tx, ctx):
@@ -367,6 +369,7 @@ def result(tx, ctx, provider, operation, generation, state, result):
     a.update(state=state, result=result)
     tx.put('actions', operation, a)
     tx.emit('operation.' + state, {'id': operation})
+    finish_submission(tx, ctx, operation)
     return a
 
 
@@ -381,3 +384,70 @@ def status(tx, ctx, operation):
 @op('cap.leases', 'task?:str', False)
 def leases(tx, ctx, task=''):
     return [l for l in tx.rows('leases') if not task or l['task'] == task]
+
+
+def start_submission(tx, ctx, lease):
+    operation = tx.get('_submission_leases', lease['id'])
+    if not operation or lease['state'] not in ('bound', 'fencing'):
+        return
+    submission = tx.need('_submissions', operation)
+    dispatch(tx, ctx, lease['id'], submission['inputs'], operation)
+    finish_submission(tx, ctx, operation)
+
+
+def finish_submission(tx, ctx, operation):
+    submission = tx.get('_submissions', operation)
+    action = tx.get('actions', operation)
+    if submission and action and action['state'] in ('succeeded', 'failed'):
+        release(tx, tx.need('leases', submission['lease']))
+        if tx.get('_submission_active', operation):
+            tx.drop('_submission_active', operation)
+
+
+@op('cap.submit', 'contract:str resource:str inputs:obj operation:str')
+def submit(tx, ctx, contract, resource, inputs, operation):
+    """Durably acquire, fence, dispatch and release one command; safe across disconnects."""
+    if ctx.permissions is not None:
+        raise Fault('Submission requires task owner access', 403)
+    ident(operation)
+    validate(tx.need('contracts', contract)['inputs'], inputs)
+    lease_id = digest([operation, contract, resource])
+    record = dict(id=operation, lease=lease_id, contract=contract, resource=resource,
+                  inputs=inputs, owner=ctx.actor)
+    prior = tx.get('_submissions', operation)
+    if prior and prior != record:
+        raise Fault('Submission identity conflict', 409)
+    action = tx.get('actions', operation)
+    if action:
+        if (action['lease'], action['contract'], action['inputs']) != (lease_id, contract, inputs):
+            raise Fault('Operation identity conflict', 409)
+        # Adopt an existing Android operation without replaying it or re-leasing.
+        tx.put('_submissions', operation, record)
+        finish_submission(tx, ctx, operation)
+        return action
+    tx.put('_submissions', operation, record)
+    tx.put('_submission_leases', lease_id, operation)
+    tx.put('_submission_active', operation, {'id': operation})
+    lease = acquire(tx, ctx, operation, contract, resource)
+    start_submission(tx, ctx, lease)
+    return submission_status(tx, ctx, operation)
+
+
+@op('cap.submission', 'operation:str', False)
+def submission_status(tx, ctx, operation):
+    """Read a combined request while queued, fencing, executing or completed."""
+    submission = tx.need('_submissions', operation)
+    if ctx.permissions is not None and submission['owner'] != ctx.actor:
+        raise Fault('Other submission', 403)
+    action = tx.get('actions', operation)
+    if action:
+        return action
+    lease = tx.need('leases', submission['lease'])
+    return dict(id=operation, lease=lease['id'], state=lease['state'])
+
+
+def settle_submissions(tx, ctx):
+    # Routine-backed commands finish outside provider.result. Tick releases only
+    # completed combined requests; uncertain commands keep their original fence.
+    for submission in tx.rows('_submission_active'):
+        finish_submission(tx, ctx, submission['id'])

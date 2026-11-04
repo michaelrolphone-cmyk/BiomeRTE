@@ -1,0 +1,124 @@
+package org.biomerte.privatechat;
+import org.json.*;
+import java.net.*;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import javax.net.ssl.HttpsURLConnection;
+public class Biome {
+ public static final String ORIGIN="https://biomerte-controller.cantikash.chatgpt.site", RESOURCE=ORIGIN+"/api/mcp";
+ public static final class RequestFailed extends IOException {}
+ private volatile HttpsURLConnection connection;
+ public void cancel(){HttpsURLConnection c=connection;if(c!=null)c.disconnect();}
+ public JSONObject request(String path,String text,String type,String token)throws Exception{
+  URL url=new URL(ORIGIN+path);HttpsURLConnection c=(HttpsURLConnection)url.openConnection();connection=c;
+  c.setInstanceFollowRedirects(false);c.setConnectTimeout(30000);c.setUseCaches(false);
+  c.setRequestMethod("POST");c.setRequestProperty("Content-Type",type);c.setRequestProperty("Accept","application/json");
+  if(token!=null)c.setRequestProperty("Authorization","Bearer "+token);
+  c.setDoOutput(true);
+  try{try(OutputStream o=c.getOutputStream()){o.write(text.getBytes(StandardCharsets.UTF_8));}
+   int code=c.getResponseCode();if(code<200||code>=300)throw new IOException("Connection rejected");
+   try(InputStream in=c.getInputStream()){return new JSONObject(new String(readBytes(in),StandardCharsets.UTF_8));}
+  }finally{c.disconnect();if(connection==c)connection=null;}
+ }
+ private static byte[] readBytes(InputStream in)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toByteArray();}
+ public JSONObject json(String path,JSONObject body,String token)throws Exception{return request(path,body.toString(),"application/json",token);}
+ public JSONObject form(String path,JSONObject body)throws Exception{
+  StringBuilder s=new StringBuilder();java.util.Iterator<String> keys=body.keys();
+  while(keys.hasNext()){String k=keys.next();if(s.length()>0)s.append('&');s.append(URLEncoder.encode(k,"UTF-8")).append('=').append(URLEncoder.encode(body.getString(k),"UTF-8"));}
+  return request(path,s.toString(),"application/x-www-form-urlencoded",null);
+ }
+ public JSONObject invoke(String token,String op,JSONObject args,String rid)throws Exception{
+  JSONObject call=new JSONObject().put("jsonrpc","2.0").put("id",rid).put("method","tools/call")
+   .put("params",new JSONObject().put("name","biome_invoke").put("arguments",new JSONObject().put("realm","site").put("operation",op).put("arguments",args).put("request_id",rid)));
+  JSONObject reply=json("/api/mcp",call,token).getJSONObject("result");
+  if(reply.optBoolean("isError"))throw new IOException("Controller reply pending or rejected");
+  if(reply.has("structuredContent")&&!reply.isNull("structuredContent"))return reply.getJSONObject("structuredContent");
+  return new JSONObject(reply.getJSONArray("content").getJSONObject(0).getString("text"));
+ }
+ private JSONObject resolveEnvelope(String token,JSONObject value)throws Exception{
+  if(!value.optString("kind").equals("artifact"))return value;
+  ByteArrayOutputStream out=new ByteArrayOutputStream();JSONArray chunks=value.getJSONArray("chunks");
+  for(int i=0;i<chunks.length();i++){
+   JSONObject item=chunks.getJSONObject(i),r=invoke(token,"artifact.get",new JSONObject().put("sha256",item.getString("sha256")),UUID.randomUUID().toString());
+   byte[] bytes=Vault.unb64(r.getString("data"));
+   if(bytes.length!=item.getInt("size")||!hex(Crypto.hash(bytes)).equals(item.getString("sha256")))throw new IOException("Image transfer failed");
+   out.write(bytes);Crypto.wipe(bytes);
+  }
+  byte[] all=out.toByteArray();
+  if(all.length!=value.getLong("size")||!hex(Crypto.hash(all)).equals(value.getString("sha256")))throw new IOException("Image transfer failed");
+  return new JSONObject(new String(all,StandardCharsets.UTF_8));
+ }
+ static String hex(byte[] b){StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return s.toString();}
+ private JSONObject awaitReply(String token,String id,String lid,JSONObject first,java.util.function.BooleanSupplier active)throws Exception{
+  boolean settled=false;JSONObject status=first;
+  try{
+   while(active.getAsBoolean()){
+    if(status==null)status=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());
+    String state=status.getString("state");
+    if(state.equals("succeeded")){settled=true;return resolveEnvelope(token,status.getJSONObject("result").getJSONObject("envelope"));}
+    if(state.equals("failed")){settled=true;throw new RequestFailed();}
+    if(state.equals("uncertain"))throw new IOException("Request needs reconciliation");
+    status=null;Thread.sleep(1500);
+   }
+   throw new InterruptedException();
+  }finally{
+   if(settled&&!lid.isEmpty())try{invoke(token,"cap.release",new JSONObject().put("lease",lid),id+"-release");}catch(Exception ignored){}
+  }
+ }
+ public JSONObject exchangeLegacy(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
+  String id=envelope.getString("id");JSONObject previous=null;
+  try{previous=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());}catch(IOException ignored){}
+  if(previous!=null&&java.util.Arrays.asList("succeeded","failed","queued","claimed","running","uncertain").contains(previous.optString("state")))
+   return awaitReply(token,id,previous.optString("lease"),previous,active);
+  JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
+  String lid=lease.getString("id");
+  while(!lease.getString("state").equals("bound")){
+   if(java.util.Arrays.asList("released","cancelled","failed","rejected").contains(lease.getString("state")))throw new RequestFailed();
+   if(!active.getAsBoolean())throw new InterruptedException();
+   Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());
+  }
+  if(!active.getAsBoolean())throw new InterruptedException();
+  invoke(token,"cap.invoke",new JSONObject().put("lease",lid).put("operation",id).put("inputs",new JSONObject().put("envelope",envelope)),id+"-invoke");
+  return awaitReply(token,id,lid,null,active);
+ }
+ // One authenticated request owns submission and completion waiting. Network
+ // interruptions retain the original envelope/id in the encrypted vault.
+ public JSONObject completion(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
+  HttpsURLConnection c=(HttpsURLConnection)new URL(ORIGIN+"/api/exchange").openConnection();connection=c;
+  c.setRequestMethod("POST");c.setConnectTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);
+  c.setRequestProperty("Content-Type","application/json");c.setRequestProperty("Accept","application/x-ndjson");
+  c.setRequestProperty("Authorization","Bearer "+token);c.setDoOutput(true);
+  JSONObject body=new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("envelope",envelope);
+  try{
+   if(!active.getAsBoolean())throw new InterruptedException();
+   try(OutputStream out=c.getOutputStream()){out.write(body.toString().getBytes(StandardCharsets.UTF_8));}
+   int code=c.getResponseCode();
+   // Older gateways may not have the additive endpoint during staged rollout.
+   if(code==404||code==405)return new JSONObject().put("legacy",true);
+   if(code!=200)throw new IOException("Connection rejected");
+   try(BufferedReader in=new BufferedReader(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8))){
+    String line;
+    while(active.getAsBoolean()&&(line=in.readLine())!=null){
+     if(line.isEmpty())continue;
+     JSONObject frame=new JSONObject(line);String type=frame.optString("type");
+     if(type.equals("result"))return frame.getJSONObject("status");
+     if(type.equals("error"))throw new IOException("Connection interrupted; resume the same request");
+    }
+   }
+   if(!active.getAsBoolean())throw new InterruptedException();
+   throw new IOException("Connection interrupted; resume the same request");
+  }finally{c.disconnect();if(connection==c)connection=null;}
+ }
+ public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
+  JSONObject status=completion(token,resource,envelope,image,active);
+  if(status.optBoolean("legacy"))return exchangeLegacy(token,resource,envelope,image,active);
+  String state=status.getString("state");
+  if(state.equals("failed"))throw new RequestFailed();
+  if(!state.equals("succeeded"))throw new IOException("Request needs reconciliation");
+  if(!status.getString("id").equals(envelope.getString("id")))throw new IOException("Reply identity mismatch");
+  return resolveEnvelope(token,status.getJSONObject("result").getJSONObject("envelope"));
+ }
+
+}
+

@@ -1,0 +1,1 @@
+<resources><style name="BiomeTheme" parent="android:style/Theme.Material.NoActionBar"><item name="android:colorAccent">#bfdfb6</item><item name="android:windowBackground">#17231e</item><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">false</item><item name="android:navigationBarColor">#17231e</item></style></resources>

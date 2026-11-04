@@ -1,0 +1,8 @@
+{
+  "logo": "Nested — official Biome logo",
+  "source_library_file_id": "libfile_26d74c72b26881919bc8123072f4ec61",
+  "source_sha256": "020fe1181c57e43395d7cdad2867a97d67f7f98e988f1517a51bbeb5e0e4bf24",
+  "selection": "personal/biome-logo-selection-20261102",
+  "png_sha256": "2c9334a563f9dc01ecb96cc244e1fc98d3847a3ad13b33e69ca16cb2d4126859",
+  "processing": "Full image resized to 512x512. Build decodes retained PNG bytes without rendering or changing the artwork."
+}
