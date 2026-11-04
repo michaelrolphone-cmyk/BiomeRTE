@@ -264,6 +264,15 @@ public final class MainActivity extends Activity {
    data.put("pending",encrypted);data.remove("draft");save();composer.setText("");render();resume();
   }catch(Exception e){fail();}
  }
+ static String modelError(String code){
+  switch(code){
+   case "selected_model_required":return "Choose a model before sending your message.";
+   case "selected_model_unavailable":return "Selected model is unavailable. Refresh models and choose it again.";
+   case "model_load_failed":return "Your Mac could not load the selected model. It may need more free memory. Choose a smaller model or retry.";
+   case "model_response_mismatch":return "Your Mac answered with a different model. The reply was rejected; retry your selection.";
+   default:return "Your selected model could not finish this request. Retry or choose another model.";
+  }
+ }
  private void resume(){
   if(busy||!data.has("pending"))return;
   try{
@@ -283,7 +292,7 @@ public final class MainActivity extends Activity {
      byte[] key=Vault.unb64(pending.getString("response_key")),clear=null;
      JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),wire.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
      data.getJSONObject("pairing").remove("enrollment_token");
-     if(reply.has("error")){status.setText("Your Mac could not finish. Try again or choose another model.");data.remove("pending");save();busy=false;updateControls();return;}
+     if(reply.has("error")){status.setText(modelError(reply.optString("error")));data.remove("pending");save();busy=false;updateControls();return;}
      if(pending.optString("action").equals("models")){
       JSONArray models=reply.getJSONArray("models");data.put("models",models);data.remove("pending");save();busy=false;
       updateControls();if(models.length()==0)status.setText("No chat models available on your Mac.");else chooseModel();return;
