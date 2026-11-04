@@ -5,7 +5,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import javax.net.ssl.HttpsURLConnection;
-public final class Biome {
+public class Biome {
  public static final String ORIGIN="https://biomerte-controller.cantikash.chatgpt.site", RESOURCE=ORIGIN+"/api/mcp";
  public static final class RequestFailed extends IOException {}
  private volatile HttpsURLConnection connection;
@@ -50,23 +50,36 @@ public final class Biome {
   return new JSONObject(new String(all,StandardCharsets.UTF_8));
  }
  static String hex(byte[] b){StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return s.toString();}
- public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
-  String id=envelope.getString("id");JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
-  String lid=lease.getString("id");boolean settled=false;
+ private JSONObject awaitReply(String token,String id,String lid,JSONObject first,java.util.function.BooleanSupplier active)throws Exception{
+  boolean settled=false;JSONObject status=first;
   try{
-   while(!lease.getString("state").equals("bound")){if(!active.getAsBoolean())throw new InterruptedException();Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());}
-   invoke(token,"cap.invoke",new JSONObject().put("lease",lid).put("operation",id).put("inputs",new JSONObject().put("envelope",envelope)),id+"-invoke");
    while(active.getAsBoolean()){
-    JSONObject status=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());
+    if(status==null)status=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());
     String state=status.getString("state");
     if(state.equals("succeeded")){settled=true;return resolveEnvelope(token,status.getJSONObject("result").getJSONObject("envelope"));}
     if(state.equals("failed")){settled=true;throw new RequestFailed();}
     if(state.equals("uncertain"))throw new IOException("Request needs reconciliation");
-    Thread.sleep(1500);
+    status=null;Thread.sleep(1500);
    }
    throw new InterruptedException();
   }finally{
-   if(settled)try{invoke(token,"cap.release",new JSONObject().put("lease",lid),id+"-release");}catch(Exception ignored){}
+   if(settled&&!lid.isEmpty())try{invoke(token,"cap.release",new JSONObject().put("lease",lid),id+"-release");}catch(Exception ignored){}
   }
+ }
+ public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
+  String id=envelope.getString("id");JSONObject previous=null;
+  try{previous=invoke(token,"cap.status",new JSONObject().put("operation",id),UUID.randomUUID().toString());}catch(IOException ignored){}
+  if(previous!=null&&java.util.Arrays.asList("succeeded","failed","queued","claimed","running","uncertain").contains(previous.optString("state")))
+   return awaitReply(token,id,previous.optString("lease"),previous,active);
+  JSONObject lease=invoke(token,"cap.acquire",new JSONObject().put("contract",image?"image.private.exchange:1":"chat.private.exchange:2").put("resource",resource).put("task",id),id+"-acquire");
+  String lid=lease.getString("id");
+  while(!lease.getString("state").equals("bound")){
+   if(java.util.Arrays.asList("released","cancelled","failed","rejected").contains(lease.getString("state")))throw new RequestFailed();
+   if(!active.getAsBoolean())throw new InterruptedException();
+   Thread.sleep(1500);lease=invoke(token,"cap.lease",new JSONObject().put("lease",lid),UUID.randomUUID().toString());
+  }
+  if(!active.getAsBoolean())throw new InterruptedException();
+  invoke(token,"cap.invoke",new JSONObject().put("lease",lid).put("operation",id).put("inputs",new JSONObject().put("envelope",envelope)),id+"-invoke");
+  return awaitReply(token,id,lid,null,active);
  }
 }

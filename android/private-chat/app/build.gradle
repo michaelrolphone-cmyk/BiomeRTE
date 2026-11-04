@@ -1,6 +1,6 @@
 plugins { id 'com.android.application' }
 android { namespace 'org.biomerte.privatechat'; compileSdk 35
- defaultConfig { applicationId 'org.biomerte.privatechat'; minSdk 26; targetSdk 35; versionCode 5; versionName '0.5.0'; multiDexEnabled true }
+ defaultConfig { applicationId 'org.biomerte.privatechat'; minSdk 26; targetSdk 35; versionCode 6; versionName '0.6.0'; multiDexEnabled true }
  testOptions { unitTests.includeAndroidResources = true }
  buildTypes {
   debug { debuggable false; minifyEnabled true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') }

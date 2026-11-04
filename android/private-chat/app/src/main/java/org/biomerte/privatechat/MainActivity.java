@@ -14,7 +14,7 @@ import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
  private Button modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog; private boolean imageMode=false,connectionScreen=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
- private final ExecutorService executor=Executors.newSingleThreadExecutor();
+ private final ExecutorService executor=Executors.newSingleThreadExecutor(); private Future<?> transport;
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
  @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);vault=new Vault(this);locked();}
@@ -49,11 +49,11 @@ public final class MainActivity extends Activity {
  private void note(String title,String body){TextView h=text(title,18,0xffe9ede4);h.setTypeface(null,android.graphics.Typeface.BOLD);root.addView(h);space(root,6);root.addView(text(body,14,0xffcad9c5));space(root,16);}
  private String modelName(String id){JSONArray a=data==null?null:data.optJSONArray("models");if(a!=null)for(int i=0;i<a.length();i++){JSONObject m=a.optJSONObject(i);if(m!=null&&id.equals(m.optString("id")))return m.optString("name",id);}return id.isEmpty()?"Mac default":id;}
  private void updateControls(){
-  if(data==null)return;boolean pending=data.has("pending");
-  if(sendButton!=null)sendButton.setEnabled(!busy&&!pending&&composer!=null&&!composer.getText().toString().trim().isEmpty());
+  if(data==null)return;boolean pending=data.has("pending");boolean imagePending=pending&&data.optJSONObject("pending").optBoolean("image");
+  if(sendButton!=null)sendButton.setEnabled((!busy||imagePending)&&(!pending||imagePending)&&composer!=null&&!composer.getText().toString().trim().isEmpty());
   if(sendButton!=null)sendButton.setAlpha(sendButton.isEnabled()?1f:0.45f);
-  if(retryButton!=null)retryButton.setVisibility(pending&&!busy?View.VISIBLE:View.GONE);
-  if(modelButton!=null)modelButton.setEnabled(!busy&&!pending);
+  if(retryButton!=null)retryButton.setVisibility(pending||data.optJSONArray("suspended_requests")!=null&&data.optJSONArray("suspended_requests").length()>0?View.VISIBLE:View.GONE);
+  if(modelButton!=null)modelButton.setEnabled((!busy||imagePending)&&(!pending||imagePending));
  }
  private void switchMode(boolean image){imageMode=image;chatModeButton.setBackground(surface(image?0xff21362b:0xff406348,12));imageModeButton.setBackground(surface(image?0xff406348:0xff21362b,12));composer.setHint(image?"Describe an image…":"Message…");sendButton.setContentDescription(image?"Generate image":"Send message");modelButton.setVisibility(image?View.GONE:View.VISIBLE);}
  private void menu(View anchor){PopupMenu menu=new PopupMenu(this,anchor);menu.getMenu().add("Connection");menu.getMenu().add("New conversation");menu.getMenu().add("Lock");menu.setOnMenuItemClickListener(item->{switch(item.getTitle().toString()){case "Connection":settings();break;case "New conversation":clearConversation();break;case "Lock":lock();break;}return true;});menu.show();}
@@ -73,7 +73,7 @@ public final class MainActivity extends Activity {
   });
  }
  private void clearBitmaps(){if(imageHistory!=null)imageHistory.removeAllViews();for(android.graphics.Bitmap b:bitmaps)b.recycle();bitmaps.clear();}
- private void lock(){if(modelDialog!=null){modelDialog.dismiss();modelDialog=null;}if(data!=null&&vaultKey!=null&&composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception ignored){}if(messageList!=null)messageList.removeAllViews();messageList=null;clearBitmaps();imageHistory=null;epoch++;biome.cancel();busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
+ private void lock(){if(modelDialog!=null){modelDialog.dismiss();modelDialog=null;}if(data!=null&&vaultKey!=null&&composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception ignored){}if(messageList!=null)messageList.removeAllViews();messageList=null;clearBitmaps();imageHistory=null;epoch++;biome.cancel();if(transport!=null)transport.cancel(true);busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
  private void save()throws Exception{vault.save(data,vaultKey,salt);}
  private void fail(){busy=false;if(status!=null)status.setText(data!=null&&data.has("pending")?"Connection interrupted. Your request is saved — tap Retry.":"Could not connect. Check Connection and try again.");updateControls();}
  private void chat(){
@@ -89,7 +89,7 @@ public final class MainActivity extends Activity {
   LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
   messageList=new LinearLayout(this);messageList.setOrientation(LinearLayout.VERTICAL);content.addView(messageList);
   imageHistory=new LinearLayout(this);imageHistory.setOrientation(LinearLayout.VERTICAL);content.addView(imageHistory);chatScroll.addView(content);root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
-  retryButton=action("Retry pending request",this::resume,false);retryButton.setVisibility(View.GONE);root.addView(retryButton,new LinearLayout.LayoutParams(-1,dp(44)));
+  retryButton=action("Pending requests",this::pendingRequests,false);retryButton.setVisibility(View.GONE);root.addView(retryButton,new LinearLayout.LayoutParams(-1,dp(44)));
   LinearLayout modes=new LinearLayout(this);modes.setPadding(0,dp(8),0,dp(8));
   chatModeButton=action("Chat",()->switchMode(false),false);imageModeButton=action("Image",()->switchMode(true),false);
   LinearLayout.LayoutParams chip=new LinearLayout.LayoutParams(dp(92),dp(40));chip.rightMargin=dp(8);modes.addView(chatModeButton,chip);modes.addView(imageModeButton,new LinearLayout.LayoutParams(dp(92),dp(40)));root.addView(modes);
@@ -99,7 +99,7 @@ public final class MainActivity extends Activity {
   sendButton=action("↑",()->send(imageMode),true);sendButton.setTextSize(24);dock.addView(sendButton,new LinearLayout.LayoutParams(dp(52),dp(52)));root.addView(dock);
   composer.setText(data.optString("draft"));composer.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){updateControls();}public void afterTextChanged(android.text.Editable e){}});
   switchMode(imageMode);render();updateControls();
-  if(data.has("pending"))composer.post(this::resume);
+  if(data.has("pending"))status.setText("Request saved. Resume it or return to chat.");
  }
  private void render(){
   if(messageList==null)return;messageList.removeAllViews();JSONArray messages=data.optJSONArray("messages");
@@ -125,7 +125,46 @@ public final class MainActivity extends Activity {
    }
   }catch(Exception e){status.setText("An encrypted image could not be displayed.");}
  }
+
+ private boolean parkImage(){
+  if(data==null)return false;
+  JSONObject p=data.optJSONObject("pending");
+  if(p!=null&&p.optBoolean("image"))return parkPending();
+  return true;
+ }
+ private boolean parkPending(){
+  if(data==null||!data.has("pending"))return true;
+  try{
+   JSONObject p=data.getJSONObject("pending");
+   JSONArray saved=data.optJSONArray("suspended_requests");
+   if(saved==null)saved=new JSONArray();
+   saved.put(p);data.put("suspended_requests",saved);data.remove("pending");
+   try{save();}catch(Exception e){saved.remove(saved.length()-1);data.put("pending",p);throw e;}
+   epoch++;biome.cancel();if(transport!=null)transport.cancel(true);busy=false;
+   updateControls();status.setText("Request saved for later. You can chat now.");return true;
+  }catch(Exception e){fail();return false;}
+ }
+ private void pendingRequests(){
+  if(data==null)return;
+  if(data.has("pending")){
+   new AlertDialog.Builder(this).setTitle("Pending request")
+    .setItems(new String[]{"Resume request","Return to chat — keep request"},(d,w)->{
+     if(w==0){if(!busy)resume();else status.setText("Still waiting. You can return to chat.");}
+     else{if(parkPending())switchMode(false);}
+    }).show();return;
+  }
+  JSONArray saved=data.optJSONArray("suspended_requests");
+  if(saved==null||saved.length()==0){status.setText("No pending requests.");return;}
+  String[] labels=new String[saved.length()];
+  for(int i=0;i<labels.length;i++){JSONObject p=saved.optJSONObject(i);labels[i]=(p.optBoolean("image")?"Image":"Chat")+" request "+(i+1);}
+  new AlertDialog.Builder(this).setTitle("Saved requests").setItems(labels,(d,w)->{
+   if(busy){status.setText("Wait for this chat request, then resume.");return;}
+   try{JSONObject p=saved.getJSONObject(w);data.put("pending",p);saved.remove(w);save();updateControls();resume();}catch(Exception e){fail();}
+  }).setNegativeButton("Back",null).show();
+ }
+
  private void chooseModel(){
+  if(!parkImage())return;
   if(busy||data.has("pending")){status.setText("Resume the pending request before changing models.");return;}
   JSONArray models=data.optJSONArray("models");if(models==null||models.length()==0){refreshModels();return;}
   String[] labels=new String[models.length()];int selected=-1;
@@ -135,6 +174,7 @@ public final class MainActivity extends Activity {
   }).setNeutralButton("Refresh",(d,w)->refreshModels()).setNegativeButton("Cancel",null).show();
  }
  private void refreshModels(){
+  if(!parkImage())return;
   if(busy||data.has("pending")){status.setText("Resume the pending request first.");return;}
   try{if(!data.has("pairing")||!data.has("oauth")){settings();return;}
    data.put("pending",startSession(false,"").put("action","models"));save();resume();
@@ -211,6 +251,7 @@ public final class MainActivity extends Activity {
  }
  private void send(){send(false);}
  private void send(boolean image){
+  if(!image&&!parkImage())return;
   if(busy||data.has("pending")){status.setText("Resume the pending request first.");return;}
   try{if(!data.has("pairing")||data.getJSONObject("pairing").optInt("v")!=2||!data.has("oauth")){settings();return;}String text=composer.getText().toString();if(text.trim().isEmpty())return;
    JSONArray messages=image?new JSONArray():data.getJSONArray("messages");messages.put(new JSONObject().put("role","user").put("content",text));
@@ -229,7 +270,7 @@ public final class MainActivity extends Activity {
    boolean image=pending.optBoolean("image");if(image)resource=resource.replace("privatechat.mac.","image.mac.");final String targetResource=resource;
    boolean isHello=pending.getString("stage").equals("hello");JSONObject outbound=pending.getJSONObject(isHello?"hello":"envelope");
    int g=epoch;busy=true;status.setText(isHello?"Connecting securely…":pending.optString("action").equals("models")?"Loading models from your Mac…":image?"Generating image on your Mac…":"Waiting for your model…");updateControls();
-   executor.execute(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted());
+   transport=executor.submit(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted());
     runOnUiThread(()->{if(g!=epoch)return;try{
      if(isHello){finishSession(response);busy=false;resume();return;}
      WireCrypto wire=new WireCrypto(image);
