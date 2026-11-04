@@ -37,7 +37,7 @@ class TransactionReplay(Delivery):
         self.assertIn('step',live['overwrite'])
         token={'at':'end','vars':{'frame':{},'step':{'keep':True},'input':{},'route':1,'prepared':{},'child_result':{}}}
         self.assertTrue(process.compact_assistant_token({'name':'assistant.test'},token,live))
-        self.assertEqual(token['vars'],{'frame':{},'step':{'keep':True}})
+        self.assertEqual(token['vars'],{'step':{'keep':True}})
         ordinary={'at':'end','vars':{'input':'keep'}}
         self.assertFalse(process.compact_assistant_token({'name':'ordinary'},ordinary,live))
         self.assertEqual(ordinary['vars'],{'input':'keep'})

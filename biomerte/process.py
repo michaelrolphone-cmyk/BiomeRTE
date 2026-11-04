@@ -483,7 +483,7 @@ def compact_assistant_token(run, token, live):
     if not run['name'].startswith('assistant.'):
         return False
     removed = False
-    for key in ('input', 'prepared', 'step', 'route', 'child_result'):
+    for key in list(token['vars']):
         if key in token['vars'] and key not in live[token['at']]:
             del token['vars'][key]
             removed = True
