@@ -1,0 +1,1588 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "governed__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "governed__start": {
+      "type": "set",
+      "values": {},
+      "next": "governed__classify"
+    },
+    "governed__classify": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "classify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governed__classify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__classify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__classify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governed__classify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__history"
+    },
+    "governed__history": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "history",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governed__history_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__history_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__history_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governed__history_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__allowed"
+    },
+    "governed__allowed": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "gateway": "allowed",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governed__allowed_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governed__allowed_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governed__review"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governed__reject"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__review": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "review",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__review_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__review_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__review_resolved"
+    },
+    "governed__review_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__review_resolved_result"
+        }
+      ],
+      "default": "governed__review_call"
+    },
+    "governed__review_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__review_merge"
+    },
+    "governed__review_call": {
+      "type": "call",
+      "process": "assistant.governance",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__review_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__review_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "review",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__review_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__review_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__review__disposition"
+    },
+    "governed__route": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "gateway": "route",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governed__route_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governed__route_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governed__effect"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governed__refine"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "governed__investigate"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "governed__judge"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__refine": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "refine",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governed__refine_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__refine_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__refine_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governed__refine_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__progress"
+    },
+    "governed__progress": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "progress",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__progress_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__progress_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__progress_resolved"
+    },
+    "governed__progress_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__progress_resolved_result"
+        }
+      ],
+      "default": "governed__progress_call"
+    },
+    "governed__progress_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__progress_merge"
+    },
+    "governed__progress_call": {
+      "type": "call",
+      "process": "assistant.progress",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__progress_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__progress_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "progress",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__progress_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__progress_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__progress__disposition"
+    },
+    "governed__revise": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "gateway": "revise",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governed__revise_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governed__revise_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governed__review"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governed__judge"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__investigate": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "investigate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__investigate_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__investigate_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__investigate_resolved"
+    },
+    "governed__investigate_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__investigate_resolved_result"
+        }
+      ],
+      "default": "governed__investigate_call"
+    },
+    "governed__investigate_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__investigate_merge"
+    },
+    "governed__investigate_call": {
+      "type": "call",
+      "process": "assistant.investigation",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__investigate_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__investigate_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "investigate",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__investigate_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__investigate_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__investigate__disposition"
+    },
+    "governed__judge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "judge",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__judge_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__judge_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__judge_resolved"
+    },
+    "governed__judge_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__judge_resolved_result"
+        }
+      ],
+      "default": "governed__judge_call"
+    },
+    "governed__judge_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__judge_merge"
+    },
+    "governed__judge_call": {
+      "type": "call",
+      "process": "assistant.judgment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__judge_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__judge_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "judge",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__judge_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__judge_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__judge__disposition"
+    },
+    "governed__effect": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "gateway": "effect",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governed__effect_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governed__effect_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governed__guard"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governed__pure"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__guard": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "guard",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__guard_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__guard_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__guard_resolved"
+    },
+    "governed__guard_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__guard_resolved_result"
+        }
+      ],
+      "default": "governed__guard_call"
+    },
+    "governed__guard_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__guard_merge"
+    },
+    "governed__guard_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__guard_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__guard_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "guard",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__guard_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__guard_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__guard__disposition"
+    },
+    "governed__pure": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "pure",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governed__pure_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__pure_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__pure_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governed__pure_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__save"
+    },
+    "governed__save": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "save",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governed__save_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governed__save_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governed__save_resolved"
+    },
+    "governed__save_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governed__save_resolved_result"
+        }
+      ],
+      "default": "governed__save_call"
+    },
+    "governed__save_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governed__save_merge"
+    },
+    "governed__save_call": {
+      "type": "call",
+      "process": "assistant.checkpoint",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governed__save_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governed__save_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "task": "save",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governed__save_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governed__save_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governed__save__disposition"
+    },
+    "governed__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__reject": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "reject",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__reject_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__reject_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__review__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__route"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governed__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governed__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governed__progress__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__revise"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__investigate__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__review"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__judge__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__review"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__guard__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__save"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "governed__save__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governed__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governed__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governed__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governed__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governed__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governed__return_faulted"
+        }
+      ],
+      "default": "governed__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "governed",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,1316 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "change_management__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "change_management__start": {
+      "type": "set",
+      "values": {},
+      "next": "change_management__classify"
+    },
+    "change_management__classify": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "classify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "change_management__classify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__classify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__classify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "change_management__classify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__independent"
+    },
+    "change_management__independent": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "independent",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "change_management__independent_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__independent_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__independent_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "change_management__independent_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__qualify"
+    },
+    "change_management__qualify": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "qualify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "change_management__qualify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "change_management__qualify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "change_management__qualify_resolved"
+    },
+    "change_management__qualify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "change_management__qualify_resolved_result"
+        }
+      ],
+      "default": "change_management__qualify_call"
+    },
+    "change_management__qualify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "change_management__qualify_merge"
+    },
+    "change_management__qualify_call": {
+      "type": "call",
+      "process": "assistant.qualification",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "change_management__qualify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "change_management__qualify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "qualify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "change_management__qualify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__qualify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__qualify__disposition"
+    },
+    "change_management__review": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "review",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "change_management__review_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "change_management__review_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "change_management__review_resolved"
+    },
+    "change_management__review_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "change_management__review_resolved_result"
+        }
+      ],
+      "default": "change_management__review_call"
+    },
+    "change_management__review_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "change_management__review_merge"
+    },
+    "change_management__review_call": {
+      "type": "call",
+      "process": "assistant.governance",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "change_management__review_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "change_management__review_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "review",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "change_management__review_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__review_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__review__disposition"
+    },
+    "change_management__activate": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "activate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "change_management__activate_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "change_management__activate_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "change_management__activate_resolved"
+    },
+    "change_management__activate_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "change_management__activate_resolved_result"
+        }
+      ],
+      "default": "change_management__activate_call"
+    },
+    "change_management__activate_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "change_management__activate_merge"
+    },
+    "change_management__activate_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "change_management__activate_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "change_management__activate_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "activate",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "change_management__activate_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__activate_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__activate__disposition"
+    },
+    "change_management__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "change_management__verify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "change_management__verify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "change_management__verify_resolved"
+    },
+    "change_management__verify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "change_management__verify_resolved_result"
+        }
+      ],
+      "default": "change_management__verify_call"
+    },
+    "change_management__verify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "change_management__verify_merge"
+    },
+    "change_management__verify_call": {
+      "type": "call",
+      "process": "assistant.verification_systems",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "change_management__verify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "change_management__verify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "verify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "change_management__verify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__verify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__verify__disposition"
+    },
+    "change_management__status": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "gateway": "status",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "change_management__status_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "change_management__status_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "change_management__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "change_management__recover"
+        }
+      ],
+      "default": "change_management__return_unresolved"
+    },
+    "change_management__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__recover": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "recover",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "change_management__recover_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "change_management__recover_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "change_management__recover_resolved"
+    },
+    "change_management__recover_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "change_management__recover_resolved_result"
+        }
+      ],
+      "default": "change_management__recover_call"
+    },
+    "change_management__recover_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "change_management__recover_merge"
+    },
+    "change_management__recover_call": {
+      "type": "call",
+      "process": "assistant.recovery",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "change_management__recover_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "change_management__recover_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "task": "recover",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "change_management__recover_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "change_management__recover_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "change_management__recover__disposition"
+    },
+    "change_management__unsafe": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "unsafe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__unsafe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__unsafe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__review_recommendation": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "gateway": "review_recommendation",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "change_management__review_recommendation_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "change_management__review_recommendation_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "change_management__activate"
+        }
+      ],
+      "default": "change_management__return_unresolved"
+    },
+    "change_management__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__qualify__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__review"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "change_management__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "change_management__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "change_management__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "change_management__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "change_management__return_faulted"
+        }
+      ],
+      "default": "change_management__return_unresolved"
+    },
+    "change_management__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__review__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__review_recommendation"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "change_management__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "change_management__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "change_management__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "change_management__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "change_management__return_faulted"
+        }
+      ],
+      "default": "change_management__return_unresolved"
+    },
+    "change_management__activate__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "change_management__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "change_management__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "change_management__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "change_management__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "change_management__harm_faulted"
+        }
+      ],
+      "default": "change_management__unsafe"
+    },
+    "change_management__harm_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "harm_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__harm_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__harm_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__harm_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "harm_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__harm_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__harm_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__harm_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "harm_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__harm_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__harm_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__harm_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "harm_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__harm_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__harm_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__harm_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "terminal": "harm_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "change_management__harm_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "change_management__harm_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "change_management__verify__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__status"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "change_management__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "change_management__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "change_management__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "change_management__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "change_management__harm_faulted"
+        }
+      ],
+      "default": "change_management__unsafe"
+    },
+    "change_management__recover__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "change_management__unsafe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "change_management__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "change_management__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "change_management__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "change_management__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "change_management__harm_faulted"
+        }
+      ],
+      "default": "change_management__unsafe"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "change_management",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

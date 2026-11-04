@@ -1,0 +1,313 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "system_review__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "system_review__start": {
+      "type": "set",
+      "values": {},
+      "next": "system_review__direct"
+    },
+    "system_review__direct": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "task": "direct",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "system_review__direct_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "system_review__direct_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "system_review__direct_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "system_review__direct_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "system_review__indirect"
+    },
+    "system_review__indirect": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "task": "indirect",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "system_review__indirect_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "system_review__indirect_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "system_review__indirect_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "system_review__indirect_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "system_review__data"
+    },
+    "system_review__data": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "task": "data",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "system_review__data_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "system_review__data_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "system_review__data_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "system_review__data_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "system_review__protect"
+    },
+    "system_review__protect": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "task": "protect",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "system_review__protect_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "system_review__protect_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "system_review__protect_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "system_review__protect_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "system_review__verify"
+    },
+    "system_review__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "system_review__verify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "system_review__verify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "system_review__verify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "system_review__verify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "system_review__end"
+    },
+    "system_review__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "system_review__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "system_review__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "system_review",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

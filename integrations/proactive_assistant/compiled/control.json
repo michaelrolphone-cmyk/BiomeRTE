@@ -1,0 +1,920 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "control__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "control__start": {
+      "type": "set",
+      "values": {},
+      "next": "control__validate"
+    },
+    "control__validate": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "validate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "control__validate_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "control__validate_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "control__validate_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "control__validate_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "control__valid"
+    },
+    "control__valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "gateway": "valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "control__valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "control__valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "control__kind"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "control__reject"
+        }
+      ],
+      "default": "control__return_unresolved"
+    },
+    "control__kind": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "gateway": "kind",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "control__kind_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "control__kind_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "control__state"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "control__cancel"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "control__adopt"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "control__contain"
+        }
+      ],
+      "default": "control__return_unresolved"
+    },
+    "control__state": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "state",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "control__state_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "control__state_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "control__state_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "control__state_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "control__end"
+    },
+    "control__cancel": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "cancel",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "control__cancel_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "control__cancel_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "control__cancel_resolved"
+    },
+    "control__cancel_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "control__cancel_resolved_result"
+        }
+      ],
+      "default": "control__cancel_call"
+    },
+    "control__cancel_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "control__cancel_merge"
+    },
+    "control__cancel_call": {
+      "type": "call",
+      "process": "assistant.governed",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "control__cancel_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "control__cancel_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "cancel",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "control__cancel_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "control__cancel_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "control__cancel_disposition"
+    },
+    "control__adopt": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "adopt",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "control__adopt_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "control__adopt_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "control__adopt_resolved"
+    },
+    "control__adopt_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "control__adopt_resolved_result"
+        }
+      ],
+      "default": "control__adopt_call"
+    },
+    "control__adopt_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "control__adopt_merge"
+    },
+    "control__adopt_call": {
+      "type": "call",
+      "process": "assistant.revision_adoption",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "control__adopt_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "control__adopt_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "adopt",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "control__adopt_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "control__adopt_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "control__adopt_disposition"
+    },
+    "control__contain": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "contain",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "control__contain_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "control__contain_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "control__contain_resolved"
+    },
+    "control__contain_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "control__contain_resolved_result"
+        }
+      ],
+      "default": "control__contain_call"
+    },
+    "control__contain_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "control__contain_merge"
+    },
+    "control__contain_call": {
+      "type": "call",
+      "process": "assistant.containment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "control__contain_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "control__contain_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "task": "contain",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "control__contain_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "control__contain_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "control__contain_disposition"
+    },
+    "control__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__reject": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "reject",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__reject_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__reject_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__cancel_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "control__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "control__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "control__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "control__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "control__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "control__return_faulted"
+        }
+      ],
+      "default": "control__return_unresolved"
+    },
+    "control__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "control__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "control__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "control__adopt_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "control__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "control__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "control__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "control__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "control__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "control__return_faulted"
+        }
+      ],
+      "default": "control__return_unresolved"
+    },
+    "control__contain_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "control__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "control__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "control__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "control__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "control__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "control__return_faulted"
+        }
+      ],
+      "default": "control__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "control",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,2037 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "reasoning__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "reasoning__start": {
+      "type": "set",
+      "values": {},
+      "next": "reasoning__context"
+    },
+    "reasoning__context": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "context",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__context_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__context_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__context_resolved"
+    },
+    "reasoning__context_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__context_resolved_result"
+        }
+      ],
+      "default": "reasoning__context_call"
+    },
+    "reasoning__context_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__context_merge"
+    },
+    "reasoning__context_call": {
+      "type": "call",
+      "process": "assistant.context",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__context_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__context_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "context",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__context_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__context_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__context__disposition"
+    },
+    "reasoning__frame": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "frame",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "reasoning__frame_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__frame_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__frame_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "reasoning__frame_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__turn"
+    },
+    "reasoning__turn": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "turn",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__turn_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__turn_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__turn_resolved"
+    },
+    "reasoning__turn_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__turn_resolved_result"
+        }
+      ],
+      "default": "reasoning__turn_call"
+    },
+    "reasoning__turn_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__turn_merge"
+    },
+    "reasoning__turn_call": {
+      "type": "call",
+      "process": "assistant.runtime",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__turn_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__turn_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "turn",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__turn_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__turn_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__turn__disposition"
+    },
+    "reasoning__choose": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "gateway": "choose",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "reasoning__choose_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "reasoning__choose_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "reasoning__step"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "reasoning__code"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "reasoning__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "reasoning__conclude"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              4
+            ]
+          },
+          "to": "reasoning__judge"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__step": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "step",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__step_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__step_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__step_resolved"
+    },
+    "reasoning__step_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__step_resolved_result"
+        }
+      ],
+      "default": "reasoning__step_call"
+    },
+    "reasoning__step_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__step_merge"
+    },
+    "reasoning__step_call": {
+      "type": "call",
+      "process": "assistant.governed",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__step_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__step_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "step",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__step_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__step_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__step__disposition"
+    },
+    "reasoning__evaluate": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "evaluate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "reasoning__evaluate_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__evaluate_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__evaluate_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "reasoning__evaluate_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__progress"
+    },
+    "reasoning__progress": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "progress",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__progress_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__progress_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__progress_resolved"
+    },
+    "reasoning__progress_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__progress_resolved_result"
+        }
+      ],
+      "default": "reasoning__progress_call"
+    },
+    "reasoning__progress_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__progress_merge"
+    },
+    "reasoning__progress_call": {
+      "type": "call",
+      "process": "assistant.progress",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__progress_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__progress_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "progress",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__progress_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__progress_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__progress__disposition"
+    },
+    "reasoning__next": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "gateway": "next",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "reasoning__next_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "reasoning__next_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "reasoning__turn"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "reasoning__conclude"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "reasoning__judge"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__code": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "code",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__code_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__code_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__code_resolved"
+    },
+    "reasoning__code_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__code_resolved_result"
+        }
+      ],
+      "default": "reasoning__code_call"
+    },
+    "reasoning__code_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__code_merge"
+    },
+    "reasoning__code_call": {
+      "type": "call",
+      "process": "assistant.development",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__code_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__code_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "code",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__code_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__code_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__code__disposition"
+    },
+    "reasoning__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__verify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__verify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__verify_resolved"
+    },
+    "reasoning__verify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__verify_resolved_result"
+        }
+      ],
+      "default": "reasoning__verify_call"
+    },
+    "reasoning__verify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__verify_merge"
+    },
+    "reasoning__verify_call": {
+      "type": "call",
+      "process": "assistant.verification",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__verify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__verify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "verify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__verify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__verify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__verify__disposition"
+    },
+    "reasoning__verdict": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "gateway": "verdict",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "reasoning__verdict_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "reasoning__verdict_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "reasoning__learn"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "reasoning__turn"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "reasoning__contain"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__contain": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "contain",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__contain_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__contain_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__contain_resolved"
+    },
+    "reasoning__contain_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__contain_resolved_result"
+        }
+      ],
+      "default": "reasoning__contain_call"
+    },
+    "reasoning__contain_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__contain_merge"
+    },
+    "reasoning__contain_call": {
+      "type": "call",
+      "process": "assistant.containment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__contain_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__contain_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "contain",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__contain_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__contain_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__contain__disposition"
+    },
+    "reasoning__judge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "judge",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__judge_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__judge_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__judge_resolved"
+    },
+    "reasoning__judge_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__judge_resolved_result"
+        }
+      ],
+      "default": "reasoning__judge_call"
+    },
+    "reasoning__judge_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__judge_merge"
+    },
+    "reasoning__judge_call": {
+      "type": "call",
+      "process": "assistant.judgment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__judge_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__judge_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "judge",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__judge_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__judge_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__judge__disposition"
+    },
+    "reasoning__conclude": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "conclude",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "reasoning__conclude_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__conclude_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__conclude_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "reasoning__conclude_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__learn"
+    },
+    "reasoning__learn": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "learn",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "reasoning__learn_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "reasoning__learn_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "reasoning__learn_resolved"
+    },
+    "reasoning__learn_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "reasoning__learn_resolved_result"
+        }
+      ],
+      "default": "reasoning__learn_call"
+    },
+    "reasoning__learn_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "reasoning__learn_merge"
+    },
+    "reasoning__learn_call": {
+      "type": "call",
+      "process": "assistant.learning",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "reasoning__learn_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__learn_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "task": "learn",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "reasoning__learn_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "reasoning__learn_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "reasoning__learn__disposition"
+    },
+    "reasoning__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__unsafe": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "unsafe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__unsafe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__unsafe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__context__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__frame"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "reasoning__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "reasoning__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "reasoning__turn__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__choose"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__step__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__evaluate"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__progress__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__next"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__code__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__verify__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__verdict"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__contain__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__unsafe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__judge__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__turn"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "reasoning__learn__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "reasoning__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "reasoning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "reasoning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "reasoning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "reasoning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "reasoning__return_faulted"
+        }
+      ],
+      "default": "reasoning__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "reasoning",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,678 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "escalation__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "escalation__start": {
+      "type": "set",
+      "values": {},
+      "next": "escalation__policy"
+    },
+    "escalation__policy": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "task": "policy",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "escalation__policy_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "escalation__policy_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "escalation__policy_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "escalation__policy_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "escalation__route"
+    },
+    "escalation__route": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "gateway": "route",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "escalation__route_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "escalation__route_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "escalation__delegate"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "escalation__judge"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "escalation__pending"
+        }
+      ],
+      "default": "escalation__return_unresolved"
+    },
+    "escalation__delegate": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "task": "delegate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "escalation__delegate_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "escalation__delegate_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "escalation__delegate_resolved"
+    },
+    "escalation__delegate_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "escalation__delegate_resolved_result"
+        }
+      ],
+      "default": "escalation__delegate_call"
+    },
+    "escalation__delegate_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "escalation__delegate_merge"
+    },
+    "escalation__delegate_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "escalation__delegate_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "escalation__delegate_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "task": "delegate",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "escalation__delegate_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "escalation__delegate_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "escalation__delegate__disposition"
+    },
+    "escalation__judge": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "task": "judge",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "escalation__judge_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "escalation__judge_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "escalation__judge_resolved"
+    },
+    "escalation__judge_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "escalation__judge_resolved_result"
+        }
+      ],
+      "default": "escalation__judge_call"
+    },
+    "escalation__judge_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "escalation__judge_merge"
+    },
+    "escalation__judge_call": {
+      "type": "call",
+      "process": "assistant.judgment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "escalation__judge_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "escalation__judge_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "task": "judge",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "escalation__judge_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "escalation__judge_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "escalation__judge__disposition"
+    },
+    "escalation__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "escalation__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "escalation__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "escalation__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "escalation__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "escalation__policy"
+    },
+    "escalation__delegate__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "escalation__pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "escalation__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "escalation__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "escalation__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "escalation__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "escalation__return_faulted"
+        }
+      ],
+      "default": "escalation__return_unresolved"
+    },
+    "escalation__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "escalation__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "escalation__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "escalation__judge__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "escalation__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "escalation__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "escalation__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "escalation__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "escalation__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "escalation__return_faulted"
+        }
+      ],
+      "default": "escalation__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "escalation",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

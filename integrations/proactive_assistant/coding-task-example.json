@@ -1,0 +1,34 @@
+{
+  "note": "Fill concrete project and immutable base commit from the chosen repository before admission; this example starts nothing. Template may be esp-idf@2 for ESP work.",
+  "workspace_request": {
+    "template": "linux-basic@1",
+    "name": "source"
+  },
+  "source_request": {
+    "url": "https://Micahels-Mac-mini.local:8443/team/project.git",
+    "project": "team/project",
+    "base_commit": "<full resolved commit SHA>",
+    "branch": "biome/task-identifier"
+  },
+  "build_test_recipe": {
+    "commands": [
+      [
+        "python3",
+        "-m",
+        "unittest",
+        "discover"
+      ]
+    ]
+  },
+  "git_mcp_request": {
+    "tool": "save_merge_request",
+    "schema_digest": "8f366e3305b89b9592262d498eea8bbb34b9a66a0925a5ee84b3130cf003f91e",
+    "arguments": {
+      "project_id": "team/project",
+      "source_branch": "biome/task-identifier",
+      "target_branch": "main",
+      "title": "Draft: reviewed workflow change",
+      "description": "Exact source, tests and final review are retained in the workflow evidence."
+    }
+  }
+}

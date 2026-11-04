@@ -1,0 +1,57 @@
+{
+  "operator_approved": false,
+  "context_bytes": null,
+  "model": "qwen3.5-9b",
+  "model_aliases": [
+    "qwen3.5-9b"
+  ],
+  "protocol_contracts": [
+    "agent.lmstudio.delegate:1",
+    "human.decision:1"
+  ],
+  "required_contracts": [
+    "agent.lmstudio.delegate:1",
+    "agent.chatgpt.delegate:1",
+    "human.decision:1",
+    "host.terminal.run:1",
+    "workspace.provision:1",
+    "workspace.acquire:1",
+    "workspace.suspend:1",
+    "workspace.handoff:1",
+    "workspace.exec:1",
+    "workspace.git:1",
+    "workspace.file.write:1",
+    "git.mcp.tools:1",
+    "git.mcp.call:1"
+  ],
+  "resources": {
+    "llm": "routine.674afca81f726163d94d8090",
+    "reviewer": "routine.f3f63a57d37c1bb2d2a174ae",
+    "workspace": "workspace.mac.75f0ef711b363088d0b1",
+    "git": "git.mac.3f1e6b0dd758be37d358"
+  },
+  "controller_home": null,
+  "python_executable": null,
+  "workspace_template": "linux-basic@1",
+  "workspace_templates": [
+    "linux-basic@1",
+    "esp-idf@2"
+  ],
+  "gitlab_url": "https://Micahels-Mac-mini.local:8443",
+  "systems": null,
+  "protected_components": [
+    "authorization",
+    "execution",
+    "governance",
+    "supervision",
+    "verifier"
+  ],
+  "trusted_verifier_revision": null,
+  "trusted_verifier_component": "verifier",
+  "observation_policy": null,
+  "review_contract": "agent.chatgpt.delegate:1",
+  "containment_actions": [],
+  "peer_recovery": null,
+  "health_probe": null,
+  "core_failure_domain": []
+}

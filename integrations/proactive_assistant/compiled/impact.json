@@ -1,0 +1,541 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "impact__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "impact__start": {
+      "type": "set",
+      "values": {},
+      "next": "impact__queue"
+    },
+    "impact__queue": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "task": "queue",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "impact__queue_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "impact__queue_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "impact__queue_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "impact__queue_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "impact__system"
+    },
+    "impact__system": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "task": "system",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "impact__system_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "impact__system_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "impact__system_resolved"
+    },
+    "impact__system_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "impact__system_resolved_result"
+        }
+      ],
+      "default": "impact__system_call"
+    },
+    "impact__system_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "impact__system_merge"
+    },
+    "impact__system_call": {
+      "type": "call",
+      "process": "assistant.system_review",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "impact__system_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "impact__system_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "task": "system",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "impact__system_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "impact__system_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "impact__system__disposition"
+    },
+    "impact__refresh": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "task": "refresh",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "impact__refresh_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "impact__refresh_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "impact__refresh_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "impact__refresh_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "impact__more"
+    },
+    "impact__more": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "gateway": "more",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "impact__more_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "impact__more_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "impact__system"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "impact__coverage"
+        }
+      ],
+      "default": "impact__return_unresolved"
+    },
+    "impact__coverage": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "task": "coverage",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "impact__coverage_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "impact__coverage_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "impact__coverage_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "impact__coverage_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "impact__end"
+    },
+    "impact__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "impact__system__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "impact__refresh"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "impact__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "impact__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "impact__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "impact__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "impact__return_faulted"
+        }
+      ],
+      "default": "impact__return_unresolved"
+    },
+    "impact__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "impact__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "impact__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "impact__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "impact__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "impact__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "impact__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "impact",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

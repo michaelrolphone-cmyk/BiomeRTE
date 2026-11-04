@@ -1,0 +1,602 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "authorization__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "authorization__start": {
+      "type": "set",
+      "values": {},
+      "next": "authorization__lookup"
+    },
+    "authorization__lookup": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "task": "lookup",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "authorization__lookup_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__lookup_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__lookup_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__lookup_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__match"
+    },
+    "authorization__match": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "gateway": "match",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "authorization__match_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "authorization__match_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "authorization__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "authorization__request"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "authorization__reject"
+        }
+      ],
+      "default": "authorization__return_unresolved"
+    },
+    "authorization__request": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "task": "request",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "authorization__request_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__request_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__request_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__request_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__submit"
+    },
+    "authorization__submit": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "task": "submit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "authorization__submit_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__submit_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__submit_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__submit_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__answer"
+    },
+    "authorization__answer": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "gateway": "answer",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "authorization__answer_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "authorization__answer_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "authorization__pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "authorization__defer"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "authorization__reject"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "authorization__interpret"
+        }
+      ],
+      "default": "authorization__return_unresolved"
+    },
+    "authorization__interpret": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "task": "interpret",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "authorization__interpret_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__interpret_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__interpret_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__interpret_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__meaning"
+    },
+    "authorization__meaning": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "gateway": "meaning",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "authorization__meaning_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "authorization__meaning_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "authorization__grant"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "authorization__clarify"
+        }
+      ],
+      "default": "authorization__return_unresolved"
+    },
+    "authorization__grant": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "task": "grant",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "authorization__grant_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__grant_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__grant_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__grant_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__end"
+    },
+    "authorization__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "authorization__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "authorization__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "authorization__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "authorization__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "authorization__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "authorization__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "authorization__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "authorization__submit"
+    },
+    "authorization__defer": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "defer",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "authorization__defer_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "authorization__defer_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "authorization__reject": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "reject",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "authorization__reject_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "authorization__reject_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "authorization__clarify": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "clarify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "authorization__clarify_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "authorization__clarify_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "authorization__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "authorization__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "authorization__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "authorization",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

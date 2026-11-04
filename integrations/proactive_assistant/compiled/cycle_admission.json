@@ -1,0 +1,604 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "cycle_admission__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__start": {
+      "type": "set",
+      "values": {},
+      "next": "cycle_admission__inspect"
+    },
+    "cycle_admission__inspect": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "task": "inspect",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_admission__inspect_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__inspect_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_admission__inspect_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_admission__inspect_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_admission__existing"
+    },
+    "cycle_admission__existing": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "gateway": "existing",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_admission__existing_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__existing_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_admission__return_existing"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_admission__state"
+        }
+      ],
+      "default": "cycle_admission__return_unresolved"
+    },
+    "cycle_admission__return_existing": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "return_existing",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__return_existing_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__return_existing_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__state": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "gateway": "state",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_admission__state_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__state_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_admission__reserve"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_admission__paused"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "cycle_admission__stopped"
+        }
+      ],
+      "default": "cycle_admission__return_unresolved"
+    },
+    "cycle_admission__reserve": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "task": "reserve",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_admission__reserve_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__reserve_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_admission__reserve_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_admission__reserve_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_admission__result"
+    },
+    "cycle_admission__result": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "gateway": "result",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_admission__result_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__result_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_admission__deliver"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_admission__coalesced"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "cycle_admission__stale"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "cycle_admission__pending"
+        }
+      ],
+      "default": "cycle_admission__return_unresolved"
+    },
+    "cycle_admission__deliver": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "task": "deliver",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_admission__deliver_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__deliver_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_admission__deliver_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_admission__deliver_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_admission__known"
+    },
+    "cycle_admission__known": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "gateway": "known",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_admission__known_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__known_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_admission__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_admission__pending"
+        }
+      ],
+      "default": "cycle_admission__return_unresolved"
+    },
+    "cycle_admission__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__coalesced": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "coalesced",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__coalesced_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__coalesced_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "cycle_admission__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_admission__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_admission__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_admission__inspect"
+    },
+    "cycle_admission__paused": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "paused",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__paused_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__paused_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__stopped": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "stopped",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__stopped_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__stopped_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__stale": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "stale",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__stale_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__stale_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_admission__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_admission__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_admission__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_admission",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

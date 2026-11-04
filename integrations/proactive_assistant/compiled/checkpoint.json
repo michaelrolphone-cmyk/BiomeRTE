@@ -1,0 +1,838 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "checkpoint__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__start": {
+      "type": "set",
+      "values": {},
+      "next": "checkpoint__authority"
+    },
+    "checkpoint__authority": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "authority",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "checkpoint__authority_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__authority_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "checkpoint__authority_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "checkpoint__authority_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "checkpoint__valid"
+    },
+    "checkpoint__valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "gateway": "valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "checkpoint__valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "checkpoint__prepare"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "checkpoint__denied"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "checkpoint__prepare": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "prepare",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "checkpoint__prepare_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__prepare_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "checkpoint__prepare_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "checkpoint__prepare_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "checkpoint__commit"
+    },
+    "checkpoint__commit": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "commit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "checkpoint__commit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__commit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "checkpoint__commit_resolved"
+    },
+    "checkpoint__commit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "checkpoint__commit_resolved_result"
+        }
+      ],
+      "default": "checkpoint__commit_call"
+    },
+    "checkpoint__commit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "checkpoint__commit_merge"
+    },
+    "checkpoint__commit_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "checkpoint__commit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__commit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "commit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "checkpoint__commit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__commit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "checkpoint__commit__disposition"
+    },
+    "checkpoint__result": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "gateway": "result",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "checkpoint__result_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__result_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "checkpoint__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "checkpoint__read"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "checkpoint__read": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "read",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "checkpoint__read_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__read_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "checkpoint__read_resolved"
+    },
+    "checkpoint__read_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "checkpoint__read_resolved_result"
+        }
+      ],
+      "default": "checkpoint__read_call"
+    },
+    "checkpoint__read_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "checkpoint__read_merge"
+    },
+    "checkpoint__read_call": {
+      "type": "call",
+      "process": "assistant.access",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "checkpoint__read_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__read_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "task": "read",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "checkpoint__read_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__read_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "checkpoint__read__disposition"
+    },
+    "checkpoint__merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "gateway": "merge",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "checkpoint__merge_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__merge_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "checkpoint__prepare"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "checkpoint__conflict"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "checkpoint__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__conflict": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "conflict",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__conflict_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__conflict_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__denied": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "denied",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__denied_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__denied_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__commit_failure": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "gateway": "commit_failure",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "checkpoint__commit_failure_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__commit_failure_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "checkpoint__read"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "checkpoint__return_faulted"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "checkpoint__commit__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "checkpoint__result"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "checkpoint__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "checkpoint__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "checkpoint__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "checkpoint__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "checkpoint__commit_failure"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "checkpoint__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "checkpoint__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "checkpoint__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "checkpoint__read__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "checkpoint__merge"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "checkpoint__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "checkpoint__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "checkpoint__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "checkpoint__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "checkpoint__return_faulted"
+        }
+      ],
+      "default": "checkpoint__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "checkpoint",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

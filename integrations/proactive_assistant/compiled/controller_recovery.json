@@ -1,0 +1,658 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "controller_recovery__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__start": {
+      "type": "set",
+      "values": {},
+      "next": "controller_recovery__authority"
+    },
+    "controller_recovery__authority": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "authority",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "controller_recovery__authority_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__authority_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "controller_recovery__authority_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "controller_recovery__authority_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "controller_recovery__valid"
+    },
+    "controller_recovery__valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "gateway": "valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "controller_recovery__valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "controller_recovery__scan"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "controller_recovery__stale"
+        }
+      ],
+      "default": "controller_recovery__return_unresolved"
+    },
+    "controller_recovery__scan": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "scan",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "controller_recovery__scan_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__scan_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "controller_recovery__scan_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "controller_recovery__scan_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "controller_recovery__classify"
+    },
+    "controller_recovery__classify": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "gateway": "classify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "controller_recovery__classify_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__classify_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "controller_recovery__resume"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "controller_recovery__admit"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "controller_recovery__wait"
+        }
+      ],
+      "default": "controller_recovery__return_unresolved"
+    },
+    "controller_recovery__resume": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "resume",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "controller_recovery__resume_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__resume_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "controller_recovery__resume_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "controller_recovery__resume_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "controller_recovery__end"
+    },
+    "controller_recovery__admit": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "admit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "controller_recovery__admit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__admit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "controller_recovery__admit_resolved"
+    },
+    "controller_recovery__admit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "controller_recovery__admit_resolved_result"
+        }
+      ],
+      "default": "controller_recovery__admit_call"
+    },
+    "controller_recovery__admit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "controller_recovery__admit_merge"
+    },
+    "controller_recovery__admit_call": {
+      "type": "call",
+      "process": "assistant.cycle_admission",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "controller_recovery__admit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__admit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "admit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "controller_recovery__admit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__admit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "controller_recovery__admit_disposition"
+    },
+    "controller_recovery__wait": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "task": "wait",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "controller_recovery__wait_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__wait_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "controller_recovery__wait_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "controller_recovery__wait_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "controller_recovery__end"
+    },
+    "controller_recovery__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__stale": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "stale",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__stale_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__stale_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__admit_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "controller_recovery__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "controller_recovery__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "controller_recovery__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "controller_recovery__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "controller_recovery__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "controller_recovery__return_faulted"
+        }
+      ],
+      "default": "controller_recovery__return_unresolved"
+    },
+    "controller_recovery__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "controller_recovery__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "controller_recovery__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "controller_recovery__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "controller_recovery",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

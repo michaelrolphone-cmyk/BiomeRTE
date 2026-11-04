@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "disposition": {
+      "type": "string"
+    },
+    "result_code": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object"
+    },
+    "evidence_refs": {
+      "type": "array"
+    },
+    "continuation": {
+      "type": "object"
+    },
+    "harm_status": {
+      "type": "string"
+    },
+    "origin": {
+      "type": "object"
+    },
+    "frame": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "disposition",
+    "result_code",
+    "data",
+    "evidence_refs",
+    "continuation",
+    "harm_status",
+    "origin",
+    "frame"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,854 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "project__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "project__start": {
+      "type": "set",
+      "values": {},
+      "next": "project__bootstrap"
+    },
+    "project__bootstrap": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "bootstrap",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "project__bootstrap_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "project__bootstrap_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "project__bootstrap_resolved"
+    },
+    "project__bootstrap_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "project__bootstrap_resolved_result"
+        }
+      ],
+      "default": "project__bootstrap_call"
+    },
+    "project__bootstrap_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "project__bootstrap_merge"
+    },
+    "project__bootstrap_call": {
+      "type": "call",
+      "process": "assistant.bootstrap",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "project__bootstrap_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "project__bootstrap_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "bootstrap",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "project__bootstrap_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "project__bootstrap_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "project__bootstrap_disposition"
+    },
+    "project__qualify": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "qualify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "project__qualify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "project__qualify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "project__qualify_resolved"
+    },
+    "project__qualify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "project__qualify_resolved_result"
+        }
+      ],
+      "default": "project__qualify_call"
+    },
+    "project__qualify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "project__qualify_merge"
+    },
+    "project__qualify_call": {
+      "type": "call",
+      "process": "assistant.qualification",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "project__qualify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "project__qualify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "qualify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "project__qualify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "project__qualify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "project__qualify_disposition"
+    },
+    "project__register": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "register",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "project__register_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "project__register_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "project__register_resolved"
+    },
+    "project__register_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "project__register_resolved_result"
+        }
+      ],
+      "default": "project__register_call"
+    },
+    "project__register_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "project__register_merge"
+    },
+    "project__register_call": {
+      "type": "call",
+      "process": "assistant.registration",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "project__register_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "project__register_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "register",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "project__register_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "project__register_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "project__register_disposition"
+    },
+    "project__admit": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "admit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "project__admit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "project__admit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "project__admit_resolved"
+    },
+    "project__admit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "project__admit_resolved_result"
+        }
+      ],
+      "default": "project__admit_call"
+    },
+    "project__admit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "project__admit_merge"
+    },
+    "project__admit_call": {
+      "type": "call",
+      "process": "assistant.cycle_admission",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "project__admit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "project__admit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "task": "admit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "project__admit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "project__admit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "project__admit_disposition"
+    },
+    "project__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__bootstrap_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "project__qualify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "project__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "project__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "project__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "project__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "project__return_faulted"
+        }
+      ],
+      "default": "project__return_unresolved"
+    },
+    "project__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "project__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "project__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "project__qualify_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "project__register"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "project__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "project__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "project__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "project__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "project__return_faulted"
+        }
+      ],
+      "default": "project__return_unresolved"
+    },
+    "project__register_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "project__admit"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "project__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "project__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "project__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "project__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "project__return_faulted"
+        }
+      ],
+      "default": "project__return_unresolved"
+    },
+    "project__admit_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "project__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "project__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "project__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "project__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "project__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "project__return_faulted"
+        }
+      ],
+      "default": "project__return_unresolved"
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "project",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

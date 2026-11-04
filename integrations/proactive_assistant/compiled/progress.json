@@ -1,0 +1,391 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "progress__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "progress__start": {
+      "type": "set",
+      "values": {},
+      "next": "progress__measure"
+    },
+    "progress__measure": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "task": "measure",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "progress__measure_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "progress__measure_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "progress__measure_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "progress__measure_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "progress__repeat"
+    },
+    "progress__repeat": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "task": "repeat",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "progress__repeat_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "progress__repeat_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "progress__repeat_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "progress__repeat_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "progress__route"
+    },
+    "progress__route": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "gateway": "route",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "progress__route_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "progress__route_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "progress__continue"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "progress__reframe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "progress__assist"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "progress__negative"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              4
+            ]
+          },
+          "to": "progress__wait"
+        }
+      ],
+      "default": "progress__return_unresolved"
+    },
+    "progress__continue": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "continue",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "progress__continue_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "progress__continue_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "progress__reframe": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "reframe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "progress__reframe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "progress__reframe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "progress__assist": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "assist",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "progress__assist_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "progress__assist_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "progress__negative": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "negative",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "progress__negative_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "progress__negative_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "progress__wait": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "wait",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "progress__wait_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "progress__wait_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "progress__wait_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "progress__wait_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "progress__measure"
+    },
+    "progress__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "progress__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "progress__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "progress",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

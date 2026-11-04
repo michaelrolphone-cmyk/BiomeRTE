@@ -1,0 +1,415 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "access__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "access__start": {
+      "type": "set",
+      "values": {},
+      "next": "access__classify"
+    },
+    "access__classify": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "task": "classify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "access__classify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "access__classify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "access__classify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "access__classify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "access__execute"
+    },
+    "access__execute": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "task": "execute",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "access__execute_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "access__execute_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "access__execute_resolved"
+    },
+    "access__execute_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "access__execute_resolved_result"
+        }
+      ],
+      "default": "access__execute_call"
+    },
+    "access__execute_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "access__execute_merge"
+    },
+    "access__execute_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "access__execute_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "access__execute_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "task": "execute",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "access__execute_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "access__execute_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "access__execute__disposition"
+    },
+    "access__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "access__execute__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "access__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "access__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "access__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "access__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "access__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "access__return_faulted"
+        }
+      ],
+      "default": "access__return_unresolved"
+    },
+    "access__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "access__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "access__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "access__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "access__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "access__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "access__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "access",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

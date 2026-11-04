@@ -1,0 +1,136 @@
+{
+  "type": "object",
+  "properties": {
+    "model": {
+      "type": "string"
+    },
+    "controller_home": {
+      "type": "string"
+    },
+    "python_executable": {
+      "type": "string"
+    },
+    "workspace_template": {
+      "type": "string"
+    },
+    "gitlab_url": {
+      "type": "string"
+    },
+    "trusted_verifier_revision": {
+      "type": "string"
+    },
+    "trusted_verifier_component": {
+      "type": "string"
+    },
+    "workspace_templates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "operator_approved": {
+      "type": "boolean",
+      "const": true
+    },
+    "context_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "model_aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "protocol_contracts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "agent.lmstudio.delegate:1",
+          "human.decision:1"
+        ]
+      }
+    },
+    "required_contracts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "dependencies"
+        ]
+      }
+    },
+    "protected_components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "observation_policy": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "events_only",
+            "interval"
+          ]
+        },
+        "interval_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    }
+  },
+  "required": [
+    "operator_approved",
+    "context_bytes",
+    "model",
+    "model_aliases",
+    "protocol_contracts",
+    "required_contracts",
+    "resources",
+    "controller_home",
+    "python_executable",
+    "workspace_template",
+    "workspace_templates",
+    "gitlab_url",
+    "systems",
+    "protected_components",
+    "trusted_verifier_revision",
+    "trusted_verifier_component",
+    "observation_policy"
+  ],
+  "additionalProperties": true
+}

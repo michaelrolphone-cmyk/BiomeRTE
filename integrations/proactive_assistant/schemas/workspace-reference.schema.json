@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "resource": {
+      "type": "string"
+    },
+    "template": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "holder": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checkpoint": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "resource",
+    "generation",
+    "state"
+  ],
+  "additionalProperties": true
+}
