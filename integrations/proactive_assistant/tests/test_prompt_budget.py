@@ -1,4 +1,5 @@
 import sys
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,7 +22,28 @@ class PromptBudget(Delivery):
             sent=action['inputs']['context']
             self.assertEqual(sent['capabilities'],context['capabilities'])
             self.assertEqual(sent['observation'],{'same_as_context_fields':['capabilities','work'],'sha256':digest(context)})
+            refs=sent['evidence_refs']
+            self.assertEqual(len([r for r in refs if r.startswith('context:')]),1)
+            evidence_context={k:v for k,v in sent.items() if k!='evidence_refs'}
+            self.assertIn('context:'+digest(evidence_context),refs)
+            self.assertTrue(set(refs)<=set(f['evidence_refs']))
+            self.assertIn('exact strings from context.evidence_refs',action['inputs']['request'])
         self.execute(run)
+
+    def test_citations_are_checked_against_the_context_actually_sent(self):
+        for reference,expected in [('sent','completed'),('context.capabilities','unresolved')]:
+            f=self.frame()
+            def run(tx):
+                tx.put('offers','llm-test',{'contract':'agent.lmstudio.delegate:1','resource':'llm.test','state':'ready'})
+                def answer(tx,ctx,frame,key,action,**kwargs):
+                    refs=action['inputs']['context']['evidence_refs']
+                    parsed={'facts':[{'claim':'Observed metadata','evidence_refs':[refs[-1] if reference=='sent' else reference]}],'assumptions':[],'findings':['Observed metadata'],'hypotheses':[],'recommendation':'investigate','proposed_action':None,'candidate_revision':None}
+                    return a.outcome(frame,data={'result':{'model':'qwen3.5-9b','text':json.dumps(parsed)}})
+                with patch.object(a,'capability',side_effect=answer):
+                    result=a.prompt_phase(tx,self.ctx,f,'discovery.classify',a.CAT['stages']['discovery.classify'])
+                self.assertEqual(result['disposition'],expected)
+                if expected=='unresolved':self.assertEqual(result['result_code'],'unknown_evidence_reference')
+            self.execute(run)
 
 for name in list(dir(Delivery)):
     if name.startswith('test_') and name not in PromptBudget.__dict__:setattr(PromptBudget,name,None)
