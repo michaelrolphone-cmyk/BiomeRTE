@@ -52,10 +52,11 @@ def conversation_messages(messages):
     if not isinstance(messages, list) or not messages:
         raise ValueError('Invalid conversation')
     result = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if (not isinstance(message, dict) or not {'role','content'} <= set(message)
                 or set(message) - {'role','content','model'}
-                or message['role'] not in ('user','assistant')
+                or message['role'] not in ('system','user','assistant')
+                or (message['role'] == 'system' and index != 0)
                 or not isinstance(message['content'], str)
                 or ('model' in message and (message['role'] != 'assistant' or not isinstance(message['model'], str)))):
             raise ValueError('Invalid conversation')

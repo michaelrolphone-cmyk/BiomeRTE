@@ -67,3 +67,13 @@ Image generation progress is authenticated and encrypted by the Mac using the
 image session. The app displays preparation, sampling step/total, decoding and
 delivery updates; prompts and image bytes are excluded from progress records.
 Progress failures do not cancel or repeat generation.
+
+## Named threads, instructions and pins (0.9.0)
+Open Conversation settings from the menu or conversation selector to edit a
+thread's name, multiline instructions and pin. Pinned threads appear first;
+pinning does not change thread identity or request ownership.
+Instructions are stored only in the existing encrypted vault. For new chat
+requests they are prepended as a system message; image requests carry them inside
+the encrypted request and include them in the image prompt while preserving
+explicit image parameters. Each request snapshots its instruction context when
+created. Editing a thread never changes an already-started saved request.

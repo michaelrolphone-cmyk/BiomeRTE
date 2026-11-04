@@ -39,6 +39,9 @@ class ComfyBackend:
             raise ValueError("Invalid image parameters")
         if not isinstance(spec.get("prompt"), str) or not spec["prompt"].strip():
             raise ValueError("Prompt required")
+        instructions = '\n\n'.join(m['content'].strip() for m in messages if m['role'] == 'system' and m['content'].strip())
+        if instructions:
+            spec['prompt'] = instructions + '\n\n' + spec['prompt']
         for name, default in (("width",512),("height",512),("steps",28),("batch_size",1)):
             value = spec.setdefault(name, default)
             if type(value) is not int or value < 1 or (name in ("width","height") and value % 8):

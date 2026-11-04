@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
- private Button threadButton,modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog; private boolean imageMode=false,connectionScreen=false,returnToConnection=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
+ private Button threadButton,modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog,threadDialog; private boolean imageMode=false,connectionScreen=false,returnToConnection=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
  private final ExecutorService executor=Executors.newSingleThreadExecutor(); private Future<?> transport;
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
@@ -60,20 +60,25 @@ public final class MainActivity extends Activity {
   if(modelButton!=null)modelButton.setEnabled((!busy||imagePending)&&(!pending||imagePending));
  }
  private void switchMode(boolean image){imageMode=image;chatModeButton.setBackground(surface(image?0xff21362b:0xff406348,12));imageModeButton.setBackground(surface(image?0xff406348:0xff21362b,12));composer.setHint(image?"Describe an image…":"Message…");sendButton.setContentDescription(image?"Generate image":"Send message");modelButton.setVisibility(image?View.GONE:View.VISIBLE);}
- private void menu(View anchor){PopupMenu menu=new PopupMenu(this,anchor);for(String label:new String[]{"Conversations","New conversation","Rename conversation","Connection","Lock"})menu.getMenu().add(label);menu.setOnMenuItemClickListener(item->{switch(item.getTitle().toString()){case "Conversations":chooseConversation();break;case "New conversation":newConversation();break;case "Rename conversation":renameConversation();break;case "Connection":settings();break;case "Lock":lock();break;}return true;});menu.show();}
+ private void menu(View anchor){PopupMenu menu=new PopupMenu(this,anchor);boolean pinned=false;try{pinned=Conversations.current(data).optBoolean("pinned");}catch(Exception ignored){}for(String label:new String[]{"Conversations","New conversation","Conversation settings",pinned?"Unpin conversation":"Pin conversation","Connection","Lock"})menu.getMenu().add(label);menu.setOnMenuItemClickListener(item->{switch(item.getTitle().toString()){case "Conversations":chooseConversation();break;case "New conversation":newConversation();break;case "Conversation settings":renameConversation();break;case "Pin conversation":case "Unpin conversation":togglePin();break;case "Connection":settings();break;case "Lock":lock();break;}return true;});menu.show();}
+ private String threadLabel()throws Exception{JSONObject t=Conversations.current(data);return (t.optBoolean("pinned")?"📌  ":"▤  ")+t.getString("title")+"  ▾";}
+ private void togglePin(){try{JSONObject thread=Conversations.current(data);thread.put("pinned",!thread.optBoolean("pinned"));save();threadButton.setText(threadLabel());status.setText(thread.optBoolean("pinned")?"Conversation pinned to the top.":"Conversation unpinned.");}catch(Exception e){fail();}}
  private void saveDraft()throws Exception{if(composer!=null)data.put("draft",composer.getText().toString());}
  private boolean leaveConversation(){try{saveDraft();if(!parkPending())return false;save();return true;}catch(Exception e){fail();return false;}}
- private void newConversation(){if(!leaveConversation())return;try{Conversations.create(data);save();chat();}catch(Exception e){fail();}}
+ private void newConversation(){if(!leaveConversation())return;try{Conversations.create(data);save();chat();renameConversation();}catch(Exception e){fail();}}
  private void selectConversation(String id){if(id.equals(data.optString("active_thread")))return;if(!leaveConversation())return;try{Conversations.select(data,id);save();chat();}catch(Exception e){fail();}}
  private void chooseConversation(){try{
-  Conversations.ensure(data);JSONArray threads=data.getJSONArray("threads");String[] labels=new String[threads.length()];int selected=0;
-  for(int i=0;i<labels.length;i++){JSONObject t=threads.getJSONObject(i);labels[i]=t.getString("title");if(t.getString("id").equals(data.getString("active_thread")))selected=i;}
-  new AlertDialog.Builder(this).setTitle("Conversations").setSingleChoiceItems(labels,selected,(d,w)->{try{String id=threads.getJSONObject(w).getString("id");d.dismiss();selectConversation(id);}catch(Exception e){fail();}}).setPositiveButton("New conversation",(d,w)->newConversation()).setNeutralButton("Rename current",(d,w)->renameConversation()).setNegativeButton("Close",null).show();
+  Conversations.ensure(data);JSONArray threads=Conversations.ordered(data);String[] labels=new String[threads.length()];int selected=0;
+  for(int i=0;i<labels.length;i++){JSONObject t=threads.getJSONObject(i);labels[i]=(t.optBoolean("pinned")?"📌  ":"")+t.getString("title");if(t.getString("id").equals(data.getString("active_thread")))selected=i;}
+  new AlertDialog.Builder(this).setTitle("Conversations").setSingleChoiceItems(labels,selected,(d,w)->{try{String id=threads.getJSONObject(w).getString("id");d.dismiss();selectConversation(id);}catch(Exception e){fail();}}).setPositiveButton("New conversation",(d,w)->newConversation()).setNeutralButton("Thread settings",(d,w)->renameConversation()).setNegativeButton("Close",null).show();
  }catch(Exception e){fail();}}
  private void renameConversation(){try{
-  JSONObject thread=Conversations.current(data);EditText name=input("Conversation name",false);name.setSingleLine(true);name.setText(thread.getString("title"));name.selectAll();
-  AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Rename conversation").setView(name).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
-  dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String title=name.getText().toString().trim();if(title.isEmpty()){name.setError("Enter a name");return;}try{thread.put("title",title);save();threadButton.setText("▤  "+title+"  ▾");dialog.dismiss();}catch(Exception e){fail();}}));dialog.show();
+  JSONObject thread=Conversations.current(data);LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(20),dp(8),dp(20),dp(8));
+  form.addView(text("Name",14,0xffcad9c5));EditText name=input("Conversation name",false);name.setSingleLine(true);name.setText(thread.getString("title"));name.setContentDescription("Conversation name");form.addView(name,new LinearLayout.LayoutParams(-1,-2));space(form,14);
+  form.addView(text("Conversation instructions",14,0xffcad9c5));EditText instructions=input("How should the assistant respond in this thread?",false);instructions.setMinLines(4);instructions.setMaxLines(8);instructions.setText(thread.optString("instructions"));instructions.setContentDescription("Conversation instructions");form.addView(instructions,new LinearLayout.LayoutParams(-1,-2));space(form,8);
+  form.addView(text("Applied to new chat and image requests in this thread. Saved requests keep the instructions they started with.",13,0xffcad9c5));CheckBox pinned=new CheckBox(this);pinned.setText("Pin conversation to top");pinned.setContentDescription("Pin conversation");pinned.setTextColor(0xffe9ede4);pinned.setChecked(thread.optBoolean("pinned"));pinned.setMinHeight(dp(48));form.addView(pinned);
+  ScrollView scroll=new ScrollView(this);scroll.addView(form);AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Conversation settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+  threadDialog=dialog;dialog.setOnDismissListener(d->{if(threadDialog==dialog)threadDialog=null;});dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String title=name.getText().toString().trim();if(title.isEmpty()){name.setError("Enter a name");return;}try{thread.put("title",title).put("instructions",instructions.getText().toString().trim()).put("pinned",pinned.isChecked());save();threadButton.setText(threadLabel());status.setText("Thread settings saved · applied to new requests.");dialog.dismiss();}catch(Exception e){fail();}}));dialog.show();
  }catch(Exception e){fail();}}
  private void deleteMessage(JSONObject message){try{
   JSONArray messages=data.getJSONArray("messages");for(int i=0;i<messages.length();i++)if(messages.optJSONObject(i)==message){Conversations.deleteMessage(data,i);save();render(false);return;}
@@ -95,7 +100,7 @@ public final class MainActivity extends Activity {
   });
  }
  private void clearBitmaps(){if(imageHistory!=null)imageHistory.removeAllViews();for(android.graphics.Bitmap b:bitmaps)b.recycle();bitmaps.clear();}
- private void lock(){if(modelDialog!=null){modelDialog.dismiss();modelDialog=null;}if(data!=null&&vaultKey!=null&&composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception ignored){}if(messageList!=null)messageList.removeAllViews();messageList=null;clearBitmaps();imageHistory=null;epoch++;biome.cancel();if(transport!=null)transport.cancel(true);busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
+ private void lock(){if(threadDialog!=null){threadDialog.dismiss();threadDialog=null;}if(modelDialog!=null){modelDialog.dismiss();modelDialog=null;}if(data!=null&&vaultKey!=null&&composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception ignored){}if(messageList!=null)messageList.removeAllViews();messageList=null;clearBitmaps();imageHistory=null;epoch++;biome.cancel();if(transport!=null)transport.cancel(true);busy=false;if(composer!=null)composer.setText("");if(history!=null)history.setText("");data=null;Crypto.wipe(vaultKey);vaultKey=null;Crypto.wipe(salt);salt=null;composer=null;history=null;if(!isFinishing())locked();}
  private void save()throws Exception{vault.save(Conversations.snapshot(data),vaultKey,salt);}
  private void fail(){busy=false;if(status!=null)status.setText(data!=null&&data.has("pending")?"Connection interrupted. Your request is saved — tap Retry.":"Could not connect. Check Connection and try again.");updateControls();}
  private void chat(){
@@ -106,7 +111,7 @@ public final class MainActivity extends Activity {
   boolean connected=data.has("pairing")&&data.has("oauth");
   status.setText(connected?"Ready · Encrypted on this phone":"Connect your Mac to start");
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));Toast.makeText(this,"Mac pairing imported",Toast.LENGTH_SHORT).show();}}catch(Exception e){status.setText("Pairing import failed. Open Connection to try again.");}}
-  try{threadButton=action("▤  "+Conversations.current(data).getString("title")+"  ▾",this::chooseConversation,false);threadButton.setMaxLines(1);threadButton.setEllipsize(android.text.TextUtils.TruncateAt.END);threadButton.setContentDescription("Choose conversation");root.addView(threadButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,6);}catch(Exception e){fail();}
+  try{threadButton=action(threadLabel(),this::chooseConversation,false);threadButton.setMaxLines(1);threadButton.setEllipsize(android.text.TextUtils.TruncateAt.END);threadButton.setContentDescription("Choose conversation");root.addView(threadButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,6);}catch(Exception e){fail();}
   modelButton=action("Model · "+modelName(data.optString("selected_model")),this::chooseModel,false);modelButton.setMaxLines(1);modelButton.setHorizontallyScrolling(false);modelButton.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);modelButton.setEllipsize(android.text.TextUtils.TruncateAt.END);modelButton.setContentDescription("Choose chat model");root.addView(modelButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,8);
   if(!connected)button("Set up connection",this::settings);
   chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);
@@ -265,7 +270,7 @@ public final class MainActivity extends Activity {
   try{
    byte[] pub=Crypto.edPublic(identity),eph=Crypto.xPublic(ephemeral),transcript=wire.clientTranscript(helloId,sid,pub,eph,nonce);
    JSONObject hello=new JSONObject().put("v",2).put("kind","hello").put("id",helloId).put("sid",sid).put("client_identity",Vault.b64(pub)).put("client_ephemeral",Vault.b64(eph)).put("client_nonce",Vault.b64(nonce)).put("signature",Vault.b64(Crypto.sign(identity,transcript)));
-   return new JSONObject().put("thread_id",data.getString("active_thread")).put("request_messages",Conversations.context(data.getJSONArray("messages"))).put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId).put("selected_model",data.optString("selected_model","")).put("image",image).put("image_prompt",image?prompt:"");
+   return new JSONObject().put("thread_id",data.getString("active_thread")).put("request_messages",image?Conversations.imageContext(prompt,Conversations.instructions(data,data.getString("active_thread"))):Conversations.requestContext(data)).put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId).put("selected_model",data.optString("selected_model","")).put("image",image).put("image_prompt",image?prompt:"");
   }finally{Crypto.wipe(identity);Crypto.wipe(ephemeral);}
  }
  private void finishSession(JSONObject reply)throws Exception{
@@ -279,7 +284,7 @@ public final class MainActivity extends Activity {
   try{
    shared=Crypto.shared(ephemeral,Vault.unb64(reply.getString("server_ephemeral")));byte[] hash=Crypto.hash(whole);
    requestKey=wire.traffic(shared,hash,"request");responseKey=wire.traffic(shared,hash,"response");
-   JSONObject body=new JSONObject().put("messages",pending.optBoolean("image")?new JSONArray().put(new JSONObject().put("role","user").put("content",pending.getString("image_prompt"))):pending.optJSONArray("request_messages")!=null?pending.getJSONArray("request_messages"):Conversations.context(Conversations.find(data,pending.getString("thread_id")).getJSONArray("messages")));
+   JSONObject body=new JSONObject().put("messages",pending.optJSONArray("request_messages")!=null?pending.getJSONArray("request_messages"):pending.optBoolean("image")?Conversations.imageContext(pending.getString("image_prompt"),Conversations.instructions(data,pending.getString("thread_id"))):Conversations.withInstructions(Conversations.context(Conversations.find(data,pending.getString("thread_id")).getJSONArray("messages")),Conversations.instructions(data,pending.getString("thread_id"))));
    if(pending.optString("action").equals("models"))body=new JSONObject().put("action","models");
    else if(!pending.optBoolean("image")&&!pending.optString("selected_model").isEmpty())body.put("model",pending.getString("selected_model"));
    if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
@@ -297,7 +302,7 @@ public final class MainActivity extends Activity {
   try{if(!data.has("pairing")||data.getJSONObject("pairing").optInt("v")!=2||!data.has("oauth")){settings();return;}String text=composer.getText().toString();if(text.trim().isEmpty())return;
    JSONArray messages=image?new JSONArray():data.getJSONArray("messages");messages.put(new JSONObject().put("role","user").put("content",text));
    JSONObject encrypted=startSession(image,text);
-   if(new JSONObject().put("messages",messages).toString().getBytes(StandardCharsets.UTF_8).length>44000){messages.remove(messages.length()-1);status.setText("Conversation exceeds Biome request size. Start a new conversation.");return;}
+   if(new JSONObject().put("messages",encrypted.getJSONArray("request_messages")).toString().getBytes(StandardCharsets.UTF_8).length>44000){messages.remove(messages.length()-1);status.setText("Conversation and instructions exceed Biome request size. Shorten the instructions or start a new conversation.");return;}
    data.put("pending",encrypted);data.remove("draft");save();composer.setText("");render();resume();
   }catch(Exception e){fail();}
  }

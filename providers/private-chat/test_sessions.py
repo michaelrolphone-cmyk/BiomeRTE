@@ -7,6 +7,17 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from session_protocol import *
 from session_client import SessionClient
 class SessionTests(unittest.TestCase):
+    def test_thread_system_instructions_survive_authenticated_exchange(self):
+        self.handshake()
+        request=self.client.request([{'role':'system','content':'Thread instructions canary'}]+self.messages,self.token)
+        seen=[]
+        reply=self.server.handle(request,request['id'],lambda history:seen.append(history) or {'text':'ok'})
+        self.assertEqual(self.client.response(reply),{'text':'ok'})
+        self.assertEqual(seen[0][0],{'role':'system','content':'Thread instructions canary'})
+        self.assertNotIn('Thread instructions canary',json.dumps(request))
+    def test_system_instructions_in_middle_of_history_are_rejected(self):
+        self.handshake();request=self.client.request(self.messages+[{'role':'system','content':'late instruction'}],self.token)
+        with self.assertRaises(ValueError):self.server.handle(request,request['id'],lambda _:self.fail('invalid role order'))
     def setUp(self):
         self.server_key=ed25519.Ed25519PrivateKey.generate()
         self.token=secrets.token_bytes(32)

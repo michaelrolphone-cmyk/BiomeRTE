@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
-from session_protocol import SessionServer, b64, raw, public
+from session_protocol import SessionServer, b64, raw, public, conversation_messages
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
@@ -60,10 +60,7 @@ def handle_request(data):
 
 def inference(messages, model=None):
     privacy_ready()
-    if not isinstance(messages, list) or not messages:
-        raise ValueError('Invalid conversation')
-    if any(not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str) for m in messages):
-        raise ValueError('Invalid message')
+    messages = conversation_messages(messages)
     # Stateless OpenAI-compatible API; no response IDs or coding integrations.
     model = selected_model(model, LOCAL, LM)
     body = dict(model=model, messages=messages, stream=False, store=False)

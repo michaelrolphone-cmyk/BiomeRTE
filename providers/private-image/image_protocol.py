@@ -71,7 +71,7 @@ class SessionServer:
         data = open_message(session['keys']['request'],'request',sid,operation,session['hash'],envelope)
         # Authenticate and validate before removing the one-use session.
         messages = data.get('messages')
-        if not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages):
+        if not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('system','user','assistant') or (m['role']=='system' and i!=0) or not isinstance(m['content'],str) for i,m in enumerate(messages)):
             raise ValueError('Invalid conversation')
         phone = session['phone']
         if self.phone_identity != phone:

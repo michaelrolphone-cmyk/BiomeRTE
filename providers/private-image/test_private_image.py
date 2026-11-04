@@ -23,6 +23,13 @@ class ArtifactRemote:
         return {"sha256":sha,"size":len(value)}
 
 class ImageTests(unittest.TestCase):
+    def test_thread_instructions_reach_image_prompt_without_changing_parameters(self):
+        server,client=self.session();client.accept(server.handle(client.hello,client.hello['id'],None))
+        messages=[{'role':'system','content':'Use watercolor and warm light.'},{'role':'user','content':json.dumps({'prompt':'a lake','steps':12,'width':256})}]
+        request=client.request(messages);seen=[]
+        result=server.handle(request,request['id'],lambda history:seen.append(ComfyBackend().specification(history)) or {'images':[]})
+        self.assertEqual(client.response(result),{'images':[]});self.assertEqual(seen[0]['prompt'],'Use watercolor and warm light.\n\na lake');self.assertEqual(seen[0]['steps'],12);self.assertEqual(seen[0]['width'],256)
+        self.assertNotIn('watercolor',json.dumps(request))
     def test_progress_is_authenticated_encrypted_and_bound_to_original_request(self):
         from image_protocol import open_message
         server,client=self.session();client.accept(server.handle(client.hello,client.hello['id'],None))

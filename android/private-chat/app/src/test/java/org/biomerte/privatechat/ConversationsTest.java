@@ -7,6 +7,21 @@ import org.robolectric.annotation.*;
 import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class ConversationsTest {
+ @Test public void instructionsAreScopedAndSavedRequestsKeepTheirOriginalContext()throws Exception{
+  JSONObject d=old();Conversations.ensure(d);JSONObject first=Conversations.current(d);first.put("instructions","Use concise explanations.");String id=first.getString("id");
+  JSONArray sent=Conversations.requestContext(d);assertEquals("system",sent.getJSONObject(0).getString("role"));assertEquals("Use concise explanations.",sent.getJSONObject(0).getString("content"));assertEquals(1,d.getJSONArray("messages").length());
+  first.put("instructions","Explain in detail.");assertEquals("Use concise explanations.",sent.getJSONObject(0).getString("content"));
+  Conversations.create(d);assertEquals(0,Conversations.requestContext(d).length());assertEquals("",Conversations.instructions(d,d.getString("active_thread")));
+  JSONObject saved=Conversations.snapshot(d);Conversations.ensure(saved);Conversations.select(saved,id);assertEquals("Explain in detail.",Conversations.requestContext(saved).getJSONObject(0).getString("content"));
+ }
+ @Test public void pinsSortFirstStablyWithoutChangingActiveThreadOrStoredOrder()throws Exception{
+  JSONObject d=old();Conversations.ensure(d);String first=d.getString("active_thread");JSONObject second=Conversations.create(d),third=Conversations.create(d);second.put("pinned",true);third.put("pinned",true);
+  JSONArray ordered=Conversations.ordered(d);assertSame(second,ordered.getJSONObject(0));assertSame(third,ordered.getJSONObject(1));assertEquals(first,ordered.getJSONObject(2).getString("id"));assertEquals(first,d.getJSONArray("threads").getJSONObject(0).getString("id"));assertEquals(third.getString("id"),d.getString("active_thread"));
+ }
+ @Test public void blankInstructionsDoNotAddAnEmptySystemMessage()throws Exception{
+  JSONObject d=old();Conversations.ensure(d);Conversations.current(d).put("instructions"," \n ");assertEquals(1,Conversations.requestContext(d).length());
+  JSONArray image=Conversations.imageContext("image prompt","A watercolor style");assertEquals("system",image.getJSONObject(0).getString("role"));assertEquals("image prompt",image.getJSONObject(1).getString("content"));
+ }
  JSONObject message(String content)throws Exception{return new JSONObject().put("role","user").put("content",content);}
  JSONObject old()throws Exception{return new JSONObject().put("messages",new JSONArray().put(message("original"))).put("draft","draft one").put("selected_model","llama").put("pairing",new JSONObject().put("marker","paired"));}
  @Test public void upgradeKeepsHistoryPairingAndBindsSavedRequests()throws Exception{

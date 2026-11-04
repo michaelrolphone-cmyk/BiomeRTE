@@ -63,6 +63,14 @@ public class ChatUiTest {
   JSONObject d=(JSONObject)get("data");String id=d.getString("active_thread");((EditText)get("composer")).setText("original draft");call("newConversation");assertEquals(2,d.getJSONArray("threads").length());assertEquals(0,d.getJSONArray("messages").length());
   Method select=MainActivity.class.getDeclaredMethod("selectConversation",String.class);select.setAccessible(true);select.invoke(activity,id);assertEquals(2,d.getJSONArray("messages").length());assertEquals("original draft",((EditText)get("composer")).getText().toString());
  }
+ @Test public void threadSettingsSaveNameInstructionsAndPin()throws Exception{
+  call("renameConversation");Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();android.app.AlertDialog dialog=(android.app.AlertDialog)get("threadDialog");View form=dialog.getWindow().getDecorView();
+  ((EditText)findDescription(form,"Conversation name")).setText("Writing");((EditText)findDescription(form,"Conversation instructions")).setText("Use concise prose.");((CheckBox)findDescription(form,"Pin conversation")).setChecked(true);
+  dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();JSONObject thread=Conversations.current((JSONObject)get("data"));assertEquals("Writing",thread.getString("title"));assertEquals("Use concise prose.",thread.getString("instructions"));assertTrue(thread.getBoolean("pinned"));assertTrue(((Button)get("threadButton")).getText().toString().contains("Writing"));assertFalse(dialog.isShowing());
+ }
+ @Test public void lockingDismissesInstructionsEditor()throws Exception{
+  call("renameConversation");android.app.AlertDialog dialog=(android.app.AlertDialog)get("threadDialog");assertTrue(dialog.isShowing());call("lock");assertFalse(dialog.isShowing());assertNull(get("threadDialog"));assertNull(get("data"));
+ }
  static View findDescription(View view,String description){if(description.contentEquals(view.getContentDescription()==null?"":view.getContentDescription()))return view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View found=findDescription(group.getChildAt(i),description);if(found!=null)return found;}}return null;}
 }
 

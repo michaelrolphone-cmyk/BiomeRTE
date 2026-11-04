@@ -28,6 +28,20 @@ final class Conversations {
   throw new JSONException("Conversation unavailable");
  }
  static JSONObject current(JSONObject data)throws JSONException{return find(data,data.getString("active_thread"));}
+ static JSONArray ordered(JSONObject data)throws JSONException{
+  ensure(data);JSONArray source=data.getJSONArray("threads"),result=new JSONArray();
+  for(boolean pinned:new boolean[]{true,false})for(int i=0;i<source.length();i++){JSONObject thread=source.getJSONObject(i);if(thread.optBoolean("pinned",false)==pinned)result.put(thread);}
+  return result;
+ }
+ static String instructions(JSONObject data,String id)throws JSONException{return find(data,id).optString("instructions","").trim();}
+ static JSONArray requestContext(JSONObject data)throws JSONException{
+  return withInstructions(context(data.getJSONArray("messages")),instructions(data,data.getString("active_thread")));
+ }
+ static JSONArray withInstructions(JSONArray messages,String instructions)throws JSONException{
+  JSONArray result=new JSONArray();if(!instructions.trim().isEmpty())result.put(new JSONObject().put("role","system").put("content",instructions.trim()));
+  for(int i=0;i<messages.length();i++)result.put(messages.getJSONObject(i));return result;
+ }
+ static JSONArray imageContext(String prompt,String instructions)throws JSONException{return withInstructions(new JSONArray().put(new JSONObject().put("role","user").put("content",prompt)),instructions);}
  static void sync(JSONObject data)throws JSONException{
   ensure(data);JSONObject t=current(data);
   for(String key:FIELDS){if(data.has(key))t.put(key,data.get(key));else t.remove(key);}
