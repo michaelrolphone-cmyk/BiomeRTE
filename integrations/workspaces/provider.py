@@ -8,9 +8,9 @@ def configure():
  p=m.ROOT/'identity.json'
  if not p.exists():m.save(p,{'node':hashlib.sha256(os.urandom(32)).hexdigest()})
  node=m.read(p)['node'];g=m.gateway();site=g.invoke('system.info',{})['site'];resource='workspace.mac.'+node[:20]
- old=m.read(m.ROOT/'provider.json') if (m.ROOT/'provider.json').exists() else {};known={o['contract'] for o in old.get('offers',[])};offers=[]
+ old=m.read(m.ROOT/'provider.json') if (m.ROOT/'provider.json').exists() else {};known={o['contract'] for o in old.get('offers',[])};offers=[];schemas=m.read(m.ROOT/'schemas.json')
  for op in OPERATIONS:
-  name='workspace.'+op;contract=name+':1';usage={'before':'Mac-bound run-owned workspace. Discover argument schemas using workspace_tools or the repository README. Every response requires result.ok inspection.','parameters':{'arguments':'Object; workspace_id, holder and generation are required for writes to acquired instances.'},'read_result':'ok=false is a business/tool error. Large results are content-addressed JSON chunks.'}
+  name='workspace.'+op;contract=name+':1';usage={'before':'Mac-bound run-owned workspace. JSON Schema for arguments is included below. provision needs a running process ID, or $current inside a BPMN service. Standard templates: linux-basic@1 and esp-idf@2. Every response requires result.ok inspection.','parameters':{'arguments':json.dumps(schemas[op],separators=(',',':'))},'read_result':'ok=false is a business/tool error. Large results are content-addressed JSON chunks.'}
   if contract not in known:g.invoke('cap.define',{'name':name,'inputs':{'arguments':'obj'},'outputs':{'ok':'bool','result':'obj'},'description':'Docker workspace '+op,'usage':usage})
   offers.append({'contract':contract,'resource':resource,'service':'workflow-workspaces','capacity':16,'usage':usage,'argv':[sys.executable,str(m.ROOT/'provider.py'),'adapter',op]})
  cfg={'site':site,'realm':'site','resource':resource,'offers':offers,'parallelism':16,'timeout':None,'poll_seconds':2,'retry_seconds':5};m.save(m.ROOT/'provider.json',cfg);print(json.dumps({'resource':resource,'provider':node,'contracts':len(offers)}))
