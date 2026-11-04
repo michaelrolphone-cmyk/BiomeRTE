@@ -11,8 +11,8 @@ unless agent
  agent=result.payload[:user]
 end
 scope='mcp api read_repository write_repository'
-application=Doorkeeper::Application.create!(name:'Biome Git capability proxy',redirect_uri:'https://127.0.0.1/biome-gitlab-callback',scopes:scope,confidential:true,owner:root)
-access=Doorkeeper::AccessToken.create!(application:application,resource_owner_id:agent.id,scopes:scope,expires_in:7200,use_refresh_token:true)
+application=Authn::OauthApplication.create!(organization_id:root.organization_id,name:'Biome Git capability proxy',redirect_uri:'https://127.0.0.1/biome-gitlab-callback',scopes:scope,confidential:true,owner:root)
+access=OauthAccessToken.create!(organization_id:root.organization_id,application:application,resource_owner_id:agent.id,scopes:scope,expires_in:7200,use_refresh_token:true)
 client_secret=application.respond_to?(:plaintext_secret) ? application.plaintext_secret : application.secret
 client_secret ||= application.secret
 access_value=access.respond_to?(:plaintext_token) ? access.plaintext_token : access.token
