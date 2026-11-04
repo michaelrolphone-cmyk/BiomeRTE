@@ -174,8 +174,16 @@ public final class MainActivity extends Activity {
   String[] labels=new String[models.length()];int selected=-1;
   for(int i=0;i<labels.length;i++)try{JSONObject m=models.getJSONObject(i);labels[i]=m.getString("name")+(m.optBoolean("loaded")?" • loaded":"");if(m.getString("id").equals(data.optString("selected_model")))selected=i;}catch(Exception e){fail();return;}
   modelDialog=new AlertDialog.Builder(this).setTitle("Chat model").setSingleChoiceItems(labels,selected,(dialog,index)->{
-   try{data.put("selected_model",models.getJSONObject(index).getString("id"));save();modelButton.setText("Model · "+models.getJSONObject(index).getString("name"));dialog.dismiss();status.setText("Model selected for your next message.");}catch(Exception e){fail();}
+   try{String id=models.getJSONObject(index).getString("id");dialog.dismiss();selectModel(id);}catch(Exception e){fail();}
   }).setNeutralButton("Refresh",(d,w)->refreshModels()).setNegativeButton("Cancel",null).show();
+ }
+ private void selectModel(String id){
+  if(busy||data.has("pending"))return;
+  try{
+   if(!data.has("pairing")||!data.has("oauth")){settings();return;}
+   data.put("pending",startSession(false,"").put("action","select_model").put("selected_model",id));
+   save();resume();
+  }catch(Exception e){fail();}
  }
  private void refreshModels(){
   if(!parkImage())return;
@@ -244,6 +252,7 @@ public final class MainActivity extends Activity {
    requestKey=wire.traffic(shared,hash,"request");responseKey=wire.traffic(shared,hash,"response");
    JSONObject body=new JSONObject().put("messages",pending.optBoolean("image")?new JSONArray().put(new JSONObject().put("role","user").put("content",pending.getString("image_prompt"))):data.getJSONArray("messages"));
    if(pending.optString("action").equals("models"))body=new JSONObject().put("action","models");
+   else if(pending.optString("action").equals("select_model"))body=new JSONObject().put("action","select_model").put("model",pending.getString("selected_model"));
    else if(!pending.optBoolean("image")&&!pending.optString("selected_model").isEmpty())body.put("model",pending.getString("selected_model"));
    if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
    clear=body.toString().getBytes(StandardCharsets.UTF_8);byte[] nonce=Crypto.random(12);String sid=hello.getString("sid"),id=pending.getString("request_id");
@@ -284,6 +293,11 @@ public final class MainActivity extends Activity {
      JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),wire.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
      data.getJSONObject("pairing").remove("enrollment_token");
      if(reply.has("error")){status.setText("Your Mac could not finish. Try again or choose another model.");data.remove("pending");save();busy=false;updateControls();return;}
+     if(pending.optString("action").equals("select_model")){
+      data.put("selected_model",reply.getString("model"));data.put("models",reply.getJSONArray("models"));
+      data.remove("pending");save();busy=false;modelButton.setText("Model · "+modelName(data.getString("selected_model")));
+      updateControls();status.setText("Mac model loaded and ready.");return;
+     }
      if(pending.optString("action").equals("models")){
       JSONArray models=reply.getJSONArray("models");data.put("models",models);data.remove("pending");save();busy=false;
       updateControls();if(models.length()==0)status.setText("No chat models available on your Mac.");else chooseModel();return;
