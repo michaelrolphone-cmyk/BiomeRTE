@@ -8,13 +8,17 @@ final class Requests {
   Conversations.ensure(d);JSONObject legacy=d.optJSONObject("pending");if(legacy!=null){add(d,legacy);d.remove("pending");}
   JSONArray saved=d.optJSONArray("suspended_requests");if(saved!=null){for(int i=0;i<saved.length();i++)add(d,saved.getJSONObject(i));d.remove("suspended_requests");}
  }
+ static JSONObject find(JSONObject data,String key)throws JSONException{JSONArray a=all(data);for(int i=0;i<a.length();i++)if(id(a.getJSONObject(i)).equals(key))return a.getJSONObject(i);throw new JSONException("Request unavailable");}
+ static boolean contains(JSONObject data,String key){try{JSONArray a=all(data);for(int i=0;i<a.length();i++)if(id(a.getJSONObject(i)).equals(key))return true;}catch(JSONException ignored){}return false;}
  static void add(JSONObject d,JSONObject p)throws JSONException{String key=id(p);JSONArray a=all(d);for(int i=0;i<a.length();i++)if(id(a.getJSONObject(i)).equals(key))return;a.put(p);}
  static void remove(JSONObject d,String id)throws JSONException{JSONArray a=all(d);for(int i=a.length()-1;i>=0;i--)if(id(a.getJSONObject(i)).equals(id))a.remove(i);}
  static void replace(JSONObject d,String id,JSONObject next)throws JSONException{JSONArray a=all(d);for(int i=0;i<a.length();i++)if(id(a.getJSONObject(i)).equals(id)){a.put(i,next);return;}throw new JSONException("Request missing");}
  static int count(JSONObject d,String thread)throws JSONException{JSONArray a=all(d);int n=0;for(int i=0;i<a.length();i++)if(thread.equals(a.getJSONObject(i).optString("thread_id")))n++;return n;}
  static void complete(JSONObject d,JSONObject pending,JSONObject reply)throws JSONException{
   String id=id(pending);
+  if(!Conversations.exists(d,pending.getString("thread_id"))){remove(d,id);return;}
   if(pending.optString("action").equals("models")){d.put("models",Models.unique(reply.getJSONArray("models")));remove(d,id);return;}
+  if(!Conversations.exists(d,pending.getString("thread_id"))){remove(d,id);return;}
   JSONObject target=Conversations.find(d,pending.getString("thread_id"));JSONArray messages=target.getJSONArray("messages"),images=target.getJSONArray("images");
   // A delivered marker makes reconciliation safe even if persistence was interrupted.
   for(int i=0;i<messages.length();i++)if(id.equals(messages.getJSONObject(i).optString("request_id"))){remove(d,id);return;}

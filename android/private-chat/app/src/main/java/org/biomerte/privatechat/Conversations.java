@@ -13,6 +13,7 @@ final class Conversations {
    if(!first.has("images"))first.put("images",new JSONArray());
    data.put("threads",new JSONArray().put(first)).put("active_thread",first.getString("id"));
   }
+  if(data.getJSONArray("threads").length()==0){data.put("active_thread","");for(String field:FIELDS)data.remove(field);data.put("messages",new JSONArray()).put("images",new JSONArray());return;}
   JSONObject active=find(data,data.optString("active_thread"));
   if(!data.has("messages"))bind(data,active);
   if(!active.has("images"))active.put("images",new JSONArray());
@@ -26,6 +27,15 @@ final class Conversations {
   JSONArray threads=data.getJSONArray("threads");
   for(int i=0;i<threads.length();i++){JSONObject t=threads.getJSONObject(i);if(t.getString("id").equals(id))return t;}
   throw new JSONException("Conversation unavailable");
+ }
+ static boolean exists(JSONObject data,String id){try{find(data,id);return true;}catch(JSONException e){return false;}}
+ static JSONObject withoutThread(JSONObject data,String id)throws JSONException{
+  if(!exists(data,id))throw new JSONException("Conversation unavailable");JSONObject next=snapshot(data);JSONArray threads=next.getJSONArray("threads");
+  for(int i=threads.length()-1;i>=0;i--)if(id.equals(threads.getJSONObject(i).getString("id")))threads.remove(i);
+  if(id.equals(next.optString("active_thread")))next.put("active_thread",threads.length()==0?"":threads.getJSONObject(0).getString("id"));
+  for(String name:new String[]{"requests","suspended_requests"}){JSONArray requests=next.optJSONArray(name);if(requests!=null)for(int i=requests.length()-1;i>=0;i--)if(id.equals(requests.getJSONObject(i).optString("thread_id")))requests.remove(i);}
+  JSONObject pending=next.optJSONObject("pending");if(pending!=null&&id.equals(pending.optString("thread_id")))next.remove("pending");
+  ensure(next);return next;
  }
  static JSONObject current(JSONObject data)throws JSONException{return find(data,data.getString("active_thread"));}
  static JSONArray ordered(JSONObject data)throws JSONException{
@@ -43,7 +53,7 @@ final class Conversations {
  }
  static JSONArray imageContext(String prompt,String instructions)throws JSONException{return withInstructions(new JSONArray().put(new JSONObject().put("role","user").put("content",prompt)),instructions);}
  static void sync(JSONObject data)throws JSONException{
-  ensure(data);JSONObject t=current(data);
+  ensure(data);if(data.getJSONArray("threads").length()==0)return;JSONObject t=current(data);
   for(String key:FIELDS){if(data.has(key))t.put(key,data.get(key));else t.remove(key);}
  }
  private static void bind(JSONObject data,JSONObject thread)throws JSONException{

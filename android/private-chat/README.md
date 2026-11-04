@@ -104,3 +104,19 @@ captured. Metadata and context live only inside the encrypted phone vault and
 are projected out of future inference messages. Deleting a message removes saved
 context snapshots in that thread and redacts pending response snapshots. Info
 windows are secure and close when the vault locks.
+
+0.12.0: Delete conversation is available from the thread row menu and the chat
+menu. Confirmation removes the complete encrypted thread, its queued request
+records and local watchers. Other conversations and their in-flight requests
+continue. Late replies cannot restore a deleted thread. The inbox remains empty
+when its last thread is deleted. A Mac operation already running may finish;
+its deleted thread's result is ignored.
+
+Copy buttons on messages copy exact prompt/response text. Image results include
+Copy prompt and Copy image while collapsed; batches offer image selection and
+expanded images have per-image long-press actions. Images use PNG content URIs
+through a private, read-only provider with temporary Android clipboard grants.
+Temporary image bytes are encrypted at rest with an Android Keystore key and
+streamed to authorized paste consumers. Copying marks the clipboard sensitive
+and does not add image/text data to inference context. Image paste requires a
+recipient app with image clipboard support.
