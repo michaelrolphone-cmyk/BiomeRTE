@@ -106,7 +106,7 @@ def git_env(w):
  sys.path.insert(0,str(GITROOT));import proxy
  token=proxy.token();host=__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(proxy.settings()['url']).hostname
  # Credentials live only on tmpfs; the helper rejects other destinations.
- script='#!/bin/sh\n[ "$1" = get ] || exit 0\nprotocol=; host=\nwhile IFS="=" read -r k v; do case "$k" in protocol) protocol="$v";; host) host="$v";; esac; done\n[ "$protocol" = https ] && [ "$host" = "'+host+':8443" ] || exit 0\nprintf "username=oauth2\\npassword="\ncat /run/biome-secrets/token\nprintf "\\n\\n"\n'
+ script='#!/bin/sh\n[ "$1" = get ] || exit 0\nprotocol=; host=\nwhile IFS="=" read -r k v; do case "$k" in protocol) protocol="$v";; host) host="$v";; esac; done\nhost=$(printf "%s" "$host" | tr "[:upper:]" "[:lower:]")\n[ "$protocol" = https ] && [ "$host" = "'+host+':8443" ] || exit 0\nprintf "username=oauth2\\npassword="\ncat /run/biome-secrets/token\nprintf "\\n\\n"\n'
  docker('exec','-i',w['container'],'sh','-c','umask 077; cat > /run/biome-secrets/token',input=token.encode())
  docker('exec','-i',w['container'],'sh','-c','cat > /run/biome-secrets/git-helper; chmod 700 /run/biome-secrets/git-helper',input=script.encode())
  return ['-c','credential.helper=','-c','credential.helper=/run/biome-secrets/git-helper','-c','http.sslCAInfo=/run/biome/gitlab.crt','-c','user.name=Biome Agent','-c','user.email=biome-agent@biome.local']
@@ -147,6 +147,7 @@ def checkpoint(w,operation):
 def restore(w):
  cp=w['checkpoint'];a=cp['volume_archive']
  if hashed(a['file'])!=a['sha256']:raise RuntimeError('Volume archive checksum mismatch')
+ if exists('container',w['container']):docker('rm','-f',w['container'])
  if not exists('image',cp['image']):load_image(cp['image_archive'])
  if exists('volume',w['volume']):docker('volume','rm',w['volume'])
  docker('volume','create','--label','biome.workspace='+w['id'],w['volume'])
