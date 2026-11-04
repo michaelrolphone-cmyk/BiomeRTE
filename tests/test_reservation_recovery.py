@@ -91,6 +91,17 @@ class ReservationRecoveryTests(unittest.TestCase):
         self.app.tick('site')
         self.assertEqual('fencing', self.inspect(lease)['state'])
 
+    def test_completed_old_generation_does_not_release_new_reservation(self):
+        lease = self.acquire('reused-task')
+        self.bound(lease)
+        self.call('cap.invoke', dict(lease=lease['id'], operation='old-job', inputs={'value': 'x'}))
+        self.call('provider.claim', dict(provider='provider', operation='old-job', generation=lease['generation']))
+        self.call('provider.result', dict(provider='provider', operation='old-job', generation=lease['generation'], state='succeeded', result={'value': 'reply'}))
+        new = self.acquire('reused-task')
+        self.assertGreater(new['generation'], lease['generation'])
+        self.app.tick('site')
+        self.assertEqual('fencing', self.inspect(new)['state'])
+
     def test_existing_reservation_gets_migration_grace_after_restart(self):
         self.offer({})
         lease = self.acquire('old')
