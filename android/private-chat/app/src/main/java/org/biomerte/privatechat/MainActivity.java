@@ -310,6 +310,28 @@ public final class MainActivity extends Activity {
    default:return "Your selected model could not finish this request. Retry or choose another model.";
   }
  }
+ static String imageProgressLabel(JSONObject value){
+  String stage=value.optString("stage");switch(stage){
+   case "preparing":return "Preparing image request…";
+   case "queued":return "Image queued on your Mac…";
+   case "loading_model":return "Loading image model…";
+   case "loading_text_encoders":return "Loading text encoders…";
+   case "encoding_prompt":return "Encoding image prompt…";
+   case "sampling":int step=value.optInt("step",-1),total=value.optInt("total",0);return step>=0&&total>0&&step<=total?"Generating image · Step "+step+" of "+total:"Sampling image…";
+   case "loading_decoder":return "Loading image decoder…";
+   case "decoding":return "Decoding image…";
+   case "delivery":return "Encrypting and delivering image…";
+   default:return "Generating image on your Mac…";
+  }
+ }
+ private void showImageProgress(JSONObject frame,JSONObject pending,int generation,long[] sequence){
+  runOnUiThread(()->{if(generation!=epoch||!busy)return;byte[] key=null,clear=null;try{
+   JSONObject request=pending.getJSONObject("envelope");String id=request.getString("id"),sid=request.getString("sid");
+   if(frame.getInt("v")!=2||!frame.getString("kind").equals("progress")||!id.equals(frame.getString("id"))||!sid.equals(frame.getString("sid")))return;
+   key=Vault.unb64(pending.getString("response_key"));clear=Crypto.crypt(false,key,Vault.unb64(frame.getString("nonce")),new WireCrypto(true).sessionAAD("progress",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(frame.getString("ct")));
+   JSONObject update=new JSONObject(new String(clear,StandardCharsets.UTF_8));long next=update.getLong("seq");if(next<=sequence[0])return;sequence[0]=next;status.setText(imageProgressLabel(update));
+  }catch(Exception ignored){}finally{Crypto.wipe(key);Crypto.wipe(clear);}});
+ }
  private void resume(){
   if(busy||!data.has("pending"))return;
   try{
@@ -320,7 +342,8 @@ public final class MainActivity extends Activity {
    boolean image=pending.optBoolean("image");if(image)resource=resource.replace("privatechat.mac.","image.mac.");final String targetResource=resource;
    boolean isHello=pending.getString("stage").equals("hello");JSONObject outbound=pending.getJSONObject(isHello?"hello":"envelope");
    int g=epoch;busy=true;status.setText(isHello?"Connecting securely…":pending.optString("action").equals("models")?"Loading models from your Mac…":image?"Generating image on your Mac…":"Waiting for your model…");updateControls();
-   transport=executor.submit(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted());
+   final long[] progressSequence={0};
+   transport=executor.submit(()->{try{JSONObject response=biome.exchange(token,targetResource,outbound,image,()->g==epoch&&!Thread.currentThread().isInterrupted(),frame->showImageProgress(frame,pending,g,progressSequence));
     runOnUiThread(()->{if(g!=epoch)return;try{
      if(isHello){finishSession(response);busy=false;resume();return;}
      WireCrypto wire=new WireCrypto(image);

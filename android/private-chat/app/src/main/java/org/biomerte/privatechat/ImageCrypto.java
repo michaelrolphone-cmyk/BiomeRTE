@@ -47,10 +47,11 @@ public final class ImageCrypto {
  }
  public static void canonicalId(String id){if(!java.util.UUID.fromString(id).toString().equals(id))throw new IllegalArgumentException();}
  public static byte[] sessionAAD(String kind,String sid,String operation,byte[] hash)throws Exception{
-  canonicalId(sid);canonicalId(operation);if(hash.length!=32||!(kind.equals("request")||kind.equals("response")))throw new IllegalArgumentException();
+  canonicalId(sid);canonicalId(operation);if(hash.length!=32||!(kind.equals("request")||kind.equals("response")||kind.equals("progress")))throw new IllegalArgumentException();
   return join(utf8("biome-private-image|2|"+kind+"|"+sid+"|"+operation+"|"),hash);
  }
  public static byte[] aad(String direction,String id){return ("biome-private-image|1|"+direction+"|"+id).getBytes(StandardCharsets.UTF_8);}
  public static void wipe(byte[] key){if(key!=null)Arrays.fill(key,(byte)0);}
  private ImageCrypto(){}
 }
+

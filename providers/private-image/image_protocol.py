@@ -5,6 +5,7 @@ import hmac
 import json
 import secrets
 import uuid
+import threading
 from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -37,7 +38,7 @@ def keys(shared, transcript_hash):
             for kind in ('request', 'response')}
 def aad(kind, sid, operation, transcript_hash):
     ident(sid); ident(operation)
-    if kind not in ('request', 'response') or len(transcript_hash) != 32:
+    if kind not in ('request', 'response', 'progress') or len(transcript_hash) != 32:
         raise ValueError('Invalid binding')
     return ('biome-private-image|2|' + kind + '|' + sid + '|' + operation + '|').encode() + transcript_hash
 def seal(key, kind, sid, operation, thash, value):
@@ -55,7 +56,7 @@ class SessionServer:
         self.phone_identity = phone_identity
         self.enrolled = enrolled or (lambda phone: None)
         self.sessions = {}
-    def handle(self, envelope, operation, infer):
+    def handle(self, envelope, operation, infer, progress=None):
         if envelope.get('v') != 2 or envelope.get('id') != operation:
             raise ValueError('Invalid operation binding')
         ident(operation)
@@ -83,7 +84,15 @@ class SessionServer:
             self.enrollment_hash = None
         self.sessions.pop(sid)
         try:
-            answer = infer(messages)
+            sequence = 0
+            progress_lock = threading.Lock()
+            def emit(update):
+                nonlocal sequence
+                with progress_lock:
+                    sequence += 1
+                    value = dict(update, seq=sequence)
+                    progress(seal(session['keys']['response'],'progress',sid,operation,session['hash'],value))
+            answer = infer(messages, emit) if progress is not None else infer(messages)
         except Exception:
             answer = {'error':'private_inference_unavailable'}
         return seal(session['keys']['response'],'response',sid,operation,session['hash'],answer)
@@ -111,3 +120,4 @@ class SessionServer:
         self.sessions[sid] = dict(keys=traffic,hash=thash,phone=phone,client=body,reply=reply)
         # Neither ephemeral private key nor conversation content is retained.
         return reply
+

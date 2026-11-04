@@ -110,6 +110,16 @@ public class Biome {
    throw new IOException("Connection interrupted; resume the same request");
   }finally{c.disconnect();if(connection==c)connection=null;}
  }
+ public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active,java.util.function.Consumer<JSONObject> progress)throws Exception{
+  java.util.concurrent.atomic.AtomicBoolean done=new java.util.concurrent.atomic.AtomicBoolean(false);Biome watcher=new Biome();Thread monitor=null;
+  if(image&&envelope.optString("kind").equals("request")){
+   monitor=new Thread(()->{while(!done.get()&&active.getAsBoolean()){
+    try{JSONObject state=watcher.invoke(token,"cap.status",new JSONObject().put("operation",envelope.getString("id")),UUID.randomUUID().toString());JSONObject checkpoint=state.optJSONObject("checkpoint");if(checkpoint!=null&&checkpoint.optJSONObject("envelope")!=null)progress.accept(checkpoint.getJSONObject("envelope"));}catch(Exception ignored){}
+    try{Thread.sleep(1500);}catch(InterruptedException e){return;}
+   }},"image-progress");monitor.setDaemon(true);monitor.start();
+  }
+  try{return exchange(token,resource,envelope,image,active);}finally{done.set(true);watcher.cancel();if(monitor!=null)monitor.interrupt();}
+ }
  public JSONObject exchange(String token,String resource,JSONObject envelope,boolean image,java.util.function.BooleanSupplier active)throws Exception{
   JSONObject status=completion(token,resource,envelope,image,active);
   if(status.optBoolean("legacy"))return exchangeLegacy(token,resource,envelope,image,active);

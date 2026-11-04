@@ -62,3 +62,8 @@ from another thread. Terminal failures are retained in Pending requests; startin
 one again requires an explicit action because a previous lost result may have
 already run. Transport interruptions continue to resume the same operation.
 Assistant model labels remain display metadata and are excluded from chat context.
+
+Image generation progress is authenticated and encrypted by the Mac using the
+image session. The app displays preparation, sampling step/total, decoding and
+delivery updates; prompts and image bytes are excluded from progress records.
+Progress failures do not cancel or repeat generation.

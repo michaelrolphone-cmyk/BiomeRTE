@@ -71,6 +71,8 @@ def serve():
         raw(chat["enrollment_hash"],32) if chat.get("enrollment_hash") else None,
         raw(chat["phone_identity"],32) if chat.get("phone_identity") else None,enrolled)
     def handle(action):
+        def progress(value):
+            remote.call('agent.progress',dict(provider=remote.node,operation=action['id'],generation=action['generation'],checkpoint=value))
         if action["contract"] == "image.generate:1":
             result = backend.generate([{"role":"user","content":json.dumps(action["inputs"])}])
             for image in result["images"]:
@@ -81,7 +83,8 @@ def serve():
         current = json.loads((CHAT/"manifest.json").read_text())
         protocol.phone_identity = raw(current["phone_identity"],32) if current.get("phone_identity") else None
         protocol.enrollment_hash = raw(current["enrollment_hash"],32) if current.get("enrollment_hash") else None
-        envelope = protocol.handle(action["inputs"]["envelope"],action["id"],backend.generate)
+        envelope = protocol.handle(action["inputs"]["envelope"],action["id"],backend.generate,
+                                   progress=lambda envelope:progress({'envelope':envelope}))
         return store_envelope(envelope,remote)
     with open(STATE/"worker.lock","a") as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
