@@ -9,10 +9,10 @@ import json
 import os
 import sqlite3
 import sys
+import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from biomerte.app import read_json
 from biomerte.gateway_journal import GatewayJournal
-from biomerte.identity import write_private
 from biomerte.store import digest, encode
 from ha_link import snapshot
 
@@ -57,7 +57,12 @@ def migrate(home, origin, key_file, controller_id, capacity):
     event_db.close()
     remote.request('events/seed', {'body': body})
     conf['gateway_journal'] = settings
-    write_private(path, (json.dumps(conf, indent=2) + '\n').encode())
+    fd, staged = tempfile.mkstemp(prefix='node-ha-', dir=home)
+    with os.fdopen(fd, 'w') as handle:
+        handle.write(json.dumps(conf, indent=2) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(staged, path)
     print(json.dumps({'migrated_entries': len(chunks), 'head_hash': previous,
                       'event_tables': len(body), 'site': conf['site']}))
 
