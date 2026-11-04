@@ -22,7 +22,8 @@ public class DecisionDialogActivity extends Activity {
  private Button button(String text,Runnable action){Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setTextColor(getColor(R.color.accent));b.setOnClickListener(v->action.run());body.addView(b,new LinearLayout.LayoutParams(-1,-2));return b;}
  private void progress(String text){ProgressBar p=new ProgressBar(this);p.setIndeterminate(true);body.addView(p,new LinearLayout.LayoutParams(dp(36),dp(36)));label(text,16).setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);}
  private void saveDraft(){if(reply==null||row==null||busy)return;String value=reply.getText().toString(),key=id;draft=value;App.work(this,()->new State(this).draft(key,value));}
- private void refresh(){if(busy||DecisionWidget.locked(this))return;App.work(this,()->{JSONObject s=new State(this).read();main.post(()->{try{if(!busy&&(reply==null||State.submitted(s,id)))render(s);}catch(Exception e){failure(e);}});});}
+ private void refresh(){if(busy||DecisionWidget.locked(this))return;App.work(this,()->{JSONObject s=new State(this).read();main.post(()->{try{if(!busy&&(row==null||State.submitted(s,id)||!hasCurrentRow(s)))render(s);}catch(Exception e){failure(e);}});});}
+ private boolean hasCurrentRow(JSONObject s)throws Exception{JSONArray rows=s.getJSONArray("rows");for(int n=0;n<rows.length();n++){JSONObject current=rows.getJSONObject(n);if(current.getString("id").equals(id)&&current.getString("digest").equals(row.getString("digest")))return true;}return false;}
  private void load(){if(busy)return;App.work(this,()->{JSONObject s=new State(this).read();main.post(()->{try{if(!busy)render(s);}catch(Exception e){failure(e);}});});}
  private void render(JSONObject s)throws Exception{
   if(isFinishing())return;if(DecisionWidget.locked(this)){page("Unlock to review");button("Close",this::close);return;}
