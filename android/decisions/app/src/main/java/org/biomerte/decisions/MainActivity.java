@@ -73,10 +73,10 @@ public class MainActivity extends Activity {
   for(int n=0;n<column.getChildCount();n++)if(column.getChildAt(n) instanceof Button)column.getChildAt(n).setEnabled(false);
   page("Your reply");progress("Saving and sending your reply…");
   App.IO.execute(()->{try{
-   new State(this).draft(row.getString("id"),value);new State(this).queue(this,row,choice,value);
-   DecisionWidget.update(this);main.post(()->{saving=false;load();});App.sync(this);
+   saveReply(row,choice,value);main.post(()->{saving=false;load();});App.sync(this);
   }catch(Exception e){main.post(()->{saving=false;sendingId="";error(e);load();});}});
  }
+ protected void saveReply(JSONObject row,String choice,String value)throws Exception{new State(this).draft(row.getString("id"),value);new State(this).queue(this,row,choice,value);DecisionWidget.update(this);}
  private void choosePairing(){saveDraft();startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),10);}
  @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request!=10||result!=RESULT_OK||data==null||data.getData()==null)return;
   App.IO.execute(()->{try{String raw;try(InputStream in=getContentResolver().openInputStream(data.getData())){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>65536)throw new IOException("Pairing file too large");out.write(b,0,n);}raw=out.toString("UTF-8");}Client.pair(this,new JSONObject(raw));App.start(this);App.sync(this);main.post(()->{editing="";load();});}catch(Exception e){main.post(()->error(e));}});
