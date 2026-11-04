@@ -35,3 +35,29 @@ if coding.exists():
   content=content.replace(marker,imports+marker).replace(original,replacement)
   compile(content,str(coding),"exec");coding.write_text(content)
   print("Added Git tools to coding facade")
+
+http=pathlib.Path.home()/".local/share/biome-lmstudio/coding_http.mjs"
+if http.exists():
+ content=http.read_text()
+ if "server.registerTool('git_tools'" not in content:
+  needle="  return server;"
+  if needle not in content:raise RuntimeError("Coding HTTP facade changed")
+  additions="""  server.registerTool('git_tools', {
+    description: 'Discover GitLab MCP tools and native Git capabilities through Biome.',
+    inputSchema: z.object({})
+  }, args => terminal('git_tools', args));
+  server.registerTool('git_start', {
+    description: 'Start a Git capability through Biome; retain operation and call git_status until settled. Inspect result.ok.',
+    inputSchema: z.object({ contract: z.string(), arguments: z.record(z.string(), z.unknown()) })
+  }, args => terminal('git_start', args));
+  server.registerTool('git_status', {
+    description: 'Read a durable Git operation through Biome; queued or uncertain is not success.',
+    inputSchema: z.object({ operation: z.string() })
+  }, args => terminal('git_status', args));
+"""
+  backup=http.with_name("coding_http.pre-gitlab."+__import__('hashlib').sha256(content.encode()).hexdigest()[:12]+".mjs")
+  if not backup.exists():backup.write_text(content)
+  http.write_text(content.replace(needle,additions+needle))
+  subprocess.run([shutil.which("node") or "/usr/local/bin/node","--check",str(http)],check=True)
+  subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/org.biomerte.lmstudio-coding-mcp"],check=True)
+  print("Published Git tools on coding MCP HTTP facade")
