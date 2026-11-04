@@ -143,7 +143,7 @@ def configure():
  atomic(ROOT/"manifest.json",manifest)
  print(json.dumps({"provider":node,"resource":resource,"mcp_tools":len(tools),"contracts":len(offers),"url":cfg["url"]}))
 def worker():
- sys.path.insert(0,str(TERMINAL/"runtime"));from biomerte.worker import run_worker
+ sys.path.insert(0,str(ROOT/"runtime"));from biomerte.worker import run_worker
  cfg=json.loads((ROOT/"manifest.json").read_text());node=json.loads((ROOT/"provider.json").read_text())["node"];g=gateway()
  class Remote:
   site=cfg["site"];realm="site"

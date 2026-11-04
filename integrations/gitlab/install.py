@@ -5,6 +5,7 @@ root=pathlib.Path.home()/".local/share/biome-gitlab";root.mkdir(parents=True,exi
 src=pathlib.Path(__file__).resolve().parent
 shutil.copy2(src/"proxy.py",root/"proxy.py")
 shutil.copy2(src/"agent_tools.py",root/"agent_tools.py")
+shutil.copytree(src.parent.parent/"biomerte",root/"runtime/biomerte",dirs_exist_ok=True)
 url="https://Micahels-Mac-mini.local:8443"
 (root/"config.json").write_text(json.dumps({"url":url,"ca":str(root/"tls/gitlab.crt")}))
 python=sys.executable
@@ -16,8 +17,9 @@ path=pathlib.Path.home()/"Library/LaunchAgents"/(label+".plist");path.parent.mkd
 with path.open("wb") as out:plistlib.dump(plist,out)
 subprocess.run([python,str(root/"proxy.py"),"configure"],check=True)
 domain="gui/"+str(os.getuid())
-subprocess.run(["launchctl","bootout",domain+"/"+label],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-subprocess.run(["launchctl","bootstrap",domain,str(path)],check=True)
+loaded=subprocess.run(["launchctl","print",domain+"/"+label],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
+if loaded:subprocess.run(["launchctl","kickstart","-k",domain+"/"+label],check=True)
+else:subprocess.run(["launchctl","bootstrap",domain,str(path)],check=True)
 print("Installed "+label)
 
 # Add Git tools to the existing coding facade without replacing its terminal tools.
