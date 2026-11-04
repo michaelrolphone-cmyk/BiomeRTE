@@ -25,6 +25,8 @@ Pinned model: `mlx-community/Qwen3.5-9B-4bit`, revision `8b2b98c00a6b4d291155e48
 
 At this checkpoint, install command `af-install-v4` had been submitted through Biome, but the controller stopped replying before its result could be recovered. Service startup, capability registration, plugin compilation/install and an end-to-end agent request are not yet confirmed. Later local source changes add next-logit resume and repeated-seed qualification checks; those additional checks have not yet run.
 
+Further recovery attempts after the reported controller fix still received no reply. Five additional model-free session-control tests pass locally: versioned config/idempotency, isolation/restart, config effective boundary, interrupted-request recovery, and synchronous reservation before starting a generation worker. The reservation and lock-order fixes need deployment to the Mac before its full test suite is rerun.
+
 Full held-out memory, correction, 10,000-token stability, cross-domain retrieval and coherence experiments have not run. C3/C4 are explicitly marked unexecuted by the runner; exact matched replay is not implemented. Optional persistent homology and a calibrated coherence score are not implemented. The experiment runner is an initial harness, not a completed scientific study. Per-layer saturation/drift/update-norm reporting still needs expansion beyond current candidate/changed counts and receipts. Confirmatory multi-seed bootstrap analysis is not yet included.
 
 The LM Studio SDK currently resolves to dependencies for which npm reports a constrained-collection validation advisory in Zod 3. No forced SDK downgrade or incompatible Zod major upgrade was applied. The authenticated loopback service itself does not use that dependency.

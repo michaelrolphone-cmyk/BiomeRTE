@@ -88,16 +88,21 @@ class Sessions:
         return receipt
 
     def configure(self,sid,body):
+        # No global guard may be held while waiting for a session lock.
+        with self.guard:
+            if self.get(sid).get('busy'):return self._configure_busy(sid,body)
+        return self.mutate(sid,'config',body)
+
+    def _configure_busy(self,sid,body):
         with self.guard:
             s=self.get(sid)
-            if not s.get('busy'):return self.mutate(sid,'config',body)
             rid=body['request_id'];key=self.request_key(sid,rid);digest=hashlib.sha256(canonical(['config',body])).hexdigest()
             try:
                 prior=self.vault.load_json(key)
                 if prior['digest']!=digest:raise Conflict('request_id_reused_with_different_content')
                 return prior
             except FileNotFoundError:pass
-            if body['expected_version']!=s['version']:raise Conflict('stale_version')
+            if type(body.get('expected_version')) is not int or body['expected_version']!=s['version']:raise Conflict('stale_version')
             config=s['config'].copy();config.update(body['config']);FieldConfig.parse(config)
             receipt=dict(request_id=rid,session_id=sid,digest=digest,status='queued',action='config',version=s['version'])
             self.vault.save_json(key,receipt)
@@ -115,11 +120,9 @@ class Sessions:
                 except Exception as exc:receipt.update(status='failed',result=dict(code=type(exc).__name__,message=str(exc)))
                 self.vault.save_json(self.request_key(sid,receipt['request_id']),receipt)
 
-    def mutate(self,sid,action,body,emit=None):
-        from .admission import model_slot
-        from .runtime import Engine
+    def mutate(self,sid,action,body,emit=None,prepared=None):
         with self.lock(sid):
-            receipt,fresh=self.begin(sid,action,body)
+            with self.guard:receipt,fresh=prepared or self.begin(sid,action,body)
             if not fresh:return receipt
             s=self.get(sid);engine=None
             try:
@@ -135,6 +138,8 @@ class Sessions:
                 def progress(info):
                     self.admission=info.get('stage','queued')
                     if emit:emit(dict(type='status',**info))
+                from .admission import model_slot
+                from .runtime import Engine
                 with model_slot(progress):
                     self.admission='running';self.active=sid
                     try:
@@ -187,13 +192,14 @@ class Sessions:
             except FileNotFoundError:pass
             if body.get('expected_version')!=s['version']:raise Conflict('stale_version')
             if s.get('busy'):raise Conflict('session_busy')
+            prepared=self.begin(sid,'generate',body)
             self.job_digests[key]=hashlib.sha256(canonical(['generate',body])).hexdigest()
             self.events[key]=[];self.cancel[key]=threading.Event()
             condition=threading.Condition();self.jobs[key]=condition
             def emit(event):
                 with condition:self.events[key].append(event);condition.notify_all()
             def run():
-                try:result=self.mutate(sid,'generate',body,emit)
+                try:result=self.mutate(sid,'generate',body,emit,prepared=prepared)
                 except Exception as exc:result=dict(status='failed',error=dict(code=type(exc).__name__,message=str(exc)))
                 emit(dict(type='complete',receipt=result))
             threading.Thread(target=run,name='field-request',daemon=True).start()
