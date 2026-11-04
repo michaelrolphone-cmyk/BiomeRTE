@@ -93,6 +93,14 @@ class Remote:
         return gateway.invoke(name, args, rid, self.realm)
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
+    def advertise(self):
+        # The generic legacy worker forwards only capacity/usage. Preserve the
+        # private service's explicitly configured reservation lifecycle too.
+        for offer in self.offers:
+            args = {key: offer[key] for key in ('contract', 'resource', 'capacity', 'service', 'configuration', 'usage') if key in offer}
+            args.update(provider=self.remote.node, state=offer.get('state', 'ready'))
+            self.remote.call('cap.offer', args)
+
     def __init__(self, *args, handler=None):
         super().__init__(*args)
         self.pending = {}
