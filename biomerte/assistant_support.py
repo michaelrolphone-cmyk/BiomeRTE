@@ -141,6 +141,11 @@ def record_frame(tx,f):
 
 def prompt_phase(tx,ctx,f,key,entry):
     cfg=configuration(tx);context=copy.deepcopy(f.get('context',{}));context.update(workspace=f.get('workspace_context'), source_request=f.get('source_request'), source_snapshot=f.get('source_snapshot'), publication=f.get('publication'), observation=f.get('last_result'),prediction=f.get('hypotheses',[]),test_evidence=f.get('test_evidence'),review_feedback=f.get('review'),goal=f.get('goal',{}),proposal=f.get('proposal'),evidence=f.get('evidence',[]),previous_findings=f.get('findings',[]),inventory=f.get('inventory',[]),system=f.get('current_system'),tool_schemas=[{'id':c['id'],'inputs':c['inputs'],'outputs':c['outputs']} for c in tx.rows('contracts')])
+    observation=context['observation']
+    if isinstance(observation,dict) and observation and all(k in context and context[k]==v for k,v in observation.items()):
+        # Protocol reads already placed these exact fields in the context.
+        # Retain them once, with an explicit digest-bound observation reference.
+        context['observation']={'same_as_context_fields':sorted(observation),'sha256':digest(observation)}
     essential={k:context[k] for k in ('goal','proposal','system','observation','prediction','test_evidence','review_feedback','workspace','source_request','source_snapshot')}
     if f.get('runtime_phase')=='development':
         context['workspace_tool_schemas']={k:assistant_workspaces.SCHEMAS[k] for k in ('exec','git','file.write')}
