@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
- private Button threadButton,modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog,threadDialog; private boolean imageMode=false,connectionScreen=false,returnToConnection=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
+ private Button threadButton,modelButton,sendButton,retryButton,chatModeButton,imageModeButton; private LinearLayout messageList,toolbar; private ScrollView chatScroll; private AlertDialog modelDialog,threadDialog; private boolean imageMode=false,connectionScreen=false,conversationsScreen=false,returnToConnection=false; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history,screenTitle; private LinearLayout conversationRows; private EditText composer;
  private final ExecutorService executor=Executors.newSingleThreadExecutor(); private Future<?> transport;
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
@@ -23,7 +23,7 @@ public final class MainActivity extends Activity {
   super.onStop();
  }
  @Override protected void onResume(){super.onResume();if(returnToConnection&&data!=null){returnToConnection=false;settings();}}
- @Override public void onBackPressed(){if(connectionScreen&&data!=null){chat();}else{lock();super.onBackPressed();}}
+ @Override public void onBackPressed(){if(connectionScreen&&data!=null){chat();}else if(data!=null&&!conversationsScreen){chooseConversation();}else{lock();super.onBackPressed();}}
  @Override protected void onDestroy(){lock();executor.shutdownNow();super.onDestroy();}
  private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
  private android.graphics.drawable.GradientDrawable surface(int color,int radius){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
@@ -36,7 +36,7 @@ public final class MainActivity extends Activity {
   if(Build.VERSION.SDK_INT>=30){getWindow().setDecorFitsSystemWindows(false);root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()),ime=insets.getInsets(WindowInsets.Type.ime());v.setPadding(dp(16)+bars.left,dp(8)+bars.top,dp(16)+bars.right,dp(8)+Math.max(bars.bottom,ime.bottom));return insets;});}else root.setFitsSystemWindows(true);
   toolbar=new LinearLayout(this);toolbar.setGravity(Gravity.CENTER_VERTICAL);
   ImageView mark=new ImageView(this);mark.setImageResource(R.drawable.biome_mark);mark.setContentDescription("Biome");toolbar.addView(mark,new LinearLayout.LayoutParams(dp(40),dp(40)));
-  TextView heading=text(title,21,0xffe9ede4);heading.setTypeface(null,android.graphics.Typeface.BOLD);heading.setPadding(dp(10),0,0,0);toolbar.addView(heading,new LinearLayout.LayoutParams(0,dp(48),1));heading.setGravity(Gravity.CENTER_VERTICAL);root.addView(toolbar);
+  TextView heading=text(title,21,0xffe9ede4);screenTitle=heading;heading.setMaxLines(1);heading.setEllipsize(android.text.TextUtils.TruncateAt.END);heading.setTypeface(null,android.graphics.Typeface.BOLD);heading.setPadding(dp(10),0,0,0);toolbar.addView(heading,new LinearLayout.LayoutParams(0,dp(48),1));heading.setGravity(Gravity.CENTER_VERTICAL);root.addView(toolbar);
   status=text("",12,0xffcad9c5);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setPadding(dp(2),dp(4),0,dp(10));root.addView(status);setContentView(root);
  }
  private void formArea(){LinearLayout shell=root;ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);scroll.addView(form);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));root=form;}
@@ -61,31 +61,65 @@ public final class MainActivity extends Activity {
  }
  private void switchMode(boolean image){imageMode=image;chatModeButton.setBackground(surface(image?0xff21362b:0xff406348,12));imageModeButton.setBackground(surface(image?0xff406348:0xff21362b,12));composer.setHint(image?"Describe an image…":"Message…");sendButton.setContentDescription(image?"Generate image":"Send message");modelButton.setVisibility(image?View.GONE:View.VISIBLE);}
  private void menu(View anchor){PopupMenu menu=new PopupMenu(this,anchor);boolean pinned=false;try{pinned=Conversations.current(data).optBoolean("pinned");}catch(Exception ignored){}for(String label:new String[]{"Conversations","New conversation","Conversation settings",pinned?"Unpin conversation":"Pin conversation","Connection","Lock"})menu.getMenu().add(label);menu.setOnMenuItemClickListener(item->{switch(item.getTitle().toString()){case "Conversations":chooseConversation();break;case "New conversation":newConversation();break;case "Conversation settings":renameConversation();break;case "Pin conversation":case "Unpin conversation":togglePin();break;case "Connection":settings();break;case "Lock":lock();break;}return true;});menu.show();}
- private String threadLabel()throws Exception{JSONObject t=Conversations.current(data);return (t.optBoolean("pinned")?"📌  ":"▤  ")+t.getString("title")+"  ▾";}
- private void togglePin(){try{JSONObject thread=Conversations.current(data);thread.put("pinned",!thread.optBoolean("pinned"));save();threadButton.setText(threadLabel());status.setText(thread.optBoolean("pinned")?"Conversation pinned to the top.":"Conversation unpinned.");}catch(Exception e){fail();}}
+ private String threadLabel()throws Exception{JSONObject t=Conversations.current(data);return (t.optBoolean("pinned")?"📌  ":"")+t.getString("title");}
+ private void togglePin(){try{JSONObject thread=Conversations.current(data);thread.put("pinned",!thread.optBoolean("pinned"));save();if(!conversationsScreen)screenTitle.setText(threadLabel());status.setText(thread.optBoolean("pinned")?"Conversation pinned to the top.":"Conversation unpinned.");}catch(Exception e){fail();}}
  private void saveDraft()throws Exception{if(composer!=null)data.put("draft",composer.getText().toString());}
  private boolean leaveConversation(){try{saveDraft();if(!parkPending())return false;save();return true;}catch(Exception e){fail();return false;}}
  private void newConversation(){if(!leaveConversation())return;try{Conversations.create(data);save();chat();renameConversation();}catch(Exception e){fail();}}
- private void selectConversation(String id){if(id.equals(data.optString("active_thread")))return;if(!leaveConversation())return;try{Conversations.select(data,id);save();chat();}catch(Exception e){fail();}}
- private void chooseConversation(){try{
-  Conversations.ensure(data);JSONArray threads=Conversations.ordered(data);String[] labels=new String[threads.length()];int selected=0;
-  for(int i=0;i<labels.length;i++){JSONObject t=threads.getJSONObject(i);labels[i]=(t.optBoolean("pinned")?"📌  ":"")+t.getString("title");if(t.getString("id").equals(data.getString("active_thread")))selected=i;}
-  new AlertDialog.Builder(this).setTitle("Conversations").setSingleChoiceItems(labels,selected,(d,w)->{try{String id=threads.getJSONObject(w).getString("id");d.dismiss();selectConversation(id);}catch(Exception e){fail();}}).setPositiveButton("New conversation",(d,w)->newConversation()).setNeutralButton("Thread settings",(d,w)->renameConversation()).setNegativeButton("Close",null).show();
- }catch(Exception e){fail();}}
- private void renameConversation(){try{
-  JSONObject thread=Conversations.current(data);LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(20),dp(8),dp(20),dp(8));
+ private void selectConversation(String id){if(id.equals(data.optString("active_thread"))){if(conversationsScreen)chat();return;}if(!leaveConversation())return;try{Conversations.select(data,id);save();chat();}catch(Exception e){fail();}}
+ private void chooseConversation(){
+  if(data==null||!leaveConversation())return;
+  try{Conversations.ensure(data);if(messageList!=null)messageList.removeAllViews();clearBitmaps();messageList=null;imageHistory=null;composer=null;chatScroll=null;threadButton=null;modelButton=null;sendButton=null;retryButton=null;
+   connectionScreen=false;conversationsScreen=true;base("Conversations");status.setText("Private threads · encrypted on this phone");
+   Button more=action("⋮",()->{},false);more.setContentDescription("App options");more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Connection");m.getMenu().add("Lock");m.setOnMenuItemClickListener(item->{if(item.getTitle().toString().equals("Connection"))settings();else lock();return true;});m.show();});toolbar.addView(more,new LinearLayout.LayoutParams(dp(48),dp(44)));
+   Button create=action("＋  New conversation",this::newConversation,true);create.setContentDescription("New conversation");root.addView(create,new LinearLayout.LayoutParams(-1,dp(48)));space(root,10);
+   EditText search=input("Search conversations",false);search.setSingleLine(true);search.setContentDescription("Search conversations");root.addView(search,new LinearLayout.LayoutParams(-1,dp(48)));space(root,8);
+   ScrollView scroll=new ScrollView(this);conversationRows=new LinearLayout(this);conversationRows.setOrientation(LinearLayout.VERTICAL);scroll.addView(conversationRows);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));renderConversationRows("");
+   search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence x,int a,int c,int z){}public void onTextChanged(CharSequence x,int a,int before,int count){renderConversationRows(x.toString());}public void afterTextChanged(android.text.Editable x){}});
+  }catch(Exception e){fail();}
+ }
+ private String conversationPreview(JSONObject thread){
+  String draft=thread.optString("draft");if(!draft.trim().isEmpty())return "Draft: "+draft;
+  JSONArray messages=thread.optJSONArray("messages"),images=thread.optJSONArray("images");int count=messages==null?0:messages.length();
+  JSONObject image=images==null||images.length()==0?null:images.optJSONObject(images.length()-1);
+  if(image!=null&&image.optInt("after_message",count)>=count)return "Image: "+image.optString("prompt");
+  JSONObject last=count==0?null:messages.optJSONObject(count-1);return last==null?"No messages yet":last.optString("content");
+ }
+ private void renderConversationRows(String query){
+  if(conversationRows==null||data==null)return;conversationRows.removeAllViews();
+  try{JSONArray threads=Conversations.ordered(data);String filter=query.trim().toLowerCase(java.util.Locale.ROOT);boolean pinnedHeading=false,otherHeading=false;int shown=0;
+   for(int i=0;i<threads.length();i++){
+    JSONObject thread=threads.getJSONObject(i);String title=thread.getString("title"),preview=conversationPreview(thread),id=thread.getString("id");
+    if(!filter.isEmpty()&&!(title+" "+preview).toLowerCase(java.util.Locale.ROOT).contains(filter))continue;
+    boolean pinned=thread.optBoolean("pinned"),active=id.equals(data.optString("active_thread"));
+    if(pinned&&!pinnedHeading){conversationRows.addView(text("Pinned",13,0xffb6cbb0));space(conversationRows,8);pinnedHeading=true;}
+    if(!pinned&&!otherHeading){if(pinnedHeading)space(conversationRows,8);conversationRows.addView(text("Conversations",13,0xffb6cbb0));space(conversationRows,8);otherHeading=true;}
+    LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(14),dp(10),dp(6),dp(10));row.setBackground(surface(active?0xff294033:0xff21362b,16));
+    LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(0,dp(4),dp(8),dp(4));body.setClickable(true);body.setFocusable(true);body.setContentDescription("Open conversation "+title);body.setOnClickListener(v->selectConversation(id));
+    TextView name=text((pinned?"📌  ":"")+title,17,0xffe9ede4);name.setTypeface(null,android.graphics.Typeface.BOLD);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);body.addView(name);space(body,4);
+    TextView snippet=text(preview,14,0xffcad9c5);snippet.setMaxLines(2);snippet.setEllipsize(android.text.TextUtils.TruncateAt.END);body.addView(snippet);
+    String detail=(active?"Current thread":"")+(!thread.optString("instructions").isEmpty()?(active?" · ":"")+"Instructions set":"");if(!detail.isEmpty()){space(body,4);body.addView(text(detail,11,0xffb6cbb0));}
+    row.addView(body,new LinearLayout.LayoutParams(0,-2,1));Button options=action("⋮",()->{},false);options.setContentDescription("Settings for "+title);options.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Conversation settings");m.getMenu().add(thread.optBoolean("pinned")?"Unpin":"Pin");m.setOnMenuItemClickListener(item->{if(item.getTitle().toString().equals("Conversation settings"))editConversation(thread);else try{thread.put("pinned",!thread.optBoolean("pinned"));save();renderConversationRows(query);}catch(Exception e){fail();}return true;});m.show();});row.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));
+    LinearLayout.LayoutParams layout=new LinearLayout.LayoutParams(-1,-2);layout.bottomMargin=dp(10);conversationRows.addView(row,layout);shown++;
+   }
+   if(shown==0){space(conversationRows,24);conversationRows.addView(text("No conversations match your search.",16,0xffcad9c5));}
+  }catch(Exception e){fail();}
+ }
+ private void renameConversation(){try{editConversation(Conversations.current(data));}catch(Exception e){fail();}}
+ private void editConversation(JSONObject thread){try{
+  LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(20),dp(8),dp(20),dp(8));
   form.addView(text("Name",14,0xffcad9c5));EditText name=input("Conversation name",false);name.setSingleLine(true);name.setText(thread.getString("title"));name.setContentDescription("Conversation name");form.addView(name,new LinearLayout.LayoutParams(-1,-2));space(form,14);
   form.addView(text("Conversation instructions",14,0xffcad9c5));EditText instructions=input("How should the assistant respond in this thread?",false);instructions.setMinLines(4);instructions.setMaxLines(8);instructions.setText(thread.optString("instructions"));instructions.setContentDescription("Conversation instructions");form.addView(instructions,new LinearLayout.LayoutParams(-1,-2));space(form,8);
   form.addView(text("Applied to new chat and image requests in this thread. Saved requests keep the instructions they started with.",13,0xffcad9c5));CheckBox pinned=new CheckBox(this);pinned.setText("Pin conversation to top");pinned.setContentDescription("Pin conversation");pinned.setTextColor(0xffe9ede4);pinned.setChecked(thread.optBoolean("pinned"));pinned.setMinHeight(dp(48));form.addView(pinned);
   ScrollView scroll=new ScrollView(this);scroll.addView(form);AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Conversation settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
-  threadDialog=dialog;dialog.setOnDismissListener(d->{if(threadDialog==dialog)threadDialog=null;});dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String title=name.getText().toString().trim();if(title.isEmpty()){name.setError("Enter a name");return;}try{thread.put("title",title).put("instructions",instructions.getText().toString().trim()).put("pinned",pinned.isChecked());save();threadButton.setText(threadLabel());status.setText("Thread settings saved · applied to new requests.");dialog.dismiss();}catch(Exception e){fail();}}));dialog.show();
+  threadDialog=dialog;dialog.setOnDismissListener(d->{if(threadDialog==dialog)threadDialog=null;});dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String title=name.getText().toString().trim();if(title.isEmpty()){name.setError("Enter a name");return;}try{thread.put("title",title).put("instructions",instructions.getText().toString().trim()).put("pinned",pinned.isChecked());save();dialog.dismiss();if(conversationsScreen){renderConversationRows("");}else{screenTitle.setText(threadLabel());}status.setText("Thread settings saved · applied to new requests.");}catch(Exception e){fail();}}));dialog.show();
  }catch(Exception e){fail();}}
  private void deleteMessage(JSONObject message){try{
   JSONArray messages=data.getJSONArray("messages");for(int i=0;i<messages.length();i++)if(messages.optJSONObject(i)==message){Conversations.deleteMessage(data,i);save();render(false);return;}
  }catch(Exception e){fail();}}
  private void confirmDeleteMessage(JSONObject message){new AlertDialog.Builder(this).setTitle("Delete message?").setMessage("Remove this message from this conversation and future chat context? A request already sent may still include it.").setPositiveButton("Delete",(d,w)->deleteMessage(message)).setNegativeButton("Cancel",null).show();}
  private void confirmDeleteImage(JSONObject entry,int index){new AlertDialog.Builder(this).setTitle(index<0?"Delete image result?":"Delete image?").setMessage("Remove it from this conversation's encrypted history on this phone?").setPositiveButton("Delete",(d,w)->{try{Conversations.deleteImage(data,entry,index);save();render(false);}catch(Exception e){fail();}}).setNegativeButton("Cancel",null).show();}
- private void locked(){connectionScreen=false;base("Biome Chat");status.setText("Private conversations on your devices");formArea();space(root,32);note(vault.exists()?"Welcome back":"Your private space",vault.exists()?"Unlock to continue your conversations.":"Choose a passphrase to protect your conversations on this phone. It cannot be recovered.");
+ private void locked(){connectionScreen=false;conversationsScreen=false;conversationRows=null;base("Biome Chat");status.setText("Private conversations on your devices");formArea();space(root,32);note(vault.exists()?"Welcome back":"Your private space",vault.exists()?"Unlock to continue your conversations.":"Choose a passphrase to protect your conversations on this phone. It cannot be recovered.");
   EditText password=field("Passphrase",true);EditText confirm=vault.exists()?null:field("Confirm passphrase",true);
   button(vault.exists()?"Unlock":"Create encrypted vault",()->{
    char[] chars=new char[password.length()];password.getText().getChars(0,password.length(),chars,0);
@@ -94,7 +128,7 @@ public final class MainActivity extends Activity {
      if(chars.length<12||!password.getText().toString().equals(confirm.getText().toString())){status.setText("Use at least 12 characters and matching passphrases.");return;}
      salt=Crypto.random(32);vaultKey=Crypto.derive(chars,salt);data=new JSONObject().put("messages",new JSONArray());save();
     }else{byte[][] keys=new byte[2][];data=vault.unlock(chars,keys);vaultKey=keys[0];salt=keys[1];}
-    password.setText("");if(confirm!=null)confirm.setText("");if(returnToConnection){returnToConnection=false;settings();}else chat();
+    password.setText("");if(confirm!=null)confirm.setText("");if(returnToConnection){returnToConnection=false;settings();}else chooseConversation();
    }catch(Exception e){Crypto.wipe(vaultKey);vaultKey=null;data=null;status.setText("Could not unlock vault. Check your passphrase.");}
    finally{Arrays.fill(chars,'\0');}
   });
@@ -104,14 +138,15 @@ public final class MainActivity extends Activity {
  private void save()throws Exception{vault.save(Conversations.snapshot(data),vaultKey,salt);}
  private void fail(){busy=false;if(status!=null)status.setText(data!=null&&data.has("pending")?"Connection interrupted. Your request is saved — tap Retry.":"Could not connect. Check Connection and try again.");updateControls();}
  private void chat(){
-  connectionScreen=false;
+  connectionScreen=false;conversationsScreen=false;conversationRows=null;
   try{Conversations.ensure(data);}catch(Exception e){fail();return;}
-  base("Biome Chat");
+  try{base(threadLabel());}catch(Exception e){fail();return;}
+  threadButton=action("‹",this::chooseConversation,false);threadButton.setContentDescription("All conversations");toolbar.addView(threadButton,0,new LinearLayout.LayoutParams(dp(44),dp(44)));
   Button more=action("⋮",()->{},false);more.setOnClickListener(this::menu);more.setContentDescription("Conversation options");toolbar.addView(more,new LinearLayout.LayoutParams(dp(48),dp(44)));
   boolean connected=data.has("pairing")&&data.has("oauth");
   status.setText(connected?"Ready · Encrypted on this phone":"Connect your Mac to start");
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));Toast.makeText(this,"Mac pairing imported",Toast.LENGTH_SHORT).show();}}catch(Exception e){status.setText("Pairing import failed. Open Connection to try again.");}}
-  try{threadButton=action(threadLabel(),this::chooseConversation,false);threadButton.setMaxLines(1);threadButton.setEllipsize(android.text.TextUtils.TruncateAt.END);threadButton.setContentDescription("Choose conversation");root.addView(threadButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,6);}catch(Exception e){fail();}
+
   modelButton=action("Model · "+modelName(data.optString("selected_model")),this::chooseModel,false);modelButton.setMaxLines(1);modelButton.setHorizontallyScrolling(false);modelButton.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);modelButton.setEllipsize(android.text.TextUtils.TruncateAt.END);modelButton.setContentDescription("Choose chat model");root.addView(modelButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,8);
   if(!connected)button("Set up connection",this::settings);
   chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);
@@ -228,7 +263,7 @@ public final class MainActivity extends Activity {
  private void settings(){
   if(busy){status.setText("Finish or lock the current request before opening Connection.");return;}
   if(composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception e){fail();return;}
-  connectionScreen=true;base("Connection");status.setText("Two steps · your existing connection is kept");formArea();
+  connectionScreen=true;conversationsScreen=false;base("Connection");status.setText("Two steps · your existing connection is kept");formArea();
   note("1 · Pair your Mac",data.has("pairing")?"✓ Mac identity imported":"Import the pairing JSON supplied by your Mac.");
   button(data.has("pairing")?"Replace Mac pairing file":"Import Mac pairing file",()->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("application/json");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,41);});
   space(root,14);note("2 · Connect Biome",data.has("oauth")?"✓ Biome authorized":"Allow the app to send encrypted requests through Biome.");

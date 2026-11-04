@@ -66,10 +66,19 @@ public class ChatUiTest {
  @Test public void threadSettingsSaveNameInstructionsAndPin()throws Exception{
   call("renameConversation");Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();android.app.AlertDialog dialog=(android.app.AlertDialog)get("threadDialog");View form=dialog.getWindow().getDecorView();
   ((EditText)findDescription(form,"Conversation name")).setText("Writing");((EditText)findDescription(form,"Conversation instructions")).setText("Use concise prose.");((CheckBox)findDescription(form,"Pin conversation")).setChecked(true);
-  dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();JSONObject thread=Conversations.current((JSONObject)get("data"));assertEquals("Writing",thread.getString("title"));assertEquals("Use concise prose.",thread.getString("instructions"));assertTrue(thread.getBoolean("pinned"));assertTrue(((Button)get("threadButton")).getText().toString().contains("Writing"));assertFalse(dialog.isShowing());
+  dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();JSONObject thread=Conversations.current((JSONObject)get("data"));assertEquals("Writing",thread.getString("title"));assertEquals("Use concise prose.",thread.getString("instructions"));assertTrue(thread.getBoolean("pinned"));assertTrue(((TextView)get("screenTitle")).getText().toString().contains("Writing"));assertFalse(dialog.isShowing());
  }
  @Test public void lockingDismissesInstructionsEditor()throws Exception{
   call("renameConversation");android.app.AlertDialog dialog=(android.app.AlertDialog)get("threadDialog");assertTrue(dialog.isShowing());call("lock");assertFalse(dialog.isShowing());assertNull(get("threadDialog"));assertNull(get("data"));
+ }
+ @Test public void dedicatedConversationScreenOpensThreadsAndKeepsDrafts()throws Exception{
+  JSONObject d=(JSONObject)get("data");String original=d.getString("active_thread");JSONObject other=Conversations.create(d);other.put("title","Writing").put("pinned",true);Conversations.select(d,original);call("chat");((EditText)get("composer")).setText("unfinished idea");call("chooseConversation");
+  assertTrue((Boolean)get("conversationsScreen"));assertNull(get("composer"));assertNotNull(findDescription(activity.getWindow().getDecorView(),"New conversation"));draw(1280,"conversations.png");
+  View writing=findDescription(activity.getWindow().getDecorView(),"Open conversation Writing");assertNotNull(writing);writing.performClick();assertFalse((Boolean)get("conversationsScreen"));assertEquals(other.getString("id"),d.getString("active_thread"));
+  ((Button)get("threadButton")).performClick();View first=findDescription(activity.getWindow().getDecorView(),"Open conversation Conversation 1");assertNotNull(first);first.performClick();assertEquals("unfinished idea",((EditText)get("composer")).getText().toString());
+ }
+ @Test public void conversationSearchFiltersRowsAndBackFromChatShowsList()throws Exception{
+  activity.onBackPressed();assertTrue((Boolean)get("conversationsScreen"));EditText search=(EditText)findDescription(activity.getWindow().getDecorView(),"Search conversations");assertNotNull(search);search.setText("does not exist");assertNull(findDescription(activity.getWindow().getDecorView(),"Open conversation Conversation 1"));search.setText("Conversation");assertNotNull(findDescription(activity.getWindow().getDecorView(),"Open conversation Conversation 1"));
  }
  static View findDescription(View view,String description){if(description.contentEquals(view.getContentDescription()==null?"":view.getContentDescription()))return view;if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++){View found=findDescription(group.getChildAt(i),description);if(found!=null)return found;}}return null;}
 }

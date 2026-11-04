@@ -77,3 +77,9 @@ requests they are prepended as a system message; image requests carry them insid
 the encrypted request and include them in the image prompt while preserving
 explicit image parameters. Each request snapshots its instruction context when
 created. Editing a thread never changes an already-started saved request.
+
+Conversations now has a dedicated inbox screen rather than a dropdown selector.
+It opens after unlocking and is reachable with Back / All conversations from a
+chat. Rows show names, pins, draft or recent-message previews, and thread settings.
+Search filters names/previews locally while unlocked. Opening a row restores its
+history and draft; pinning affects only list order.
