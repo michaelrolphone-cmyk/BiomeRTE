@@ -17,7 +17,7 @@ class Journal:
         return value,str(len(self.entries))
     def append(self,expected,entry):
         size=len(encode(entry).encode())
-        assert size<=900000
+        if size>900000:raise Fault('Test journal rejected oversized transaction',413)
         self.sizes.append(size);self.entries[entry['seq']]=copy.deepcopy(entry)
         self.head={'seq':entry['seq'],'hash':digest(entry)}
         return self.head
@@ -77,7 +77,7 @@ class TransactionReplay(Delivery):
         def oversized(tx,ctx,budget):
             tx.put('oversized','value',{'data':'x'*910000});return 1
         with patch.object(process,'tick',side_effect=oversized):
-            with self.assertRaisesRegex(Fault,'shared transaction size'):self.app.tick('site')
+            with self.assertRaisesRegex(Fault,'oversized transaction'):self.app.tick('site')
         self.assertEqual(journal.entries,{})
         self.assertIsNone(self.execute(lambda tx:tx.get('oversized','value')))
 

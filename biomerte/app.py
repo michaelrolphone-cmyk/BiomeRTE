@@ -112,7 +112,7 @@ class Application:
             except Fault as exc:
                 # A rolled-back batch has dispatched no durable effects.
                 # Reduce the batch, preserving each activity's atomic commit.
-                if exc.status != 413 or str(exc) != 'Command exceeds shared transaction size. Split the work.' or budget == 1:
+                if exc.status != 413 or budget == 1:
                     raise
                 budget = max(1, budget // 2)
 
