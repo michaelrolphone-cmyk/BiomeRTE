@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "sign_off",
+        "changes",
+        "infeasible"
+      ]
+    },
+    "revision": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "recommendation",
+    "revision",
+    "findings",
+    "evidence_refs"
+  ]
+}

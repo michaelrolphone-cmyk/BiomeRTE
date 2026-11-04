@@ -1,0 +1,622 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "inventory__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "inventory__start": {
+      "type": "set",
+      "values": {},
+      "next": "inventory__discover"
+    },
+    "inventory__discover": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "discover",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "inventory__discover_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "inventory__discover_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "inventory__discover_resolved"
+    },
+    "inventory__discover_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "inventory__discover_resolved_result"
+        }
+      ],
+      "default": "inventory__discover_call"
+    },
+    "inventory__discover_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "inventory__discover_merge"
+    },
+    "inventory__discover_call": {
+      "type": "call",
+      "process": "assistant.access",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "inventory__discover_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "inventory__discover_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "discover",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "inventory__discover_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "inventory__discover_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "inventory__discover__disposition"
+    },
+    "inventory__relate": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "relate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "inventory__relate_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "inventory__relate_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "inventory__relate_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "inventory__relate_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "inventory__unknown"
+    },
+    "inventory__unknown": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "unknown",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "inventory__unknown_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "inventory__unknown_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "inventory__unknown_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "inventory__unknown_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "inventory__commit"
+    },
+    "inventory__commit": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "commit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "inventory__commit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "inventory__commit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "inventory__commit_resolved"
+    },
+    "inventory__commit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "inventory__commit_resolved_result"
+        }
+      ],
+      "default": "inventory__commit_call"
+    },
+    "inventory__commit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "inventory__commit_merge"
+    },
+    "inventory__commit_call": {
+      "type": "call",
+      "process": "assistant.checkpoint",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "inventory__commit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "inventory__commit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "task": "commit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "inventory__commit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "inventory__commit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "inventory__commit__disposition"
+    },
+    "inventory__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__discover__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "inventory__relate"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "inventory__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "inventory__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "inventory__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "inventory__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "inventory__return_faulted"
+        }
+      ],
+      "default": "inventory__return_unresolved"
+    },
+    "inventory__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "inventory__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "inventory__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "inventory__commit__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "inventory__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "inventory__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "inventory__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "inventory__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "inventory__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "inventory__return_faulted"
+        }
+      ],
+      "default": "inventory__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "inventory",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

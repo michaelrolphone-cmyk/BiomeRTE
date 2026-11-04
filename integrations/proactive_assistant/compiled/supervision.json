@@ -1,0 +1,908 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "supervision__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "supervision__start": {
+      "type": "set",
+      "values": {},
+      "next": "supervision__owner"
+    },
+    "supervision__owner": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "owner",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "supervision__owner_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "supervision__owner_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "supervision__owner_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "supervision__owner_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "supervision__valid"
+    },
+    "supervision__valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "gateway": "valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "supervision__valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "supervision__valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "supervision__snapshot"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "supervision__stale"
+        }
+      ],
+      "default": "supervision__return_unresolved"
+    },
+    "supervision__snapshot": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "snapshot",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "supervision__snapshot_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "supervision__snapshot_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "supervision__snapshot_resolved"
+    },
+    "supervision__snapshot_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "supervision__snapshot_resolved_result"
+        }
+      ],
+      "default": "supervision__snapshot_call"
+    },
+    "supervision__snapshot_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "supervision__snapshot_merge"
+    },
+    "supervision__snapshot_call": {
+      "type": "call",
+      "process": "assistant.responsibility_reconcile",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "supervision__snapshot_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "supervision__snapshot_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "snapshot",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "supervision__snapshot_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "supervision__snapshot_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "supervision__snapshot_disposition"
+    },
+    "supervision__health": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "health",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "supervision__health_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "supervision__health_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "supervision__health_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "supervision__health_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "supervision__state"
+    },
+    "supervision__state": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "gateway": "state",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "supervision__state_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "supervision__state_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "supervision__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "supervision__repair"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "supervision__contain"
+        }
+      ],
+      "default": "supervision__return_unresolved"
+    },
+    "supervision__repair": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "repair",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "supervision__repair_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "supervision__repair_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "supervision__repair_resolved"
+    },
+    "supervision__repair_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "supervision__repair_resolved_result"
+        }
+      ],
+      "default": "supervision__repair_call"
+    },
+    "supervision__repair_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "supervision__repair_merge"
+    },
+    "supervision__repair_call": {
+      "type": "call",
+      "process": "assistant.controller_recovery",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "supervision__repair_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "supervision__repair_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "repair",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "supervision__repair_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "supervision__repair_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "supervision__repair_disposition"
+    },
+    "supervision__contain": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "contain",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "supervision__contain_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "supervision__contain_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "supervision__contain_resolved"
+    },
+    "supervision__contain_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "supervision__contain_resolved_result"
+        }
+      ],
+      "default": "supervision__contain_call"
+    },
+    "supervision__contain_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "supervision__contain_merge"
+    },
+    "supervision__contain_call": {
+      "type": "call",
+      "process": "assistant.containment",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "supervision__contain_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "supervision__contain_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "task": "contain",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "supervision__contain_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "supervision__contain_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "supervision__contain_disposition"
+    },
+    "supervision__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__stale": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "stale",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__stale_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__stale_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__snapshot_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "supervision__health"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "supervision__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "supervision__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "supervision__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "supervision__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "supervision__return_faulted"
+        }
+      ],
+      "default": "supervision__return_unresolved"
+    },
+    "supervision__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "supervision__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "supervision__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "supervision__repair_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "supervision__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "supervision__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "supervision__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "supervision__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "supervision__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "supervision__return_faulted"
+        }
+      ],
+      "default": "supervision__return_unresolved"
+    },
+    "supervision__contain_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "supervision__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "supervision__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "supervision__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "supervision__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "supervision__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "supervision__return_faulted"
+        }
+      ],
+      "default": "supervision__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "supervision",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

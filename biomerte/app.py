@@ -8,7 +8,8 @@ from .api import Context, OPERATIONS, command, op, ident
 from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
 from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
-from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization
+from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support
+assistant_support.install_hooks()
 
 
 def read_json(path):
@@ -102,6 +103,7 @@ class Application:
             ctx = Context(self, scope=realm)
             moved = process.tick(tx, ctx)
             providers.settle_submissions(tx, ctx)
+            assistant_support.pump(tx, ctx)
             return moved
         return self.stores[realm].execute(run)
 
@@ -206,4 +208,3 @@ def demo(tx, ctx, message='Hello from BiomeRTE'):
     r = process.start(tx, ctx, 'demo.echo-and-save',
                       {'message': message, 'key': 'demo-' + t['id']}, t['id'])
     return {'goal': g['id'], 'task': t['id'], 'run': r['id'], 'document': 'demo-' + t['id']}
-

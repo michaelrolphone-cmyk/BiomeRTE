@@ -1,0 +1,354 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "architecture__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "architecture__start": {
+      "type": "set",
+      "values": {},
+      "next": "architecture__existing"
+    },
+    "architecture__existing": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "existing",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__existing_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__existing_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__existing_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__existing_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__general"
+    },
+    "architecture__general": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "general",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__general_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__general_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__general_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__general_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__extension"
+    },
+    "architecture__extension": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "extension",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__extension_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__extension_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__extension_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__extension_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__parallel"
+    },
+    "architecture__parallel": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "parallel",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__parallel_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__parallel_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__parallel_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__parallel_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__ownership"
+    },
+    "architecture__ownership": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "ownership",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__ownership_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__ownership_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__ownership_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__ownership_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__compare"
+    },
+    "architecture__compare": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "task": "compare",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "architecture__compare_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "architecture__compare_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "architecture__compare_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "architecture__compare_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "architecture__end"
+    },
+    "architecture__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "architecture__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "architecture__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "architecture",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

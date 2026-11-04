@@ -1,0 +1,875 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "containment__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "containment__start": {
+      "type": "set",
+      "values": {},
+      "next": "containment__match"
+    },
+    "containment__match": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "match",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "containment__match_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "containment__match_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "containment__match_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "containment__match_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "containment__allowed"
+    },
+    "containment__allowed": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "gateway": "allowed",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "containment__allowed_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "containment__allowed_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "containment__execute"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "containment__request"
+        }
+      ],
+      "default": "containment__return_unresolved"
+    },
+    "containment__execute": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "execute",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "containment__execute_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "containment__execute_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "containment__execute_resolved"
+    },
+    "containment__execute_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "containment__execute_resolved_result"
+        }
+      ],
+      "default": "containment__execute_call"
+    },
+    "containment__execute_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "containment__execute_merge"
+    },
+    "containment__execute_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "containment__execute_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "containment__execute_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "execute",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "containment__execute_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "containment__execute_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "containment__execute__disposition"
+    },
+    "containment__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "containment__verify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "containment__verify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "containment__verify_resolved"
+    },
+    "containment__verify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "containment__verify_resolved_result"
+        }
+      ],
+      "default": "containment__verify_call"
+    },
+    "containment__verify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "containment__verify_merge"
+    },
+    "containment__verify_call": {
+      "type": "call",
+      "process": "assistant.verification_systems",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "containment__verify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "containment__verify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "verify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "containment__verify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "containment__verify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "containment__verify__disposition"
+    },
+    "containment__safe": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "gateway": "safe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "containment__safe_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "containment__safe_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "containment__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "containment__unsafe"
+        }
+      ],
+      "default": "containment__return_unresolved"
+    },
+    "containment__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__request": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "request",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "containment__request_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "containment__request_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "containment__request_resolved"
+    },
+    "containment__request_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "containment__request_resolved_result"
+        }
+      ],
+      "default": "containment__request_call"
+    },
+    "containment__request_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "containment__request_merge"
+    },
+    "containment__request_call": {
+      "type": "call",
+      "process": "assistant.authorization",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "containment__request_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "containment__request_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "task": "request",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "containment__request_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "containment__request_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "containment__request__disposition"
+    },
+    "containment__unsafe": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "unsafe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__unsafe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__unsafe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__execute__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "containment__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "containment__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "containment__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "containment__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "containment__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "containment__harm_faulted"
+        }
+      ],
+      "default": "containment__unsafe"
+    },
+    "containment__harm_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "harm_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__harm_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__harm_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__harm_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "harm_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__harm_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__harm_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__harm_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "harm_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__harm_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__harm_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__harm_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "harm_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__harm_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__harm_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__harm_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "terminal": "harm_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "containment__harm_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "containment__harm_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "containment__verify__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "containment__safe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "containment__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "containment__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "containment__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "containment__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "containment__harm_faulted"
+        }
+      ],
+      "default": "containment__unsafe"
+    },
+    "containment__request__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "containment__match"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "containment__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "containment__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "containment__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "containment__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "containment__harm_faulted"
+        }
+      ],
+      "default": "containment__unsafe"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "containment",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

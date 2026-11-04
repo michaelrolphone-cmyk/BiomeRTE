@@ -1,0 +1,818 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "qualification__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "qualification__start": {
+      "type": "set",
+      "values": {},
+      "next": "qualification__policy"
+    },
+    "qualification__policy": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "policy",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "qualification__policy_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "qualification__policy_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "qualification__policy_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "qualification__policy_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "qualification__policy_valid"
+    },
+    "qualification__contracts": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "contracts",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "qualification__contracts_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "qualification__contracts_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "qualification__contracts_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "qualification__contracts_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "qualification__contracts_valid"
+    },
+    "qualification__tests": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "tests",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "qualification__tests_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "qualification__tests_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "qualification__tests_resolved"
+    },
+    "qualification__tests_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "qualification__tests_resolved_result"
+        }
+      ],
+      "default": "qualification__tests_call"
+    },
+    "qualification__tests_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "qualification__tests_merge"
+    },
+    "qualification__tests_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "qualification__tests_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "qualification__tests_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "tests",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "qualification__tests_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "qualification__tests_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "qualification__tests__disposition"
+    },
+    "qualification__independent": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "independent",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "qualification__independent_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "qualification__independent_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "qualification__independent_resolved"
+    },
+    "qualification__independent_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "qualification__independent_resolved_result"
+        }
+      ],
+      "default": "qualification__independent_call"
+    },
+    "qualification__independent_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "qualification__independent_merge"
+    },
+    "qualification__independent_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "qualification__independent_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "qualification__independent_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "task": "independent",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "qualification__independent_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "qualification__independent_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "qualification__independent__disposition"
+    },
+    "qualification__ready": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "gateway": "ready",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "qualification__ready_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "qualification__ready_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "qualification__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "qualification__blocked"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "qualification__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__blocked": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "blocked",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__blocked_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__blocked_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__policy_valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "gateway": "policy_valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "qualification__policy_valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "qualification__policy_valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "qualification__contracts"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "qualification__blocked"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "qualification__contracts_valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "gateway": "contracts_valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "qualification__contracts_valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "qualification__contracts_valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "qualification__tests"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "qualification__blocked"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "qualification__tests_valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "gateway": "tests_valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "qualification__tests_valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "qualification__tests_valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "qualification__independent"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "qualification__blocked"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "qualification__tests__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "qualification__tests_valid"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "qualification__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "qualification__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "qualification__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "qualification__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "qualification__return_faulted"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "qualification__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "qualification__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "qualification__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "qualification__independent__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "qualification__ready"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "qualification__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "qualification__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "qualification__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "qualification__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "qualification__return_faulted"
+        }
+      ],
+      "default": "qualification__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "qualification",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

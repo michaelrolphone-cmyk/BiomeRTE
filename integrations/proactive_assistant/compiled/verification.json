@@ -1,0 +1,1214 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "verification__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "verification__start": {
+      "type": "set",
+      "values": {},
+      "next": "verification__criteria"
+    },
+    "verification__criteria": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "criteria",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "verification__criteria_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__criteria_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__criteria_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "verification__criteria_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__checks"
+    },
+    "verification__checks": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "checks",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "verification__checks_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "verification__checks_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "verification__checks_resolved"
+    },
+    "verification__checks_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "verification__checks_resolved_result"
+        }
+      ],
+      "default": "verification__checks_call"
+    },
+    "verification__checks_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "verification__checks_merge"
+    },
+    "verification__checks_call": {
+      "type": "call",
+      "process": "assistant.governed",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "verification__checks_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "verification__checks_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "checks",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "verification__checks_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__checks_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__checks__disposition"
+    },
+    "verification__systems": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "systems",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "verification__systems_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "verification__systems_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "verification__systems_resolved"
+    },
+    "verification__systems_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "verification__systems_resolved_result"
+        }
+      ],
+      "default": "verification__systems_call"
+    },
+    "verification__systems_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "verification__systems_merge"
+    },
+    "verification__systems_call": {
+      "type": "call",
+      "process": "assistant.verification_systems",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "verification__systems_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "verification__systems_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "systems",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "verification__systems_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__systems_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__systems__disposition"
+    },
+    "verification__evidence": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "evidence",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "verification__evidence_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__evidence_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__evidence_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "verification__evidence_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__route"
+    },
+    "verification__route": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "gateway": "route",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "verification__route_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "verification__route_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "verification__accept"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "verification__unmet"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "verification__recover"
+        }
+      ],
+      "default": "verification__return_unresolved"
+    },
+    "verification__accept": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "accept",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "verification__accept_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "verification__accept_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "verification__accept_resolved"
+    },
+    "verification__accept_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "verification__accept_resolved_result"
+        }
+      ],
+      "default": "verification__accept_call"
+    },
+    "verification__accept_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "verification__accept_merge"
+    },
+    "verification__accept_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "verification__accept_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "verification__accept_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "accept",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "verification__accept_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__accept_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__accept__disposition"
+    },
+    "verification__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__unmet": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "unmet",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__unmet_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__unmet_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__recover": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "recover",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "verification__recover_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "verification__recover_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "verification__recover_resolved"
+    },
+    "verification__recover_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "verification__recover_resolved_result"
+        }
+      ],
+      "default": "verification__recover_call"
+    },
+    "verification__recover_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "verification__recover_merge"
+    },
+    "verification__recover_call": {
+      "type": "call",
+      "process": "assistant.recovery",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "verification__recover_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "verification__recover_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "task": "recover",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "verification__recover_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "verification__recover_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "verification__recover__disposition"
+    },
+    "verification__recovered": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "gateway": "recovered",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "verification__recovered_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "verification__recovered_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "verification__contained"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "verification__unsafe"
+        }
+      ],
+      "default": "verification__return_unresolved"
+    },
+    "verification__contained": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "contained",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__contained_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__contained_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__unsafe": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "unsafe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__unsafe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__unsafe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__checks__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__systems"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "verification__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "verification__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "verification__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "verification__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "verification__return_faulted"
+        }
+      ],
+      "default": "verification__return_unresolved"
+    },
+    "verification__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__systems__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__evidence"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "verification__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "verification__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "verification__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "verification__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "verification__return_faulted"
+        }
+      ],
+      "default": "verification__return_unresolved"
+    },
+    "verification__accept__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "verification__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "verification__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "verification__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "verification__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "verification__return_faulted"
+        }
+      ],
+      "default": "verification__return_unresolved"
+    },
+    "verification__recover__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "verification__recovered"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "verification__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "verification__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "verification__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "verification__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "verification__harm_faulted"
+        }
+      ],
+      "default": "verification__unsafe"
+    },
+    "verification__harm_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "harm_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__harm_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__harm_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__harm_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "harm_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__harm_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__harm_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__harm_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "harm_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__harm_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__harm_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__harm_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "harm_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__harm_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__harm_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "verification__harm_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "terminal": "harm_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "verification__harm_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "verification__harm_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "verification",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

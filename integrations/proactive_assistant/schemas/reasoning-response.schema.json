@@ -1,0 +1,101 @@
+{
+  "type": "object",
+  "properties": {
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "claim",
+          "evidence_refs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "proceed",
+        "revise",
+        "investigate",
+        "human",
+        "reject",
+        "defer",
+        "act",
+        "code",
+        "verify",
+        "infeasible",
+        "no_action",
+        "reframe"
+      ]
+    },
+    "proposed_action": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "candidate_revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "facts",
+    "assumptions",
+    "findings",
+    "hypotheses",
+    "recommendation",
+    "proposed_action",
+    "candidate_revision"
+  ]
+}

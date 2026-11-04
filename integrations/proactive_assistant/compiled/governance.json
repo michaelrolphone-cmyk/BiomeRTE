@@ -1,0 +1,1106 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "governance__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "governance__start": {
+      "type": "set",
+      "values": {},
+      "next": "governance__scope"
+    },
+    "governance__scope": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "scope",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governance__scope_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__scope_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__scope_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governance__scope_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__constraints"
+    },
+    "governance__constraints": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "constraints",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governance__constraints_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__constraints_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__constraints_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governance__constraints_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__depth"
+    },
+    "governance__depth": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "gateway": "depth",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governance__depth_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governance__depth_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governance__decide"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governance__architecture"
+        }
+      ],
+      "default": "governance__return_unresolved"
+    },
+    "governance__architecture": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "architecture",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governance__architecture_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governance__architecture_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governance__architecture_resolved"
+    },
+    "governance__architecture_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governance__architecture_resolved_result"
+        }
+      ],
+      "default": "governance__architecture_call"
+    },
+    "governance__architecture_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governance__architecture_merge"
+    },
+    "governance__architecture_call": {
+      "type": "call",
+      "process": "assistant.architecture",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governance__architecture_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governance__architecture_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "architecture",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governance__architecture_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__architecture_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__architecture__disposition"
+    },
+    "governance__inventory": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "inventory",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governance__inventory_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governance__inventory_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governance__inventory_resolved"
+    },
+    "governance__inventory_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governance__inventory_resolved_result"
+        }
+      ],
+      "default": "governance__inventory_call"
+    },
+    "governance__inventory_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governance__inventory_merge"
+    },
+    "governance__inventory_call": {
+      "type": "call",
+      "process": "assistant.inventory",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governance__inventory_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governance__inventory_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "inventory",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governance__inventory_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__inventory_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__inventory__disposition"
+    },
+    "governance__systems": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "systems",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "governance__systems_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "governance__systems_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "governance__systems_resolved"
+    },
+    "governance__systems_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "governance__systems_resolved_result"
+        }
+      ],
+      "default": "governance__systems_call"
+    },
+    "governance__systems_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "governance__systems_merge"
+    },
+    "governance__systems_call": {
+      "type": "call",
+      "process": "assistant.impact",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "governance__systems_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "governance__systems_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "systems",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "governance__systems_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__systems_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__systems__disposition"
+    },
+    "governance__data": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "data",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governance__data_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__data_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__data_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governance__data_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__decide"
+    },
+    "governance__decide": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "gateway": "decide",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "governance__decide_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "governance__decide_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "governance__record"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "governance__revise"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "governance__investigate"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "governance__human"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              4
+            ]
+          },
+          "to": "governance__reject"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              5
+            ]
+          },
+          "to": "governance__defer"
+        }
+      ],
+      "default": "governance__return_unresolved"
+    },
+    "governance__record": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "task": "record",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "governance__record_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "governance__record_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__record_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "governance__record_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "governance__end"
+    },
+    "governance__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__revise": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "revise",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__revise_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__revise_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__investigate": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "investigate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__investigate_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__investigate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__human": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "human",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__human_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__human_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__reject": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "reject",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__reject_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__reject_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__defer": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "defer",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__defer_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__defer_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__architecture__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__inventory"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governance__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governance__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governance__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governance__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governance__return_faulted"
+        }
+      ],
+      "default": "governance__return_unresolved"
+    },
+    "governance__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "governance__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "governance__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "governance__inventory__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__systems"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governance__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governance__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governance__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governance__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governance__return_faulted"
+        }
+      ],
+      "default": "governance__return_unresolved"
+    },
+    "governance__systems__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "governance__data"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "governance__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "governance__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "governance__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "governance__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "governance__return_faulted"
+        }
+      ],
+      "default": "governance__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "governance",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,354 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "git_publish__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "git_publish__start": {
+      "type": "set",
+      "values": {},
+      "next": "git_publish__acquire"
+    },
+    "git_publish__acquire": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "acquire",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__acquire_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__acquire_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__acquire_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__acquire_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__commit"
+    },
+    "git_publish__commit": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "commit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__commit_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__commit_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__commit_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__commit_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__push"
+    },
+    "git_publish__push": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "push",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__push_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__push_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__push_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__push_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__verify"
+    },
+    "git_publish__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__verify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__verify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__verify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__verify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__catalog"
+    },
+    "git_publish__catalog": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "catalog",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__catalog_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__catalog_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__catalog_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__catalog_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__review_request"
+    },
+    "git_publish__review_request": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "task": "review_request",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "git_publish__review_request_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "git_publish__review_request_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "git_publish__review_request_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "git_publish__review_request_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "git_publish__end"
+    },
+    "git_publish__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "git_publish__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "git_publish__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "git_publish",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -239,6 +239,7 @@ def finish(tx, run, state, result):
 def advance(tx, ctx, r, t, n, version):
     """Advance one token. Return False for an unchanged durable wait."""
     kind, variables = n['type'], t['vars']
+    ctx.workflow = {'run_id': r['id'], 'name': r['name'], 'revision': r['rev'], 'node': t['at'], 'token_id': t['id']}
     ev = lambda value: val(value, variables)
     dest = n.get('next')
     result = None
@@ -378,6 +379,17 @@ def advance(tx, ctx, r, t, n, version):
         inputs = ev(n.get('args', {}))
         if 'operation' in n:
             result = invoke(tx, ctx, n['operation'], inputs)
+            if n['operation'].startswith('assistant.') and isinstance(result, dict) and 'frame' in result:
+                from .assistant_workspaces import hold_unresolved
+                result = hold_unresolved(result)
+            workspace_return = n['operation'] in ('assistant.child', 'assistant.finish', 'assistant.fault') and result.get('frame', {}).get('workspace')
+            if (n['operation'] in ('assistant.stage', 'assistant.before', 'assistant.wait') or workspace_return) and result.get('disposition') == 'pending' and not result.get('result', {}).get('result_code', '').startswith('independent_'):
+                # Keep the exact token/call stack. No inference lease is held by this wait.
+                variables['frame'] = result['frame']
+                t['assistant_wait'] = result['continuation']
+                tx.put('runs', r['id'], r)
+                return False
+            t.pop('assistant_wait', None)
         else:
             contract = ev(n['contract'])
             resource = ev(n.get('resource', ''))

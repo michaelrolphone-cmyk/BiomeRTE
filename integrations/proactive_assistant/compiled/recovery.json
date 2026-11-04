@@ -1,0 +1,1029 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "recovery__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "recovery__start": {
+      "type": "set",
+      "values": {},
+      "next": "recovery__actual"
+    },
+    "recovery__actual": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "actual",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "recovery__actual_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "recovery__actual_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "recovery__actual_resolved"
+    },
+    "recovery__actual_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "recovery__actual_resolved_result"
+        }
+      ],
+      "default": "recovery__actual_call"
+    },
+    "recovery__actual_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "recovery__actual_merge"
+    },
+    "recovery__actual_call": {
+      "type": "call",
+      "process": "assistant.reconcile",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "recovery__actual_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "recovery__actual_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "actual",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "recovery__actual_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "recovery__actual_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "recovery__actual__disposition"
+    },
+    "recovery__options": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "options",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "recovery__options_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "recovery__options_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "recovery__options_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "recovery__options_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "recovery__review"
+    },
+    "recovery__review": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "review",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "recovery__review_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "recovery__review_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "recovery__review_resolved"
+    },
+    "recovery__review_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "recovery__review_resolved_result"
+        }
+      ],
+      "default": "recovery__review_call"
+    },
+    "recovery__review_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "recovery__review_merge"
+    },
+    "recovery__review_call": {
+      "type": "call",
+      "process": "assistant.governance",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "recovery__review_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "recovery__review_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "review",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "recovery__review_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "recovery__review_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "recovery__review__disposition"
+    },
+    "recovery__execute": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "execute",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "recovery__execute_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "recovery__execute_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "recovery__execute_resolved"
+    },
+    "recovery__execute_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "recovery__execute_resolved_result"
+        }
+      ],
+      "default": "recovery__execute_call"
+    },
+    "recovery__execute_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "recovery__execute_merge"
+    },
+    "recovery__execute_call": {
+      "type": "call",
+      "process": "assistant.execution",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "recovery__execute_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "recovery__execute_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "execute",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "recovery__execute_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "recovery__execute_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "recovery__execute__disposition"
+    },
+    "recovery__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "recovery__verify_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "recovery__verify_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "recovery__verify_resolved"
+    },
+    "recovery__verify_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "recovery__verify_resolved_result"
+        }
+      ],
+      "default": "recovery__verify_call"
+    },
+    "recovery__verify_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "recovery__verify_merge"
+    },
+    "recovery__verify_call": {
+      "type": "call",
+      "process": "assistant.verification_systems",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "recovery__verify_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "recovery__verify_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "task": "verify",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "recovery__verify_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "recovery__verify_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "recovery__verify__disposition"
+    },
+    "recovery__route": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "gateway": "route",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "recovery__route_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "recovery__route_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "recovery__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "recovery__unsafe"
+        }
+      ],
+      "default": "recovery__return_unresolved"
+    },
+    "recovery__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__unsafe": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "unsafe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__unsafe_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__unsafe_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__review_recommendation": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "gateway": "review_recommendation",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "recovery__review_recommendation_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "recovery__review_recommendation_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "recovery__execute"
+        }
+      ],
+      "default": "recovery__return_unresolved"
+    },
+    "recovery__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__actual__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "recovery__options"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "recovery__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "recovery__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "recovery__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "recovery__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "recovery__harm_faulted"
+        }
+      ],
+      "default": "recovery__unsafe"
+    },
+    "recovery__harm_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "harm_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__harm_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__harm_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__harm_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "harm_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__harm_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__harm_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__harm_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "harm_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__harm_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__harm_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__harm_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "harm_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__harm_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__harm_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__harm_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "terminal": "harm_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "recovery__harm_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "recovery__harm_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "recovery__review__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "recovery__review_recommendation"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "recovery__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "recovery__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "recovery__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "recovery__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "recovery__harm_faulted"
+        }
+      ],
+      "default": "recovery__unsafe"
+    },
+    "recovery__execute__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "recovery__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "recovery__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "recovery__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "recovery__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "recovery__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "recovery__harm_faulted"
+        }
+      ],
+      "default": "recovery__unsafe"
+    },
+    "recovery__verify__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "recovery__route"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "recovery__harm_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "recovery__harm_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "recovery__harm_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "recovery__harm_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "recovery__harm_faulted"
+        }
+      ],
+      "default": "recovery__unsafe"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "recovery",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

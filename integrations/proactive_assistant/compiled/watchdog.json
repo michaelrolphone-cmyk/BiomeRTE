@@ -1,0 +1,532 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "watchdog__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "watchdog__start": {
+      "type": "set",
+      "values": {},
+      "next": "watchdog__read"
+    },
+    "watchdog__read": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "task": "read",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "watchdog__read_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "watchdog__read_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "watchdog__read_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "watchdog__read_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "watchdog__state"
+    },
+    "watchdog__state": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "gateway": "state",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "watchdog__state_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "watchdog__state_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "watchdog__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "watchdog__restore"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "watchdog__pending"
+        }
+      ],
+      "default": "watchdog__return_unresolved"
+    },
+    "watchdog__restore": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "task": "restore",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "watchdog__restore_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "watchdog__restore_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "watchdog__restore_resolved"
+    },
+    "watchdog__restore_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "watchdog__restore_resolved_result"
+        }
+      ],
+      "default": "watchdog__restore_call"
+    },
+    "watchdog__restore_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "watchdog__restore_merge"
+    },
+    "watchdog__restore_call": {
+      "type": "call",
+      "process": "assistant.external_recovery",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "watchdog__restore_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__restore_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "task": "restore",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "watchdog__restore_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "watchdog__restore_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "watchdog__restore_disposition"
+    },
+    "watchdog__handoff": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "task": "handoff",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "watchdog__handoff_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "watchdog__handoff_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "watchdog__handoff_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "watchdog__handoff_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "watchdog__end"
+    },
+    "watchdog__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__restore_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "watchdog__handoff"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "watchdog__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "watchdog__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "watchdog__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "watchdog__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "watchdog__return_faulted"
+        }
+      ],
+      "default": "watchdog__return_unresolved"
+    },
+    "watchdog__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "watchdog__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "watchdog__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "watchdog__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "watchdog",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

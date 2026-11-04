@@ -1,0 +1,313 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "workspace_open__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__start": {
+      "type": "set",
+      "values": {},
+      "next": "workspace_open__provision"
+    },
+    "workspace_open__provision": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "task": "provision",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "workspace_open__provision_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__provision_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "workspace_open__provision_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "workspace_open__provision_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "workspace_open__acquire"
+    },
+    "workspace_open__acquire": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "task": "acquire",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "workspace_open__acquire_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__acquire_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "workspace_open__acquire_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "workspace_open__acquire_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "workspace_open__clone"
+    },
+    "workspace_open__clone": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "task": "clone",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "workspace_open__clone_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__clone_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "workspace_open__clone_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "workspace_open__clone_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "workspace_open__pin"
+    },
+    "workspace_open__pin": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "task": "pin",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "workspace_open__pin_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__pin_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "workspace_open__pin_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "workspace_open__pin_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "workspace_open__snapshot"
+    },
+    "workspace_open__snapshot": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "task": "snapshot",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "workspace_open__snapshot_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__snapshot_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "workspace_open__snapshot_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "workspace_open__snapshot_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "workspace_open__end"
+    },
+    "workspace_open__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "workspace_open__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "workspace_open__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "workspace_open",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

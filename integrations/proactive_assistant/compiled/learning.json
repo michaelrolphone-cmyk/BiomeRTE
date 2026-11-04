@@ -1,0 +1,707 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "learning__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "learning__start": {
+      "type": "set",
+      "values": {},
+      "next": "learning__compare"
+    },
+    "learning__compare": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "compare",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "learning__compare_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "learning__compare_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "learning__compare_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "learning__compare_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "learning__generalize"
+    },
+    "learning__generalize": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "generalize",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "learning__generalize_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "learning__generalize_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "learning__generalize_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "learning__generalize_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "learning__challenge"
+    },
+    "learning__challenge": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "challenge",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "learning__challenge_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "learning__challenge_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "learning__challenge_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "learning__challenge_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "learning__commit"
+    },
+    "learning__commit": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "commit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "learning__commit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "learning__commit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "learning__commit_resolved"
+    },
+    "learning__commit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "learning__commit_resolved_result"
+        }
+      ],
+      "default": "learning__commit_call"
+    },
+    "learning__commit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "learning__commit_merge"
+    },
+    "learning__commit_call": {
+      "type": "call",
+      "process": "assistant.checkpoint",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "learning__commit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "learning__commit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "commit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "learning__commit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "learning__commit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "learning__commit__disposition"
+    },
+    "learning__change": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "gateway": "change",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "learning__change_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "learning__change_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "learning__manage"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "learning__end"
+        }
+      ],
+      "default": "learning__return_unresolved"
+    },
+    "learning__manage": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "manage",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "learning__manage_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "learning__manage_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "learning__manage_resolved"
+    },
+    "learning__manage_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "learning__manage_resolved_result"
+        }
+      ],
+      "default": "learning__manage_call"
+    },
+    "learning__manage_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "learning__manage_merge"
+    },
+    "learning__manage_call": {
+      "type": "call",
+      "process": "assistant.change_management",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "learning__manage_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "learning__manage_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "task": "manage",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "learning__manage_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "learning__manage_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "learning__manage__disposition"
+    },
+    "learning__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__commit__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "learning__change"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "learning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "learning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "learning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "learning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "learning__return_faulted"
+        }
+      ],
+      "default": "learning__return_unresolved"
+    },
+    "learning__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "learning__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "learning__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "learning__manage__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "learning__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "learning__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "learning__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "learning__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "learning__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "learning__return_faulted"
+        }
+      ],
+      "default": "learning__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "learning",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

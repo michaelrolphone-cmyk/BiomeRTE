@@ -1,0 +1,573 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "wake__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "wake__start": {
+      "type": "set",
+      "values": {},
+      "next": "wake__read"
+    },
+    "wake__read": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "task": "read",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "wake__read_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "wake__read_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "wake__read_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "wake__read_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "wake__state"
+    },
+    "wake__state": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "gateway": "state",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "wake__state_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "wake__state_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "wake__record"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "wake__pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "wake__held"
+        }
+      ],
+      "default": "wake__return_unresolved"
+    },
+    "wake__record": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "task": "record",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "wake__record_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "wake__record_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "wake__record_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "wake__record_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "wake__admit"
+    },
+    "wake__admit": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "task": "admit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "wake__admit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "wake__admit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "wake__admit_resolved"
+    },
+    "wake__admit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "wake__admit_resolved_result"
+        }
+      ],
+      "default": "wake__admit_call"
+    },
+    "wake__admit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "wake__admit_merge"
+    },
+    "wake__admit_call": {
+      "type": "call",
+      "process": "assistant.cycle_admission",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "wake__admit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "wake__admit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "task": "admit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "wake__admit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "wake__admit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "wake__admit_disposition"
+    },
+    "wake__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "wake__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "wake__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "wake__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "wake__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "wake__read"
+    },
+    "wake__held": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "held",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__held_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__held_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__admit_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "wake__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "wake__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "wake__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "wake__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "wake__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "wake__return_faulted"
+        }
+      ],
+      "default": "wake__return_unresolved"
+    },
+    "wake__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "wake__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "wake__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "wake__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "wake",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,346 @@
+{
+  "type": "object",
+  "properties": {
+    "goal": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "ge",
+                  "le",
+                  "gt",
+                  "lt"
+                ]
+              },
+              "expected": {}
+            },
+            "required": [
+              "path",
+              "operator",
+              "expected"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "description",
+        "criteria"
+      ],
+      "additionalProperties": false
+    },
+    "proposed_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "verification_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "verification_probes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "object",
+            "properties": {
+              "contract": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "inputs": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "contract",
+              "resource",
+              "inputs"
+            ],
+            "additionalProperties": false
+          },
+          "mappings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "safety_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "operator": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "ge",
+                    "le",
+                    "gt",
+                    "lt"
+                  ]
+                },
+                "expected": {}
+              },
+              "required": [
+                "path",
+                "operator",
+                "expected"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "action",
+          "mappings",
+          "safety_criteria"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "build_test_recipe": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "additionalProperties": false
+    },
+    "qualification_test_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "independent_check_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "integration_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "recovery_action": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "contract",
+        "resource",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "workspace_request": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "enum": [
+            "linux-basic@1",
+            "esp-idf@2"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_request": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "base_commit": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "commit_message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "project",
+        "base_commit",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "git_mcp_request": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "schema_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "arguments",
+        "schema_digest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "goal",
+    "verification_action",
+    "verification_probes"
+  ],
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "build_test_recipe"
+        ]
+      },
+      "then": {
+        "required": [
+          "source_request"
+        ]
+      }
+    }
+  ]
+}

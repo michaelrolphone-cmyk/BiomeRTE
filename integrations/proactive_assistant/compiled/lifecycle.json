@@ -1,0 +1,1485 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "lifecycle__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__start": {
+      "type": "set",
+      "values": {},
+      "next": "lifecycle__restore"
+    },
+    "lifecycle__restore": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "restore",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "lifecycle__restore_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__restore_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__restore_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "lifecycle__restore_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__desired"
+    },
+    "lifecycle__desired": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "gateway": "desired",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "lifecycle__desired_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__desired_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "lifecycle__reconcile"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "lifecycle__summary"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__reconcile": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "reconcile",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__reconcile_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__reconcile_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__reconcile_resolved"
+    },
+    "lifecycle__reconcile_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__reconcile_resolved_result"
+        }
+      ],
+      "default": "lifecycle__reconcile_call"
+    },
+    "lifecycle__reconcile_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__reconcile_merge"
+    },
+    "lifecycle__reconcile_call": {
+      "type": "call",
+      "process": "assistant.responsibility_reconcile",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__reconcile_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__reconcile_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "reconcile",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__reconcile_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__reconcile_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__reconcile_disposition"
+    },
+    "lifecycle__due": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "gateway": "due",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "lifecycle__due_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__due_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "lifecycle__observe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "lifecycle__select"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__observe": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "observe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__observe_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__observe_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__observe_resolved"
+    },
+    "lifecycle__observe_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__observe_resolved_result"
+        }
+      ],
+      "default": "lifecycle__observe_call"
+    },
+    "lifecycle__observe_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__observe_merge"
+    },
+    "lifecycle__observe_call": {
+      "type": "call",
+      "process": "assistant.discovery",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__observe_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__observe_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "observe",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__observe_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__observe_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__observe_disposition"
+    },
+    "lifecycle__select": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "select",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__select_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__select_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__select_resolved"
+    },
+    "lifecycle__select_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__select_resolved_result"
+        }
+      ],
+      "default": "lifecycle__select_call"
+    },
+    "lifecycle__select_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__select_merge"
+    },
+    "lifecycle__select_call": {
+      "type": "call",
+      "process": "assistant.planning",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__select_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__select_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "select",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__select_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__select_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__select_disposition"
+    },
+    "lifecycle__available": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "gateway": "available",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "lifecycle__available_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__available_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "lifecycle__dispatch"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "lifecycle__collect"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__dispatch": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "dispatch",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__dispatch_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__dispatch_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__dispatch_resolved"
+    },
+    "lifecycle__dispatch_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__dispatch_resolved_result"
+        }
+      ],
+      "default": "lifecycle__dispatch_call"
+    },
+    "lifecycle__dispatch_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__dispatch_merge"
+    },
+    "lifecycle__dispatch_call": {
+      "type": "call",
+      "process": "assistant.dispatch",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__dispatch_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__dispatch_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "dispatch",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__dispatch_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__dispatch_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__dispatch_disposition"
+    },
+    "lifecycle__collect": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "collect",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "lifecycle__collect_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__collect_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__collect_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "lifecycle__collect_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__progress"
+    },
+    "lifecycle__progress": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "progress",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__progress_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__progress_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__progress_resolved"
+    },
+    "lifecycle__progress_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__progress_resolved_result"
+        }
+      ],
+      "default": "lifecycle__progress_call"
+    },
+    "lifecycle__progress_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__progress_merge"
+    },
+    "lifecycle__progress_call": {
+      "type": "call",
+      "process": "assistant.progress",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__progress_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__progress_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "progress",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__progress_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__progress_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__progress_disposition"
+    },
+    "lifecycle__summary": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "summary",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "lifecycle__summary_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__summary_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__summary_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "lifecycle__summary_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__commit"
+    },
+    "lifecycle__commit": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "commit",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "lifecycle__commit_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__commit_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "lifecycle__commit_resolved"
+    },
+    "lifecycle__commit_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "lifecycle__commit_resolved_result"
+        }
+      ],
+      "default": "lifecycle__commit_call"
+    },
+    "lifecycle__commit_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "lifecycle__commit_merge"
+    },
+    "lifecycle__commit_call": {
+      "type": "call",
+      "process": "assistant.cycle_commit",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "lifecycle__commit_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__commit_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "commit",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "lifecycle__commit_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__commit_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__commit_disposition"
+    },
+    "lifecycle__receipt": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "gateway": "receipt",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "lifecycle__receipt_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__receipt_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "lifecycle__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        }
+      ],
+      "default": "lifecycle__commit_wait"
+    },
+    "lifecycle__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "lifecycle__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "lifecycle__yield": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "task": "yield",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "lifecycle__yield_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__yield_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__yield_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "lifecycle__yield_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__summary"
+    },
+    "lifecycle__commit_wait": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "terminal": "commit_wait",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "lifecycle__commit_wait_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "lifecycle__commit_wait_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__commit_wait_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "lifecycle__commit_wait_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "lifecycle__commit"
+    },
+    "lifecycle__reconcile_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__due"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__yield"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__observe_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__select"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__yield"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__select_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__available"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__yield"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__dispatch_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__collect"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__yield"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__progress_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__summary"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__yield"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__yield"
+        }
+      ],
+      "default": "lifecycle__yield"
+    },
+    "lifecycle__commit_disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "lifecycle__receipt"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "lifecycle__commit_wait"
+        }
+      ],
+      "default": "lifecycle__commit_wait"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "lifecycle",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

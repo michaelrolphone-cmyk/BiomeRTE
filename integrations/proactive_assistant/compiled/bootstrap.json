@@ -1,0 +1,564 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "bootstrap__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__start": {
+      "type": "set",
+      "values": {},
+      "next": "bootstrap__transport"
+    },
+    "bootstrap__transport": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "task": "transport",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "bootstrap__transport_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__transport_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "bootstrap__transport_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "bootstrap__transport_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "bootstrap__present"
+    },
+    "bootstrap__present": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "gateway": "present",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "bootstrap__present_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__present_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "bootstrap__permissions"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "bootstrap__blocked"
+        }
+      ],
+      "default": "bootstrap__return_unresolved"
+    },
+    "bootstrap__permissions": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "task": "permissions",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "bootstrap__permissions_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__permissions_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "bootstrap__permissions_resolved"
+    },
+    "bootstrap__permissions_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "bootstrap__permissions_resolved_result"
+        }
+      ],
+      "default": "bootstrap__permissions_call"
+    },
+    "bootstrap__permissions_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "bootstrap__permissions_merge"
+    },
+    "bootstrap__permissions_call": {
+      "type": "call",
+      "process": "assistant.authorization",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "bootstrap__permissions_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__permissions_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "task": "permissions",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "bootstrap__permissions_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__permissions_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "bootstrap__permissions__disposition"
+    },
+    "bootstrap__check": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "task": "check",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "bootstrap__check_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__check_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "bootstrap__check_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "bootstrap__check_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "bootstrap__ready"
+    },
+    "bootstrap__ready": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "gateway": "ready",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "bootstrap__ready_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__ready_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "bootstrap__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "bootstrap__blocked"
+        }
+      ],
+      "default": "bootstrap__return_unresolved"
+    },
+    "bootstrap__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__blocked": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "blocked",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__blocked_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__blocked_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__permissions__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "bootstrap__check"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "bootstrap__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "bootstrap__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "bootstrap__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "bootstrap__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "bootstrap__return_faulted"
+        }
+      ],
+      "default": "bootstrap__return_unresolved"
+    },
+    "bootstrap__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "bootstrap__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "bootstrap__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "bootstrap__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "bootstrap",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

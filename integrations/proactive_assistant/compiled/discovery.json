@@ -1,0 +1,873 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "discovery__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "discovery__start": {
+      "type": "set",
+      "values": {},
+      "next": "discovery__read"
+    },
+    "discovery__read": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "read",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "discovery__read_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "discovery__read_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "discovery__read_resolved"
+    },
+    "discovery__read_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "discovery__read_resolved_result"
+        }
+      ],
+      "default": "discovery__read_call"
+    },
+    "discovery__read_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "discovery__read_merge"
+    },
+    "discovery__read_call": {
+      "type": "call",
+      "process": "assistant.access",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "discovery__read_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "discovery__read_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "read",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "discovery__read_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__read_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__read__disposition"
+    },
+    "discovery__probe": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "gateway": "probe",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "discovery__probe_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "discovery__probe_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "discovery__govern"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "discovery__classify"
+        }
+      ],
+      "default": "discovery__return_unresolved"
+    },
+    "discovery__govern": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "govern",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "discovery__govern_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "discovery__govern_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "discovery__govern_resolved"
+    },
+    "discovery__govern_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "discovery__govern_resolved_result"
+        }
+      ],
+      "default": "discovery__govern_call"
+    },
+    "discovery__govern_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "discovery__govern_merge"
+    },
+    "discovery__govern_call": {
+      "type": "call",
+      "process": "assistant.governed",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "discovery__govern_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "discovery__govern_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "govern",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "discovery__govern_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__govern_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__govern__disposition"
+    },
+    "discovery__classify": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "classify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "discovery__classify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__classify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__classify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "discovery__classify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__dedup"
+    },
+    "discovery__dedup": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "dedup",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "discovery__dedup_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__dedup_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__dedup_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "discovery__dedup_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__candidate"
+    },
+    "discovery__candidate": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "candidate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "discovery__candidate_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__candidate_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__candidate_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "discovery__candidate_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__save"
+    },
+    "discovery__save": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "save",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.before",
+      "next": "discovery__save_prepared",
+      "save": "prepared",
+      "on_error": "fault_capture"
+    },
+    "discovery__save_prepared": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "prepared.frame"
+        }
+      },
+      "next": "discovery__save_resolved"
+    },
+    "discovery__save_resolved": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "prepared.resolved"
+              },
+              true
+            ]
+          },
+          "to": "discovery__save_resolved_result"
+        }
+      ],
+      "default": "discovery__save_call"
+    },
+    "discovery__save_resolved_result": {
+      "type": "set",
+      "values": {
+        "child_result": {
+          "$": "prepared.result"
+        }
+      },
+      "next": "discovery__save_merge"
+    },
+    "discovery__save_call": {
+      "type": "call",
+      "process": "assistant.checkpoint",
+      "args": {
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "next": "discovery__save_merge",
+      "save": "child_result",
+      "on_error": "fault_capture"
+    },
+    "discovery__save_merge": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "task": "save",
+        "child": {
+          "$": "child_result"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.child",
+      "next": "discovery__save_mapped",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "discovery__save_mapped": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "discovery__save__disposition"
+    },
+    "discovery__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__read__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__probe"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "discovery__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "discovery__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "discovery__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "discovery__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "discovery__return_faulted"
+        }
+      ],
+      "default": "discovery__return_unresolved"
+    },
+    "discovery__return_rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "return_rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__return_rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__return_rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__return_deferred": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "return_deferred",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__return_deferred_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__return_deferred_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__return_pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "return_pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__return_pending_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__return_pending_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__return_faulted": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "terminal": "return_faulted",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "discovery__return_faulted_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "discovery__return_faulted_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "discovery__govern__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__classify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "discovery__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "discovery__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "discovery__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "discovery__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "discovery__return_faulted"
+        }
+      ],
+      "default": "discovery__return_unresolved"
+    },
+    "discovery__save__disposition": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "discovery__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "rejected"
+            ]
+          },
+          "to": "discovery__return_rejected"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "deferred"
+            ]
+          },
+          "to": "discovery__return_deferred"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "pending"
+            ]
+          },
+          "to": "discovery__return_pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "unresolved"
+            ]
+          },
+          "to": "discovery__return_unresolved"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "frame.last_disposition"
+              },
+              "faulted"
+            ]
+          },
+          "to": "discovery__return_faulted"
+        }
+      ],
+      "default": "discovery__return_unresolved"
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "discovery",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "contract": {
+      "type": "string"
+    },
+    "resource": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "contract",
+    "resource",
+    "inputs"
+  ],
+  "additionalProperties": false
+}

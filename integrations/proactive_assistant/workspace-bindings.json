@@ -1,0 +1,341 @@
+{
+  "placement": "Mac only; pin current resource and wait if absent",
+  "resource": "workspace.mac.75f0ef711b363088d0b1",
+  "git_resource": "git.mac.3f1e6b0dd758be37d358",
+  "contracts": {
+    "provision": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "auto_suspend": {
+          "type": "boolean"
+        },
+        "gitlab_project": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    "acquire": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder"
+      ],
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id"
+      ],
+      "additionalProperties": false
+    },
+    "dispose": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id"
+      ],
+      "additionalProperties": false
+    },
+    "reconcile": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "list": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "template.list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "template.get": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "template.ensure_image": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "template.publish": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "additionalProperties": false
+    },
+    "checkpoint": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation"
+      ],
+      "additionalProperties": false
+    },
+    "suspend": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation"
+      ],
+      "additionalProperties": false
+    },
+    "handoff": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "to_holder": {
+          "type": "string"
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation",
+        "to_holder"
+      ],
+      "additionalProperties": false
+    },
+    "exec": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "stdin": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation",
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "stdin": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation",
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "file.read": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "file.write": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "data_base64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "holder",
+        "generation",
+        "path",
+        "data_base64"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "source": "workspace.git:1 operates /workspace/source; git.cli:1 operates separate host namespaces",
+  "ownership": "independent episode run ID, never finite lifecycle cycle ID",
+  "provisioning": "Concrete run ID for internal assistant stage; $current only for native direct workspace service calls",
+  "provider_result": "Inspect ok; expand and SHA256 verify artifact chunks; inspect command exit_code; preserve unknown effect IDs",
+  "cleanup": "Publish outputs before terminal state; monitor disposes only after owning run and children terminal. Unresolved/deferred/faulted workspace outcomes park the same token. Explicit cancellation permits disposal.",
+  "handoff": "workspace.handoff:1 then use returned holder/generation and checkpoint; direct callers retain context and source/test/publication refs",
+  "templates": [
+    "linux-basic@1",
+    "esp-idf@2"
+  ],
+  "limitations": [
+    "Mac execution only; additional providers are not deployed.",
+    "Template images and checkpoints use local Docker image store and verified host archives, not a remote OCI registry.",
+    "Cross-host/host-loss recovery and emulated firmware boot/hardware flashing are not qualified.",
+    "Credentials currently reuse the existing non-admin Biome GitLab service identity, not per-run project-scoped tokens.",
+    "Agents explicitly publish outputs before run termination. No automatic declared-artifact publisher is implemented.",
+    "Active delegated agents are not automatically suspended merely because the orchestrator has a delegate wait."
+  ]
+}

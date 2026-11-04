@@ -1,0 +1,318 @@
+{
+  "provision": {
+    "type": "object",
+    "properties": {
+      "run_id": {
+        "type": "string"
+      },
+      "template": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "auto_suspend": {
+        "type": "boolean"
+      },
+      "gitlab_project": {
+        "type": "string"
+      },
+      "resources": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "run_id"
+    ],
+    "additionalProperties": false
+  },
+  "acquire": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder"
+    ],
+    "additionalProperties": false
+  },
+  "status": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id"
+    ],
+    "additionalProperties": false
+  },
+  "dispose": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id"
+    ],
+    "additionalProperties": false
+  },
+  "reconcile": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "reason"
+    ],
+    "additionalProperties": false
+  },
+  "list": {
+    "type": "object",
+    "properties": {
+      "run_id": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "template.list": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "template.get": {
+    "type": "object",
+    "properties": {
+      "template": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "template.ensure_image": {
+    "type": "object",
+    "properties": {
+      "template": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "template.publish": {
+    "type": "object",
+    "properties": {
+      "template": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "template"
+    ],
+    "additionalProperties": false
+  },
+  "checkpoint": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation"
+    ],
+    "additionalProperties": false
+  },
+  "suspend": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation"
+    ],
+    "additionalProperties": false
+  },
+  "handoff": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "to_holder": {
+        "type": "string"
+      },
+      "context": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation",
+      "to_holder"
+    ],
+    "additionalProperties": false
+  },
+  "exec": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "argv": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "stdin": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation",
+      "argv"
+    ],
+    "additionalProperties": false
+  },
+  "git": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "argv": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "cwd": {
+        "type": "string"
+      },
+      "stdin": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation",
+      "argv"
+    ],
+    "additionalProperties": false
+  },
+  "file.read": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation",
+      "path"
+    ],
+    "additionalProperties": false
+  },
+  "file.write": {
+    "type": "object",
+    "properties": {
+      "workspace_id": {
+        "type": "string"
+      },
+      "holder": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "path": {
+        "type": "string"
+      },
+      "data_base64": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspace_id",
+      "holder",
+      "generation",
+      "path",
+      "data_base64"
+    ],
+    "additionalProperties": false
+  }
+}

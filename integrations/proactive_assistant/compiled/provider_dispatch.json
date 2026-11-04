@@ -1,0 +1,476 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "provider_dispatch__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__start": {
+      "type": "set",
+      "values": {},
+      "next": "provider_dispatch__validate"
+    },
+    "provider_dispatch__validate": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "task": "validate",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "provider_dispatch__validate_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__validate_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "provider_dispatch__validate_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "provider_dispatch__validate_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "provider_dispatch__valid"
+    },
+    "provider_dispatch__valid": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "gateway": "valid",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "provider_dispatch__valid_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__valid_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "provider_dispatch__select"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "provider_dispatch__rejected"
+        }
+      ],
+      "default": "provider_dispatch__return_unresolved"
+    },
+    "provider_dispatch__select": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "task": "select",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "provider_dispatch__select_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__select_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "provider_dispatch__select_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "provider_dispatch__select_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "provider_dispatch__capacity"
+    },
+    "provider_dispatch__capacity": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "gateway": "capacity",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "provider_dispatch__capacity_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__capacity_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "provider_dispatch__dispatch"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "provider_dispatch__pending"
+        }
+      ],
+      "default": "provider_dispatch__return_unresolved"
+    },
+    "provider_dispatch__dispatch": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "task": "dispatch",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "provider_dispatch__dispatch_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__dispatch_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "provider_dispatch__dispatch_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "provider_dispatch__dispatch_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "provider_dispatch__receipt"
+    },
+    "provider_dispatch__receipt": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "gateway": "receipt",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "provider_dispatch__receipt_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__receipt_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "provider_dispatch__end"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "provider_dispatch__unknown"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "provider_dispatch__rejected"
+        }
+      ],
+      "default": "provider_dispatch__return_unresolved"
+    },
+    "provider_dispatch__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "provider_dispatch__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "provider_dispatch__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "provider_dispatch__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "provider_dispatch__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "provider_dispatch__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "provider_dispatch__select"
+    },
+    "provider_dispatch__unknown": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "terminal": "unknown",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "provider_dispatch__unknown_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__unknown_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "provider_dispatch__rejected": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "terminal": "rejected",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "provider_dispatch__rejected_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__rejected_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "provider_dispatch__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "provider_dispatch__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "provider_dispatch__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "provider_dispatch",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}

@@ -1,0 +1,505 @@
+{
+  "start": "entry",
+  "nodes": {
+    "entry": {
+      "type": "start",
+      "next": "input_frame"
+    },
+    "input_frame": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "next": "initialize"
+    },
+    "initialize": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "frame": {
+          "$": "input.frame"
+        }
+      },
+      "operation": "assistant.enter",
+      "next": "cycle_commit__start",
+      "save": "frame",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__start": {
+      "type": "set",
+      "values": {},
+      "next": "cycle_commit__read"
+    },
+    "cycle_commit__read": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "task": "read",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_commit__read_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__read_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_commit__read_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_commit__read_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_commit__already"
+    },
+    "cycle_commit__already": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "gateway": "already",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_commit__already_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__already_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_commit__existing"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_commit__plan"
+        }
+      ],
+      "default": "cycle_commit__return_unresolved"
+    },
+    "cycle_commit__existing": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "existing",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_commit__existing_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__existing_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_commit__plan": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "task": "plan",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_commit__plan_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__plan_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_commit__plan_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_commit__plan_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_commit__transaction"
+    },
+    "cycle_commit__transaction": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "task": "transaction",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_commit__transaction_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__transaction_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_commit__transaction_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_commit__transaction_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_commit__result"
+    },
+    "cycle_commit__result": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "gateway": "result",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.route",
+      "next": "cycle_commit__result_select",
+      "save": "route",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__result_select": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              0
+            ]
+          },
+          "to": "cycle_commit__verify"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              1
+            ]
+          },
+          "to": "cycle_commit__conflict"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              2
+            ]
+          },
+          "to": "cycle_commit__pending"
+        },
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "route.index"
+              },
+              3
+            ]
+          },
+          "to": "cycle_commit__stale"
+        }
+      ],
+      "default": "cycle_commit__return_unresolved"
+    },
+    "cycle_commit__verify": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "task": "verify",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.stage",
+      "next": "cycle_commit__verify_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__verify_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_commit__verify_accept"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_commit__verify_accept": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_commit__end"
+    },
+    "cycle_commit__end": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "end",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_commit__end_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__end_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_commit__conflict": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "conflict",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_commit__conflict_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__conflict_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_commit__pending": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "pending",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.wait",
+      "next": "cycle_commit__pending_status",
+      "save": "step",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__pending_status": {
+      "type": "choose",
+      "cases": [
+        {
+          "when": {
+            "op": "eq",
+            "args": [
+              {
+                "$": "step.disposition"
+              },
+              "completed"
+            ]
+          },
+          "to": "cycle_commit__pending_resume"
+        }
+      ],
+      "default": "propagate"
+    },
+    "cycle_commit__pending_resume": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        }
+      },
+      "next": "cycle_commit__read"
+    },
+    "cycle_commit__stale": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "stale",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_commit__stale_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__stale_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "cycle_commit__return_unresolved": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "terminal": "return_unresolved",
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.finish",
+      "next": "cycle_commit__return_unresolved_end",
+      "save": "result",
+      "on_error": "fault_capture"
+    },
+    "cycle_commit__return_unresolved_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "propagate": {
+      "type": "set",
+      "values": {
+        "frame": {
+          "$": "step.frame"
+        },
+        "result": {
+          "$": "step"
+        }
+      },
+      "next": "propagate_end"
+    },
+    "propagate_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    },
+    "fault_capture": {
+      "type": "service",
+      "args": {
+        "logical_process": "cycle_commit",
+        "error": {
+          "$": "error"
+        },
+        "frame": {
+          "$": "frame"
+        }
+      },
+      "operation": "assistant.fault",
+      "next": "fault_end",
+      "save": "result"
+    },
+    "fault_end": {
+      "type": "end",
+      "result": {
+        "$": "result"
+      }
+    }
+  },
+  "inputs": {
+    "frame": "obj"
+  },
+  "outputs": {
+    "disposition": "str",
+    "result_code": "str",
+    "data": "obj",
+    "evidence_refs": "list",
+    "continuation": "obj",
+    "harm_status": "str",
+    "origin": "obj",
+    "frame": "obj"
+  }
+}
