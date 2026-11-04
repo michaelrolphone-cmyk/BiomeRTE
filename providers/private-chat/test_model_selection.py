@@ -39,11 +39,11 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn('model-b',json.dumps(req))
         response=server.handle(req,req['id'],None)
         self.assertEqual(client.response(response)['model'],'model-b')
-    def test_catalog_filters_embeddings_and_preserves_instance(self):
+    def test_catalog_filters_embeddings_and_uses_stable_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);(p/'api-token').write_text('test-only')
             opener=Opener();models=model_catalog(opener,p)
-            self.assertEqual([m['id'] for m in models],['loaded-a','model-b'])
+            self.assertEqual([m['id'] for m in models],['model-a','model-b'])
             self.assertTrue(models[0]['loaded']);self.assertFalse(models[1]['loaded'])
             self.assertEqual(opener.requests[0].get_header('Authorization'),'Bearer test-only')
     def test_selection_exact_and_legacy_default(self):
