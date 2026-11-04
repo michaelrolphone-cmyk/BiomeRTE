@@ -48,15 +48,23 @@ def privacy_ready():
     server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
     if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
         raise RuntimeError('LM Studio sensitive logging must be disabled')
-from model_service import model_catalog, selected_model
+from model_service import model_catalog, ensure_selected_model, switch_model, ModelSwitchError
 
 def handle_request(data):
     privacy_ready()
     if data.get('action') == 'models':
         return {'models': model_catalog(LOCAL, LM)}
+    if data.get('action') == 'select_model':
+        try:
+            return switch_model(data.get('model'), LOCAL, LM)
+        except ModelSwitchError as e:
+            return {'error': e.code, 'models': model_catalog(LOCAL, LM)}
     if data.get('action') not in (None, ''):
         raise ValueError('Invalid private action')
-    return inference(data['messages'], data.get('model'))
+    try:
+        return inference(data['messages'], data.get('model'))
+    except ModelSwitchError as e:
+        return {'error': e.code}
 
 def inference(messages, model=None):
     privacy_ready()
@@ -65,7 +73,7 @@ def inference(messages, model=None):
     if any(not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str) for m in messages):
         raise ValueError('Invalid message')
     # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    model = selected_model(model, LOCAL, LM)
+    model = ensure_selected_model(model, LOCAL, LM)
     body = dict(model=model, messages=messages, stream=False, store=False)
     headers = {'Content-Type': 'application/json'}
     token_file = LM / 'api-token'
