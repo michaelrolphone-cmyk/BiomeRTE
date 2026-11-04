@@ -165,7 +165,7 @@ def recover_reservations(tx, ctx):
         policy = reservation_policy(tx, lease)
         if not policy:
             continue
-        work = actions.get(lease['id'], [])
+        work = [a for a in actions.get(lease['id'], []) if a['generation'] == lease['generation']]
         if any(a['state'] not in ('succeeded', 'failed') for a in work):
             continue
         # Combined submissions retain enough information to repair dispatch.
