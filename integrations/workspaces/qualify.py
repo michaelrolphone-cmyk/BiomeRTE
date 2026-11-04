@@ -7,6 +7,8 @@ import workspace_agent_tools as agent
 path=m.ROOT/'qualification.json';q=m.read(path) if path.exists() else {}
 def save():m.save(path,q)
 def call(label,op,args,expected=True):
+ if '--retry-failed' in sys.argv and label in q and q[label].get('state')=='succeeded' and q[label].get('result',{}).get('ok')!=expected:
+  q.setdefault('prior_attempts',[]).append(dict(q.pop(label),label=label));save()
  if label not in q:
   d=agent.workspace_start({'contract':'workspace.'+op+':1','arguments':args});q[label]={'id':d['id']};save()
  while True:

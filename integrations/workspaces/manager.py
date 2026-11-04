@@ -109,7 +109,7 @@ def git_env(w):
  script='#!/bin/sh\n[ "$1" = get ] || exit 0\nprotocol=; host=\nwhile IFS="=" read -r k v; do case "$k" in protocol) protocol="$v";; host) host="$v";; esac; done\nhost=$(printf "%s" "$host" | tr "[:upper:]" "[:lower:]")\n[ "$protocol" = https ] && [ "$host" = "'+host+':8443" ] || exit 0\nprintf "username=oauth2\\npassword="\ncat /run/biome-secrets/token\nprintf "\\n\\n"\n'
  docker('exec','-i',w['container'],'sh','-c','umask 077; cat > /run/biome-secrets/token',input=token.encode())
  docker('exec','-i',w['container'],'sh','-c','cat > /run/biome-secrets/git-helper; chmod 700 /run/biome-secrets/git-helper',input=script.encode())
- return ['-c','credential.helper=','-c','credential.helper=/run/biome-secrets/git-helper','-c','http.sslCAInfo=/run/biome/gitlab.crt','-c','user.name=Biome Agent','-c','user.email=biome-agent@biome.local']
+ return ['-c','credential.helper=','-c','credential.helper=!sh /run/biome-secrets/git-helper','-c','http.sslCAInfo=/run/biome/gitlab.crt','-c','user.name=Biome Agent','-c','user.email=biome-agent@biome.local']
 def probe_git(w):
  url=read(GITROOT/'config.json')['url']+'/'+w['gitlab_project']+'.git'
  docker('exec',w['container'],'git',*git_env(w),'ls-remote',url)
@@ -179,9 +179,10 @@ def dispose(w):
  docker('volume','rm',w['volume'],check=False)
  if exists('volume',w['volume']):raise RuntimeError('Volume removal pending')
  private_images={read(p)['image'] for p in state_path(w['id']).parent.glob('checkpoints/*/manifest.json')}
- shutil.rmtree(state_path(w['id']).parent/'checkpoints',ignore_errors=True)
  shared={read(p).get('image') for p in (ROOT/'images').glob('*/state.json')}
- for image in private_images-shared:docker('image','rm',image,check=False)
+ for image in private_images-shared:docker('image','rm','-f',image,check=False)
+ if any(exists('image',image) for image in private_images-shared):raise RuntimeError('Private checkpoint image removal pending')
+ shutil.rmtree(state_path(w['id']).parent/'checkpoints',ignore_errors=True)
  w.update(state='disposed',checkpoint=None,disposed_at=time.time());w.pop('active_operation',None);persist(w);return w
 def handle(tool,a,operation):
  if tool=='template.list':return {'templates':templates()}
