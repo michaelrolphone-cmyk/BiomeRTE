@@ -42,7 +42,7 @@ export async function controllerDevice(req,env,path,node,legacy) {
   if(d.key==='head'){const head=await journalHead(db,config.site);return reply({value:head.seq?head:null,version:String(head.seq)});}
   if(!/^log\/\d{20}$/.test(d.key))return reply({error:'Invalid journal key'},400);
   const row=await db.prepare('SELECT entry FROM controller_journal WHERE site=? AND seq=?').bind(config.site,Number(d.key.slice(4))).first();
-  return reply({value:row?JSON.parse(row.entry):null});
+  return reply({encoded:row?.entry??null});
  }
  if(path==='/bridge/ha/append'){
   if(typeof d.entry!=='string'||d.entry.length>900000||!Number.isInteger(d.expected)||d.expected<0)return reply({error:'Invalid journal entry'},400);

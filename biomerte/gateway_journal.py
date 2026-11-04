@@ -37,7 +37,8 @@ class GatewayJournal:
 
     def read(self, name):
         result = self.request('read', {'key': name})
-        return result['value'], result.get('version', '0')
+        value = json.loads(result['encoded']) if result.get('encoded') is not None else result.get('value')
+        return value, result.get('version', '0')
 
     def append(self, expected, entry):
         return self.request('append', {'expected': int(expected), 'entry': encode(entry)})

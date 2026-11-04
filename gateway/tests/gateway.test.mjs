@@ -152,6 +152,7 @@ test('shared journal CAS, preferred routing, overflow, takeover and return',asyn
  assert.equal((await send('/bridge/ha/append',{expected:0,entry},mac)).status,200);
  assert.equal((await send('/bridge/ha/append',{expected:0,entry:entry.replace('value":1','value":2')},mac)).status,409);
  assert.equal((await (await send('/bridge/ha/read',{key:'head'},mac)).json()).value.hash,sha(entry));
+ assert.equal((await (await send('/bridge/ha/read',{key:'log/00000000000000000001'},mac)).json()).encoded,entry);
  const put=id=>sql.prepare("INSERT INTO bridge_jobs(id,request,state,deadline,updated) VALUES(?,?,'queued',?,?)").run(id,JSON.stringify({name:'biome_status',arguments:{}}),Date.now()/1000+60,Date.now()/1000);
  put('primary');assert.equal((await (await send('/bridge/next',{},mac)).json()).idle,true);
  const first=await (await send('/bridge/next',{},pi)).json();assert.equal(first.id,'primary');
