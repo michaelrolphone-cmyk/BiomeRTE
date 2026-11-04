@@ -35,8 +35,18 @@ class WorkspaceTests(unittest.TestCase):
    m.monitor_once();dispose.assert_not_called()
  def test_waiting_run_suspends_only_quiescent(self):
   w={'id':'ws-test','run_id':'run1','state':'active','auto_suspend':True};m.persist(w)
-  with patch.object(m,'run_state',return_value={'state':'running','tokens':[{'wait':'human'}]}),patch.object(m,'checkpoint') as cp:
+  with patch.object(m,'run_state',return_value={'id':'run1','state':'running','tokens':[{'wait':'human'}]}),patch.object(m,'gateway') as gateway,patch.object(m,'checkpoint') as cp:
+   gateway.return_value.invoke.return_value=[{'id':'human','kind':'human'}]
    m.monitor_once();cp.assert_called_once();cp.reset_mock();w['active_operation']='build';m.persist(w);m.monitor_once();cp.assert_not_called()
+ def test_delegated_agent_workspace_is_not_suspended(self):
+  w={'id':'ws-test','run_id':'run1','state':'active','auto_suspend':True};m.persist(w)
+  with patch.object(m,'run_state',return_value={'id':'run1','state':'running','tokens':[{'wait':'agent'}]}),patch.object(m,'gateway') as gateway,patch.object(m,'checkpoint') as cp:
+   gateway.return_value.invoke.return_value=[{'id':'agent','kind':'delegate'}]
+   m.monitor_once();cp.assert_not_called()
+ def test_active_child_prevents_parent_cleanup(self):
+  w={'id':'ws-test','run_id':'parent','state':'active','active_operation':'build','auto_suspend':True};m.persist(w)
+  with patch.object(m,'run_state',side_effect=[{'state':'completed','children':['child']},{'state':'running'}]),patch.object(m,'docker') as docker,patch.object(m,'dispose') as dispose:
+   m.monitor_once();docker.assert_not_called();dispose.assert_not_called()
  def test_identifiers_cannot_escape_storage(self):
   for x in ('../../x','/tmp/x','a/b',''):
    with self.assertRaises(ValueError):m.identifier(x)

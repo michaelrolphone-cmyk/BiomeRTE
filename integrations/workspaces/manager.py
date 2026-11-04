@@ -54,7 +54,12 @@ def template_publish(a):
   if p.exists() and read(p)['revision']!=key:raise ValueError('Template version is immutable; publish a new version')
   save(p,dict(t,revision=key))
  return dict(t,revision=key)
-def templates():return [read(p) for p in sorted((ROOT/'templates').glob('*.json'))]
+def templates():
+ result=[]
+ for p in sorted((ROOT/'templates').glob('*.json')):
+  t=read(p);s=ROOT/'images'/t['revision']/'state.json';build=read(s) if s.exists() else {'state':'unbuilt'}
+  result.append(dict(t,build_state=build['state'],build_error=build.get('error','')))
+ return result
 def template(a):return read(ROOT/'templates'/(identifier(a.get('template','linux-basic@1'))+'.json'))
 def ensure_image(a):
  t=template(a);key=t['revision'];d=ROOT/'images'/key;d.mkdir(parents=True,exist_ok=True)
@@ -74,7 +79,9 @@ def ensure_image(a):
    with (d/'build.log').open('wb') as log:
     proc=subprocess.run(['docker','build','--platform',t['platform'],'-t',tag,str(d)],stdout=log,stderr=subprocess.STDOUT)
    if proc.returncode:raise RuntimeError('Image build failed; read template build log with template.get')
-   probe=docker('run','--rm','--platform',t['platform'],'--entrypoint','/bin/bash',tag,'-lc',t['probe'])
+   probe=docker('run','--rm','--platform',t['platform'],'--entrypoint','/bin/bash',tag,'-lc',t['probe'],check=False)
+   (d/'probe.log').write_bytes(probe.stdout+b'\n'+probe.stderr)
+   if probe.returncode:raise RuntimeError('Template validation failed: '+probe.stderr.decode(errors='replace')[-2000:])
    image=json.loads(docker('image','inspect',tag).stdout)[0]['Id'];archive=archive_image(image,d/'image.tar.gz')
    result={'state':'ready','revision':key,'image':image,'tag':tag,'platform':t['platform'],'archive':archive,'probe':probe.stdout.decode(errors='replace')[-4000:],'built_at':time.time(),'base':read(pin)['reference']};save(p,result);return dict(result,reused=False)
   except Exception as e:save(p,{'state':'failed','revision':key,'error':str(e)});raise
@@ -189,7 +196,7 @@ def handle(tool,a,operation):
  if tool=='template.publish':return template_publish(a)
  if tool=='template.ensure_image':return ensure_image(a)
  if tool=='template.get':
-  t=template(a);d=ROOT/'images'/t['revision'];return {'template':t,'build':read(d/'state.json') if (d/'state.json').exists() else {'state':'unbuilt'},'build_log':(d/'build.log').read_text(errors='replace')[-12000:] if (d/'build.log').exists() else ''}
+  t=template(a);d=ROOT/'images'/t['revision'];return {'template':t,'build':read(d/'state.json') if (d/'state.json').exists() else {'state':'unbuilt'},'build_log':(d/'build.log').read_text(errors='replace')[-12000:] if (d/'build.log').exists() else '', 'probe_log':(d/'probe.log').read_text(errors='replace')[-12000:] if (d/'probe.log').exists() else ''}
  if tool=='provision':
   if a.get('run_id')=='$current':
    runs=gateway().invoke('process.list',{})['runs'];matches=[]
@@ -226,19 +233,27 @@ def handle(tool,a,operation):
    code+= 'print(base64.b64encode(p.read_bytes()).decode())' if tool=='file.read' else 'p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(base64.b64decode(sys.stdin.read(),validate=True))'
    return execute(w,dict(a,argv=['python3','-c',code,a['path']],stdin=a.get('data_base64','')),operation)
   raise ValueError('Unknown workspace operation')
+def idle_wait(r):
+ tokens=r.get('tokens',[])
+ if not tokens or not all('wait' in t or 'delay_id' in t for t in tokens):return False
+ waits={w['id']:w for w in gateway().invoke('process.waits',{'run':r['id']})} if any('wait' in t for t in tokens) else {}
+ # A delegate wait represents an agent still doing work, not idle compute.
+ return all('delay_id' in t or waits.get(t['wait'],{}).get('kind') in ('human','message') for t in tokens)
 def monitor_once():
  for p in (ROOT/'instances').glob('*/state.json'):
   try:
    w=read(p)
    if w['state']=='disposed':continue
    r=run_state(w['run_id'])
-   if r['state'] in ('completed','failed','cancelled') and w.get('active_operation'):
-    docker('stop','-t','-1',w['container'],check=False)
+   if r['state'] in ('completed','failed','cancelled'):
+    children=[run_state(x)['state'] for x in r.get('children',[])]
+    if not all(x in ('completed','failed','cancelled') for x in children):continue
+    if w.get('active_operation'):docker('stop','-t','-1',w['container'],check=False)
    with lock(w['id'],False):
     w=read(p)
     if r['state'] in ('completed','failed','cancelled'):
      children=[run_state(x)['state'] for x in r.get('children',[])]
      if all(x in ('completed','failed','cancelled') for x in children):dispose(w)
-    elif w['state']=='active' and w['auto_suspend'] and not w.get('active_operation') and r.get('tokens') and all('wait' in t or 'delay_id' in t for t in r['tokens']):checkpoint(w,'wait-'+uuid.uuid4().hex)
+    elif w['state']=='active' and w['auto_suspend'] and not w.get('active_operation') and idle_wait(r):checkpoint(w,'wait-'+uuid.uuid4().hex)
   except BlockingIOError:pass
   except Exception as e:save(ROOT/'monitor-errors'/ (p.parent.name+'.json'),{'error':str(e),'at':time.time()})
