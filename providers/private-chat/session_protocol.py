@@ -71,8 +71,10 @@ class SessionServer:
         data = open_message(session['keys']['request'],'request',sid,operation,session['hash'],envelope)
         # Authenticate and validate before removing the one-use session.
         messages = data.get('messages')
-        if not (self.request_handler and data.get('action') == 'models') and (not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages)):
+        if not (self.request_handler and data.get('action') in ('models', 'select_model')) and (not isinstance(messages,list) or not messages or any(not isinstance(m,dict) or set(m)!={'role','content'} or m['role'] not in ('user','assistant') or not isinstance(m['content'],str) for m in messages)):
             raise ValueError('Invalid conversation')
+        if data.get('action') == 'select_model' and (not isinstance(data.get('model'), str) or not data['model']):
+            raise ValueError('Invalid model selection')
         phone = session['phone']
         if self.phone_identity != phone:
             token = raw(data.get('enrollment_token',''),32)
