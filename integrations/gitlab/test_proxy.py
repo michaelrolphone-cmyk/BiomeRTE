@@ -32,4 +32,12 @@ class ProxyTests(unittest.TestCase):
   with patch.object(p,"GitLabMCP") as cls,patch("sys.stdin",__import__("io").StringIO(json.dumps({"inputs":{"arguments":{}}}))),patch("sys.stdout",new_callable=__import__("io").StringIO) as output:
    cls.return_value.call.return_value=raw;p.adapter("git.gitlab.get_project")
    self.assertFalse(json.loads(output.getvalue())["ok"])
+class ApiTests(unittest.TestCase):
+ def test_rest_rejects_foreign_origin(self):
+  with patch.object(p,"settings",return_value={"url":"https://gitlab.local"}):
+   with self.assertRaises(ValueError):p.rest({"path":"https://other.example/api/v4/projects"})
+ def test_rest_preserves_list_response(self):
+  with patch.object(p,"settings",return_value={"url":"https://gitlab.local","ca":"unused"}),patch.object(p,"token",return_value="test-token"),patch.object(p.ssl,"create_default_context"),patch.object(p.urllib.request,"urlopen") as call:
+   response=call.return_value.__enter__.return_value;response.status=200;response.read.return_value=b'[{"id":1}]'
+   result=p.rest({"path":"/api/v4/projects"});self.assertTrue(result["ok"]);self.assertEqual([{"id":1}],result["result"]["data"])
 if __name__=="__main__":unittest.main()

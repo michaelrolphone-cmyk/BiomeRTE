@@ -5,8 +5,8 @@ ROOT=Path.home()/".local/share/biome-gitlab"
 sys.path.insert(0,str(Path.home()/".local/share/biome-mac-terminal"))
 import mac_provider as biome
 def git_tools(args):
- tools=json.loads((ROOT/"catalog.json").read_text())
- return {"mcp_tools":tools,"native_git":["git.cli:1"]+["git."+x+":1" for x in ("clone","fetch","pull","push","status","diff","log","commit","checkout","branch","merge","add","init")],"invoke":"Use git_start({contract,arguments}); retain its operation and use git_status until settled. Inspect result.ok."}
+ tools=[dict(t,contract="git.gitlab."+t["name"]+":1") for t in json.loads((ROOT/"catalog.json").read_text())]
+ return {"mcp_tools":tools,"native_git":["git.cli:1","git.gitlab.api:1","git.mcp.call:1","git.mcp.tools:1"]+["git."+x+":1" for x in ("clone","fetch","pull","push","status","diff","log","commit","checkout","branch","merge","add","init")],"invoke":"Use git_start({contract,arguments}); retain its operation and use git_status until settled. Inspect result.ok."}
 def operation_file(operation):
  if not operation.startswith("git-") or not all(x.isalnum() or x=="-" for x in operation):raise ValueError("Invalid Git operation")
  return ROOT/"agent-commands"/(operation+".json")

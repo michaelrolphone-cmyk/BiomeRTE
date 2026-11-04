@@ -100,11 +100,23 @@ def compact(out):
  for offset in range(0,len(raw),32768):
   part=raw[offset:offset+32768];r=g.invoke("artifact.put",{"data":base64.b64encode(part).decode()});chunks.append({"sha256":r["id"],"size":len(part)})
  return {"ok":out["ok"],"result":{"artifact":{"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw),"chunks":chunks},"encoding":"json"}}
+def rest(args):
+ cfg=settings();path=args.get("path","")
+ if not path.startswith("/api/v4/") or urllib.parse.urlsplit(path).netloc:raise ValueError("Expected a relative /api/v4/ path")
+ method=args.get("method","GET").upper();body=args.get("body")
+ req=urllib.request.Request(cfg["url"]+path,method=method,data=json.dumps(body).encode() if body is not None else None,headers={"Authorization":"Bearer "+token(),"Content-Type":"application/json","Accept":"application/json"})
+ try:
+  with urllib.request.urlopen(req,context=ssl.create_default_context(cafile=cfg["ca"])) as r:
+   raw=r.read();value=json.loads(raw) if raw else {}
+   return {"ok":True,"result":{"status":r.status,"data":value}}
+ except urllib.error.HTTPError as e:
+  return {"ok":False,"result":{"status":e.code,"error":e.read(4096).decode("utf-8","replace")}}
 def adapter(tool):
  payload=json.load(sys.stdin);args=payload["inputs"]["arguments"]
  if tool=="git.mcp.tools":out={"ok":True,"result":{"tools":json.loads((ROOT/"catalog.json").read_text())}}
  elif tool=="git.mcp.call":
   client=GitLabMCP();client.initialize();raw=client.call(args["tool"],args.get("arguments",{}));out={"ok":not raw.get("isError",False),"result":raw}
+ elif tool=="git.gitlab.api":out=rest(args)
  elif tool.startswith("git.gitlab."):
   client=GitLabMCP();client.initialize();raw=client.call(tool[len("git.gitlab."):],args);out={"ok":not raw.get("isError",False),"result":raw}
  else:out=cli(tool,args)
@@ -115,15 +127,17 @@ def configure():
  if nodefile.exists():node=json.loads(nodefile.read_text())["node"]
  else:node=hashlib.sha256(os.urandom(32)).hexdigest();atomic(nodefile,{"node":node})
  client=GitLabMCP();client.initialize();tools=client.tools();atomic(ROOT/"catalog.json",tools)
- entries=[("git.mcp.tools","Discover the current native GitLab MCP tool schemas."),("git.mcp.call","Call a native GitLab MCP tool with {tool,arguments}. Inspect ok and result.isError."),("git.cli","Run Git argv in a namespaced Mac worktree; arguments {namespace,path,argv,stdin?}.")]
+ entries=[("git.gitlab.api","GitLab REST API for operations absent from native MCP. arguments {method,path,body?}, path starts /api/v4/."),("git.mcp.tools","Discover the current native GitLab MCP tool schemas."),("git.mcp.call","Call a native GitLab MCP tool with {tool,arguments}. Inspect ok and result.isError."),("git.cli","Run Git argv in a namespaced Mac worktree; arguments {namespace,path,argv,stdin?}.")]
  entries.extend(("git."+n,"Native git "+n+"; arguments {namespace,path,options?,url?}. clone requires url and a new path.") for n in NATIVE)
  entries.extend((tool_contract(t["name"]).rsplit(":",1)[0],t.get("description","GitLab MCP tool")) for t in tools)
+ prior=json.loads((ROOT/"manifest.json").read_text()) if (ROOT/"manifest.json").exists() else {}
+ known={o["contract"] for o in prior.get("offers",[])}
  offers=[];resource="git.mac."+node[:20]
  for name,desc in entries:
   contract=name+":1";tool=next((t for t in tools if tool_contract(t["name"])==contract),None)
   usage={"before":desc,"parameters":{"arguments":"Native MCP inputSchema is published in the tool catalog. Native Git uses namespace, path and argv/options; tokens stay on the Mac."},"read_result":"Check result.ok. For MCP inspect result.result (including isError/content/structuredContent). Large JSON is losslessly returned as artifact chunks; decode and verify SHA256."}
   if tool:usage["before"]+=" Exact inputSchema: call git.mcp.tools:1 and select "+tool["name"]+"."
-  g.invoke("cap.define",dict(name=name,inputs={"arguments":"obj"},outputs={"ok":"bool","result":"obj"},description=("GitLab MCP tool "+tool["name"] if tool else desc[:1000]),usage=usage))
+  if contract not in known:g.invoke("cap.define",dict(name=name,inputs={"arguments":"obj"},outputs={"ok":"bool","result":"obj"},description=("GitLab MCP tool "+tool["name"] if tool else desc[:1000]),usage=usage))
   offers.append(dict(contract=contract,resource=resource,service="gitlab-mcp-proxy",capacity=16,usage=usage,argv=[sys.executable,str(ROOT/"proxy.py"),"adapter",name]))
  manifest={"site":info["site"],"realm":"site","offers":offers,"parallelism":16,"timeout":None,"poll_seconds":2,"retry_seconds":5}
  atomic(ROOT/"manifest.json",manifest)
