@@ -89,7 +89,7 @@ def serve():
                      configuration={"engine":"ComfyUI","model":backend.model,"encrypted":True,
                                     "protocol":2,"result_transport":"inline_or_encrypted_artifact_chunks",
                                     "reservation_policy":cfg.get("reservation_policy", {"idle_seconds":120,"release_after_result":True})})
-        worker = ImageWorker(str(STATE/"worker.sqlite"),remote,[offer,dict(offer,contract="image.generate:1",service="image-generation",configuration={"engine":"ComfyUI","model":backend.model,"encrypted":False,"result_transport":"png_artifact_chunks"})],None,handler=handle)
+        worker = ImageWorker(str(STATE/"worker.sqlite"),remote,[offer,dict(offer,contract="image.generate:1",service="image-generation",configuration={"engine":"ComfyUI","model":backend.model,"encrypted":False,"result_transport":"png_artifact_chunks","reservation_policy":cfg.get("reservation_policy", {"idle_seconds":120,"release_after_result":True})})],None,handler=handle)
         while True:
             try:
                 nodes = backend.api("/object_info")
