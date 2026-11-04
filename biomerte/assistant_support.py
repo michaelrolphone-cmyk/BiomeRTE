@@ -160,15 +160,21 @@ def prompt_phase(tx,ctx,f,key,entry):
         if values:omitted.append({'field':field,'digest':digest(values)});context[field]=[]
     if len(json.dumps(context).encode())>budget:return outcome(f,'unresolved','context_needs_decomposition')
     context.update(coding=False,purpose='workflow_reasoning',model=cfg['model'],omitted_refs=omitted)
+    # Bind the supplied observation to an exact evidence ID and send the IDs
+    # the validator accepts. A field path or the answer itself is not evidence.
+    context_ref='context:'+digest(context)
+    context['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+[context_ref]))
+    prompt=entry['prompt']+'\nCite facts only with exact strings from context.evidence_refs. Field paths are not evidence IDs. Keep unsupported claims in assumptions. Registry ready state is advertised availability, not a verified live health check. Omitted tool schemas remain available in the registry; do not infer that a capability is missing. Return proposed_action:null unless the supplied schema and all required argument values are known.'
     previous=f.get('_operations',{}).get(key)
-    action=copy.deepcopy(previous['action']) if previous else {'contract':'agent.lmstudio.delegate:1','resource':select_resource(tx,'agent.lmstudio.delegate:1','llm',cfg),'inputs':{'request':entry['prompt'],'context':context}}
+    action=copy.deepcopy(previous['action']) if previous else {'contract':'agent.lmstudio.delegate:1','resource':select_resource(tx,'agent.lmstudio.delegate:1','llm',cfg),'inputs':{'request':prompt,'context':context}}
+    supplied=set(action['inputs']['context'].get('evidence_refs',[]))
+    f['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+sorted(supplied)))
     result=capability(tx,ctx,f,key,action,protocol=True)
     if result['disposition']!='completed':return result
     try:parsed=parse_model_result(result['data'],entry['schema'],cfg['model_aliases'])
     except (Fault,ValueError,TypeError) as exc:
         f['schema_error']=str(exc);return outcome(f,'unresolved','invalid_model_response',{'error':str(exc)})
     # Only facts linked to supplied evidence enter observations. Assumptions remain separate.
-    supplied=set(f.get('evidence_refs',[]))
     for fact in parsed['facts']:
         if not set(fact['evidence_refs'])<=supplied:return outcome(f,'unresolved','unknown_evidence_reference')
     f.setdefault('phase_results',{})[key]=parsed;f.setdefault('findings',[]).extend(parsed['findings']);f['recommendation']=parsed['recommendation'];f['hypotheses']=parsed['hypotheses'];f['assumptions']=parsed['assumptions']
