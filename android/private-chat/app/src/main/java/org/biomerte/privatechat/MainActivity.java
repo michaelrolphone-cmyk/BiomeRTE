@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 public final class MainActivity extends Activity {
  private Vault vault; private JSONObject data; private byte[] vaultKey,salt;
- private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
+ private Button modelButton; private LinearLayout root,imageHistory; private final java.util.List<android.graphics.Bitmap> bitmaps=new java.util.ArrayList<>(); private TextView status,history; private EditText composer;
  private final ExecutorService executor=Executors.newSingleThreadExecutor();
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
   base("Biome Private Chat");status.setText("Encrypted on this phone • unlocked");
   ScrollView scroll=new ScrollView(this);history=new TextView(this);history.setTextColor(0xffe9ede4);history.setTextSize(17);history.setTextIsSelectable(false);history.setSaveEnabled(false);LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.addView(history);imageHistory=new LinearLayout(this);imageHistory.setOrientation(LinearLayout.VERTICAL);content.addView(imageHistory);scroll.addView(content);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));}}catch(Exception e){status.setText("Could not import pairing file.");}}
+  modelButton=button("Model: "+data.optString("selected_model","Mac default"),this::chooseModel);
   render();composer=field("Message",false);
   button("Send",this::send);button("Generate image",()->send(true));button("Resume pending request",this::resume);
   button("Pair Mac / connection",this::settings);button("Lock",this::lock);
@@ -68,6 +69,21 @@ public final class MainActivity extends Activity {
     if(bitmap==null)throw new Exception();bitmaps.add(bitmap);ImageView view=new ImageView(this);view.setAdjustViewBounds(true);view.setImageBitmap(bitmap);imageHistory.addView(view,new LinearLayout.LayoutParams(-1,-2));
    }
   }catch(Exception e){status.setText("An encrypted image could not be displayed.");}
+ }
+ private void chooseModel(){
+  if(busy||data.has("pending")){status.setText("Resume the pending request before changing models.");return;}
+  JSONArray models=data.optJSONArray("models");if(models==null||models.length()==0){refreshModels();return;}
+  String[] labels=new String[models.length()];int selected=-1;
+  for(int i=0;i<labels.length;i++)try{JSONObject m=models.getJSONObject(i);labels[i]=m.getString("name")+(m.optBoolean("loaded")?" • loaded":"");if(m.getString("id").equals(data.optString("selected_model")))selected=i;}catch(Exception e){fail();return;}
+  new AlertDialog.Builder(this).setTitle("Chat model").setSingleChoiceItems(labels,selected,(dialog,index)->{
+   try{data.put("selected_model",models.getJSONObject(index).getString("id"));save();modelButton.setText("Model: "+models.getJSONObject(index).getString("name"));dialog.dismiss();status.setText("Model selected for your next message.");}catch(Exception e){fail();}
+  }).setNeutralButton("Refresh",(d,w)->refreshModels()).setNegativeButton("Cancel",null).show();
+ }
+ private void refreshModels(){
+  if(busy||data.has("pending")){status.setText("Resume the pending request first.");return;}
+  try{if(!data.has("pairing")||!data.has("oauth")){settings();return;}
+   data.put("pending",startSession(false,"").put("action","models"));save();resume();
+  }catch(Exception e){fail();}
  }
  private void settings(){
   base("Private connection");status.setText("Import the pairing JSON directly from your Mac. Keep it private. Biome receives only encrypted chat.");
@@ -108,7 +124,7 @@ public final class MainActivity extends Activity {
   try{
    byte[] pub=Crypto.edPublic(identity),eph=Crypto.xPublic(ephemeral),transcript=wire.clientTranscript(helloId,sid,pub,eph,nonce);
    JSONObject hello=new JSONObject().put("v",2).put("kind","hello").put("id",helloId).put("sid",sid).put("client_identity",Vault.b64(pub)).put("client_ephemeral",Vault.b64(eph)).put("client_nonce",Vault.b64(nonce)).put("signature",Vault.b64(Crypto.sign(identity,transcript)));
-   return new JSONObject().put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId).put("image",image).put("image_prompt",image?prompt:"");
+   return new JSONObject().put("stage","hello").put("hello",hello).put("client_private",Vault.b64(ephemeral)).put("request_id",requestId).put("selected_model",data.optString("selected_model","")).put("image",image).put("image_prompt",image?prompt:"");
   }finally{Crypto.wipe(identity);Crypto.wipe(ephemeral);}
  }
  private void finishSession(JSONObject reply)throws Exception{
@@ -123,11 +139,13 @@ public final class MainActivity extends Activity {
    shared=Crypto.shared(ephemeral,Vault.unb64(reply.getString("server_ephemeral")));byte[] hash=Crypto.hash(whole);
    requestKey=wire.traffic(shared,hash,"request");responseKey=wire.traffic(shared,hash,"response");
    JSONObject body=new JSONObject().put("messages",pending.optBoolean("image")?new JSONArray().put(new JSONObject().put("role","user").put("content",pending.getString("image_prompt"))):data.getJSONArray("messages"));
+   if(pending.optString("action").equals("models"))body=new JSONObject().put("action","models");
+   else if(!pending.optBoolean("image")&&!pending.optString("selected_model").isEmpty())body.put("model",pending.getString("selected_model"));
    if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
    clear=body.toString().getBytes(StandardCharsets.UTF_8);byte[] nonce=Crypto.random(12);String sid=hello.getString("sid"),id=pending.getString("request_id");
    JSONObject envelope=new JSONObject().put("v",2).put("kind","request").put("id",id).put("sid",sid).put("nonce",Vault.b64(nonce)).put("ct",Vault.b64(Crypto.crypt(true,requestKey,nonce,wire.sessionAAD("request",sid,id,hash),clear)));
    if(envelope.toString().getBytes(StandardCharsets.UTF_8).length>60000)throw new Exception("Request too large");
-   data.put("pending",new JSONObject().put("stage","message").put("envelope",envelope).put("response_key",Vault.b64(responseKey)).put("transcript_hash",Vault.b64(hash)).put("image",pending.optBoolean("image")).put("image_prompt",pending.optString("image_prompt")));
+   data.put("pending",new JSONObject().put("stage","message").put("envelope",envelope).put("response_key",Vault.b64(responseKey)).put("transcript_hash",Vault.b64(hash)).put("action",pending.optString("action")).put("selected_model",pending.optString("selected_model")).put("image",pending.optBoolean("image")).put("image_prompt",pending.optString("image_prompt")));
    save();
   }finally{Crypto.wipe(ephemeral);Crypto.wipe(shared);Crypto.wipe(requestKey);Crypto.wipe(responseKey);Crypto.wipe(clear);}
  }
@@ -161,6 +179,10 @@ public final class MainActivity extends Activity {
      JSONObject reply;try{clear=Crypto.crypt(false,key,Vault.unb64(response.getString("nonce")),wire.sessionAAD("response",sid,id,Vault.unb64(pending.getString("transcript_hash"))),Vault.unb64(response.getString("ct")));reply=new JSONObject(new String(clear,StandardCharsets.UTF_8));}finally{Crypto.wipe(key);Crypto.wipe(clear);}
      data.getJSONObject("pairing").remove("enrollment_token");
      if(reply.has("error")){status.setText("Mac could not complete private inference.");data.remove("pending");save();busy=false;return;}
+     if(pending.optString("action").equals("models")){
+      JSONArray models=reply.getJSONArray("models");data.put("models",models);data.remove("pending");save();busy=false;
+      if(models.length()==0)status.setText("No chat models available on your Mac.");else chooseModel();return;
+     }
      if(image){
       JSONArray images=reply.getJSONArray("images");
       for(int i=0;i<images.length();i++){JSONObject item=images.getJSONObject(i);byte[] png=Vault.unb64(item.getString("data"));try{if(!Biome.hex(Crypto.hash(png)).equals(item.getString("sha256")))throw new Exception();}finally{Crypto.wipe(png);}}
