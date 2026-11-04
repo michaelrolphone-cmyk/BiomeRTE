@@ -451,6 +451,45 @@ def advance(tx, ctx, r, t, n, version):
     return True
 
 
+def assistant_live_variables(nodes):
+    """Conservative backwards liveness for compiler scratch variables."""
+    def reads(value):
+        if isinstance(value, dict):
+            if set(value) == {'$'} and isinstance(value['$'], str):
+                return {value['$'].split('.')[0]}
+            return set().union(*(reads(v) for v in value.values()))
+        if isinstance(value, list):
+            return set().union(*(reads(v) for v in value))
+        return set()
+    live = {key: set() for key in nodes}
+    changed = True
+    while changed:
+        changed = False
+        for key, node in nodes.items():
+            used = reads(node)
+            successors = targets(node)
+            killed = {node.get('save')} | (set(node.get('values', {})) if node['type'] == 'set' else set())
+            for successor in successors:
+                if successor != node.get('on_error'):
+                    used |= live.get(successor, set()) - killed
+            used |= live.get(node.get('on_error'), set())
+            if not used <= live[key]:
+                live[key] |= used
+                changed = True
+    return live
+
+
+def compact_assistant_token(run, token, live):
+    if not run['name'].startswith('assistant.'):
+        return False
+    removed = False
+    for key in ('input', 'prepared', 'step', 'route', 'child_result'):
+        if key in token['vars'] and key not in live[token['at']]:
+            del token['vars'][key]
+            removed = True
+    return removed
+
+
 def tick(tx, ctx, budget=64):
     from .api import events_after
     budget = max(1, min(256, budget))
@@ -471,10 +510,14 @@ def tick(tx, ctx, budget=64):
     runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
         version = tx.need('process_versions', r['rev'])
+        live = assistant_live_variables(version['graph']['nodes']) if r['name'].startswith('assistant.') else None
         for t in list(r['tokens']):
             if r['state'] != 'running' or moves >= budget:
                 break
             n = version['graph']['nodes'][t['at']]
+            compacted = live is not None and compact_assistant_token(r, t, live)
+            if compacted:
+                tx.put('runs', r['id'], r)
             # Roll back partial effects and token mutations on a business error.
             backup = copy.deepcopy(r)
             change_backup = dict(tx.changes)
@@ -482,7 +525,7 @@ def tick(tx, ctx, budget=64):
             try:
                 if r['steps'] >= 100000:
                     raise Fault('Step budget exhausted')
-                changed = advance(tx, ctx, r, t, n, version)
+                changed = advance(tx, ctx, r, t, n, version) or compacted
             except (Fault, ValueError, KeyError, IndexError, TypeError) as exc:
                 tx.db.execute('ROLLBACK TO activity')
                 tx.changes = change_backup
@@ -514,6 +557,8 @@ def tick(tx, ctx, budget=64):
                 moves += 1
                 break
             tx.db.execute('RELEASE activity')
+            if live is not None and t in r['tokens'] and compact_assistant_token(r, t, live):
+                tx.put('runs', r['id'], r)
             if changed:
                 r['steps'] += 1
                 tx.put('runs', r['id'], r)
