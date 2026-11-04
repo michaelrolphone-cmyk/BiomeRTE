@@ -1,4 +1,4 @@
-# Biome Private Chat 0.2.0
+# Biome Private Chat 0.3.0
 
 Android 8+ app and isolated Mac LM Studio provider. Keychain is not used.
 
@@ -39,3 +39,6 @@ History, phone signing key, OAuth credentials and pending transport state share 
 The Mac ledger stores only operation hashes, fencing/status metadata and generic failures. Request/response ciphertext retries live in RAM until Biome acknowledges them. Plaintext passes only in memory to localhost LM Studio, with store:false, no coding integrations and runtime guards requiring sensitive/incoming-token logging disabled. LM Studio retention must be qualified on the installed version.
 
 No artificial inference timeouts or CPU/memory limits are imposed. Core dumps are disabled for the bridge. Runtime copies, OS swap, model KV caches and device compromise are outside a no-forensic-remnants guarantee.
+
+## Encrypted image generation
+Generate image uses the separate image.private.exchange:1 capability backed by Fluxed Up GGUF Q8_0 on the Mac. Image prompts and PNG replies are encrypted before dispatch and before leaving the Mac; image history stays in the password-encrypted phone vault. Existing chat, OAuth and pairing remain compatible. Images display only while unlocked and are cleared from the view on lock. Generic Biome callers separately use image.generate:1. Physical phone lock/resume/display qualification remains pending until tested on the device.

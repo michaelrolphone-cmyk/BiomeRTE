@@ -12,3 +12,7 @@ pair-pending.json
 gateway/.openai/
 gateway/dist/
 providers/lmstudio/coding-deps/node_modules/
+
+android/private-chat/.gradle/
+android/private-chat/app/build/
+providers/private-image/__pycache__/

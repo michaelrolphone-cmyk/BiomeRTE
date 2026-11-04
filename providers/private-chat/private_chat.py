@@ -150,10 +150,16 @@ def serve():
     protocol = SessionServer(identity_key(),
         raw(cfg['enrollment_hash'],32) if cfg.get('enrollment_hash') else None,
         raw(cfg['phone_identity'],32) if cfg.get('phone_identity') else None, enrolled)
+    def dispatch(action):
+        # Image and chat providers share the current paired phone public identity.
+        current = json.loads((STATE / 'manifest.json').read_text())
+        protocol.phone_identity = raw(current['phone_identity'],32) if current.get('phone_identity') else None
+        protocol.enrollment_hash = raw(current['enrollment_hash'],32) if current.get('enrollment_hash') else None
+        return {'envelope': protocol.handle(action['inputs']['envelope'], action['id'], inference)}
     with open(STATE / 'worker.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         worker = PrivateWorker(str(STATE / 'worker-v2.sqlite'), remote, [offer], None,
-            handler=lambda action: {'envelope': protocol.handle(action['inputs']['envelope'], action['id'], inference)})
+            handler=dispatch)
         while True:
             try:
                 privacy_ready()
