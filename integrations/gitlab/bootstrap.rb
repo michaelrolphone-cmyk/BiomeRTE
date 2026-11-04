@@ -22,10 +22,10 @@ refresh_value ||= access.refresh_token
 raise 'OAuth material missing' if [client_secret,access_value,refresh_value].any?(&:blank?)
 settings=ApplicationSetting.current
 settings.update!(signup_enabled:false)
-File.write('/etc/gitlab/biome-oauth.json',JSON.generate({client_id:application.uid,client_secret:client_secret,access_token:access_value,refresh_token:refresh_value,expires_at:Time.now.to_f+7200}))
-File.chmod(0600,'/etc/gitlab/biome-oauth.json')
-initial=File.read('/etc/gitlab/initial_root_password')
+File.write('/var/opt/gitlab/biome-bootstrap/biome-oauth.json',JSON.generate({client_id:application.uid,client_secret:client_secret,access_token:access_value,refresh_token:refresh_value,expires_at:Time.now.to_f+7200}))
+File.chmod(0600,'/var/opt/gitlab/biome-bootstrap/biome-oauth.json')
+initial=File.read('/var/opt/gitlab/biome-bootstrap/initial_root_password')
 password=initial.lines.find{|l|l.start_with?('Password: ')}.to_s.sub('Password: ','').strip
-File.write('/etc/gitlab/biome-admin-access.json',JSON.generate({url:'https://Micahels-Mac-mini.local:8443',username:'root',password:password}))
-File.chmod(0600,'/etc/gitlab/biome-admin-access.json')
+File.write('/var/opt/gitlab/biome-bootstrap/biome-admin-access.json',JSON.generate({url:'https://Micahels-Mac-mini.local:8443',username:'root',password:password}))
+File.chmod(0600,'/var/opt/gitlab/biome-bootstrap/biome-admin-access.json')
 puts JSON.generate({gitlab:Gitlab::VERSION,agent:agent.username,oauth_scopes:scope,mcp_enabled:settings.respond_to?(:mcp_server_enabled) ? settings.mcp_server_enabled : 'see settings'})
