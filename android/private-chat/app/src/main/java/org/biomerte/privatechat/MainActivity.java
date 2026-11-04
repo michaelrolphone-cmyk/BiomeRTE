@@ -83,7 +83,7 @@ public final class MainActivity extends Activity {
   boolean connected=data.has("pairing")&&data.has("oauth");
   status.setText(connected?"Ready · Encrypted on this phone":"Connect your Mac to start");
   if(pairingUri!=null){Uri uri=pairingUri;pairingUri=null;try{try(java.io.InputStream in=getContentResolver().openInputStream(uri)){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buf=new byte[4096];int n;while((n=in.read(buf))!=-1){if(out.size()+n>4096)throw new Exception();out.write(buf,0,n);}savePairing(new String(out.toByteArray(),StandardCharsets.UTF_8));Toast.makeText(this,"Mac pairing imported",Toast.LENGTH_SHORT).show();}}catch(Exception e){status.setText("Pairing import failed. Open Connection to try again.");}}
-  modelButton=action("Model · "+modelName(data.optString("selected_model")),this::chooseModel,false);modelButton.setSingleLine(true);modelButton.setEllipsize(android.text.TextUtils.TruncateAt.END);modelButton.setContentDescription("Choose chat model");root.addView(modelButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,8);
+  modelButton=action("Model · "+modelName(data.optString("selected_model")),this::chooseModel,false);modelButton.setMaxLines(1);modelButton.setHorizontallyScrolling(false);modelButton.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);modelButton.setEllipsize(android.text.TextUtils.TruncateAt.END);modelButton.setContentDescription("Choose chat model");root.addView(modelButton,new LinearLayout.LayoutParams(-1,dp(44)));space(root,8);
   if(!connected)button("Set up connection",this::settings);
   chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);
   LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
@@ -109,7 +109,7 @@ public final class MainActivity extends Activity {
    JSONObject message=messages.optJSONObject(i);if(message==null)continue;boolean mine=message.optString("role").equals("user");
    LinearLayout row=new LinearLayout(this);row.setGravity(mine?Gravity.RIGHT:Gravity.LEFT);row.setPadding(mine?dp(30):0,dp(4),mine?0:dp(24),dp(10));
    LinearLayout bubble=new LinearLayout(this);bubble.setOrientation(LinearLayout.VERTICAL);bubble.setPadding(dp(14),dp(11),dp(14),dp(12));bubble.setBackground(surface(mine?0xff36533e:0xff21362b,18));
-   TextView who=text(mine?"You":modelName(message.optString("model")),11,0xffb6cbb0);who.setTypeface(null,android.graphics.Typeface.BOLD);bubble.addView(who);space(bubble,4);bubble.addView(text(message.optString("content"),16,0xffe9ede4));row.addView(bubble,new LinearLayout.LayoutParams(-2,-2));messageList.addView(row);
+   TextView who=text(mine?"You":modelName(message.optString("model")),11,0xffb6cbb0);who.setTypeface(null,android.graphics.Typeface.BOLD);bubble.addView(who);space(bubble,4);bubble.addView(text(message.optString("content"),16,0xffe9ede4));row.addView(bubble,new LinearLayout.LayoutParams(-1,-2));messageList.addView(row);
   }
   renderImages();if(chatScroll!=null)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));
  }

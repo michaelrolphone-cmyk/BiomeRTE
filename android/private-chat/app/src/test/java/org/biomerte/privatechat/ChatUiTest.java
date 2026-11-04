@@ -32,7 +32,7 @@ public class ChatUiTest {
   File dir=new File("build/ui-previews");dir.mkdirs();try(FileOutputStream out=new FileOutputStream(new File(dir,name))){b.compress(Bitmap.CompressFormat.PNG,100,out);}b.recycle();return root;
  }
  @Test public void chatHasBubblesAndDockedComposer()throws Exception{
-  draw(1280,"chat.png");LinearLayout list=(LinearLayout)get("messageList");assertEquals(2,list.getChildCount());
+  draw(1280,"chat.png");LinearLayout list=(LinearLayout)get("messageList");assertEquals(2,list.getChildCount());assertTrue("message bubble must have readable width",((android.view.ViewGroup)list.getChildAt(0)).getChildAt(0).getWidth()>300);
   EditText composer=(EditText)get("composer");composer.setText("Hello");assertTrue(((Button)get("sendButton")).isEnabled());
   assertEquals(View.GONE,((Button)get("retryButton")).getVisibility());
   assertTrue(composer.getHeight()>=96);assertTrue(((ScrollView)get("chatScroll")).getHeight()>300);
