@@ -14,11 +14,11 @@ public class PendingRecoveryTest {
   MainActivity a=Robolectric.buildActivity(MainActivity.class).setup().get();
   JSONObject p=new JSONObject().put("image",true).put("stage","message").put("response_key","synthetic-key").put("envelope",new JSONObject().put("id","original-operation"));
   JSONObject d=new JSONObject().put("pending",p).put("messages",new JSONArray().put("history"));
-  set(a,"data",d);set(a,"vaultKey",new byte[32]);set(a,"salt",new byte[32]);set(a,"busy",true);
+  set(a,"data",d);set(a,"vaultKey",new byte[32]);set(a,"salt",new byte[32]);set(a,"busy",false);
   call(a,"chat");((EditText)get(a,"composer")).setText("new chat");call(a,"updateControls");
   assertTrue(((Button)get(a,"modelButton")).isEnabled());assertTrue(((Button)get(a,"sendButton")).isEnabled());
   assertEquals(Boolean.TRUE,call(a,"parkPending"));
-  assertFalse(d.has("pending"));assertEquals("synthetic-key",d.getJSONArray("suspended_requests").getJSONObject(0).getString("response_key"));
+  assertFalse(d.has("pending"));assertEquals("synthetic-key",d.getJSONArray("requests").getJSONObject(0).getString("response_key"));
   assertEquals("history",d.getJSONArray("messages").getString(0));assertFalse((Boolean)get(a,"busy"));
   assertTrue(((Button)get(a,"modelButton")).isEnabled());
  }

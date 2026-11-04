@@ -23,7 +23,7 @@ def lm_headers(state):
 
 def model_catalog(opener, state):
     models = available_models(opener, state)
-    result = []
+    result = {}
     for model in models:
         if model.get('type') != 'llm':
             continue
@@ -32,8 +32,11 @@ def model_catalog(opener, state):
         name = model.get('display_name') or key
         if '@' in key:
             name += ' · ' + key.rsplit('@', 1)[1].upper()
-        result.append(dict(id=key, name=name, loaded=bool(instances)))
-    return result
+        if key in result:
+            result[key]["loaded"] |= bool(instances)
+        else:
+            result[key] = dict(id=key, name=name, loaded=bool(instances))
+    return list(result.values())
 
 def selected_model(model, opener, state):
     if not isinstance(model, str) or not model:

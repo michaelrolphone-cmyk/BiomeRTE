@@ -43,9 +43,9 @@ public class ChatUiTest {
   ((Button)get("imageModeButton")).performClick();assertEquals("Describe an image…",composer.getHint().toString());assertEquals(View.GONE,((Button)get("modelButton")).getVisibility());
   ((Button)get("chatModeButton")).performClick();assertEquals(View.VISIBLE,((Button)get("modelButton")).getVisibility());
  }
- @Test public void pendingRequestDisablesDuplicateSendAndExposesRetry()throws Exception{
-  ((JSONObject)get("data")).put("pending",new JSONObject());((EditText)get("composer")).setText("another");
-  call("updateControls");assertFalse(((Button)get("sendButton")).isEnabled());assertFalse(((Button)get("modelButton")).isEnabled());assertEquals(View.VISIBLE,((Button)get("retryButton")).getVisibility());
+ @Test public void pendingRequestAllowsNewSendAndExposesQueue()throws Exception{
+  ((JSONObject)get("data")).put("pending",new JSONObject().put("request_id","saved"));((EditText)get("composer")).setText("another");
+  call("parkPending");call("updateControls");assertTrue(((Button)get("sendButton")).isEnabled());assertTrue(((Button)get("modelButton")).isEnabled());assertEquals(View.VISIBLE,((Button)get("retryButton")).getVisibility());
  }
  @Test public void connectionExplainsBothStepsAndBackReturnsToChat()throws Exception{
   call("settings");draw(1280,"connection.png");assertTrue((Boolean)get("connectionScreen"));activity.onBackPressed();assertFalse((Boolean)get("connectionScreen"));

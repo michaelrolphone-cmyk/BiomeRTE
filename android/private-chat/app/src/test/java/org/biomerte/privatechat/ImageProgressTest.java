@@ -12,6 +12,7 @@ import static org.junit.Assert.*;
 public class ImageProgressTest {
  @Test public void validProgressUpdatesButStaleAndTamperedFramesDoNot()throws Exception{
   MainActivity a=Robolectric.buildActivity(MainActivity.class).setup().get();Field busy=MainActivity.class.getDeclaredField("busy");busy.setAccessible(true);busy.set(a,true);
+  PendingRecoveryTest.set(a,"data",new JSONObject());
   String id=UUID.randomUUID().toString(),sid=UUID.randomUUID().toString();byte[] key=Crypto.random(32),hash=Crypto.random(32);
   JSONObject pending=new JSONObject().put("response_key",Vault.b64(key)).put("transcript_hash",Vault.b64(hash)).put("envelope",new JSONObject().put("id",id).put("sid",sid));long[] seq={0};
   Method show=MainActivity.class.getDeclaredMethod("showImageProgress",JSONObject.class,JSONObject.class,int.class,long[].class);show.setAccessible(true);

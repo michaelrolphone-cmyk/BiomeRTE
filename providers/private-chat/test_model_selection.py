@@ -15,6 +15,19 @@ class Opener:
             {'type':'llm','key':'model-b','display_name':'Model B','loaded_instances':[]}]}))
 
 class ModelTests(unittest.TestCase):
+    def test_duplicate_model_keys_merge_loaded_instances(self):
+        class Duplicates:
+            def open(self, req):
+                return io.StringIO(json.dumps({'models':[
+                    {'type':'llm','key':'llama@q4','display_name':'Llama'},
+                    {'type':'llm','key':'llama@q4','loaded_instances':[{'id':'loaded'}]},
+                    {'type':'llm','key':'llama@q8','display_name':'Llama'}]}))
+        with tempfile.TemporaryDirectory() as directory:
+            result=model_catalog(Duplicates(),Path(directory))
+        self.assertEqual(['llama@q4','llama@q8'],[m['id'] for m in result])
+        self.assertTrue(result[0]['loaded'])
+        self.assertIn('Q8',result[1]['name'])
+
     def session(self,handler):
         key,phone=ed25519.Ed25519PrivateKey.generate(),ed25519.Ed25519PrivateKey.generate()
         server=SessionServer(key,phone_identity=public(phone),request_handler=handler)

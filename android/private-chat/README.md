@@ -83,3 +83,12 @@ It opens after unlocking and is reachable with Back / All conversations from a
 chat. Rows show names, pins, draft or recent-message previews, and thread settings.
 Search filters names/previews locally while unlocked. Opening a row restores its
 history and draft; pinning affects only list order.
+
+0.10.0: Saved chat/image requests resume automatically after unlock and foreground.
+An encrypted request queue stores each original operation ID, transcript and keys.
+Each outstanding request has an independent network client and watcher; navigating
+threads does not stop it. The Mac continues queued work while Android is closed;
+reopening collects encrypted results into the originating thread, once, at the
+saved prompt anchor. Network interruptions reconnect automatically. Explicitly
+failed operations remain visible for a deliberate restart, to avoid duplicate work.
+Model rows merge exact IDs and loaded flags; distinct quantizations stay separate.
