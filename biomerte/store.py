@@ -190,18 +190,28 @@ class Store:
                 time.sleep(0.01)
 
     def _execute(self, fn, cached=False):
+        from .gateway_journal import JournalConflict
         with contextlib.closing(self.connect()) as db:
+            entries = {}
+            if self.remote and not cached:
+                observed = db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0]
+                head, version = self.remote.read('head')
+                last = head['seq'] if head else 0
+                if last < observed:
+                    raise Fault('Shared journal rolled back. Inspect membership and backup.', 409)
+                for number in range(observed + 1, last + 1):
+                    entries[number], unused = self.remote.read('log/%020d' % number)
+            # Network catch-up never holds the mirror's writer lock. Another
+            # local caller may already have applied part of this same history.
             db.execute('BEGIN IMMEDIATE')
             try:
                 tx = Records(db)
                 seq, previous = db.execute('SELECT seq,hash FROM position WHERE id=1').fetchone()
                 if self.remote and not cached:
-                    head, version = self.remote.read('head')
-                    last = head['seq'] if head else 0
                     if last < seq:
-                        raise Fault('Shared journal rolled back. Inspect membership and backup.', 409)
+                        raise JournalConflict('Local mirror advanced during catch-up', 409)
                     while seq < last:
-                        entry, unused = self.remote.read('log/%020d' % (seq + 1))
+                        entry = entries[seq + 1]
                         if not entry or entry['prev'] != previous or entry['seq'] != seq + 1:
                             raise Fault('Shared journal discontinuity', 503)
                         for kind, key, value in entry['changes']:
