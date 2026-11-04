@@ -18,7 +18,11 @@ public final class MainActivity extends Activity {
  private final Biome biome=new Biome(); private volatile int epoch=0; private boolean busy=false; private Uri pairingUri;
  private static final String REDIRECT=Biome.ORIGIN+"/android/private-chat-callback";
  @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);vault=new Vault(this);locked();}
- @Override protected void onStop(){super.onStop();lock();}
+ @Override protected void onStop(){
+  if(data!=null&&vaultKey!=null&&composer!=null)try{data.put("draft",composer.getText().toString());save();}catch(Exception ignored){}
+  super.onStop();
+ }
+ @Override protected void onResume(){super.onResume();if(returnToConnection&&data!=null){returnToConnection=false;settings();}}
  @Override public void onBackPressed(){if(connectionScreen&&data!=null){chat();}else{lock();super.onBackPressed();}}
  @Override protected void onDestroy(){lock();executor.shutdownNow();super.onDestroy();}
  private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
@@ -194,7 +198,7 @@ public final class MainActivity extends Activity {
   space(root,12);button("Back to chat",this::chat);
  }
  private void savePairing(String text)throws Exception{if(data.has("pending"))throw new Exception();JSONObject p=new JSONObject(text);if(p.getInt("v")!=2||Vault.unb64(p.getString("server_identity")).length!=32||!p.getString("resource").startsWith("privatechat.mac."))throw new Exception();data.put("pairing",p);save();}
- @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(request==41&&result==RESULT_OK&&intent!=null)pairingUri=intent.getData();}
+ @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(request==41&&result==RESULT_OK&&intent!=null){pairingUri=intent.getData();if(data!=null)chat();}}
  private void authorize(){
   if(busy)return;busy=true;final int g=epoch;
   executor.execute(()->{try{
