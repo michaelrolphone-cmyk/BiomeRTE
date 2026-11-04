@@ -1,6 +1,6 @@
 plugins { id 'com.android.application' }
 android { namespace 'org.biomerte.decisions'; compileSdk 35
- defaultConfig { applicationId 'org.biomerte.decisions'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.1.2'; multiDexEnabled true }
+ defaultConfig { applicationId 'org.biomerte.decisions'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.1.3'; multiDexEnabled true }
  testOptions { unitTests.includeAndroidResources = true }
  buildTypes {
   debug { debuggable false; minifyEnabled true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt') }

@@ -40,13 +40,13 @@ public class MainActivity extends Activity {
   App.start(this);String status=s.optString("status");label(status.isEmpty()?"Connected to Biome":status,14,false);
   if(rows.length()==0){label("✓",64,true);label("No decisions",30,true);}else{
    label(rows.length()+" waiting on you",16,false);
-   for(int n=0;n<rows.length();n++){JSONObject r=rows.getJSONObject(n),request=r.getJSONObject("request");String id=r.getString("id");button(request.optString("title","Decision")+"\n"+request.getString("question"),false,()->{editing=id;load();});}
+   for(int n=0;n<rows.length();n++){JSONObject r=rows.getJSONObject(n),request=r.getJSONObject("request");String id=r.getString("id");button(DecisionModel.title(request)+"\n"+request.getString("question"),false,()->{editing=id;load();});}
   }
   JSONArray out=s.getJSONArray("outbox");for(int n=out.length()-1;n>=0;n--){JSONObject item=out.getJSONObject(n);if(!"accepted".equals(item.getString("state")))label("Saved reply · "+("needs_review".equals(item.getString("state"))?"question changed; review required":"waiting to send")+(!item.optString("text").isEmpty()?"\n"+item.getString("text"):""),14,false);}
   button("Refresh",false,()->App.sync(this));button("Pairing settings",false,this::choosePairing);
  }
  private void renderDecision(JSONObject s,JSONObject row)throws Exception{
-  JSONObject r=row.getJSONObject("request");page(r.optString("title","Decision"));displayed=row;label(r.getString("question"),20,true);label(DecisionModel.describe(r),15,false);
+  JSONObject r=row.getJSONObject("request");page(DecisionModel.title(r));displayed=row;label(r.getString("question"),20,true);label(DecisionModel.describe(r),15,false);
   if(State.submitted(s,row.getString("id"))){sendingId=row.getString("id");renderDelivery(s,sendingId);return;}
   label("Optional reply",14,true);reply=new EditText(this);reply.setTextSize(16);reply.setTextColor(getColor(R.color.ink));reply.setHint("Conditions, a question, or requested changes…");reply.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);reply.setMinLines(3);JSONObject drafts=s.optJSONObject("drafts");if(drafts!=null)reply.setText(drafts.optString(row.getString("id")));column.addView(reply,new LinearLayout.LayoutParams(-1,-2));
   if(r.has("authorization_request"))label("An approval with written conditions or questions will require clarification before permission is granted.",13,false);

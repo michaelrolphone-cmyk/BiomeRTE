@@ -2,6 +2,8 @@ package org.biomerte.decisions;
 import org.json.*;
 import java.nio.charset.StandardCharsets;
 public final class DecisionModel {
+ public static String title(JSONObject r){String value=r.optString("title").trim();if(value.isEmpty())value=r.optString("question","Decision").trim();String[] words=value.split("[\\p{Z}\\s]+");return String.join(" ",java.util.Arrays.copyOf(words,Math.min(10,words.length)));}
+ public static String fullQuestion(JSONObject r)throws Exception{String description=describe(r);return r.getString("question")+(description.isEmpty()?"":"\n\n"+description);}
  public static void validate(JSONObject row,String choice,String text)throws Exception{
   if(text==null||text.getBytes(StandardCharsets.UTF_8).length>16384)throw new Exception("Reply exceeds 16 KiB");
   if(choice==null||choice.isEmpty()&&text.trim().isEmpty())throw new Exception("Choose an option or write a reply");
