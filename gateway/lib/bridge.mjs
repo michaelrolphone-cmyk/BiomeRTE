@@ -1,10 +1,11 @@
+import {controllerDevice,claimControllerJob,controllerStatus} from './ha.mjs';
 import {openGrokJob} from './grok.mjs';
 import {canDeliver} from './events.mjs';
 import {sameSecret} from './access.mjs';
 export const reply = (data, status=200) => Response.json(data, {status, headers:{'Cache-Control':'no-store'}});
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const epoch = () => Math.floor(Date.now()/1000);
-const hexHash = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), b => b.toString(16).padStart(2,'0')).join('');
+export const hexHash = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), b => b.toString(16).padStart(2,'0')).join('');
 
 export async function limitedJSON(req, max) {
  const reader = req.body?.getReader();
@@ -23,8 +24,10 @@ export async function limitedJSON(req, max) {
 
 export async function device(req, env, path) {
  const token = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.get('Authorization')||'')?.[1];
- if (!token || !env.BIOME_BRIDGE_PIN || !sameSecret(await hexHash(await hexHash(token)+'\n'), env.BIOME_BRIDGE_PIN))
-  return reply({error:'Invalid device credential'},401);
+ const legacy=!!token&&!!env.BIOME_BRIDGE_PIN&&sameSecret(await hexHash(await hexHash(token)+'\n'),env.BIOME_BRIDGE_PIN);
+ const node=token?await env.DB.prepare('SELECT * FROM controller_nodes WHERE token_hash=? AND enabled=1').bind(await hexHash(token)).first():null;
+ if(!legacy&&!node)return reply({error:'Invalid device credential'},401);
+ if(path.startsWith('/bridge/ha/'))return controllerDevice(req,env,path,node,legacy);
  if (req.method !== 'POST') return reply({error:'Use POST'},405);
  if (path === '/bridge/event-authorize') {
   const {owner,grant}=await limitedJSON(req,2048);
@@ -37,10 +40,11 @@ export async function device(req, env, path) {
  }
  const db = env.DB, time = epoch();
  if (path === '/bridge/next') {
-  const lease = crypto.randomUUID();
-  const job = await db.prepare("UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=? WHERE id=(SELECT id FROM bridge_jobs WHERE deadline>=? AND (state='queued' OR (state='claimed' AND lease_until<?)) ORDER BY updated,id LIMIT 1) RETURNING id,request")
-   .bind(lease,time+35,time,time,time).first();
-  if (!job) return reply({idle:true});
+  const selected=await claimControllerJob(db,node);
+  const lease = selected.lease||crypto.randomUUID();
+  const job = selected.legacy? await db.prepare("UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=? WHERE id=(SELECT id FROM bridge_jobs WHERE deadline>=? AND (state='queued' OR (state='claimed' AND lease_until<?)) ORDER BY updated,id LIMIT 1) RETURNING id,request")
+   .bind(lease,time+35,time,time,time).first():selected;
+  if (!job||job.idle) return reply({idle:true,primary:job?.primary});
   let request=JSON.parse(job.request);
   if (request.name==='sealed_grok_receiver')
    request={name:'grok_receiver_change',arguments:await openGrokJob(env,job.id,request.arguments)};
@@ -50,8 +54,8 @@ export async function device(req, env, path) {
   const d = await limitedJSON(req,500000);
   if (typeof d.id !== 'string' || typeof d.lease !== 'string' || !Array.isArray(d.result?.content))
    return reply({error:'Invalid controller result'},400);
-  const row = await db.prepare("UPDATE bridge_jobs SET state='done',request=CASE WHEN id LIKE 'event-%' THEN '{}' ELSE request END,result=?,updated=? WHERE id=? AND lease=? AND state='claimed' RETURNING id")
-   .bind(JSON.stringify(d.result),time,d.id,d.lease).first();
+  const row = await db.prepare("UPDATE bridge_jobs SET state='done',request=CASE WHEN id LIKE 'event-%' THEN '{}' ELSE request END,result=?,updated=? WHERE id=? AND lease=? AND state='claimed' AND (controller IS NULL OR controller=?) RETURNING id")
+   .bind(JSON.stringify(d.result),time,d.id,d.lease,node?.id??'').first();
   return reply({accepted:!!row},row?200:409);
  }
  return reply({error:'Unknown bridge operation'},404);
@@ -65,9 +69,9 @@ function canonical(value) {
 export const toolError = message => ({isError:true,content:[{type:'text',text:message}]});
 export const toolsList = [
  {name:'biome_status',description:'Verify connectivity to the running physical controller and read its health.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
- {name:'biome_discover',description:'Read the live controller’s operations, argument schemas, and provider offers.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
+ {name:'biome_discover',description:'Discover controller operations, contracts, offers and caller guidance. Pass section to filter or cursor to continue. OAuth discovery is paged by default. Cached clients can call discovery.page via biome_invoke.',inputSchema:{type:'object',properties:{section:{type:'string',enum:['operations','contracts','offers','guide']},cursor:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:true}},
  {name:'biome_work_list',description:'List work stored on the running controller.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true}},
- {name:'biome_invoke',description:'Call a BiomeRTE operation. Choose a unique request_id and reuse it and the same arguments if the reply is lost.',inputSchema:{type:'object',properties:{operation:{type:'string'},arguments:{type:'object',additionalProperties:true},request_id:{type:'string',minLength:1,maxLength:128},realm:{type:'string',enum:['site','local']}},required:['operation','arguments','request_id'],additionalProperties:false}}
+ {name:'biome_invoke',description:'Acquire a lease, invoke with a unique command ID, then read cap.status using that ID. Follow next_call for current state. provider.poll is the worker inbox. Reuse a mutation request_id only for an identical retry.',inputSchema:{type:'object',properties:{operation:{type:'string'},arguments:{type:'object',additionalProperties:true},request_id:{type:'string',minLength:1,maxLength:128},realm:{type:'string',enum:['site','local']}},required:['operation','arguments','request_id'],additionalProperties:false}}
 ];
 export async function runTool(env, name, args={}) {
  if (!toolsList.some(t=>t.name===name)) return toolError('Unknown tool');
@@ -78,7 +82,10 @@ export async function runTool(env, name, args={}) {
       Object.keys(args).some(k=>!['operation','arguments','request_id','realm'].includes(k)) ||
       !['site','local'].includes(args.realm??'site')) return toolError('Expected operation, arguments, request_id and optional realm');
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
- const key = name==='biome_invoke' ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
+ // A status read must see later transitions even when a client repeats the
+ // exact next_call returned in a queued receipt. Mutation retries stay durable.
+ const liveRead=name==='biome_invoke' && ['cap.status','cap.lease','cap.leases','cap.discover','bus.inbox','provider.poll'].includes(args.operation);
+ const key = name==='biome_invoke' && !liveRead ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
  return enqueue(env,name,args,key);
 }
 export async function enqueue(env,name,args,key){

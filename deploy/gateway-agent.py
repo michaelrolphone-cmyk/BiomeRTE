@@ -140,6 +140,11 @@ def main():
         if access.get('origin') != origin:
             raise SystemExit('Private Site access belongs to a different origin')
         site_access = access['token']
+    with open(os.path.join(args.home, 'node.json')) as handle:
+        conf = json.load(handle)
+    if conf.get('gateway_journal'):
+        from ha_link import run
+        return run(args, origin, token, site_access, fetch, dispatch, event_service, event_change)
     events_file = os.path.join(os.path.dirname(args.key), 'events.sqlite')
     factory = lambda: event_service(events_file, local, args.home, origin, token, site_access)
     events = factory()

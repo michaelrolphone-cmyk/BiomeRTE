@@ -7,7 +7,7 @@ import gateway from '../worker/index.js';
 const base='https://biome.test';
 const sha=v=>createHash('sha256').update(v).digest('hex');
 function fixture(){
- const sql=new DatabaseSync(':memory:');sql.exec(readFileSync('drizzle/0000_biome_gateway.sql','utf8'));
+ const sql=new DatabaseSync(':memory:');sql.exec(readFileSync('drizzle/0000_biome_gateway.sql','utf8'));sql.exec(readFileSync('drizzle/0001_controller_ha.sql','utf8'));
  const DB={prepare(query){let args=[];const stmt=sql.prepare(query);return {bind(...values){args=values;return this},async first(){return stmt.get(...args)},async run(){return stmt.run(...args)},async all(){return {results:stmt.all(...args)}}}}};
  const deviceKey='f'.repeat(64);
  const env={DB,BIOME_RECEIVER_WRAP_KEY:Buffer.alloc(32,33).toString('base64'),BIOME_OAUTH_ORIGIN:base,BIOME_OWNER_EMAIL:'owner@test.invalid',BIOME_BRIDGE_PIN:sha(sha(deviceKey)+'\n')};
@@ -54,7 +54,7 @@ test('MCP events are advertised on both handshakes; subscriptions and grant chec
   assert.deepEqual((await (await send('/mcp',rpc(method))).json()).result.capabilities.events,{});
  }
  const list=await (await send('/mcp',rpc('events/list',{_meta:{progressToken:'scan'}}))).json();
- assert.equal(list.result.events[0].name,'workflow.delegation.requested');
+ assert.deepEqual(list.result.events.map(e=>e.name),['workflow.delegation.requested','lease.available']);
  assert.equal((await send('/mcp',rpc('events/subscribe'))).status,403);
  assert.equal((await send('/api/mcp',rpc('events/list'))).status,401);
  const bad=await (await send('/mcp',rpc('events/subscribe',{name:'bad'}),owner)).json();
@@ -95,4 +95,78 @@ test('cached clients reach the same receiver registration through biome_invoke',
  const outer={operation:'grok.receiver.register',realm:'local',request_id:'new',arguments:settings};
  assert.deepEqual(grokCall({name:'biome_invoke',arguments:outer}),{action:'register',args:{...settings,realm:'local',request_id:'new'}});
  assert.equal(grokCall({name:'biome_invoke',arguments:{operation:'work.list',arguments:{}}}),null);
+});
+
+test('OAuth discovery lists Grok tools and cached clients can follow a complete bounded snapshot',async()=>{
+ const {sql,send,rpc,deviceKey}=fixture();
+ await send('/mcp',rpc('tools/call',{name:'bad'}),{'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@test.invalid'});
+ const token='p'.repeat(43),auth={Authorization:'Bearer '+token},link={Authorization:'Bearer '+deviceKey};
+ sql.prepare("INSERT INTO biome_oauth_tokens(hash,kind,grant_id,client_id,principal,resource,expires) VALUES(?,'access','grant','client','owner',?,?)").run(createHash('sha256').update(token).digest('base64url'),base+'/api/mcp',Date.now()/1000+60);
+ const call=async(method,params)=>(await (await send('/api/mcp',rpc(method,params),auth)).json()).result;
+ const names=(await call('tools/list')).tools.map(t=>t.name);
+ for(const name of ['biome_register_grok_webhook','biome_list_grok_webhooks'])assert.ok(names.includes(name));
+ const pending=call('tools/call',{name:'biome_discover',arguments:{}});
+ let job;
+ for(let i=0;i<30;i++){await new Promise(r=>setTimeout(r,10));job=await(await send('/bridge/next',{},link)).json();if(job.id)break;}
+ const large='😀"'.repeat(9000);
+ const doc={operations:[{name:'test'}],capabilities:{contracts:[],offers:[{large}]},capability_caller_guide:{a:1}};
+ await send('/bridge/complete',{id:job.id,lease:job.lease,result:{content:[{type:'text',text:JSON.stringify(doc)}]}},link);
+ let response=await pending, fragments=[],seen=[];
+ for(let i=0;i<200;i++){
+  assert.ok(Buffer.byteLength(JSON.stringify(response))<20000);
+  const page=JSON.parse(response.content[0].text);
+  for(const item of page.items){seen.push(item.section);if(item.section==='offers')fragments.push(item.fragment);}
+  if(!page.next_cursor)break;
+  response=await call('tools/call',page.next_call);
+ }
+ assert.equal(JSON.parse(fragments.join('')).large,large);assert.ok(seen.includes('operations')&&seen.includes('guide'));sql.close();
+});
+
+test('private receiver verifies challenge, deduplicates signed deliveries and acknowledges only its inbox',async()=>{
+ const {sql,send,rpc,owner}=fixture();
+ await send('/mcp',rpc('tools/call',{name:'bad'}),owner);
+ const token='a'.repeat(43), hash=createHash('sha256').update(token).digest('base64url');
+ sql.prepare("INSERT INTO biome_oauth_tokens VALUES (?,'access','mac-grant','mac','owner',?,?)").run(hash,base+'/api/mcp',Date.now()/1000+300);
+ const auth={Authorization:'Bearer '+token},root='/agent-events/lmstudio/';
+ assert.equal((await send(root+'connect',{})).status,401);
+ const {url,secret}=await (await send(root+'connect',{},auth)).json(),path=new URL(url).pathname;
+ const key=Buffer.from(secret.slice(6),'base64'),ts=String(Math.floor(Date.now()/1000));
+ async function post(id,body){const {createHmac}=await import('node:crypto');return send(path,body,{'webhook-id':id,'webhook-timestamp':ts,'webhook-signature':'v1,'+createHmac('sha256',key).update(id+'.'+ts+'.'+JSON.stringify(body)).digest('base64')})}
+ assert.deepEqual(await (await post('verify_1',{type:'verification',challenge:'hello'})).json(),{challenge:'hello'});
+ const ev={eventId:'delegate_1',name:'workflow.delegation.requested',data:{delegation_id:'1'}};
+ assert.equal((await send(path,ev)).status,401);await post(ev.eventId,ev);await post(ev.eventId,ev);
+ const next=async(p=root)=>await (await send(p+'next',{},auth)).json();
+ assert.deepEqual((await next()).events,[ev]);assert.deepEqual((await next('/agent-events/grok/')).events,[]);
+ await send(root+'ack',{}, {...auth,'x-event-id':ev.eventId});assert.deepEqual((await next()).events,[]);sql.close();
+});
+
+test('shared journal CAS, preferred routing, overflow, takeover and return',async()=>{
+ const {sql,send,deviceKey}=fixture();
+ const pi={Authorization:'Bearer '+deviceKey},macKey='a'.repeat(64),mac={Authorization:'Bearer '+macKey};
+ const config={site:'ha-test',enabled:true,nodes:[{id:'pi',token_hash:sha(deviceKey),priority:0,capacity:1},{id:'mac',token_hash:sha(macKey),priority:10,capacity:2}]};
+ assert.equal((await send('/bridge/ha/configure',config,pi)).status,200);
+ const heartbeat={position:0,ready:true,load:0,host:'test'};
+ await send('/bridge/ha/heartbeat',heartbeat,pi);await send('/bridge/ha/heartbeat',heartbeat,mac);
+ const entry=JSON.stringify({seq:1,prev:'',changes:[['state','x',{value:1}]]});
+ assert.equal((await send('/bridge/ha/append',{expected:0,entry},pi)).status,200);
+ assert.equal((await send('/bridge/ha/append',{expected:0,entry},mac)).status,200);
+ assert.equal((await send('/bridge/ha/append',{expected:0,entry:entry.replace('value":1','value":2')},mac)).status,409);
+ assert.equal((await (await send('/bridge/ha/read',{key:'head'},mac)).json()).value.hash,sha(entry));
+ const put=id=>sql.prepare("INSERT INTO bridge_jobs(id,request,state,deadline,updated) VALUES(?,?,'queued',?,?)").run(id,JSON.stringify({name:'biome_status',arguments:{}}),Date.now()/1000+60,Date.now()/1000);
+ put('primary');assert.equal((await (await send('/bridge/next',{},mac)).json()).idle,true);
+ const first=await (await send('/bridge/next',{},pi)).json();assert.equal(first.id,'primary');
+ put('overflow');assert.equal((await (await send('/bridge/next',{},mac)).json()).id,'overflow');
+ sql.prepare("UPDATE controller_nodes SET seen=0 WHERE id='pi'").run();
+ const takeover=await (await send('/bridge/next',{},mac)).json();assert.equal(takeover.id,'primary');
+ const answer={content:[{type:'text',text:'done'}]};
+ assert.equal((await send('/bridge/complete',{id:first.id,lease:first.lease,result:answer},pi)).status,409);
+ assert.equal((await send('/bridge/complete',{id:takeover.id,lease:takeover.lease,result:answer},mac)).status,200);
+ assert.equal((await (await send('/bridge/ha/heartbeat',heartbeat,pi)).json()).primary,'pi');
+ const claim=await (await send('/bridge/ha/events/claim',{},pi)).json();assert.equal(claim.acquired,true);
+ sql.prepare('UPDATE controller_events SET until=0').run();
+ const next=await (await send('/bridge/ha/events/claim',{},pi)).json();
+ assert.ok(next.fence>claim.fence);
+ assert.equal((await send('/bridge/ha/events/commit',{fence:claim.fence,body:[]},pi)).status,409);
+ assert.equal((await send('/bridge/ha/events/commit',{fence:next.fence,body:[]},pi)).status,200);
+ sql.close();
 });

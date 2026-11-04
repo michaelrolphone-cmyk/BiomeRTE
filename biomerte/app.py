@@ -6,6 +6,7 @@ import os
 import time
 from .api import Context, OPERATIONS, command, op, ident
 from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
+from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions
 
@@ -35,6 +36,10 @@ def initialize(directory, site=None):
 
 
 def seed(tx):
+    # Backfill this built-in's guide for existing realms as well as fresh nodes.
+    if tx.get('_contract_usage', 'core.echo:1') is None:
+        from .capability_usage import ECHO_USAGE
+        tx.put('_contract_usage', 'core.echo:1', ECHO_USAGE)
     if not tx.get('_meta', 'initialized'):
         ctx = Context(None)
         providers.define(tx, ctx, 'core.echo', {'value': 'any'}, {
@@ -49,9 +54,16 @@ class Application:
         self.config = read_json(os.path.join(directory, 'node.json'))
         self.node, self.site = self.config['node'], self.config['site']
         self.key = os.path.join(directory, 'node.key')
+        remote = None
+        realm_file = 'site'
+        if self.config.get('etcd'):
+            remote = Etcd(self.config['etcd'], self.site)
+            realm_file = 'cluster-' + self.site
+        if self.config.get('gateway_journal'):
+            remote = GatewayJournal(self.config['gateway_journal'], self.site)
+            realm_file = 'gateway-' + self.site
         self.stores = {'local': Store(directory, 'local'),
-                       'site': Store(directory, 'cluster-' + self.site if self.config.get('etcd') else 'site', Etcd(self.config['etcd'], self.site)
-                                     if self.config.get('etcd') else None)}
+                       'site': Store(directory, realm_file, remote)}
         self.timer_anchors = {}
         self.health = {}
         for scope, store in self.stores.items():
@@ -150,6 +162,9 @@ def cluster_status(tx, ctx):
     remote = ctx.app.stores['site'].remote
     if not remote:
         return {'mode': 'standalone', 'node': ctx.app.node, 'automatic_failover': False}
+    if isinstance(remote, GatewayJournal):
+        return dict(remote.status(), mode='gateway-replicated', node=ctx.app.node,
+                    site_position=tx.db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0])
     members = remote.gateway('cluster/member/list', {}, remote.urls).get('members', [])
     observations = []
     for url in remote.urls:

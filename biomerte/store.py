@@ -180,6 +180,16 @@ class Store:
         return con
 
     def execute(self, fn, cached=False):
+        from .gateway_journal import JournalConflict
+        while True:
+            try:
+                return self._execute(fn, cached)
+            except JournalConflict:
+                # A competing committed transaction won. Re-read its receipt and
+                # re-evaluate against that history instead of replaying old changes.
+                time.sleep(0.01)
+
+    def _execute(self, fn, cached=False):
         with contextlib.closing(self.connect()) as db:
             db.execute('BEGIN IMMEDIATE')
             try:

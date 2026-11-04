@@ -5,7 +5,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-from mcp_events import EVENT, compact, destination, iso, signed_post, signing_key
+from mcp_events import EVENT, LEASE_EVENT, compact, destination, iso, signed_post, signing_key
 
 
 def identifier(value):
@@ -17,8 +17,9 @@ def identifier(value):
 def public_record(row):
     args = json.loads(row['args'])
     result = {k: args[k] for k in ('receiver', 'realm', 'topic', 'auth_mode')}
-    if 'workflow' in args:
-        result['workflow'] = args['workflow']
+    for field in ('workflow', 'reply_to'):
+        if field in args:
+            result[field] = args[field]
     result.update(origin='https://' + urlsplit(row['url']).hostname, cursor=row['cursor'],
                   last_accepted_at=iso(row['verified']) if row['verified'] else None,
                   last_error=row['last_error'])
@@ -43,7 +44,7 @@ def mutate(store, action, args, owner, grant):
     if realm not in ('site', 'local'):
         raise ValueError('Unknown realm.')
     base = {'receiver','request_id','realm'}
-    permitted = base | {'topic','workflow','url','key','auth_mode','from_cursor'} if action == 'register' else base
+    permitted = base | {'topic','workflow','reply_to','url','key','auth_mode','from_cursor'} if action == 'register' else base
     if set(args) - permitted:
         raise ValueError('Unsupported receiver argument.')
     sub_id = 'grok_' + hashlib.sha256(compact([owner, realm, receiver]).encode()).hexdigest()
@@ -69,6 +70,10 @@ def mutate(store, action, args, owner, grant):
                 if topic != EVENT:
                     raise ValueError('workflow is a filter on workflow.delegation.requested.')
                 config['workflow'] = identifier(args['workflow'])
+            if 'reply_to' in args:
+                if topic != LEASE_EVENT or not isinstance(args['reply_to'], str) or not 1 <= len(args['reply_to']) <= 160:
+                    raise ValueError('reply_to is an inbox filter on lease.available.')
+                config['reply_to'] = args['reply_to']
             url, key = args.get('url'), args.get('key')
             dest = destination(url)
             if dest.path in ('', '/'):
@@ -78,7 +83,7 @@ def mutate(store, action, args, owner, grant):
             elif config['auth_mode'] != 'bearer' or not isinstance(key,str) or not re.match(r'^[\x21-\x7e]{1,4096}\Z',key):
                 raise ValueError('Supply a raw bearer key or a Standard Webhooks signing secret.')
             old_args = json.loads(old['args']) if old else {}
-            same_feed = old and old_args['topic']==topic and old_args.get('workflow')==config.get('workflow')
+            same_feed = old and old_args['topic']==topic and all(old_args.get(k)==config.get(k) for k in ('workflow','reply_to'))
             if 'from_cursor' in args or not same_feed:
                 feed = store.feed(realm,0,0) if topic==EVENT else store.topic_feed(realm,topic,0,0)
                 cursor = args.get('from_cursor',feed['high'])
