@@ -52,3 +52,5 @@ Run python3 integrations/gitlab/test_proxy.py for eight automated tests, includi
 qualify.py exercises the actual authenticated coding MCP HTTP endpoint through Biome: private project creation, clone, branch, commit, push, merge request, MCP project read and Git log. It preserves operation IDs and receipts under ~/.local/share/biome-gitlab/qualification.json. Re-running reads the same operations; it does not create duplicate test repositories or merge requests.
 
 The initial live qualification passed against biome-agent/biome-git-qualification, with commit d93188a on biome-proxy-test and merge request !1. The repository is intentionally retained as concrete evidence.
+
+The org.biomerte.gitlab-server login LaunchAgent starts Docker Desktop if needed, waits for the engine, and starts the existing biome-gitlab container. It was launched and verified against the running engine. A full Mac power cycle remains untested. It does not read or modify Docker Desktop's protected settings file.

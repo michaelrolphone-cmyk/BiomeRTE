@@ -66,3 +66,14 @@ if http.exists():
   subprocess.run([shutil.which("node") or "/usr/local/bin/node","--check",str(http)],check=True)
   subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/org.biomerte.lmstudio-coding-mcp"],check=True)
   print("Published Git tools on coding MCP HTTP facade")
+
+# Docker Desktop and the existing persistent server must also start after login.
+shutil.copy2(src/"server_start.py",root/"server_start.py")
+server_label="org.biomerte.gitlab-server"
+server_plist={"Label":server_label,"ProgramArguments":[python,str(root/"server_start.py")],"RunAtLoad":True,"WorkingDirectory":str(root),"EnvironmentVariables":{"PATH":"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},"StandardOutPath":str(root/"server-start.log"),"StandardErrorPath":str(root/"server-start-error.log")}
+server_path=pathlib.Path.home()/"Library/LaunchAgents"/(server_label+".plist")
+with server_path.open("wb") as out:plistlib.dump(server_plist,out)
+loaded=subprocess.run(["launchctl","print",domain+"/"+server_label],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
+if loaded:subprocess.run(["launchctl","kickstart",domain+"/"+server_label],check=True)
+else:subprocess.run(["launchctl","bootstrap",domain,str(server_path)],check=True)
+print("Installed "+server_label+" login startup")
