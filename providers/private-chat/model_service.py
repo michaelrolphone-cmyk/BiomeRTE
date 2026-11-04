@@ -49,6 +49,9 @@ def _cli(*args):
     except OSError as e:
         raise ModelSwitchError('model_switch_unavailable') from e
     if p.returncode:
+        detail = (p.stdout + p.stderr).lower()
+        if 'insufficient system resources' in detail or 'overload your system' in detail:
+            raise ModelSwitchError('model_memory_unavailable')
         raise ModelSwitchError('model_load_failed')
     return p.stdout
 
