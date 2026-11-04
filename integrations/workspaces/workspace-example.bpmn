@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:biome="urn:biomerte:v1" targetNamespace="urn:biomerte:workspace">
+ <process id="workspace-example" isExecutable="true">
+  <startEvent id="start"/>
+  <serviceTask id="provision" name="Provision run workspace" biome:contract="workspace.provision:1" biome:args='{"arguments":{"run_id":"$current","template":"linux-basic@1"}}' biome:save="workspace"/>
+  <endEvent id="end"/>
+  <sequenceFlow id="a" sourceRef="start" targetRef="provision"/>
+  <sequenceFlow id="b" sourceRef="provision" targetRef="end"/>
+ </process>
+</definitions>

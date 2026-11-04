@@ -189,7 +189,16 @@ def handle(tool,a,operation):
  if tool=='template.ensure_image':return ensure_image(a)
  if tool=='template.get':
   t=template(a);d=ROOT/'images'/t['revision'];return {'template':t,'build':read(d/'state.json') if (d/'state.json').exists() else {'state':'unbuilt'},'build_log':(d/'build.log').read_text(errors='replace')[-12000:] if (d/'build.log').exists() else ''}
- if tool=='provision':return provision(a)
+ if tool=='provision':
+  if a.get('run_id')=='$current':
+   runs=gateway().invoke('process.list',{})['runs'];matches=[]
+   for r in runs:
+    if r['state']=='running':
+     actual=run_state(r['id'])
+     if any(t.get('action')==operation for t in actual.get('tokens',[])):matches.append(r['id'])
+   if len(matches)!=1:raise ValueError('Cannot resolve unique invoking BPMN run')
+   a=dict(a,run_id=matches[0])
+  return provision(a)
  if tool=='list':return {'workspaces':[read(p) for p in (ROOT/'instances').glob('*/state.json') if not a.get('run_id') or read(p)['run_id']==a['run_id']]}
  wid=identifier(a['workspace_id'])
  if tool=='status':return state(wid)
