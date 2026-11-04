@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
-from session_protocol import SessionServer, b64, raw, public
+from session_protocol import SessionServer, b64, raw, public, conversation_messages
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
@@ -48,7 +48,9 @@ def privacy_ready():
     server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
     if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
         raise RuntimeError('LM Studio sensitive logging must be disabled')
-from model_service import model_catalog, selected_model
+from model_service import ModelError, model_catalog, selected_model
+sys.path.insert(0,str(HOME/'.local/share/biome-model-runtime'))
+from model_runtime import ModelRuntime
 
 def handle_request(data):
     privacy_ready()
@@ -59,21 +61,33 @@ def handle_request(data):
     return inference(data['messages'], data.get('model'))
 
 def inference(messages, model=None):
+    if not isinstance(model,str) or not model:
+        raise ModelError('selected_model_required')
+    started=time.monotonic()
+    with ModelRuntime().slot('llm',model) as instance:
+        admitted=time.monotonic()
+        answer=_inference(messages,instance)
+        answer['diagnostics'].update(requested_model=model,resolved_model=instance,
+                                     model_verified=True,admission_ms=round((admitted-started)*1000))
+        return answer
+
+def _inference(messages, model):
     privacy_ready()
-    if not isinstance(messages, list) or not messages:
-        raise ValueError('Invalid conversation')
-    if any(not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str) for m in messages):
-        raise ValueError('Invalid message')
+    messages = conversation_messages(messages)
     # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    model = selected_model(model, LOCAL, LM)
+    # Admission already unloaded competitors and resolved the exact instance.
     body = dict(model=model, messages=messages, stream=False, store=False)
     headers = {'Content-Type': 'application/json'}
     token_file = LM / 'api-token'
     if token_file.exists():
         headers['Authorization'] = 'Bearer ' + token_file.read_text().strip()
     req = Request('http://127.0.0.1:1234/v1/chat/completions', json.dumps(body).encode(), headers)
+    started=time.monotonic()
     with LOCAL.open(req) as response:
         result = json.load(response)
+    inference_ms=round((time.monotonic()-started)*1000)
+    if result.get('model') != model:
+        raise ModelError('model_response_mismatch')
     if 'response_id' in result:
         raise RuntimeError('Unexpected retained response')
     choice = result['choices'][0]
@@ -82,7 +96,12 @@ def inference(messages, model=None):
     text = choice['message']['content']
     if not isinstance(text, str) or not text:
         raise RuntimeError('Empty completion')
-    return {'text': text, 'model': model}
+    usage=result.get('usage',{})
+    usage={key:usage[key] for key in ('prompt_tokens','completion_tokens','total_tokens')
+           if isinstance(usage,dict) and type(usage.get(key)) is int and usage[key]>=0}
+    diagnostics={'v':1,'response_model':result['model'],'finish_reason':choice.get('finish_reason'),
+                 'inference_ms':inference_ms,'usage':usage}
+    return {'text': text, 'model': result['model'], 'diagnostics':diagnostics}
 class Remote:
     realm = 'site'
     def __init__(self, cfg):
@@ -91,6 +110,14 @@ class Remote:
         return gateway.invoke(name, args, rid, self.realm)
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
+    def advertise(self):
+        # The generic legacy worker forwards only capacity/usage. Preserve the
+        # private service's explicitly configured reservation lifecycle too.
+        for offer in self.offers:
+            args = {key: offer[key] for key in ('contract', 'resource', 'capacity', 'service', 'configuration', 'usage') if key in offer}
+            args.update(provider=self.remote.node, state=offer.get('state', 'ready'))
+            self.remote.call('cap.offer', args)
+
     def __init__(self, *args, handler=None):
         super().__init__(*args)
         self.pending = {}
@@ -152,7 +179,9 @@ def serve():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     cfg = json.loads((STATE / 'manifest.json').read_text())
     remote = Remote(cfg)
-    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat')
+    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat',
+        configuration={'reservation_policy': cfg.get('reservation_policy',
+            {'idle_seconds': 120, 'release_after_result': True})})
     def enrolled(phone):
         cfg['phone_identity'] = b64(phone)
         cfg.pop('enrollment_hash', None)

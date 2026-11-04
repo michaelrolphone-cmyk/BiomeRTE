@@ -7,6 +7,17 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from session_protocol import *
 from session_client import SessionClient
 class SessionTests(unittest.TestCase):
+    def test_thread_system_instructions_survive_authenticated_exchange(self):
+        self.handshake()
+        request=self.client.request([{'role':'system','content':'Thread instructions canary'}]+self.messages,self.token)
+        seen=[]
+        reply=self.server.handle(request,request['id'],lambda history:seen.append(history) or {'text':'ok'})
+        self.assertEqual(self.client.response(reply),{'text':'ok'})
+        self.assertEqual(seen[0][0],{'role':'system','content':'Thread instructions canary'})
+        self.assertNotIn('Thread instructions canary',json.dumps(request))
+    def test_system_instructions_in_middle_of_history_are_rejected(self):
+        self.handshake();request=self.client.request(self.messages+[{'role':'system','content':'late instruction'}],self.token)
+        with self.assertRaises(ValueError):self.server.handle(request,request['id'],lambda _:self.fail('invalid role order'))
     def setUp(self):
         self.server_key=ed25519.Ed25519PrivateKey.generate()
         self.token=secrets.token_bytes(32)
@@ -66,4 +77,17 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(again.response(self.server.handle(r,r['id'],lambda _:{'text':'again'})),{'text':'again'})
         other=SessionClient(public(self.server_key))
         with self.assertRaises(ValueError):self.server.handle(other.hello,other.hello['id'],None)
+    def test_saved_assistant_model_label_is_not_forwarded_to_inference(self):
+        self.handshake()
+        messages=self.messages+[{'role':'assistant','content':'prior reply','model':'previous-model'}, {'role':'user','content':'continue'}]
+        request=self.client.request(messages,self.token)
+        seen=[]
+        reply=self.server.handle(request,request['id'],lambda history:seen.append(history) or {'text':'continued'})
+        self.assertEqual(self.client.response(reply),{'text':'continued'})
+        self.assertEqual(seen[0][1],{'role':'assistant','content':'prior reply'})
+    def test_unrecognized_history_fields_still_rejected_before_inference(self):
+        self.handshake()
+        request=self.client.request([{'role':'assistant','content':'prior','tool_calls':[]}],self.token)
+        with self.assertRaises(ValueError):self.server.handle(request,request['id'],lambda _:self.fail('invalid history reached inference'))
 if __name__=='__main__':unittest.main()
+

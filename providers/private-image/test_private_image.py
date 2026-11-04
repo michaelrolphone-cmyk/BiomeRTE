@@ -23,6 +23,31 @@ class ArtifactRemote:
         return {"sha256":sha,"size":len(value)}
 
 class ImageTests(unittest.TestCase):
+    def test_thread_instructions_reach_image_prompt_without_changing_parameters(self):
+        server,client=self.session();client.accept(server.handle(client.hello,client.hello['id'],None))
+        messages=[{'role':'system','content':'Use watercolor and warm light.'},{'role':'user','content':json.dumps({'prompt':'a lake','steps':12,'width':256})}]
+        request=client.request(messages);seen=[]
+        result=server.handle(request,request['id'],lambda history:seen.append(ComfyBackend().specification(history)) or {'images':[]})
+        self.assertEqual(client.response(result),{'images':[]});self.assertEqual(seen[0]['prompt'],'Use watercolor and warm light.\n\na lake');self.assertEqual(seen[0]['steps'],12);self.assertEqual(seen[0]['width'],256)
+        self.assertNotIn('watercolor',json.dumps(request))
+    def test_progress_is_authenticated_encrypted_and_bound_to_original_request(self):
+        from image_protocol import open_message
+        server,client=self.session();client.accept(server.handle(client.hello,client.hello['id'],None))
+        request=client.request([{'role':'user','content':'private prompt canary'}]);frames=[]
+        def generate(messages,progress):
+            progress({'stage':'sampling','step':7,'total':28});progress({'stage':'decoding'})
+            return {'images':[]}
+        result=server.handle(request,request['id'],generate,progress=frames.append)
+        self.assertNotIn('sampling',json.dumps(frames));self.assertNotIn('private prompt canary',json.dumps(frames))
+        value=open_message(client.traffic['response'],'progress',client.sid,client.operation,client.thash,frames[0])
+        self.assertEqual(value,{'stage':'sampling','step':7,'total':28,'seq':1})
+        self.assertEqual(open_message(client.traffic['response'],'progress',client.sid,client.operation,client.thash,frames[1])['seq'],2)
+        with self.assertRaises(Exception):open_message(client.traffic['response'],'response',client.sid,client.operation,client.thash,frames[0])
+        self.assertEqual(client.response(result),{'images':[]})
+    def test_progress_mapping_excludes_prompt_and_rejects_invalid_counts(self):
+        self.assertEqual(ComfyBackend.progress_update('progress',{'value':3,'max':28,'prompt':'private'}),{'stage':'sampling','step':3,'total':28})
+        self.assertIsNone(ComfyBackend.progress_update('progress',{'value':29,'max':28}))
+        self.assertEqual(ComfyBackend.progress_update('executing',{'node':'9'}),{'stage':'decoding'})
     def session(self):
         identity,phone = Ed25519PrivateKey.generate(),Ed25519PrivateKey.generate()
         return SessionServer(identity,phone_identity=public(phone)),SessionClient(public(identity),phone)
@@ -95,3 +120,4 @@ class ImageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

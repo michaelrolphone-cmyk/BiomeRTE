@@ -3,7 +3,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from session_protocol import SessionServer,public,seal
 from session_client import SessionClient
-from model_service import model_catalog,selected_model
+from model_service import ModelError,model_catalog,selected_model
 
 class Opener:
     def __init__(self): self.requests=[]
@@ -15,6 +15,19 @@ class Opener:
             {'type':'llm','key':'model-b','display_name':'Model B','loaded_instances':[]}]}))
 
 class ModelTests(unittest.TestCase):
+    def test_duplicate_model_keys_merge_loaded_instances(self):
+        class Duplicates:
+            def open(self, req):
+                return io.StringIO(json.dumps({'models':[
+                    {'type':'llm','key':'llama@q4','display_name':'Llama'},
+                    {'type':'llm','key':'llama@q4','loaded_instances':[{'id':'loaded'}]},
+                    {'type':'llm','key':'llama@q8','display_name':'Llama'}]}))
+        with tempfile.TemporaryDirectory() as directory:
+            result=model_catalog(Duplicates(),Path(directory))
+        self.assertEqual(['llama@q4','llama@q8'],[m['id'] for m in result])
+        self.assertTrue(result[0]['loaded'])
+        self.assertIn('Q8',result[1]['name'])
+
     def session(self,handler):
         key,phone=ed25519.Ed25519PrivateKey.generate(),ed25519.Ed25519PrivateKey.generate()
         server=SessionServer(key,phone_identity=public(phone),request_handler=handler)
@@ -43,19 +56,47 @@ class ModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);(p/'api-token').write_text('test-only')
             opener=Opener();models=model_catalog(opener,p)
-            self.assertEqual([m['id'] for m in models],['loaded-a','model-b'])
+            self.assertEqual([m['id'] for m in models],['model-a','model-b'])
             self.assertTrue(models[0]['loaded']);self.assertFalse(models[1]['loaded'])
             self.assertEqual(opener.requests[0].get_header('Authorization'),'Bearer test-only')
-    def test_selection_exact_and_legacy_default(self):
+    def test_selection_requires_explicit_model_and_accepts_existing_instance(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);o=Opener()
-            self.assertEqual(selected_model(None,o,p),'qwen3.5-9b')
-            self.assertEqual(selected_model('model-b',o,p),'model-b')
-            for bad in ['',{},'embedding','missing']:
+            self.assertEqual(selected_model('model-a',o,p),'loaded-a')
+            self.assertEqual(selected_model('loaded-a',o,p),'loaded-a')
+            for bad in [None,'',{},'embedding','missing']:
                 with self.assertRaises(ValueError): selected_model(bad,o,p)
+    def test_unloaded_selection_loads_exact_key_and_verifies_instance(self):
+        class Loader(Opener):
+            def __init__(self): super().__init__();self.loaded=False
+            def open(self,req):
+                if req.full_url.endswith('/load'):
+                    self.requests.append(req)
+                    self.test_body=json.loads(req.data)
+                    self.loaded=True
+                    return io.StringIO(json.dumps({'instance_id':'instance-b'}))
+                if self.loaded:
+                    return io.StringIO(json.dumps({'models':[{'type':'llm','key':'model-b','loaded_instances':[{'id':'instance-b'}]}]}))
+                return super().open(req)
+        with tempfile.TemporaryDirectory() as tmp:
+            o=Loader()
+            self.assertEqual(selected_model('model-b',o,Path(tmp)),'instance-b')
+            self.assertEqual(o.test_body,{'model':'model-b'})
+    def test_failed_load_never_substitutes_loaded_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ModelError) as error:
+                selected_model('model-b',Opener(),Path(tmp))
+            self.assertEqual(error.exception.public_code,'model_load_failed')
+    def test_encrypted_failure_exposes_only_safe_code(self):
+        def fail(body): raise ModelError('model_load_failed')
+        server,client=self.session(fail)
+        req=self.request(client,{'messages':[{'role':'user','content':'synthetic'}],'model':'model-b'})
+        reply=client.response(server.handle(req,req['id'],None))
+        self.assertEqual(reply,{'error':'model_load_failed'})
     def test_catalog_not_available_to_unpaired_phone(self):
         key,phone=ed25519.Ed25519PrivateKey.generate(),ed25519.Ed25519PrivateKey.generate()
         server=SessionServer(key,phone_identity=public(phone),request_handler=lambda _:self.fail())
         client=SessionClient(public(key))
         with self.assertRaises(ValueError): server.handle(client.hello,client.hello['id'],None)
 if __name__=='__main__':unittest.main()
+
