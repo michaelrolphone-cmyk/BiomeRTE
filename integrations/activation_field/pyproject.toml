@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biome-activation-field"
+version = "0.1.0"
+description = "Full-model quantized activation-field experiment for Biome"
+requires-python = ">=3.12"
+dependencies = ["mlx-lm", "numpy", "scipy", "cryptography", "fastapi", "uvicorn", "huggingface-hub"]
+
+[project.scripts]
+fieldctl = "activation_field.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["activation_field*", "experiments*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

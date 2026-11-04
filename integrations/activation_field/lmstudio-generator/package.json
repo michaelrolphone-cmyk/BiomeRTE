@@ -1,0 +1,1 @@
+{"name":"biome-activation-field-generator","version":"0.1.0","private":true,"type":"module","scripts":{"check":"tsc --noEmit"},"dependencies":{"@lmstudio/sdk":"latest","zod":"^3.24.0"},"devDependencies":{"@types/node":"^22.0.0","typescript":"^5.8.0"}}

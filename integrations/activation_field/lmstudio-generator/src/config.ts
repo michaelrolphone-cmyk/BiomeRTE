@@ -1,0 +1,17 @@
+import {createConfigSchematics} from '@lmstudio/sdk';
+export const configSchematics=createConfigSchematics()
+ .field('session','string',{displayName:'Field session',hint:'Choose a unique name for this chat. Reusing a name deliberately reopens that field.'},'')
+ .field('enabled','boolean',{displayName:'Enable weight writes'},false)
+ .field('readOnly','boolean',{displayName:'Read only (freeze writes and traces)'},false)
+ .field('eta','numeric',{displayName:'Learning rate',min:0},0.0001)
+ .field('threshold','numeric',{displayName:'Amplitude threshold',min:0},2.5)
+ .field('frequencyFloor','numeric',{displayName:'Frequency floor',min:0,max:1},0.001)
+ .field('frequencyHalfLife','numeric',{displayName:'Frequency half-life in tokens',min:1},256)
+ .field('baselinePull','numeric',{displayName:'Baseline pull — 0 is Off',min:0},0)
+ .field('commitTokens','numeric',{displayName:'Commit interval in tokens',min:1,int:true},1)
+ .field('userScale','numeric',{displayName:'User write scale',min:0},1)
+ .field('assistantScale','numeric',{displayName:'Assistant write scale',min:0},1)
+ .field('systemScale','numeric',{displayName:'System write scale',min:0},1)
+ .field('toolScale','numeric',{displayName:'Tool write scale',min:0},1)
+ .field('maxTokens','numeric',{displayName:'Maximum generated tokens',min:1,int:true},128)
+ .build();

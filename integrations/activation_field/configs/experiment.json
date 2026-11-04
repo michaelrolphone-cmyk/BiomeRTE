@@ -1,0 +1,1 @@
+{"manifest":"/Users/micahelbyrns/.local/share/biome-activation-field/model-manifest.json","output":"/Users/micahelbyrns/.local/share/biome-activation-field/experiments/zero-pull-42","corpus_seed":42,"episodes":200,"conditions":["C0","C1","C2","C3","C4","C5","C6","C7-8","C7-32"],"retention_gaps":[0,512,2048,8192],"probe_tokens":32,"seed":42,"spectral":true}
