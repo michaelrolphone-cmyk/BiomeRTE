@@ -98,7 +98,10 @@ class Application:
     def tick(self, realm):
         def run(tx):
             seed(tx)
-            return process.tick(tx, Context(self, scope=realm))
+            ctx = Context(self, scope=realm)
+            moved = process.tick(tx, ctx)
+            providers.settle_submissions(tx, ctx)
+            return moved
         return self.stores[realm].execute(run)
 
     def begin_pair(self, pub, label):
@@ -202,3 +205,4 @@ def demo(tx, ctx, message='Hello from BiomeRTE'):
     r = process.start(tx, ctx, 'demo.echo-and-save',
                       {'message': message, 'key': 'demo-' + t['id']}, t['id'])
     return {'goal': g['id'], 'task': t['id'], 'run': r['id'], 'document': 'demo-' + t['id']}
+

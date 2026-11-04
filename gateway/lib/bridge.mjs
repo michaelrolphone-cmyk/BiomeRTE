@@ -2,6 +2,7 @@ import {controllerDevice,claimControllerJob,controllerStatus} from './ha.mjs';
 import {openGrokJob} from './grok.mjs';
 import {canDeliver} from './events.mjs';
 import {sameSecret} from './access.mjs';
+import {controllerSocket} from './transport.mjs';
 export const reply = (data, status=200) => Response.json(data, {status, headers:{'Cache-Control':'no-store'}});
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const epoch = () => Math.floor(Date.now()/1000);
@@ -27,6 +28,7 @@ export async function device(req, env, path) {
  const legacy=!!token&&!!env.BIOME_BRIDGE_PIN&&sameSecret(await hexHash(await hexHash(token)+'\n'),env.BIOME_BRIDGE_PIN);
  const node=token?await env.DB.prepare('SELECT * FROM controller_nodes WHERE token_hash=? AND enabled=1').bind(await hexHash(token)).first():null;
  if(!legacy&&!node)return reply({error:'Invalid device credential'},401);
+ if(path==='/bridge/connect')return controllerSocket(req,env,node);
  if(path.startsWith('/bridge/ha/'))return controllerDevice(req,env,path,node,legacy);
  if (req.method !== 'POST') return reply({error:'Use POST'},405);
  if (path === '/bridge/event-authorize') {
@@ -84,7 +86,7 @@ export async function runTool(env, name, args={}) {
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
  // A status read must see later transitions even when a client repeats the
  // exact next_call returned in a queued receipt. Mutation retries stay durable.
- const liveRead=name==='biome_invoke' && ['cap.status','cap.lease','cap.leases','cap.discover','bus.inbox','provider.poll'].includes(args.operation);
+ const liveRead=name==='biome_invoke' && ['cap.status','cap.submission','cap.lease','cap.leases','cap.discover','bus.inbox','provider.poll'].includes(args.operation);
  const key = name==='biome_invoke' && !liveRead ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
  return enqueue(env,name,args,key);
 }
@@ -99,8 +101,8 @@ export async function enqueue(env,name,args,key){
  if(key.startsWith('invoke-') && row.request!==payload) return toolError('request_id already belongs to a different request.');
  if(row.state==='done') return JSON.parse(row.result);
  if(row.deadline<time) await db.prepare("UPDATE bridge_jobs SET deadline=?,updated=? WHERE id=? AND state!='done'").bind(time+22,time,key).run();
- for(let turn=0;turn<20;turn++){
-  await wait(turn===0?250:1000);
+ for(let turn=0;turn<80;turn++){
+  await wait(250);
   row=await db.prepare('SELECT result FROM bridge_jobs WHERE id=?').bind(key).first();
   if(row?.result) return JSON.parse(row.result);
  }

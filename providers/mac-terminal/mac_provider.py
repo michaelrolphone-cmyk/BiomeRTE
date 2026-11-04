@@ -110,7 +110,14 @@ def credentials(force=False):
             (ROOT / 'refresh-pending.json').unlink()
         return c
 
+_persistent = None
+_persistent_after = 0
+
+def transport_active():
+    return _persistent is not None and _persistent.socket is not None
+
 def invoke(operation, arguments=None, rid=None, realm='site'):
+    global _persistent, _persistent_after
     rid = rid or uuid.uuid4().hex
     args = dict(operation=operation, arguments=arguments or {}, request_id=rid, realm=realm)
     rpc = dict(jsonrpc='2.0', id=rid, method='tools/call', params=dict(name='biome_invoke', arguments=args))
@@ -118,7 +125,19 @@ def invoke(operation, arguments=None, rid=None, realm='site'):
     for attempt in range(6):
         try:
             c = credentials()
-            res = request(RESOURCE, rpc, headers={'Authorization': 'Bearer ' + c['access_token']})
+            res = None
+            if time.monotonic() >= _persistent_after:
+                try:
+                    if _persistent is None:
+                        from persistent_transport import PersistentTransport
+                        _persistent = PersistentTransport(ORIGIN, credentials)
+                    res = _persistent.invoke(args)
+                except Exception:
+                    # Reconcile/retry the identical durable request over HTTP.
+                    # A connection failure never creates another command ID.
+                    _persistent_after = time.monotonic() + 10
+            if res is None:
+                res = request(RESOURCE, rpc, headers={'Authorization': 'Bearer ' + c['access_token']})
             if 'error' in res:
                 raise RuntimeError('MCP protocol error: ' + str(res['error'].get('code')))
             result = res['result']
@@ -244,3 +263,4 @@ if __name__ == '__main__':
         print('Gateway registration transport: OK' if r.get('client_id') else 'FAILED')
     else:
         raise SystemExit('Expected setup, authorize, worker, or probe')
+
