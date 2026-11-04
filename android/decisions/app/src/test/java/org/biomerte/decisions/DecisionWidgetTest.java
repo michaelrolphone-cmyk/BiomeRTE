@@ -28,4 +28,30 @@ public class DecisionWidgetTest {
    assertFalse(controller.get().isFinishing());assertNotNull(controller.get().findViewById(android.R.id.content));
   }
  }
+
+ private boolean containsText(View v,String text){if(v instanceof TextView&&((TextView)v).getText().toString().contains(text))return true;if(v instanceof ViewGroup)for(int n=0;n<((ViewGroup)v).getChildCount();n++)if(containsText(((ViewGroup)v).getChildAt(n),text))return true;return false;}
+ private boolean hasSpinner(View v){if(v instanceof ProgressBar)return true;if(v instanceof ViewGroup)for(int n=0;n<((ViewGroup)v).getChildCount();n++)if(hasSpinner(((ViewGroup)v).getChildAt(n)))return true;return false;}
+ @Test public void replyShowsImmediateProgressWhileExecutorIsBusyAndRepeatedTapQueuesOnce()throws Exception{
+  JSONObject r=row(2);r.getJSONObject("request").put("proposal_revision",1);
+  JSONObject s=new JSONObject().put("rows",new JSONArray().put(r)).put("outbox",new JSONArray()).put("config",new JSONObject().put("site","test").put("device","test"));
+  new State(app).save(s);
+  java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+  App.IO.execute(()->{entered.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});entered.await();
+  try(org.robolectric.android.controller.ActivityController<MainActivity> c=Robolectric.buildActivity(MainActivity.class).create()){
+   MainActivity a=c.get();java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderDecision",JSONObject.class,JSONObject.class);render.setAccessible(true);render.invoke(a,s,r);
+   java.lang.reflect.Method answer=MainActivity.class.getDeclaredMethod("answer",String.class);answer.setAccessible(true);answer.invoke(a,"c0");answer.invoke(a,"c0");
+   assertTrue(hasSpinner(a.findViewById(android.R.id.content)));assertTrue(containsText(a.findViewById(android.R.id.content),"Saving and sending"));
+   release.countDown();App.IO.submit(()->{}).get();org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+   assertEquals(1,new State(app).read().getJSONArray("outbox").length());
+  }finally{release.countDown();}
+ }
+ @Test public void deliveryDistinguishesQueuedAndAcceptedWithoutLeavingTheReply()throws Exception{
+  JSONObject item=new JSONObject().put("decision_id","question").put("state","queued"),s=new JSONObject().put("outbox",new JSONArray().put(item));
+  try(org.robolectric.android.controller.ActivityController<MainActivity> c=Robolectric.buildActivity(MainActivity.class).create()){
+   MainActivity a=c.get();java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderDelivery",JSONObject.class,String.class);render.setAccessible(true);render.invoke(a,s,"question");
+   assertTrue(hasSpinner(a.findViewById(android.R.id.content)));assertFalse(containsText(a.findViewById(android.R.id.content),"Received by Biome"));
+   item.put("state","accepted");render.invoke(a,s,"question");assertFalse(hasSpinner(a.findViewById(android.R.id.content)));assertTrue(containsText(a.findViewById(android.R.id.content),"Received by Biome"));
+   item.put("state","needs_review");render.invoke(a,s,"question");assertFalse(containsText(a.findViewById(android.R.id.content),"Received by Biome"));assertTrue(containsText(a.findViewById(android.R.id.content),"Question changed"));
+  }
+ }
 }

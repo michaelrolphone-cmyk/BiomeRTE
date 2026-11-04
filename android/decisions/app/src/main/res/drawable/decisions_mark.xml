@@ -1,11 +1,6 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
- android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
- <!-- Biome's nested layers carry a checked decision diamond. Keep within adaptive-icon safe zone. -->
- <path android:fillColor="#00000000" android:strokeColor="#9BE2C2" android:strokeWidth="4"
-  android:strokeLineJoin="round" android:strokeLineCap="round"
-  android:pathData="M28,57 L54,73 L80,57 M28,68 L54,84 L80,68"/>
- <path android:fillColor="#BDB0EC" android:pathData="M54,24 L82,44 L54,64 L26,44 Z"/>
- <path android:fillColor="#00000000" android:strokeColor="#18282B" android:strokeWidth="5"
-  android:strokeLineJoin="round" android:strokeLineCap="round"
-  android:pathData="M43,44 L51,51 L65,36"/>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+ <!-- One decision splits into two equally spaced workflow outcomes. -->
+ <path android:fillColor="#00000000" android:strokeColor="#9BE2C2" android:strokeWidth="5" android:strokeLineJoin="round" android:strokeLineCap="round" android:pathData="M54,25 L54,36 M42,48 L32,48 L32,73 M66,48 L76,48 L76,73"/>
+ <path android:fillColor="#BDB0EC" android:pathData="M54,34 L68,48 L54,62 L40,48 Z"/>
+ <path android:fillColor="#9BE2C2" android:pathData="M49,19 L59,19 L59,29 L49,29 Z M25,72 L39,72 L39,84 L25,84 Z M69,72 L83,72 L83,84 L69,84 Z"/>
 </vector>
