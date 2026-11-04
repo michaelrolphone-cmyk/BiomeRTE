@@ -302,7 +302,7 @@ def dispatch(tx, ctx, lease, inputs, operation):
     if l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer'])):
         raise Fault('Lease unavailable', 409)
     from .authorization import guard, observe
-    guard(tx, key, l['contract'], l['resource'], inputs)
+    guard(tx, key, l['contract'], l['resource'], inputs, ctx)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l['provider'],
          'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs, 'guard': l['guard'],
          'status_query': {'operation': 'cap.status', 'arguments': {'operation': key}}}
@@ -351,7 +351,7 @@ def claim(tx, ctx, provider, operation, generation):
     if a['state'] == 'queued':
         from .authorization import guard, observe
         try:
-            guard(tx, operation, a['contract'], a['resource'], a['inputs'])
+            guard(tx, operation, a['contract'], a['resource'], a['inputs'], ctx)
         except Fault as error:
             a.update(state='failed', result={'authorization_blocked': True, 'reason': str(error)})
             tx.put('actions', operation, a)

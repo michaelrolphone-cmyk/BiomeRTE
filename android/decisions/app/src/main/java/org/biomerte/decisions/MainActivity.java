@@ -16,7 +16,8 @@ public class MainActivity extends Activity {
  private EditText reply;
  private JSONObject displayed;
  private final Handler main=new Handler(Looper.getMainLooper());
- @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},9);}
+ @Override public void onCreate(Bundle b){super.onCreate(b);if(b!=null)editing=b.getString("editing","");getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},9);}
+ @Override protected void onSaveInstanceState(Bundle b){saveDraft();b.putString("editing",editing);super.onSaveInstanceState(b);}
  @Override protected void onResume(){super.onResume();App.changed=()->{if(editing.isEmpty())load();};load();App.sync(this);}
  @Override protected void onPause(){saveDraft();App.changed=null;super.onPause();}
  private void saveDraft(){if(reply!=null&&!editing.isEmpty()){String id=editing,value=reply.getText().toString();App.work(this,()->new State(this).draft(id,value));}}

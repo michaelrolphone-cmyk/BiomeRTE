@@ -131,6 +131,12 @@ def resolve(tx, ctx, request_id, decision):
     req = tx.need('authorization_requests', request_id)
     row = tx.need('decisions', decision.get('decision_id', ''))
     response = row.get('response')
+    if row['state'] in ('withdrawn', 'superseded') and not response:
+        expected = dict(outcome=row['state'], decision_id=row['id'], request_id=row['request']['id'],
+                        proposal_revision=row['request']['proposal_revision'])
+        if decision != expected or row['request'].get('authorization_request') != request_id:
+            raise Fault('Exact withdrawn decision identity required', 409)
+        return answer_result(row['state'], request_id)
     if (not response or response != decision or row['request'].get('authorization_request') != request_id or
             row['request'].get('proposal') != req['proposal'] or response['request_id'] != request_id or
             response['proposal_revision'] != req['proposal']['revision'] or not response.get('authenticated')):
@@ -255,7 +261,7 @@ def on_lease(tx, ctx, lease, inputs, operation, authorization_id, proposal):
     return send(tx, ctx, lease['id'], inputs, operation)
 
 
-def guard(tx, operation, contract, resource, inputs):
+def guard(tx, operation, contract, resource, inputs, ctx=None):
     usage = tx.get('authorization_usage', operation)
     protected = tx.get('_authorization_protected', digest([contract, resource]))
     if not usage:
@@ -263,7 +269,7 @@ def guard(tx, operation, contract, resource, inputs):
             raise Fault('This action requires an authorization guard', 403)
         return
     assert_grant(tx, usage['authorization_id'], usage['proposal'], dict(contract=contract, resource=resource, inputs=inputs))
-    conditions_met(tx, Context(None), usage['proposal'])
+    conditions_met(tx, Context(ctx.app, scope=ctx.scope) if ctx else Context(None), usage['proposal'])
 
 
 def observe(tx, operation, state, result=None):

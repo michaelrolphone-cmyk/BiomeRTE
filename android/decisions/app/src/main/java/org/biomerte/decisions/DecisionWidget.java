@@ -11,9 +11,10 @@ import java.util.*;
 
 public class DecisionWidget extends AppWidgetProvider {
  public static PendingIntent open(Context c,String id){Intent i=new Intent(c,MainActivity.class).setData(Uri.parse("biome-decisions://review/"+id)).putExtra("decision",id);return PendingIntent.getActivity(c,id.hashCode(),i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
- @Override public void onUpdate(Context c,AppWidgetManager m,int[] ids){App.work(c,()->update(c));}
- @Override public void onAppWidgetOptionsChanged(Context c,AppWidgetManager m,int id,Bundle options){App.work(c,()->update(c));}
- @Override public void onReceive(Context c,Intent i){super.onReceive(c,i);if("biome.decisions.next".equals(i.getAction()))App.work(c,()->{new State(c).next();update(c);});}
+ private void refresh(Context c,boolean next){PendingResult result=goAsync();App.IO.execute(()->{try{if(next)new State(c).next();update(c);}catch(Exception e){App.error(c,e);}finally{result.finish();}});}
+ @Override public void onUpdate(Context c,AppWidgetManager m,int[] ids){refresh(c,false);}
+ @Override public void onAppWidgetOptionsChanged(Context c,AppWidgetManager m,int id,Bundle options){refresh(c,false);}
+ @Override public void onReceive(Context c,Intent i){super.onReceive(c,i);if("biome.decisions.next".equals(i.getAction()))refresh(c,true);}
  public static boolean locked(Context c){return c.getSystemService(KeyguardManager.class).isDeviceLocked();}
  public static List<RemoteViews> rows(Context c,JSONObject row,boolean locked,boolean submitted)throws Exception{
   ArrayList<RemoteViews> rows=new ArrayList<>();JSONObject request=row==null?null:row.getJSONObject("request");

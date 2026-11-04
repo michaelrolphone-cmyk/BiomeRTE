@@ -19,4 +19,13 @@ public class DecisionWidgetTest {
  @Test public void queuedReplyDoesNotClaimTheQuestionIsAnswered()throws Exception{JSONObject r=row(4),s=new JSONObject().put("rows",new JSONArray().put(r)).put("outbox",new JSONArray().put(new JSONObject().put("decision_id","question").put("state","queued")));assertEquals(1,State.pending(s).length());assertEquals(1,DecisionWidget.rows(app,r,false,true).size());s.getJSONArray("outbox").getJSONObject(0).put("state","accepted");assertEquals(0,State.pending(s).length());}
  @Test public void freeTextIsPreservedAndUnknownChoicesCannotBeQueued()throws Exception{JSONObject r=row(2);String original="Only after backing up · café 🗂";DecisionModel.validate(r,"c0",original);DecisionModel.validate(r,"",original);try{DecisionModel.validate(r,"missing",original);fail();}catch(Exception expected){}try{DecisionModel.validate(r,"","");fail();}catch(Exception expected){}}
  @Test public void emptyStateIsLargeCheckmarkAndNoDecisionsOnly()throws Exception{View v=new RemoteViews(app.getPackageName(),R.layout.widget_empty).apply(app,new FrameLayout(app));assertNotNull(v.findViewById(R.id.empty_check));assertEquals("No decisions",((TextView)v.findViewById(R.id.empty_label)).getText().toString());assertEquals(2,((ViewGroup)v).getChildCount());}
+ @Test public void widgetTapOpensTheNativeInboxAndHandlesAnUnknownQuestion()throws Exception{
+  DecisionWidget.open(app,"withdrawn-question").send();
+  android.content.Intent launched=org.robolectric.Shadows.shadowOf(app).getNextStartedActivity();
+  assertNotNull(launched);assertEquals(MainActivity.class.getName(),launched.getComponent().getClassName());
+  try(org.robolectric.android.controller.ActivityController<MainActivity> controller=Robolectric.buildActivity(MainActivity.class,launched).setup()){
+   App.IO.submit(()->{}).get();org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+   assertFalse(controller.get().isFinishing());assertNotNull(controller.get().findViewById(android.R.id.content));
+  }
+ }
 }

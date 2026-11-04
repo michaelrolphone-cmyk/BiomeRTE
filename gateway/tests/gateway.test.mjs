@@ -171,3 +171,20 @@ test('shared journal CAS, preferred routing, overflow, takeover and return',asyn
  assert.equal((await send('/bridge/ha/events/commit',{fence:next.fence,body:[]},pi)).status,200);
  sql.close();
 });
+
+test('decision phone ingress is narrowed and always delegates signature verification to Biome',async()=>{
+ const {sql,send,deviceKey}=fixture(),link={Authorization:'Bearer '+deviceKey};
+ assert.equal((await send('/api/decisions',{command:'authorization.dispatch'})).status,400);
+ assert.equal((await send('/api/decisions',{command:'respond'})).status,401);
+ assert.equal((await send('/api/decisions',{command:'inbox'},{Origin:'https://untrusted.test'})).status,403);
+ const envelope={command:'inbox',device:'a'.repeat(64),site:'site',id:'same-unverified-id',payload:'e30=',signature:'phone-signature'};
+ for(let attempt=0;attempt<2;attempt++){
+  const pending=send('/api/decisions',envelope);let job;
+  for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,5));job=await(await send('/bridge/next',{},link)).json();if(job.id)break}
+  assert.equal(job.request.arguments.operation,'decision.mobile.inbox');assert.equal(job.request.arguments.realm,'site');
+  assert.deepEqual(job.request.arguments.arguments,{envelope});
+  await send('/bridge/complete',{id:job.id,lease:job.lease,result:{content:[{type:'text',text:JSON.stringify({site:'site',decisions:[],next_cursor:''})}]}},link);
+  assert.deepEqual(await(await pending).json(),{site:'site',decisions:[],next_cursor:''});
+ }
+ sql.close();
+});

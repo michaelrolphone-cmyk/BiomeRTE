@@ -142,6 +142,17 @@ def revoke_device(tx, ctx, device, reason):
     return tx.put('_decision_devices', device, row)
 
 
+@op('decision.pair.revoke', 'pair_id:str')
+def revoke_pairing(tx, ctx, pair_id):
+    operator(ctx)
+    row = tx.need('_decision_pairings', pair_id)
+    if row['state'] == 'used':
+        raise Fault('Pairing already redeemed; revoke the enrolled device instead', 409)
+    row['state'] = 'revoked'
+    tx.put('_decision_pairings', pair_id, row)
+    return dict(id=pair_id, state='revoked')
+
+
 @op('decision.mobile', 'envelope:obj')
 def mobile(tx, ctx, envelope):
     """Narrow gateway ingress: never accepts an owner-asserted answer without a phone signature."""
@@ -150,6 +161,8 @@ def mobile(tx, ctx, envelope):
         if set(e) != {'command', 'pair_id', 'code', 'public_key', 'installation'}:
             raise Fault('Invalid enrollment')
         p = tx.need('_decision_pairings', e['pair_id'])
+        if p['state'] == 'revoked':
+            raise Fault('Pairing revoked', 403)
         who = fingerprint(e['public_key'])
         if not hmac.compare_digest(p['code_hash'], digest(e['code'])):
             raise Fault('Invalid pairing code', 403)

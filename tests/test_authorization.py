@@ -273,3 +273,21 @@ class Authorization(unittest.TestCase):
         p2=copy.deepcopy(p);p2['action']=second
         self.call('authorization.dispatch',dict(id=grant,proposal=p2,operation='group-two'))
         with self.assertRaises(Fault):self.call('authorization.dispatch',dict(id=grant,proposal=p2,operation='group-three'))
+
+    def test_withdrawal_returns_explicit_non_authorizing_outcome(self):
+        run=self.start()
+        self.call('decision.withdraw',dict(id=self.inbox()[0]['id'],reason='Proposal no longer needed'))
+        self.drain()
+        result=self.call('process.get',dict(run=run))['result']
+        self.assertEqual('withdrawn',result['outcome'])
+        self.assertEqual('',result['authorization_id'])
+
+    def test_revoked_pairing_cannot_enroll_and_optional_proposal_fields_are_bound(self):
+        pairing=self.call('decision.pair',dict(label='Revoked pairing'))
+        self.call('decision.pair.revoke',dict(pair_id=pairing['pair_id']))
+        with self.assertRaises(Fault):
+            self.call('decision.mobile',dict(envelope=dict(command='enroll',pair_id=pairing['pair_id'],code=pairing['code'],public_key=self.phone['public_key'],installation='another-phone')))
+        p=proposal();p['additional_constraint']='Only this exact proposal'
+        grant,_=self.grant(p)
+        altered=copy.deepcopy(p);del altered['additional_constraint']
+        with self.assertRaises(Fault):self.call('authorization.dispatch',dict(id=grant,proposal=altered,operation='omitted-restriction'))
