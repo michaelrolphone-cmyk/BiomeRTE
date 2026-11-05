@@ -33,7 +33,7 @@ def main(argv=None):
         from ..runtime import Engine
         from ..config import FieldConfig
         from .source import RuntimeSource
-        engine=None
+        engine=None;source=None
         with model_slot():
             try:
                 engine=Engine(read_manifest(args.base),FieldConfig.parse(dict(enabled=False,read_only=True,baseline_pull=0.,spectral_enabled=False)))
@@ -51,6 +51,7 @@ def main(argv=None):
                     from .compare import compare
                     result=compare(engine,vault,args.target,args.restored,json.loads(Path(args.suite).read_text()),args.output,args.resume)
             finally:
+                source=None
                 if engine:engine.close()
     print(json.dumps(result,indent=2,allow_nan=False))
 

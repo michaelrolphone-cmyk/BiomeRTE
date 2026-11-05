@@ -91,11 +91,45 @@ def overlaps(a, b):
     return x[0]<=y[1] and y[0]<=x[1] and x[2]<=y[3] and y[2]<=x[3]
 
 
-def refit_neighborhood(current, d, a, c):
-    """Coordinate least squares avoids a model-wide dense normal matrix."""
+def refit_neighborhood(current, d, a, c, workspace_bytes=None):
+    """Solve local overlaps jointly; retain bounded-memory coordinate fallback."""
     if not current:return current
     affected=[r.id for r in current if overlaps(r,current[-1])]
     score=sample_loss(current,d,a,0,c)
+    selected=[r for r in current if r.id in affected]
+    others=[r for r in current if r.id not in affected]
+    problem=training_problem(others,d,a,c)
+    if problem is None:return current
+    x,y,u,residual,weights=problem
+    modes=[(r,bool(r.b or r.window)) for r in selected]
+    columns=sum(1+int(affine) for r,affine in modes)
+    workspace=workspace_bytes if workspace_bytes is not None else max(a.nbytes*8,columns*columns*32)
+    if columns*columns*32<=workspace:
+        def design(start,end):
+            pieces=[]
+            for r,affine in modes:
+                phi,psi=r.basis(x[start:end],y[start:end],u[start:end]);pieces.append(phi)
+                if affine:pieces.append(psi)
+            return np.column_stack(pieces)*np.sqrt(weights[start:end])[:,None]
+        if len(x)*columns*32<=workspace:
+            matrix=design(0,len(x))
+            coef=np.linalg.lstsq(matrix,residual*np.sqrt(weights),rcond=None)[0]
+        else:
+            # Streaming sufficient statistics: no parameter-by-model matrix.
+            gram=np.zeros((columns,columns));rhs=np.zeros(columns)
+            rows=max(1,(workspace-columns*columns*32)//max(1,columns*32))
+            for start in range(0,len(x),rows):
+                end=min(len(x),start+rows);matrix=design(start,end)
+                gram+=matrix.T@matrix;rhs+=matrix.T@(residual[start:end]*np.sqrt(weights[start:end]))
+            scales=np.sqrt(np.maximum(np.diag(gram),np.finfo(float).tiny))
+            normalized=gram/scales[:,None]/scales[None,:]
+            coef=np.linalg.lstsq(normalized,rhs/scales,rcond=np.finfo(float).eps*max(len(x),columns))[0]/scales
+        index=0;revised=[]
+        for r,affine in modes:
+            revised.append(dataclasses.replace(r,a=float(coef[index]),b=float(coef[index+1]) if affine else 0.))
+            index+=1+int(affine)
+        candidate=sorted(others+revised,key=lambda r:r.id)
+        return candidate if sample_loss(candidate,d,a,0,c)<=score else current
     while True:
         previous=score
         for rid in affected:
@@ -110,26 +144,46 @@ def refit_neighborhood(current, d, a, c):
     return current
 
 
-def fit_coefficients(region, current, d, a, c, affine):
+def training_problem(current,d,a,c):
     b=a[a[:,5]==0]
-    if not len(b): return None
+    if not len(b):return None
     x0=(b[:,0]+.5)/d['logical_shape'][0];x1=(b[:,1]+.5)/d['logical_shape'][1];u=b[:,2]/d['s_m']
-    phi,psi=region.basis(x0,x1,u)
     residual=(b[:,3]-evaluate_delta(current,d,b[:,0],b[:,1],b[:,2]))/d['s_m']
     weights=np.zeros(len(b))
     for changed,w in [(True,1.),(False,c['unchanged_loss_weight'])]:
         mask=b[:,4]==changed
         if mask.any():weights[mask]=w/b[mask,6]/np.sum(1/b[mask,6])
-    design=np.column_stack([phi,psi]) if affine else phi[:,None]
-    matrix=design*np.sqrt(weights)[:,None];y=residual*np.sqrt(weights)
-    if not np.any(matrix):return None
-    coef=np.linalg.lstsq(matrix,y,rcond=None)[0]
-    return dataclasses.replace(region,a=float(coef[0]),b=float(coef[1]) if affine else 0.)
+    return x0,x1,u,residual,weights
+
+
+def training_score(region,problem):
+    x0,x1,u,residual,weights=problem
+    phi,psi=region.basis(x0,x1,u)
+    return float(np.sum(weights*(phi*region.a+psi*region.b-residual)**2))
+
+
+def fit_coefficients(region, current, d, a, c, affine, problem=None):
+    problem=training_problem(current,d,a,c) if problem is None else problem
+    if problem is None:return None
+    x0,x1,u,residual,weights=problem
+    phi,_=region.basis(x0,x1,u)
+    weighted_phi=weights*phi;effective=weighted_phi*phi;total=float(effective.sum())
+    if not total:return None
+    intercept=float(np.sum(weighted_phi*residual)/total);slope=0.;center=0.
+    if affine:
+        z=u-region.mu;center=float(np.sum(effective*z)/total);centered=z-center
+        variance=float(np.sum(effective*centered**2))
+        # Centered sufficient statistics avoid an N-by-2 SVD and its condition
+        # squaring. Rank tolerance is floating precision, not a fit-quality gate.
+        tolerance=np.finfo(float).eps*total*max(1.,float(np.max(np.abs(z)))**2)
+        if variance>tolerance:slope=float(np.sum(weighted_phi*centered*residual)/variance)
+    return dataclasses.replace(region,a=intercept-slope*center,b=slope)
 
 
 def propose(current, d, a, c, region_id, bounds):
     b=a[a[:,5]==0]
     if not len(b):return []
+    problem=training_problem(current,d,a,c)
     x=np.column_stack([(b[:,0]+.5)/d['logical_shape'][0],(b[:,1]+.5)/d['logical_shape'][1]])
     residual=(b[:,3]-evaluate_delta(current,d,b[:,0],b[:,1],b[:,2]))/d['s_m']
     inside=(x[:,0]>=bounds[0])&(x[:,0]<=bounds[1])&(x[:,1]>=bounds[2])&(x[:,1]<=bounds[3])
@@ -149,19 +203,20 @@ def propose(current, d, a, c, region_id, bounds):
                 best=None;best_loss=float('inf')
                 for factor in (.5,1.,2.):
                     region=Region(region_id,d['id'],*center,*np.log(radii*factor),angle,0.,0.,mu,hv if mode=='windowed_affine' else 1.,exponent,int(mode=='windowed_affine'))
-                    region=fit_coefficients(region,current,d,a,c,mode!='disabled')
+                    region=fit_coefficients(region,current,d,a,c,mode!='disabled',problem)
                     if region is None:continue
-                    score=sample_loss(current+[region],d,a,0,c)
+                    score=training_score(region,problem)
                     if score<best_loss:best,best_loss=region,score
                 if best is not None:
-                    best=refine_geometry(best,current,d,a,c,mode!='disabled')
+                    best=refine_geometry(best,current,d,a,c,mode!='disabled',problem)
                     candidates.append((best,mode))
     return candidates
 
 
-def refine_geometry(region,current,d,a,c,affine):
+def refine_geometry(region,current,d,a,c,affine,problem=None):
     """Training-only coordinate pattern search; convergence is explicit."""
-    score=sample_loss(current+[region],d,a,0,c);step=.25
+    problem=training_problem(current,d,a,c) if problem is None else problem
+    score=training_score(region,problem);step=.25
     while step>=c['geometry_relative_tolerance']:
         improved=False
         scales=dict(c0=math.exp(region.log_h0),c1=math.exp(region.log_h1),log_h0=1.,log_h1=1.,angle=math.pi)
@@ -172,9 +227,9 @@ def refine_geometry(region,current,d,a,c,affine):
                 value=getattr(region,key)+sign*step*scale
                 if key=='hv' and value<=0:continue
                 trial=dataclasses.replace(region,**{key:value})
-                trial=fit_coefficients(trial,current,d,a,c,affine)
+                trial=fit_coefficients(trial,current,d,a,c,affine,problem)
                 if trial is None:continue
-                loss=sample_loss(current+[trial],d,a,0,c)
+                loss=training_score(trial,problem)
                 if score-loss>c['convergence_relative_improvement']*max(score,np.finfo(float).tiny):
                     region,score,improved=trial,loss,True
         if not improved:step/=2
@@ -194,12 +249,20 @@ def fit(source, output, config=None, resume=False, progress=None, cancel=None):
     else:
         state=dict(identity=identity,regions=[],tensor_index=0,candidates=[],sampling={},elapsed_seconds=0.,frontier=[],penalty_trials=[])
     regions=[Region(**r) for r in state['regions']];manifest=source.manifest(c)
+    # The complete mapping is already in every artifact. Do not copy it into
+    # every journal entry and repeatedly encrypt megabytes of duplicate data.
+    for candidate in state['candidates']:
+        for key in ('baseline_ref','coverage','provenance'):candidate.pop(key,None)
+    revision=getattr(source.engine,'manifest',{}).get('source_revision','fixture')
+    history=state.setdefault('implementation_history',[])
+    if not history or history[-1]!=revision:history.append(revision)
     def checkpoint():
         state['regions']=[r.to_dict() for r in regions];vault.save_json('fit.enc',state)
     def retain(reason, validation):
         candidate_id='candidate-'+digest([manifest,[r.to_dict() for r in regions]])[:20]
         receipt=save_transform(manifest,regions,output/(candidate_id+'.afwt.enc'))
-        record=dict(candidate_id=candidate_id,validation_loss=validation,selection_reason=reason,**receipt)
+        compact={k:v for k,v in receipt.items() if k not in ('baseline_ref','coverage','provenance')}
+        record=dict(candidate_id=candidate_id,validation_loss=validation,selection_reason=reason,**compact)
         if not any(r['candidate_id']==candidate_id for r in state['candidates']):state['candidates'].append(record)
         valid=[r for r in state['candidates'] if r['validation_loss'] is not None]
         state['frontier']=[r['candidate_id'] for r in valid if not any(q['bytes']<=r['bytes'] and q['validation_loss']<=r['validation_loss'] and (q['bytes']<r['bytes'] or q['validation_loss']<r['validation_loss']) for q in valid)]
@@ -253,7 +316,7 @@ def fit(source, output, config=None, resume=False, progress=None, cancel=None):
                     raise TransformError('cancelled','operator region budget')
                 bounds=pending.pop(0);best=None;best_loss=local_loss
                 for proposal,mode in propose(regions,d,a,c,max([r.id for r in regions],default=-1)+1,bounds):
-                    jointly_fitted=refit_neighborhood(regions+[proposal],d,a,c)
+                    jointly_fitted=refit_neighborhood(regions+[proposal],d,a,c,source.tile_bytes)
                     decoded=decode(encode(manifest,jointly_fitted))[1]
                     score=sample_loss(decoded,d,a,1,c)
                     if score<best_loss:
@@ -297,6 +360,8 @@ def fit(source, output, config=None, resume=False, progress=None, cancel=None):
                   stop_reason=state['stop_reason'],source=source.identity,sampling=state['sampling'],
                   candidate_selection='operator; no size-only default',behavioral_evaluation='unexecuted')
     report['source_signed_statistics']=source.stats
+    report['implementation_history']=state['implementation_history']
     vault.save_json('report.enc',report)
     state['final_report']=report;checkpoint()
-    return dict(status=state['status'],stop_reason=state['stop_reason'],candidates=state['candidates'],report=report)
+    return dict(status=state['status'],stop_reason=state['stop_reason'],candidates=state['candidates'],report=report,
+                coverage=manifest['coverage'],baseline_ref=source.baseline_ref)

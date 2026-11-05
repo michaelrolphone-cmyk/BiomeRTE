@@ -68,6 +68,12 @@ class TransformJobs:
                                       metrics=report.get('global_metrics'),behavioral_evaluation=report.get('behavioral_evaluation'))
             elif row['action']=='compare':result['result']={k:data.get(k) for k in ('scores','paired_kl','retention_ratio','paired_bootstrap_95','scientific_usefulness','assessment','selected_candidate')}
             else:result['result']={k:data[k] for k in ('checkpoint_id','sha256','native_state','writes','decay') if k in data}
+            if not details:result['result']['cost']=data.get('cost')
+        elif row['action']=='fit' and (self.jobs/job_id/'fit/private/fit.enc').is_file():
+            partial=Vault(self.jobs/job_id/'fit/private').load_json('fit.enc')
+            result['result']=dict(partial=True,stop_reason=partial.get('stop_reason'),
+                candidates=[{k:r[k] for k in ('candidate_id','bytes','sha256','region_count','validation_loss','above_goal')} for r in partial.get('candidates',[])],
+                completed_tensors=partial.get('tensor_index',0),behavioral_evaluation='unexecuted')
         return result
 
     def artifact(self, run_id, candidate_id):
@@ -261,7 +267,7 @@ class TransformJobs:
                 if time.monotonic()-last_progress[0]>=1:
                     with self.db:self.db.execute('UPDATE jobs SET progress=? WHERE id=?',(json.dumps(value),job_id))
                     last_progress[0]=time.monotonic()
-            engine=None
+            engine=None;source=None
             try:
                 check();model=read_manifest(self.manifest)
                 if model['baseline_hash']!=config['baseline_hash']:raise TransformError('baseline_mismatch','Installed baseline changed')
@@ -292,6 +298,9 @@ class TransformJobs:
                             from .compare import compare
                             result=compare(engine,state,config['target_checkpoint'],config['restored_checkpoint'],config['suite'],folder/'comparison',resume=(folder/'comparison/comparison.enc').exists(),progress=progress,cancel=check)
                     finally:
+                        # Tiled readers retain projection modules; release them
+                        # before Engine.close collects arrays and admission exits.
+                        source=None
                         if engine:engine.close()
                         engine=None
                 import resource

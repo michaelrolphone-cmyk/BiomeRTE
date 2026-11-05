@@ -175,5 +175,5 @@ class RuntimeSource:
                                   frozen='All noneligible baseline tensors are immutable and not represented by field checkpoints',
                                   source_properties='fixed original scales and offsets; committed sparse packed groups'),
                     provenance=dict(target_checkpoint_hash=self.identity['target_hash'], source_field_version=self.identity['field_version'],
-                                    fitter_version='afwt-streaming/1', configuration_digest=digest(config)),
+                                    fitter_version='afwt-streaming/2-centered-statistics', configuration_digest=digest(config)),
                     size_goal=dict(target_bytes=config['target_bytes'], enforcement='none'))

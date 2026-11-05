@@ -22,8 +22,8 @@ def install(api, root, manifest, sessions=None):
     @api.post('/transforms/export')
     def export(body:dict):return jobs.export(body)
     @api.get('/transforms/jobs/{run_id}')
-    def status(run_id:str):
-        jobs.reconcile();return jobs.get(run_id)
+    def status(run_id:str,details:bool=False):
+        jobs.reconcile();return jobs.get(run_id,details=details)
     @api.post('/transforms/jobs/{run_id}/cancel')
     def cancel(run_id:str,body:dict):return jobs.cancel(run_id,body)
     @api.post('/transforms/jobs/{run_id}/assessment')

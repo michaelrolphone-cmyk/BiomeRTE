@@ -189,6 +189,31 @@ def test_generic_worker_route_is_bound_by_offer_argv():
     with pytest.raises(ValueError):bind_contract(dict(contract='model.field_transform.fit:1'),'status')
 
 
+def test_centered_solver_matches_weighted_svd():
+    from activation_field.transforms.fit import fit_coefficients,training_problem
+    rng=np.random.default_rng(61);d=artifact()[0]['tensor_map'][0]
+    a=np.column_stack([rng.integers(0,32,4000),rng.integers(0,64,4000),rng.normal(0,3,4000),rng.normal(0,.2,4000),rng.integers(0,2,4000),np.zeros(4000),rng.uniform(.2,1,4000)])
+    r=Region(0,0,.5,.4,-.5,-1.,.4,.1,.2,.3,2.,2,1)
+    problem=training_problem([],d,a,configuration());x,y,u,residual,weights=problem
+    phi,psi=r.basis(x,y,u);matrix=np.column_stack([phi,psi])*np.sqrt(weights)[:,None]
+    expected=np.linalg.lstsq(matrix,residual*np.sqrt(weights),rcond=None)[0]
+    fitted=fit_coefficients(r,[],d,a,configuration(),True,problem)
+    np.testing.assert_allclose([fitted.a,fitted.b],expected,rtol=1e-10,atol=1e-12)
+
+
+def test_joint_overlap_solver_direct_and_streamed_agree():
+    from activation_field.transforms.fit import refit_neighborhood,sample_loss
+    rng=np.random.default_rng(90);d=artifact()[0]['tensor_map'][0]
+    rows=rng.integers(0,32,3000);cols=rng.integers(0,64,3000);values=rng.normal(0,2,3000)
+    truth=[Region(0,0,.45,.5,-.7,-.8,.1,.3,.07),Region(1,0,.55,.5,-.7,-.8,.1,-.2,.04)]
+    target=evaluate_delta(truth,d,rows,cols,values)
+    a=np.column_stack([rows,cols,values,target,np.ones(3000),np.zeros(3000),np.ones(3000)])
+    initial=[dataclasses.replace(r,a=r.a/2,b=r.b/2) for r in truth]
+    for workspace in (1000000,4096):
+        fitted=refit_neighborhood(initial,d,a,configuration(),workspace)
+        assert sample_loss(fitted,d,a,0,configuration())<1e-20
+
+
 def test_durable_jobs_versions_replay_encryption_and_recovery(tmp_path,monkeypatch):
     import activation_field.transforms.jobs as module
     monkeypatch.setattr(module,'read_manifest',lambda *args,**kw:dict(baseline_hash='a'*64))
@@ -204,6 +229,10 @@ def test_durable_jobs_versions_replay_encryption_and_recovery(tmp_path,monkeypat
     cancel=dict(request_id='cancel',expected_version=0)
     assert jobs.cancel(run,cancel)==jobs.cancel(run,cancel)
     jobs.reconcile();assert jobs.get(run)['status']=='interrupted'
+    candidate=dict(candidate_id='partial',bytes=100,sha256='b'*64,region_count=1,validation_loss=.5,above_goal=False)
+    Vault(jobs.jobs/run/'fit/private').save_json('fit.enc',dict(candidates=[candidate],tensor_index=2,regions=['private parameters']))
+    exposed=jobs.get(run)['result']
+    assert exposed['partial'] and exposed['candidates']==[candidate] and 'regions' not in exposed
     with pytest.raises(ValueError):jobs.start('fit',dict(request_id='badresume',expected_version=0,resume_run_id=run))
     version=jobs.get(run)['version']
     resumed=jobs.start('fit',dict(request_id='resume',expected_version=version,resume_run_id=run))

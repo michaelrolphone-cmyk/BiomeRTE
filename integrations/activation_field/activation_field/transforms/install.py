@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from .provider import ROOT,FIELD_ROOT,configure
 
@@ -32,7 +33,12 @@ def main():
             path=agents/(label+'.plist');path.write_bytes(plistlib.dumps(plist));path.chmod(0o600)
             domain='gui/'+str(os.getuid());service=domain+'/'+label
             found=subprocess.run(['launchctl','print',service],capture_output=True).returncode==0
-            if found:subprocess.run(['launchctl','bootout',service],check=True)
+            if found:
+                subprocess.run(['launchctl','bootout',service],check=True)
+                # bootout can acknowledge before launchd removes the old job.
+                # Wait for that actual state transition, not an arbitrary delay.
+                while subprocess.run(['launchctl','print',service],capture_output=True).returncode==0:
+                    time.sleep(.1)
             subprocess.run(['launchctl','bootstrap',domain,str(path)],check=True)
         (ROOT/'source-version.json').write_text(json.dumps(receipt,indent=2))
         print(json.dumps(receipt))
