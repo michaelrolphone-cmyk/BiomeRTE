@@ -20,13 +20,28 @@ def save(path,value):
 
 
 def child(args):
-    from activation_field.admission import model_slot
     from activation_field.checkpoint import Vault
     from activation_field.config import FieldConfig
     from activation_field.manifest import read_manifest
     from activation_field.runtime import Engine
     from activation_field.transforms.source import RuntimeSource
     from activation_field.transforms.materialize import materialize
+    # The unsandboxed parent owns the normal FIFO slot for both subprocess
+    # restoration and later diagnostics. macOS disallows setuid ps in a sandbox,
+    # so process admission must be acquired before entering that sandbox.
+    if args.admission_fd is None:raise RuntimeError('Parent-owned model admission required')
+    with os.fdopen(args.admission_fd) as permit:owner=json.load(permit)
+    if owner['pid']!=os.getppid():raise RuntimeError('Admission parent changed')
+    runtime=Path.home()/'.local/share/biome-model-runtime';sys.path.insert(0,str(runtime))
+    from model_runtime import ModelRuntime
+    queue=ModelRuntime().state()
+    if not queue or queue[0]['pid']!=owner['pid'] or queue[0]['phase']!='running':
+        raise RuntimeError('Parent does not own running model admission')
+    import fcntl
+    with (runtime/'active.lock').open('a+b') as handle:
+        try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:pass
+        else:raise RuntimeError('Parent admission lock is not held')
     denied=[]
     for name in args.forbid_file:
         try:Path(name).read_bytes()
@@ -41,15 +56,14 @@ def child(args):
             report.update(progress=value,updated_unix=time.time());save(destination/'progress.json',report);last[0]=stamp
     engine=source=None
     started=time.monotonic()
-    with model_slot(progress):
-        try:
-            engine=Engine(read_manifest(args.manifest),FieldConfig.parse(dict(enabled=False,read_only=True,baseline_pull=0.,spectral_enabled=False)))
-            vault=Vault(destination/'state');source=RuntimeSource(engine,vault)
-            result=materialize(source,args.artifact,vault,args.checkpoint,destination/'staging',progress=progress)
-            report.update(status='succeeded',result=result,source_revision=engine.manifest['source_revision'],seconds=time.monotonic()-started)
-        finally:
-            source=None
-            if engine:engine.close()
+    try:
+        engine=Engine(read_manifest(args.manifest),FieldConfig.parse(dict(enabled=False,read_only=True,baseline_pull=0.,spectral_enabled=False)))
+        vault=Vault(destination/'state');source=RuntimeSource(engine,vault)
+        result=materialize(source,args.artifact,vault,args.checkpoint,destination/'staging',progress=progress)
+        report.update(status='succeeded',result=result,source_revision=engine.manifest['source_revision'],seconds=time.monotonic()-started)
+    finally:
+        source=None
+        if engine:engine.close()
     save(destination/'child-result.json',report)
 
 
@@ -60,6 +74,7 @@ def main():
     p.add_argument('--comparison-vault',required=True);p.add_argument('--checkpoint',required=True)
     p.add_argument('--target-checkpoint');p.add_argument('--fit-config')
     p.add_argument('--output',required=True);p.add_argument('--child',action='store_true')
+    p.add_argument('--admission-fd',type=int)
     args=p.parse_args()
     if args.child:return child(args)
     sandbox=Path('/usr/bin/sandbox-exec')
@@ -70,9 +85,19 @@ def main():
     profile='(version 1) (allow default) (deny file-read* '+''.join('(subpath '+json.dumps(str(Path(n).resolve()))+')' for n in args.forbid_dir)+')'
     profile_path=destination/'deny-source.sb';profile_path.write_text(profile);profile_path.chmod(0o600)
     save(destination/'progress.json',dict(status='starting',source_files_verified_present=args.forbid_file,updated_unix=time.time()))
-    with (destination/'child.log').open('ab') as log:
-        os.chmod(log.name,0o600)
-        completed=subprocess.run([str(sandbox),'-f',str(profile_path),sys.executable,str(Path(__file__).resolve()),*sys.argv[1:],'--child'],stdout=log,stderr=log)
+    from activation_field.admission import model_slot
+    def progress(value):save(destination/'progress.json',dict(status='running',phase='model_admission',progress=value,updated_unix=time.time()))
+    with model_slot(progress):return admitted(args,destination,profile_path)
+
+
+def admitted(args,destination,profile_path):
+    read_fd,write_fd=os.pipe()
+    try:
+        with os.fdopen(write_fd,'w') as permit:json.dump(dict(pid=os.getpid()),permit)
+        with (destination/'child.log').open('ab') as log:
+            os.chmod(log.name,0o600)
+            completed=subprocess.run(['/usr/bin/sandbox-exec','-f',str(profile_path),sys.executable,str(Path(__file__).resolve()),*sys.argv[1:],'--child','--admission-fd',str(read_fd)],pass_fds=(read_fd,),stdout=log,stderr=log)
+    finally:os.close(read_fd)
     if completed.returncode:
         save(destination/'result.json',dict(status='failed',child_exit=completed.returncode,log=str(destination/'child.log')))
         raise RuntimeError('Isolated materialization failed; see '+str(destination/'child.log'))
@@ -94,7 +119,6 @@ def main():
     if args.target_checkpoint:
         # This separate parent phase may read the target. It never supplies data
         # to the already-completed, sandboxed baseline-only materializer.
-        from activation_field.admission import model_slot
         from activation_field.config import FieldConfig
         from activation_field.manifest import read_manifest
         from activation_field.runtime import Engine
@@ -108,19 +132,18 @@ def main():
         assert digest(config)==transform[0]['provenance']['configuration_digest'],'Use the recorded fit configuration for diagnostic splits'
         def progress(value):save(destination/'progress.json',dict(status='running',phase='full_numerical_scan',progress=value,updated_unix=time.time()))
         engine=source=None;started=time.monotonic()
-        with model_slot(progress):
-            try:
-                engine=Engine(read_manifest(args.manifest),FieldConfig.parse(dict(enabled=False,read_only=True,baseline_pull=0.,spectral_enabled=False)))
-                source=RuntimeSource(engine,Vault(args.comparison_vault),args.target_checkpoint)
-                validate_baseline(source,transform[0])
-                assert source.identity['target_hash']==transform[0]['provenance']['target_checkpoint_hash'],'Target provenance mismatch'
-                numerical=numerical_scan(source,transform,config,progress)
-                numerical.update(candidate_sha256=report['result']['artifact']['sha256'],seconds=time.monotonic()-started,
-                                 candidate_selection='saved partial candidate selected before final diagnostics; full fit continues separately')
-                report['numerical']=numerical
-            finally:
-                source=None
-                if engine:engine.close()
+        try:
+            engine=Engine(read_manifest(args.manifest),FieldConfig.parse(dict(enabled=False,read_only=True,baseline_pull=0.,spectral_enabled=False)))
+            source=RuntimeSource(engine,Vault(args.comparison_vault),args.target_checkpoint)
+            validate_baseline(source,transform[0])
+            assert source.identity['target_hash']==transform[0]['provenance']['target_checkpoint_hash'],'Target provenance mismatch'
+            numerical=numerical_scan(source,transform,config,progress)
+            numerical.update(candidate_sha256=report['result']['artifact']['sha256'],seconds=time.monotonic()-started,
+                             candidate_selection='saved partial candidate selected before final diagnostics; full fit continues separately')
+            report['numerical']=numerical
+        finally:
+            source=None
+            if engine:engine.close()
     save(destination/'result.json',report)
     print(json.dumps({k:v for k,v in report.items() if k not in ('result','progress','numerical')}))
     if report.get('numerical'):print(json.dumps(dict(global_metrics=report['numerical']['global_metrics'])))
