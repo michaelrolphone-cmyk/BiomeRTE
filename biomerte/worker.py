@@ -65,11 +65,58 @@ class Worker:
                     args[field] = o[field]
             self.remote.call('cap.offer', args)
 
+
+    def reconcile_guard(self, guard, exclude=None):
+        """Adopt only exact, explicitly quiescent controller reconciliations."""
+        rows = list(self.db.execute(
+            "SELECT id,signature,result FROM actions WHERE state='uncertain' AND resource=?", (guard,)))
+        for operation, signature, old_result in rows:
+            if operation == exclude:
+                continue
+            a = self.remote.call('cap.status', {'operation': operation})
+            if a.get('provider') != self.remote.node or a.get('guard', a.get('resource')) != guard:
+                raise Fault('Reconciliation binding mismatch', 409)
+            if signature != digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']]):
+                raise Fault('Reconciliation identity mismatch', 409)
+            result = a.get('result', {})
+            if a.get('state') not in ('succeeded', 'failed') or not (
+                    result.get('reconciliation', {}).get('quiescent') is True or
+                    result.get('evidence', {}).get('quiescent') is True):
+                continue
+            with self.db:
+                self.db.execute('CREATE TABLE IF NOT EXISTS reconciliations '
+                                '(id TEXT PRIMARY KEY,previous_result TEXT,state TEXT,result TEXT,observed REAL)')
+                self.db.execute('INSERT OR IGNORE INTO reconciliations VALUES(?,?,?,?,?)',
+                                (operation, old_result, a['state'], encode(result), time.time()))
+                self.db.execute("UPDATE actions SET state=?,result=? WHERE id=? AND signature=? AND state='uncertain'",
+                                (a['state'], encode(result), operation, signature))
+        return not self.db.execute(
+            "SELECT 1 FROM actions WHERE state='uncertain' AND resource=? AND id!=? LIMIT 1",
+            (guard, exclude or '')).fetchone()
+
+    def write_health(self, errors, pending):
+        """Report execution progress separately from transport connectivity."""
+        self.last_health = {'observed_at': time.time(), 'provider': self.remote.node,
+                            'state': 'degraded' if errors else 'ready',
+                            'pending': pending, 'blocked': errors}
+        path = os.path.join(os.path.dirname(self.path), 'worker-health.json')
+        temporary = path + '.' + uid()
+        try:
+            with open(temporary, 'w') as out:
+                out.write(encode(self.last_health))
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def fence(self, l):
         resource, gen, holder = l['resource'], l['generation'], l['id']
         guard = l.get('guard', resource)
         if resource not in self.physical:
             raise Fault('Unconfigured physical resource')
+        self.reconcile_guard(guard)
         with self.db:
             row = self.db.execute(
                 'SELECT gen,holder FROM fences WHERE resource=?', (guard,)).fetchone()
@@ -97,6 +144,8 @@ class Worker:
     def perform(self, a):
         args = {'provider': self.remote.node, 'operation': a['id'], 'generation': a['generation']}
         guard = a.get('guard', a['resource'])
+        if not self.reconcile_guard(guard, exclude=a['id']):
+            raise Fault('Reconcile uncertain operation in this slot before new work', 409)
         binding = self.db.execute(
             'SELECT gen,holder FROM fences WHERE resource=?', (guard,)).fetchone()
         if binding != (a['generation'], a['lease']):
@@ -150,19 +199,46 @@ class Worker:
         self.remote.call('provider.result', args)
 
     def once(self, pool=None):
+        import logging
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
+        errors, blocked = [], set()
+        def failure(kind, item, error):
+            guard = item.get('guard', item.get('resource', ''))
+            if guard:
+                blocked.add(guard)
+            errors.append({'kind': kind, 'id': item['id'], 'guard': guard,
+                           'error': type(error).__name__, 'reason': str(error)})
+            logging.warning('Provider %s %s paused: %s', kind, item['id'], error)
         for a in queue.get('activations', []):
-            found = next((o for o in self.offers if digest(
-                [self.remote.node, o['contract'], o['resource']]) == a['offer']), None)
-            if found and found.get('configure_argv'):
-                self.configure(a, found['configure_argv'])
-        for l in queue['fences']:
-            self.fence(l)
+            try:
+                found = next((o for o in self.offers if digest(
+                    [self.remote.node, o['contract'], o['resource']]) == a['offer']), None)
+                if found and found.get('configure_argv'):
+                    self.configure(a, found['configure_argv'])
+            except Exception as error:
+                failure('activation', a, error)
+        fenced = 0
+        for lease in queue['fences']:
+            try:
+                self.fence(lease)
+                fenced += 1
+            except Exception as error:
+                failure('fence', lease, error)
+        actions = [a for a in queue['actions']
+                   if a.get('guard', a['resource']) not in blocked]
         if pool is not None:
-            return len(queue['fences']) + pool.dispatch(queue['actions'])
-        for a in queue['actions']:
-            self.perform(a)
-        return len(queue['fences']) + len(queue['actions'])
+            count = fenced + pool.dispatch(actions)
+            errors.extend(getattr(pool, 'failures', {}).values())
+        else:
+            count = fenced
+            for a in actions:
+                try:
+                    self.perform(a)
+                    count += 1
+                except Exception as error:
+                    failure('action', a, error)
+        self.write_health(errors, len(queue['actions']))
+        return count
 
 
 class ActionPool:
@@ -173,6 +249,7 @@ class ActionPool:
         self.limit = limit
         self.executor = ThreadPoolExecutor(max_workers=limit)
         self.running = {}
+        self.failures = {}
 
     def perform(self, action):
         w = self.worker
@@ -188,7 +265,10 @@ class ActionPool:
             if future.done():
                 del self.running[guard]
                 if future.exception():
+                    self.failures[guard] = {'kind': 'action', 'guard': guard, 'error': type(future.exception()).__name__, 'reason': str(future.exception())}
                     logging.warning('Provider operation paused: %s', future.exception())
+                else:
+                    self.failures.pop(guard, None)
         started = 0
         for action in actions:
             if len(self.running) >= self.limit:
