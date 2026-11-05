@@ -140,33 +140,38 @@ def record_frame(tx,f):
     tx.put('assistant_frames',key,copy.deepcopy(f))
 
 def prompt_phase(tx,ctx,f,key,entry):
-    cfg=configuration(tx);context=copy.deepcopy(f.get('context',{}));context.update(workspace=f.get('workspace_context'), source_request=f.get('source_request'), source_snapshot=f.get('source_snapshot'), publication=f.get('publication'), observation=f.get('last_result'),prediction=f.get('hypotheses',[]),test_evidence=f.get('test_evidence'),review_feedback=f.get('review'),goal=f.get('goal',{}),proposal=f.get('proposal'),evidence=f.get('evidence',[]),previous_findings=f.get('findings',[]),inventory=f.get('inventory',[]),system=f.get('current_system'),tool_schemas=[{'id':c['id'],'inputs':c['inputs'],'outputs':c['outputs']} for c in tx.rows('contracts')])
-    observation=context['observation']
-    if isinstance(observation,dict) and observation and all(k in context and context[k]==v for k,v in observation.items()):
-        # Protocol reads already placed these exact fields in the context.
-        # Retain them once, with an explicit digest-bound observation reference.
-        context['observation']={'same_as_context_fields':sorted(observation),'sha256':digest(observation)}
-    essential={k:context[k] for k in ('goal','proposal','system','observation','prediction','test_evidence','review_feedback','workspace','source_request','source_snapshot')}
-    if f.get('runtime_phase')=='development':
-        context['workspace_tool_schemas']={k:assistant_workspaces.SCHEMAS[k] for k in ('exec','git','file.write')}
-        essential['workspace_tool_schemas']=context['workspace_tool_schemas']
-    budget=cfg['context_bytes']
-    if len(json.dumps(essential).encode())>budget:return outcome(f,'unresolved','essential_context_does_not_fit')
-    # Remove only optional historical material, retaining explicit reference evidence.
-    omitted=[]
-    for field in ['previous_findings','evidence','inventory','tool_schemas']:
-        if len(json.dumps(context).encode())<=budget:break
-        values=context.get(field,[])
-        if values:omitted.append({'field':field,'digest':digest(values)});context[field]=[]
-    if len(json.dumps(context).encode())>budget:return outcome(f,'unresolved','context_needs_decomposition')
-    context.update(coding=False,purpose='workflow_reasoning',model=cfg['model'],omitted_refs=omitted)
-    # Bind the supplied observation to an exact evidence ID and send the IDs
-    # the validator accepts. A field path or the answer itself is not evidence.
-    context_ref='context:'+digest(context)
-    context['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+[context_ref]))
-    prompt=entry['prompt']+'\nCite facts only with exact strings from context.evidence_refs. Field paths are not evidence IDs. Keep unsupported claims in assumptions. Registry ready state is advertised availability, not a verified live health check. Omitted tool schemas remain available in the registry; do not infer that a capability is missing. Return proposed_action:null unless the supplied schema and all required argument values are known.'
+    cfg=configuration(tx)
     previous=f.get('_operations',{}).get(key)
-    action=copy.deepcopy(previous['action']) if previous else {'contract':'agent.lmstudio.delegate:1','resource':select_resource(tx,'agent.lmstudio.delegate:1','llm',cfg),'inputs':{'request':prompt,'context':context}}
+    if previous:
+        # Poll the immutable submitted request even if later frame data is larger.
+        action=copy.deepcopy(previous['action'])
+    else:
+        context=copy.deepcopy(f.get('context',{}));context.update(workspace=f.get('workspace_context'), source_request=f.get('source_request'), source_snapshot=f.get('source_snapshot'), publication=f.get('publication'), observation=f.get('last_result'),prediction=f.get('hypotheses',[]),test_evidence=f.get('test_evidence'),review_feedback=f.get('review'),goal=f.get('goal',{}),proposal=f.get('proposal'),evidence=f.get('evidence',[]),previous_findings=f.get('findings',[]),inventory=f.get('inventory',[]),system=f.get('current_system'),tool_schemas=[{'id':c['id'],'inputs':c['inputs'],'outputs':c['outputs']} for c in tx.rows('contracts')])
+        observation=context['observation']
+        if isinstance(observation,dict) and observation and all(k in context and context[k]==v for k,v in observation.items()):
+            # Protocol reads already placed these exact fields in the context.
+            # Retain them once, with an explicit digest-bound observation reference.
+            context['observation']={'same_as_context_fields':sorted(observation),'sha256':digest(observation)}
+        essential={k:context[k] for k in ('goal','proposal','system','observation','prediction','test_evidence','review_feedback','workspace','source_request','source_snapshot')}
+        if f.get('runtime_phase')=='development':
+            context['workspace_tool_schemas']={k:assistant_workspaces.SCHEMAS[k] for k in ('exec','git','file.write')}
+            essential['workspace_tool_schemas']=context['workspace_tool_schemas']
+        budget=cfg['context_bytes']
+        if len(json.dumps(essential).encode())>budget:return outcome(f,'unresolved','essential_context_does_not_fit')
+        # Remove only optional historical material, retaining explicit reference evidence.
+        omitted=[]
+        for field in ['previous_findings','evidence','inventory','tool_schemas']:
+            if len(json.dumps(context).encode())<=budget:break
+            values=context.get(field,[])
+            if values:omitted.append({'field':field,'digest':digest(values)});context[field]=[]
+        if len(json.dumps(context).encode())>budget:return outcome(f,'unresolved','context_needs_decomposition')
+        context.update(coding=False,purpose='workflow_reasoning',model=cfg['model'],omitted_refs=omitted,response_schema=entry['schema'])
+        # Bind the supplied observation to an exact evidence ID and send the IDs
+        # the validator accepts. A field path or the answer itself is not evidence.
+        context_ref='context:'+digest(context)
+        context['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+[context_ref]))
+        prompt=entry['prompt']+'\nCite facts only with exact strings from context.evidence_refs. Field paths are not evidence IDs. Keep unsupported claims in assumptions. Registry ready state is advertised availability, not a verified live health check. Omitted tool schemas remain available in the registry; do not infer that a capability is missing. Return proposed_action:null unless the supplied schema and all required argument values are known.'
+        action={'contract':'agent.lmstudio.delegate:1','resource':select_resource(tx,'agent.lmstudio.delegate:1','llm',cfg),'inputs':{'request':prompt,'context':context}}
     supplied=set(action['inputs']['context'].get('evidence_refs',[]))
     f['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+sorted(supplied)))
     result=capability(tx,ctx,f,key,action,protocol=True)
@@ -379,11 +384,11 @@ def protocol_stage(tx,ctx,f,p,s):
             candidates=sorted([x for x in tx.rows('work') if x['kind']=='task' and x['state']=='open'],key=lambda x:(-x['priority'],x['sequence'],x['id']))
             f['assignment']=None
             for x in candidates:
-                if tx.get('assistant_assignment',x['id']):continue
+                if tx.get('assistant_assignment',x['id']) or tx.get('assistant_dispatch_failures',x['id']):continue
                 if any(tx.need('work',d)['state']!='accepted' for d in x['dependencies']):continue
                 reservation={'task':x['id'],'epoch':f.get('owner_epoch'),'cycle':f.get('cycle_id')};tx.put('assistant_assignment',x['id'],reservation);f['assignment']=x;break
         elif p=='dispatch':
-            if s=='release' and f.get('assignment') and not f.get('episode_id'):tx.drop('assistant_assignment',f['assignment']['id'])
+            if s=='release':release_dispatch_assignment(tx,ctx,f)
         elif p=='faults':
             tx.put('assistant_incidents',f.setdefault('incident_id','incident-'+uid()),{'id':f['incident_id'],'error':f.get('last_error'),'frame':f,'harm_status':f.get('harm_status','none')})
         elif p=='wake':
@@ -407,7 +412,7 @@ def local_stage(tx,ctx,f,p,s):
         elif s=='coverage':f['impact_complete']=f['impact_index']>=len(f['impact_queue']) and not f.get('unknown_dependencies')
     elif p=='lifecycle':
         if s=='summary':
-            f['runnable']=bool([x for x in tx.rows('work') if x['kind']=='task' and x['state']=='open' and not tx.get('assistant_assignment',x['id']) and all(tx.need('work',d)['state']=='accepted' for d in x['dependencies'])]) and not f.get('pending_global_dependency')
+            f['runnable']=bool([x for x in tx.rows('work') if x['kind']=='task' and x['state']=='open' and not tx.get('assistant_assignment',x['id']) and not tx.get('assistant_dispatch_failures',x['id']) and all(tx.need('work',d)['state']=='accepted' for d in x['dependencies'])]) and not f.get('pending_global_dependency')
             r=responsibility(tx,f);f['expected_revision']=r['revision'];f['binding_revision']=r['binding_revision']
             pending_observation=any(x['state']=='running' and x['responsibility_id']==r['id'] for x in tx.rows('assistant_background'))
             f['next_inspection_at']=None if pending_observation else r.get('next_inspection_at')
@@ -707,6 +712,86 @@ def wait(tx,ctx,logical_process,terminal,frame):
         f['context']['operator_input']=receipt['value'];return outcome(f)
     return outcome(f,'pending','durable_wait',continuation={'event':event,'wait_id':key,'operation':opid})
 
+
+def release_dispatch_assignment(tx,ctx,f):
+    """Release only a matching reservation with no episode or unresolved effects."""
+    task=f.get('assignment',{}).get('id')
+    if not task:return False,'no_assignment'
+    reservation=tx.get('assistant_assignment',task)
+    if reservation and (reservation.get('cycle')!=f.get('cycle_id') or reservation.get('epoch')!=f.get('owner_epoch')):
+        return False,'superseded_assignment'
+    if any(e.get('task_id')==task and e.get('epoch')==f.get('owner_epoch') for e in tx.rows('assistant_episodes')):
+        return False,'episode_exists'
+    operations={f.get('operation_id')}
+    for record in f.get('_operations',{}).values():
+        operations.update((record.get('operation'),record.get('decision_operation')))
+    for operation in operations-{None,''}:
+        submission=tx.get('_submissions',operation) or tx.get('actions',operation)
+        if not submission:continue
+        state,observed=action_status(tx,ctx,operation)
+        if state not in ('completed','faulted'):return False,'operation_requires_reconciliation'
+        inputs=submission.get('inputs',{})
+        pure=(submission.get('contract')=='human.decision:1' or
+              submission.get('contract')=='agent.lmstudio.delegate:1' and
+              inputs.get('context',{}).get('coding') is False)
+        # A terminal error does not prove an external effect did not occur.
+        if not pure:return False,'effect_requires_reconciliation'
+    if reservation:tx.drop('assistant_assignment',task)
+    return True,'released'
+
+def reconcile_dispatch(tx,ctx,row,run):
+    if row.get('dispatch_reconciled'):return
+    result=run.get('result') or {}
+    f=result.get('frame') or tx.get('assistant_frames','background-'+row['id'],{})
+    task=f.get('assignment',{}).get('id')
+    released,reason=release_dispatch_assignment(tx,ctx,f)
+    if task and reason not in ('episode_exists','superseded_assignment'):
+        failure={'task_id':task,'responsibility_id':row['responsibility_id'],'run_id':run['id'],
+                 'disposition':result.get('disposition','faulted'),'result_code':result.get('result_code','engine_fault'),
+                 'reservation_released':released,'recovery_state':reason,'evidence_refs':f.get('evidence_refs',[]),
+                 'operations':{key:value.get('operation') for key,value in f.get('_operations',{}).items()},
+                 'effect_operation':f.get('operation_id')}
+        if failure['disposition']=='completed':
+            failure.update(disposition='unresolved',result_code='episode_receipt_missing')
+        tx.put('assistant_dispatch_failures',task,failure)
+        tx.emit('assistant.dispatch.blocked',failure)
+    row['dispatch_reconciled']=True
+    tx.put('assistant_background',row['id'],row)
+
+@op('assistant.status','id:str',False)
+def assistant_status(tx,ctx,id):
+    r=tx.need('assistant_responsibilities',id)
+    def brief(row):
+        run=tx.need('runs',row['run_id']);result=run.get('result') or {}
+        return {'id':row['id'],'run_id':run['id'],'process':run['name'],'state':run['state'],
+                'disposition':result.get('disposition'),'result_code':result.get('result_code')}
+    background=[brief(x) for x in tx.rows('assistant_background') if x['responsibility_id']==id]
+    episodes=[brief(x) for x in tx.rows('assistant_episodes') if x['responsibility_id']==id]
+    blocked=[x for x in tx.rows('assistant_dispatch_failures') if x['responsibility_id']==id]
+    active=[x for x in background+episodes if x['state']=='running']
+    return {'id':id,'desired':r['desired'],'state':'running' if active or r.get('active_cycle') else 'blocked' if blocked else r.get('coverage',{}).get('kind','idle'),
+            'active_cycle':r.get('active_cycle'),'active_runs':active,'blocked_dispatches':blocked,
+            'background':background,'episodes':episodes,'coverage':r.get('coverage')}
+
+@op('assistant.retry','id:str task_id:str failure_run_id:str')
+def retry_dispatch(tx,ctx,id,task_id,failure_run_id):
+    """Retry one repaired dispatch; never erase uncertain effect ownership."""
+    from .decisions import operator
+    operator(ctx);configuration(tx)
+    r=tx.need('assistant_responsibilities',id)
+    failure=tx.need('assistant_dispatch_failures',task_id)
+    if failure['responsibility_id']!=id or failure['run_id']!=failure_run_id:
+        raise Fault('Dispatch failure changed; inspect assistant.status',409)
+    if not failure['reservation_released'] or tx.get('assistant_assignment',task_id):
+        run=tx.need('runs',failure_run_id)
+        released,_=release_dispatch_assignment(tx,ctx,(run.get('result') or {}).get('frame',{}))
+        if not released:raise Fault('Reconcile the existing operation before retrying dispatch',409)
+    if r['desired']!='run':raise Fault('Admission is paused',409)
+    if tx.need('work',task_id)['state']!='open':raise Fault('Task is no longer open',409)
+    tx.drop('assistant_dispatch_failures',task_id)
+    tx.emit('assistant.dispatch.retry',{'responsibility_id':id,'task_id':task_id,'failure_run_id':failure_run_id})
+    return admit(tx,ctx,r,'retry:'+failure_run_id)
+
 @op('assistant.register','definition:obj')
 def register(tx,ctx,definition):
     from .decisions import operator
@@ -743,6 +828,7 @@ def episode_start(tx,ctx,definition):
     if r['desired']!='run':raise Fault('Admission is paused',409)
     assignment=tx.need('assistant_assignment',definition['task_id'])
     if assignment['epoch']!=r['epoch']:raise Fault('Stale task assignment',409)
+    if assignment.get('cycle')!=definition['frame'].get('cycle_id'):raise Fault('Stale assignment cycle',409)
     frame=copy.deepcopy(definition['frame']);frame['episode_id']=definition['id'];frame['goal']=frame['assignment'].get('goal',frame['goal']);frame['runtime_phase']='reasoning'
     key='assistant.task.'+definition['task_id'];document=tx.get('documents',key)
     if document:
@@ -754,7 +840,9 @@ def episode_start(tx,ctx,definition):
         frame.update(copy.deepcopy(body));frame.setdefault('evidence_refs',[]).append(revision['rev']);frame.setdefault('evidence',[]).append({'source':key,'revision':revision['rev'],'body':body})
 
     run=process.new_run(tx,r['episode_definition'],{'frame':frame},pin=r['episode_revision'])
-    row={'id':definition['id'],'responsibility_id':r['id'],'task_id':definition['task_id'],'run_id':run['id'],'state':'running','epoch':r['epoch']};tx.put('assistant_episodes',row['id'],row);return row
+    row={'id':definition['id'],'responsibility_id':r['id'],'task_id':definition['task_id'],'run_id':run['id'],'state':'running','epoch':r['epoch']};tx.put('assistant_episodes',row['id'],row)
+    tx.drop('assistant_dispatch_failures',definition['task_id'])
+    return row
 
 @op('assistant.input','wait_id:str value:obj')
 def operator_input(tx,ctx,wait_id,value):
@@ -872,9 +960,11 @@ def pump(tx,ctx):
     # Settle independently running reasoning and observation without holding cycles open.
     for kind in ('assistant_background','assistant_episodes'):
         for row in tx.rows(kind):
-            if row['state']!='running':continue
             run=tx.need('runs',row['run_id'])
             if run['state']=='running':continue
+            if kind=='assistant_background' and run['name']=='assistant.dispatch':
+                reconcile_dispatch(tx,ctx,row,run)
+            if row['state']!='running':continue
             row['state']=run['state'];row['result']=run['result'];tx.put(kind,row['id'],row)
             if kind=='assistant_episodes' and not tx.get('assistant_learning_outbox',run['id']):
                 learned=run['result']

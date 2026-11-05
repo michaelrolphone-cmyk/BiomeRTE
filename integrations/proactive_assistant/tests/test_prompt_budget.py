@@ -20,6 +20,7 @@ class PromptBudget(Delivery):
                 action=call.call_args.args[4]
             self.assertEqual(result['disposition'],'pending')
             sent=action['inputs']['context']
+            self.assertEqual(sent['response_schema'],{})
             self.assertEqual(sent['capabilities'],context['capabilities'])
             self.assertEqual(sent['observation'],{'same_as_context_fields':['capabilities','work'],'sha256':digest(context)})
             refs=sent['evidence_refs']
@@ -28,6 +29,18 @@ class PromptBudget(Delivery):
             self.assertIn('context:'+digest(evidence_context),refs)
             self.assertTrue(set(refs)<=set(f['evidence_refs']))
             self.assertIn('exact strings from context.evidence_refs',action['inputs']['request'])
+        self.execute(run)
+
+    def test_pending_request_is_polled_even_when_later_context_is_oversized(self):
+        f=self.frame();f['proposal']={'large':'x'*2000000}
+        frozen={'contract':'agent.lmstudio.delegate:1','resource':'llm.test',
+                'inputs':{'request':'Original','context':{'evidence_refs':['original']}}}
+        f['_operations']={'test':{'operation':'already-submitted','action':frozen}}
+        def run(tx):
+            with patch.object(a,'capability',return_value=a.outcome(f,'pending','operation_queued')) as call:
+                result=a.prompt_phase(tx,self.ctx,f,'test',{'prompt':'New','schema':{}})
+                self.assertEqual(call.call_args.args[4],frozen)
+            self.assertEqual(result['result_code'],'operation_queued')
         self.execute(run)
 
     def test_citations_are_checked_against_the_context_actually_sent(self):
