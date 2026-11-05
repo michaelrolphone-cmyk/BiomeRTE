@@ -27,11 +27,16 @@ def configure():
     usage['parameters']['context']+=' Scientific jobs: action=experiment_start with experiment_config, or run_id and expected_version to resume; action=experiment_status with run_id. Jobs persist and run through the shared model queue; starting returns immediately.'
     g.invoke('cap.define',dict(name=name,version=1,inputs={'request':'str','context':'obj'},outputs={'result':'obj'},description='Activation Field — Qwen3.5 9B: experimental writable quantized full-model agent.',usage=usage),rid='af-capability-definition-v2')
     cfg=dict(site=site,realm='site',parallelism=1,timeout=None,poll_seconds=2,retry_seconds=5,offers=[dict(contract=contract,resource=resource,service='activation-field',capacity=1,usage=usage,argv=[sys.executable,'-m','activation_field.provider','adapter'])])
+    from .transforms.capabilities import offers
+    cfg['offers'].extend(offers(g,resource))
     g.save_json(ROOT/'provider.json',cfg)
     return dict(provider=node,resource=resource,contract=contract)
 
 
 def adapter(payload):
+    from .transforms.capabilities import adapter as transform_adapter
+    transformed=transform_adapter(payload,api)
+    if transformed is not None:return transformed
     context=payload['inputs']['context'];request=payload['inputs']['request'];action=context.get('action','generate');rid=payload['operation']
     if action=='health':return dict(ok=True,**api('/health'))
     if action=='experiment_start':
@@ -94,4 +99,3 @@ def main():
         run_worker(str(ROOT),Remote(),cfg,False)
 
 if __name__=='__main__':main()
-
