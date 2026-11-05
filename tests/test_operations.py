@@ -48,8 +48,10 @@ class Operations(unittest.TestCase):
                   'operation': 'set-a', 'inputs': {'value': 'green'}})
         w.once()
         remote.drop = True
-        with self.assertRaises(IOError):
-            w.once()
+        w.once()
+        self.assertEqual(w.last_health['state'], 'degraded')
+        self.assertEqual(w.last_health['blocked'][0]['id'], 'set-a')
+        self.assertIn('simulated link failure', w.last_health['blocked'][0]['reason'])
         w.db.close()
         w = Worker(path, remote, offers)
         w.once()
