@@ -7,7 +7,7 @@ the separate `feature-change` workflow.
 ## Installed configuration
 
 - LM Studio 0.4.28 build 2, running Qwen3.5-9B Q4_K_M (`qwen3.5-9b`).
-- Model context: 16,384 tokens.
+- Model context: verified per loaded instance; text-only context exhaustion can expand it up to the model's supported context.
 - Agent workflow: `agent.lmstudio`; capability: `agent.lmstudio.delegate:1`.
 - Coding workspace: `/Users/micahelbyrns/Developer/biome-lmstudio` on local disk.
 - Service files: `~/.local/share/biome-lmstudio`.
@@ -97,3 +97,35 @@ To restore the exact filesystem MCP dependencies, copy `coding-deps/package.json
 and `coding-deps/package-lock.json` to the installation's `coding-deps` directory
 and run `npm ci` there. The installer updates an already configured installation;
 keep its existing workspace configuration, tokens, OAuth identity and ledgers.
+
+## Context exhaustion recovery
+
+The ownership review on 2026-11-04 stopped after a 9,961-token prompt filled
+its 16,384-token loaded window (server n_tokens=16383, truncated=1), despite
+max_tokens=-1. Output-token limits and the model's loaded context are separate.
+
+Text-only requests now run through context_recovery.py. The existing shared
+ModelRuntime admission covers discovery, unloading/reloading, every prediction,
+and verification, so image and other model tasks remain serialized. Deployments
+without that optional installed coordinator keep the standalone loading path.
+The requested task model is preserved; a response from another model is rejected.
+
+A length stop is recoverable only when returned usage reaches the verified
+context boundary (or the native stop reason confirms context exhaustion), output
+is uncapped, and no tool calls are involved. Recovery grows the loaded window,
+verifies the model and capacity, and reruns the unchanged pure request. Growth
+ends at the model's advertised maximum or an actual load failure. There is no
+fixed retry count or generation deadline. Missing usage, a smaller output cap,
+transport uncertainty, coding tool calls and ignored resize requests fail
+explicitly; partial JSON is never accepted as a complete answer.
+
+Verified capacities are remembered per model in owner-only context-lengths.json
+so eviction for another workload does not restore the known insufficient window.
+The file contains model identifiers and capacities only. Logs/results include
+usage, context length and finish reason, without prompt/response bodies. Coding
+requests also explicitly disable a saved output-token cap while retaining their
+checkpoint and no-replay semantics.
+
+Run both adapter and recovery tests with python3 -S -m unittest discover -s
+providers/lmstudio -p 'test_*.py' -v. Native full-workflow qualification is separate
+from unit-test success; record its actual result in the work item.

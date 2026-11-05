@@ -82,17 +82,47 @@ class CodingTests(unittest.TestCase):
             self.assertEqual(agent.infer(self.wait),{'answer':'ok'})
             plain.assert_called_once_with(self.wait)
 
-    def test_only_intended_quantization_can_be_loaded(self):
-        wrong={'models':[{'key':agent.MODEL,'quantization':{'name':'Q8_0'},'loaded_instances':[]}]}
-        with patch.object(agent,'ROOT',self.root),patch.object(agent,'api',return_value=wrong) as api:
-            with self.assertRaisesRegex(RuntimeError,'not uniquely available'):agent.model_ready()
+    def test_unavailable_task_model_rejected(self):
+        with patch.object(agent,'api',return_value={'models':[]}):
+            with self.assertRaisesRegex(RuntimeError,'unavailable'):agent.model_ready('missing')
+
+    def test_model_loading_is_deferred_to_shared_admission(self):
+        models={'models':[{'key':'chosen','loaded_instances':[]}]}
+        with patch.object(agent,'ModelRuntime',Mock()),patch.object(agent,'api',return_value=models) as api:
+            self.assertEqual(agent.model_ready('chosen'),'chosen')
             api.assert_called_once_with('/api/v1/models')
 
-    def test_model_load_uses_exact_native_model_key(self):
-        models={'models':[{'key':agent.MODEL,'quantization':{'name':'Q4_K_M'},'loaded_instances':[]}]}
-        with patch.object(agent,'ROOT',self.root),patch.object(agent,'api',side_effect=[models,{'status':'loaded','instance_id':agent.MODEL}]) as api:
-            agent.model_ready()
-            self.assertEqual(api.call_args.args,('/api/v1/models/load',{'model':agent.MODEL,'context_length':16384}))
+    def test_standalone_installation_still_loads_requested_model(self):
+        models={'models':[{'key':'chosen','loaded_instances':[]}]}
+        with patch.object(agent,'ROOT',self.root),patch.object(agent,'ModelRuntime',None),patch.object(agent,'api',side_effect=[models,{'status':'loaded','instance_id':'chosen'}]) as api:
+            agent.model_ready('chosen')
+            self.assertEqual(api.call_args.args,('/api/v1/models/load',{'model':'chosen','context_length':16384}))
+
+    def test_context_recovery_remains_inside_shared_admission(self):
+        from contextlib import contextmanager
+        active=[]
+        @contextmanager
+        def slot(kind,model):
+            active.append((kind,model))
+            yield 'actual-instance'
+            active.clear()
+        runtime=Mock();runtime.slot=slot
+        def recover(raw,body,cache,log):
+            self.assertEqual(active,[('llm','chosen')])
+            self.assertEqual(body['model'],'actual-instance')
+            return {'model':'expanded-instance','choices':[]}
+        with patch.object(agent,'ModelRuntime',return_value=runtime),patch.object(agent,'complete_text',side_effect=recover) as complete:
+            self.assertEqual(agent.api('/v1/chat/completions',{'model':'chosen'})['model'],'expanded-instance')
+        self.assertEqual(active,[])
+        complete.assert_called_once()
+
+    def test_coding_tools_do_not_enter_text_recovery(self):
+        from contextlib import nullcontext
+        runtime=Mock();runtime.slot.return_value=nullcontext('chosen')
+        with patch.object(agent,'ModelRuntime',return_value=runtime),patch.object(agent,'complete_text') as recover,patch.object(agent,'_api',return_value={'model':'chosen'}) as raw:
+            agent.api('/v1/chat/completions',{'model':'chosen','tools':[{'type':'function'}]})
+        recover.assert_not_called()
+        raw.assert_called_once()
 
     def test_mcp_token_cannot_be_forwarded_to_another_endpoint(self):
         self.cfg.update(mcp_port=48731,integrations=[{'type':'ephemeral_mcp','server_url':'https://example.com/mcp'}])

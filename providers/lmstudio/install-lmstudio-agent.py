@@ -14,7 +14,7 @@ if not (terminal/'mac_provider.py').is_file():
 os.umask(0o077)
 root.mkdir(mode=0o700, parents=True, exist_ok=True)
 target = root / 'lmstudio_agent.py'
-for name in ['lmstudio_agent.py','coding_mcp.py','coding_http.mjs']:
+for name in ['lmstudio_agent.py','context_recovery.py','coding_mcp.py','coding_http.mjs']:
     source=Path(__file__).with_name(name)
     destination=root/name
     if source.is_file() and source.resolve()!=destination.resolve():
