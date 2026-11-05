@@ -1,0 +1,25 @@
+services:
+  gitlab:
+    image: gitlab/gitlab-ee@sha256:c2687e16c31b812f559491dd0b60a3816283b1ea4b48904604b61efcbdb08ce0
+    platform: linux/arm64
+    container_name: biome-gitlab
+    hostname: Micahels-Mac-mini.local
+    restart: unless-stopped
+    shm_size: 256m
+    ports: ["8443:443", "2424:22"]
+    volumes:
+      - config:/etc/gitlab
+      - data:/var/opt/gitlab
+      - logs:/var/log/gitlab
+      - ./tls:/etc/gitlab/tls:ro
+      - ./gitlab.rb:/etc/gitlab/gitlab.rb:ro
+volumes:
+  config:
+    external: true
+    name: biome-gitlab-config
+  data:
+    external: true
+    name: biome-gitlab-data
+  logs:
+    external: true
+    name: biome-gitlab-logs
