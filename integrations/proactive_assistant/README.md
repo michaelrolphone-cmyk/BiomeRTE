@@ -1,8 +1,8 @@
 # Biome assistant workflow delivery
 
-Prepared for review and later installation. Nothing in this package has been imported into, registered with, or started on the live Biome.
+Installed on the Mac mini and enabled as `biome-proactive-assistant` on 2026-11-05. All 50 native processes are published. Real Qwen discovery completed, a candidate and checkpoint were saved, lifecycle runs finalized, and the responsibility reached durable event-wait coverage. See `reliability-qualification.md` for the tested boundary.
 
-The design is now bound to the native `urn:biomerte:v1` executable profile. It includes 50 individually importable BPMN processes, actual operation implementations, prompts and response schemas, deterministic gateway code, input/output mappings, and durable waiting/error behavior. This is authored delivery source, not a claim of production qualification.
+The design is now bound to the native `urn:biomerte:v1` executable profile. It includes 50 individually importable BPMN processes, actual operation implementations, prompts and response schemas, deterministic gateway code, input/output mappings, and durable waiting/error behavior. Implementation and activation are verified; full physical-provider fault qualification remains scenario-specific.
 
 ## What to review
 

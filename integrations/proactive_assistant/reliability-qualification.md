@@ -1,6 +1,10 @@
 # Operational qualification
 
-No live qualification was performed. Execute these scenarios only in an authorized isolated realm/namespace before production adoption. Use the exact delivered process revisions, current controller source, real provider generations and Android enrollment. Record original request IDs, process revisions, token IDs, grants, operation IDs, provider receipts and finalization receipts. Do not use inferred completion or substitute an unrelated successful action.
+Activation was verified on the Mac mini on 2026-11-05: 54 core tests and 54 assistant/workspace/terminal tests passed on-host before restart; CI passed at https://github.com/michaelrolphone-cmyk/BiomeRTE/actions/runs/41938437266. Real Qwen discovery completed and saved a candidate and checkpoint. The lifecycle recovered, finalized, and established durable event-wait coverage. Both realms reported ready with no background errors after restart.
+
+The saved-state replay repair is merged in PR #28 (`ca4e9f56034ef0fe48678607d4a21aa51f3237ca`). Exact captured journals 9959 and 9971 were replayed in isolation, including the old oversized inline proposal. The repair preserves removal of the hard-coded store limit, graph-liveness compaction, immutable episode-intent references, and atomic retry of smaller batches on transport 413. The isolated replay stubs providers; it is not a physical failover test. Mac test receipt: `assistant-live-replay-compat`, stdout artifact `dffff8618db3e484d2b4df2023af07d19d5daa91c369e2b1b5543ddbf3416f04`.
+
+The scenario matrix below is not blanket-completed by activation. Physical Pi failover, independent watchdog recovery, fresh Android restart/decision delivery, and a full live assistant coding-to-publication episode remain unqualified. Execute disruptive scenarios in an authorized isolated realm/namespace. Use the exact delivered process revisions, current controller source, real provider generations and Android enrollment. Record original request IDs, process revisions, token IDs, grants, operation IDs, provider receipts and finalization receipts. Do not use inferred completion or substitute an unrelated successful action.
 
 | Scenario | Injected condition | Required evidence and pass condition |
 |---|---|---|
@@ -38,4 +42,4 @@ These are prepared scenarios, not a claim of live execution of the revised assis
 9. Publish every desired output before ending the owning episode and its children. Verify retried disposal of private containers, volumes, snapshots and images; retain shared templates and Git commits. Cancellation permits discard, not successful delivery.
 10. Make Mac unavailable: remain pending on the pinned provider, without claiming Pi/cross-host recovery.
 
-Offline tests use the native engine/stores with fake providers plus real local Git repositories. Revised full assistant execution, physical failover, Android/model delivery and live fault injection remain unexecuted until deployment is requested.
+Offline tests use the native engine/stores with fake providers plus real local Git repositories. Activation and real model discovery have now run. Full assistant coding/publication, physical failover, fresh Android decision/restart delivery and the remaining live fault-injection scenarios are not established by the activation evidence.
