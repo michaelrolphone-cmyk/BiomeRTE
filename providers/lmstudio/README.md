@@ -104,28 +104,39 @@ The ownership review on 2026-11-04 stopped after a 9,961-token prompt filled
 its 16,384-token loaded window (server n_tokens=16383, truncated=1), despite
 max_tokens=-1. Output-token limits and the model's loaded context are separate.
 
-Text-only requests now run through context_recovery.py. The existing shared
-ModelRuntime admission covers discovery, unloading/reloading, every prediction,
-and verification, so image and other model tasks remain serialized. Deployments
-without that optional installed coordinator keep the standalone loading path.
-The requested task model is preserved; a response from another model is rejected.
+Text-only requests now run through context_recovery.py and context_memory.py.
+The existing shared ModelRuntime admission covers discovery, memory measurement,
+model resize, prediction and verification, preserving LLM/image serialization.
+The requested task model is preserved and different-model replies are rejected.
+Installations without the optional coordinator keep standalone loading behavior.
 
-A length stop is recoverable only when returned usage reaches the verified
-context boundary (or the native stop reason confirms context exhaustion), output
-is uncapped, and no tool calls are involved. Recovery grows the loaded window,
-verifies the model and capacity, and reruns the unchanged pure request. Growth
-ends at the model's advertised maximum or an actual load failure. There is no
-fixed retry count or generation deadline. Missing usage, a smaller output cap,
-transport uncertainty, coding tool calls and ignored resize requests fail
-explicitly; partial JSON is never accepted as a complete answer.
+On macOS every admitted request chooses **32K or 64K** from fresh RAM and memory
+pressure measurements, never from the previous request's remembered capacity.
+The selector runs LM Studio's estimate-only command for the same model and
+parallelism. Available RAM is free + inactive + speculative pages; purgeable
+pages are not counted twice. 64K requires normal memory pressure and enough RAM
+for its incremental allocation plus headroom equal to the estimated 32K-to-64K
+increment. Otherwise it selects 32K. Insufficient RAM even for 32K is explicit.
+This is an estimate, not a guarantee against concurrent non-Biome allocations.
 
-Verified capacities are remembered per model in owner-only context-lengths.json
-so eviction for another workload does not restore the known insufficient window.
-The file contains model identifiers and capacities only. Logs/results include
-usage, context length and finish reason, without prompt/response bodies. Coding
-requests also explicitly disable a saved output-token cap while retaining their
-checkpoint and no-replay semantics.
+The selector can shrink a loaded 64K instance to 32K. It rechecks memory after a
+resize before starting prediction. Normal future requests can return to 64K when
+RAM becomes available. Neither reasoning nor the existing parallel slot count
+is disabled. Generation has no arbitrary output-token cap or wall-clock timeout.
 
-Run both adapter and recovery tests with python3 -S -m unittest discover -s
-providers/lmstudio -p 'test_*.py' -v. Native full-workflow qualification is separate
-from unit-test success; record its actual result in the work item.
+A length stop can retry only when usage proves context exhaustion, no tools were
+involved, and the current memory decision permits a larger window. The exact
+prompt and schema are preserved. It never exceeds the user's 64K choice, treats
+partial JSON as success, or replays coding calls or uncertain transport results.
+If a request still needs more context than current RAM allows, it fails with the
+measured context, usage and memory decision instead of retrying unchanged.
+
+Logs/results include context size, RAM decision, usage and finish reason without
+prompt/response bodies. context-lengths.json remains capacity metadata for the
+non-macOS fallback; it cannot override macOS RAM selection. Coding requests also
+explicitly disable a saved output-token cap while retaining their checkpoints.
+
+Validation includes 43 native adapter/recovery/memory-policy tests. Both 32K and
+64K loaded on the 24-GiB Mac with unchanged swap usage and no extra swap-outs.
+Run the suite with python3 -S -m unittest discover -s providers/lmstudio -p
+ 'test_*.py' -v. Live ownership-review qualification is recorded separately.

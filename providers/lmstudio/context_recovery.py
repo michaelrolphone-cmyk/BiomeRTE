@@ -38,12 +38,12 @@ def grow(api, model, loaded, target):
     if not instance:
         raise RuntimeError('Context expansion did not return a loaded instance')
     actual, _, size, _ = loaded_model(api, instance)
-    if actual['key'] != model['key'] or size < target:
+    if actual['key'] != model['key'] or size != target:
         raise RuntimeError('Context expansion was not confirmed for the requested model')
     return instance
 
 
-def complete(api, body, cache_path=None, log=lambda message: None):
+def complete(api, body, cache_path=None, log=lambda message: None, context_selector=None):
     """Identical pure inference may retry only after measured capacity increases."""
     if body.get('tools') or body.get('tool_choice') or body.get('stream'):
         raise ValueError('Context recovery requires non-streaming text-only inference')
@@ -59,11 +59,26 @@ def complete(api, body, cache_path=None, log=lambda message: None):
             cache = {}
     model, loaded, size, maximum = loaded_model(api, body['model'])
     remembered = cache.get(model['key'])
-    if positive(remembered) and size < remembered <= maximum:
+    if context_selector is None and positive(remembered) and size < remembered <= maximum:
         body['model'] = grow(api, model, loaded, remembered)
 
     while True:
         model, loaded, size, maximum = loaded_model(api, body['model'])
+        memory = None
+        if context_selector is not None:
+            memory = context_selector(model, loaded, size, maximum)
+            target = memory['target']
+            if target not in (32768, 65536) or target > maximum:
+                raise ValueError('Memory policy returned an unsupported context')
+            if target != size:
+                body['model'] = grow(api, model, loaded, target)
+                model, loaded, size, maximum = loaded_model(api, body['model'])
+                # A growing load can change pressure; measure again before inference.
+                checked = context_selector(model, loaded, size, maximum)
+                if checked['target'] < size:
+                    body['model'] = grow(api, model, loaded, checked['target'])
+                    model, loaded, size, maximum = loaded_model(api, body['model'])
+                memory = dict(checked, target=size, rechecked_target=checked['target'])
         result = api('/v1/chat/completions', body)
         if result.get('model') != body['model']:
             raise RuntimeError('Delegated inference returned a different model')
@@ -79,7 +94,7 @@ def complete(api, body, cache_path=None, log=lambda message: None):
         metrics = {'model': result['model'], 'context_length': size,
                    'max_context_length': maximum, 'prompt_tokens': prompt,
                    'completion_tokens': output, 'total_tokens': total,
-                   'finish_reason': finish, 'stop_reason': stop}
+                   'finish_reason': finish, 'stop_reason': stop, 'memory': memory}
         history.append(metrics)
         log('Inference outcome ' + json.dumps(metrics, sort_keys=True))
         if finish != 'length':
@@ -92,7 +107,14 @@ def complete(api, body, cache_path=None, log=lambda message: None):
         safe = body.get('max_tokens') == -1 and not choice.get('message', {}).get('tool_calls')
         if not exhausted or not safe or size >= maximum:
             raise ValueError('LM Studio finish reason: length; ' + json.dumps(metrics, sort_keys=True))
-        target = min(maximum, max(size * 2, (total + 1) if positive(total) else 0))
+        if context_selector is not None:
+            memory = context_selector(model, loaded, size, maximum)
+            target = memory['target']
+            if target <= size:
+                raise ValueError('LM Studio context exhausted within current 32K/64K memory allowance; '
+                                 + json.dumps(dict(metrics, memory=memory), sort_keys=True))
+        else:
+            target = min(maximum, max(size * 2, (total + 1) if positive(total) else 0))
         body['model'] = grow(api, model, loaded, target)
         # Persist only verified capacity metadata, never prompts or responses.
         cache[model['key']] = target

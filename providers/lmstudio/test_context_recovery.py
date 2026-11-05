@@ -98,6 +98,33 @@ class RecoveryTests(unittest.TestCase):
         server=FakeServer(responses=[res])
         with self.assertRaises(ValueError):complete(server,self.body)
         self.assertEqual(server.loads,[])
+    def test_dynamic_policy_shrinks_cached_64k_and_never_reuses_cache_as_ram_authority(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache=Path(d)/'context.json';cache.write_text('{"qwen-key":65536}')
+            server=FakeServer(size=65536,maximum=262144,responses=[response()])
+            seen=[]
+            def policy(model,loaded,size,maximum):
+                seen.append(size);return {'target':32768,'available_bytes':1024}
+            result=complete(server,self.body,cache,context_selector=policy)
+            self.assertEqual([x['context_length'] for x in server.loads],[32768])
+            self.assertEqual(result['biome_inference']['attempts'][0]['context_length'],32768)
+            self.assertEqual(seen,[65536,32768])
+    def test_pressure_increase_during_growth_shrinks_before_predicting(self):
+        server=FakeServer(size=32768,maximum=262144,responses=[response()])
+        picks=iter([65536,32768])
+        result=complete(server,self.body,context_selector=lambda *a:{'target':next(picks)})
+        self.assertEqual([x['context_length'] for x in server.loads],[65536,32768])
+        self.assertEqual(result['biome_inference']['attempts'][0]['context_length'],32768)
+    def test_ignored_shrink_is_a_failure(self):
+        server=FakeServer(size=65536,maximum=262144);server.actual_size=65536
+        with self.assertRaisesRegex(RuntimeError,'not confirmed'):
+            complete(server,self.body,context_selector=lambda *a:{'target':32768})
+        self.assertEqual(server.requests,[])
+    def test_context_failure_does_not_override_current_memory_allowance(self):
+        server=FakeServer(size=32768,maximum=262144,responses=[response('length',20000,12767)])
+        with self.assertRaisesRegex(ValueError,'memory allowance'):
+            complete(server,self.body,context_selector=lambda *a:{'target':32768})
+        self.assertEqual(server.loads,[])
     def test_logs_include_usage_but_not_prompt_or_response(self):
         logs=[];server=FakeServer(responses=[response()])
         complete(server,self.body,log=logs.append)

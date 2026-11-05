@@ -107,7 +107,7 @@ class CodingTests(unittest.TestCase):
             yield 'actual-instance'
             active.clear()
         runtime=Mock();runtime.slot=slot
-        def recover(raw,body,cache,log):
+        def recover(raw,body,cache,log,**kwargs):
             self.assertEqual(active,[('llm','chosen')])
             self.assertEqual(body['model'],'actual-instance')
             return {'model':'expanded-instance','choices':[]}

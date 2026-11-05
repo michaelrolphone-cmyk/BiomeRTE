@@ -28,6 +28,7 @@ except ModuleNotFoundError as exc:
     ModelRuntime = None
 from contextlib import nullcontext
 from context_recovery import complete as complete_text
+from context_memory import select_context
 GGUF = 'lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf'
 LOCAL = 'http://127.0.0.1:1234'
 TARGET = 'lmstudio'
@@ -78,7 +79,8 @@ def api(path, payload=None):
               else nullcontext(payload['model'])) as instance:
             body=dict(payload,model=instance)
             if path == '/v1/chat/completions' and not body.get('tools') and not body.get('tool_choice'):
-                result=complete_text(_api,body,ROOT/'context-lengths.json',log)
+                result=complete_text(_api,body,ROOT/'context-lengths.json',log,
+                                     context_selector=select_context if sys.platform == 'darwin' else None)
                 instance=result['model']
             else:
                 result=_api(path,body)
