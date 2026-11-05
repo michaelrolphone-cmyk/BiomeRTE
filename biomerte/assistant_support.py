@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from .api import op, invoke, Context
 from .store import Fault, uid, digest
-from . import authorization, providers, process, assistant_workspaces
+from . import authorization, providers, process, assistant_workspaces, assistant_impact
 
 ROOT=Path(__file__).resolve().parent
 CAT=json.loads((ROOT/'assistant_catalog.json').read_text())
@@ -880,11 +880,9 @@ def local_stage(tx,ctx,f,p,s):
         require_keys(f.get('goal'),['description','criteria'],'goal')
         if not f['goal']['criteria']:return outcome(f,'unresolved','testable_criteria_required')
     elif p=='reasoning' and s=='conclude':f['conclusion']={'recommendation':f.get('recommendation'),'evidence_refs':f['evidence_refs'],'assumptions':f.get('assumptions',[])}
-    elif p=='inventory':
-        systems={x['id']:copy.deepcopy(x) for x in cfg['systems']}
-        for offer in tx.rows('offers'):
-            if offer['resource'] not in systems:systems[offer['resource']]={'id':offer['resource'],'dependencies':[],'source':'registry','unknown_relationships':True}
-        f['inventory']=sorted(systems.values(),key=lambda x:x['id']);f['inventory_revision']=digest(f['inventory']);f['unknown_dependencies']=[x['id'] for x in f['inventory'] if x.get('unknown_relationships')]
+    elif p=='inventory':assistant_impact.snapshot(tx,cfg,f)
+    elif p=='impact' and s=='queue':assistant_impact.begin(tx,cfg,f)
+    elif p=='impact' and s=='refresh':assistant_impact.refresh(tx,cfg,f)
     elif p=='discovery' and s=='candidate':
         candidate=f.get('candidate') or {'goal':f.get('goal'),'findings':f['findings'],'evidence_refs':f['evidence_refs']};key=digest(candidate);tx.put('assistant_candidates',key,{'id':key,'candidate':candidate,'reviewed':False})
     elif p=='faults' and s=='classify':
@@ -904,8 +902,7 @@ def local_stage(tx,ctx,f,p,s):
         elif f.get('_verifying_recovery') and not f.get('_safety_failed') and f['verification_index']+1==len(f['verification_probes']):f['harm_status']='recovered'
         f['verification_index']+=1;f['verification_complete']=f['verification_index']==len(f['verification_probes'])
     elif p=='impact' and s=='coverage':
-        f['impact_complete']=f['impact_index']>=len(f['impact_queue']) and not f.get('unknown_dependencies')
-        if not f['impact_complete']:return outcome(f,'unresolved','dependency_inventory_incomplete')
+        if not assistant_impact.covered(tx,cfg,f):return outcome(f,'unresolved','dependency_inventory_incomplete')
     elif p=='governed' and s=='pure':pass  # Pure result already produced and schema-checked by deliberation.
     elif p=='runtime' and s=='repair':
         e=f.get('schema_error') or f.get('last_error') or f.get('last_result_code');f['new_information']=e!=f.get('_previous_schema_error');f['_previous_schema_error']=e;f['context']['validation_feedback']=e
