@@ -1,0 +1,69 @@
+{
+  "status": "passed",
+  "tests": {
+    "all_32_layers_248_projections": true,
+    "field_disabled_reference_equivalence": true,
+    "zero_pull_bypasses_anchor": true,
+    "actual_packed_weight_changes": true,
+    "frozen_tensors_unchanged": true,
+    "readonly_preserves_frequency": true,
+    "weight_changes_affect_later_inference": true,
+    "complete_checkpoint_weights_roundtrip": true,
+    "complete_checkpoint_native_state": true,
+    "complete_resume_next_logits_bitexact": true,
+    "same_seed_replay_bitexact": true,
+    "change_map_bitexact_roundtrip": true,
+    "import_resets_all_native_caches": true
+  },
+  "model": "Qwen3.5-9B",
+  "layers": 32,
+  "memory": {
+    "model_bytes": 5038041600,
+    "writable_bytes": 3459252224,
+    "transaction_peak_bytes": 12694743552,
+    "native_cache_estimate": 201326592,
+    "host_bytes": 25769803776
+  },
+  "disabled_seconds_per_token": 0.11596504149929387,
+  "disabled_max_logit_error": 0.0,
+  "enabled_seconds_per_token": 1.658481603999462,
+  "max_later_logit_effect": 0.34375,
+  "diagnostics": {
+    "field_version": 4,
+    "consumed_tokens": 0,
+    "eligible_layers": 32,
+    "eligible_projections": 248,
+    "changed_words_total": 141304,
+    "last_receipts": [],
+    "baseline_pull": 0,
+    "read_only": true,
+    "field_enabled": false,
+    "commit_every_tokens": 1,
+    "precision": "fp32 proposal; uint32 packed affine4; fixed group64 scales/offsets",
+    "realized_step_bound": false,
+    "native_tokens": 0,
+    "consumed_token_count": 4,
+    "ordinary_resets": 6,
+    "spectral": {
+      "windows_completed": 0,
+      "backlog": 0,
+      "errors": 0,
+      "covered_tokens": 0,
+      "label": "trajectory novelty; unvalidated",
+      "bucket_assignment": "projection-output-row modulo8; attention8+MLP8/layer; v1"
+    },
+    "memory": {
+      "model_bytes": 5038041600,
+      "writable_bytes": 3459252224,
+      "transaction_peak_bytes": 12694743552,
+      "native_cache_estimate": 201326592,
+      "host_bytes": 25769803776
+    },
+    "mlx_peak_memory": 12216120758,
+    "mlx_active_memory": 8503954878,
+    "load_seconds": 2.3451675420001266,
+    "forward_seconds": 0.8006009590062604,
+    "write_seconds": 5.844323000001168,
+    "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc"
+  }
+}

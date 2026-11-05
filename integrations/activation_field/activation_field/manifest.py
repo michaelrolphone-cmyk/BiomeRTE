@@ -28,4 +28,4 @@ def read_manifest(path,verify=True):
 
 def hardware():
     if platform.system()!='Darwin' or platform.machine()!='arm64':raise RuntimeError("Native Apple Silicon Mac required")
-    return dict(system=platform.platform(),machine=platform.machine(),memory_bytes=int(subprocess.check_output(['sysctl','-n','hw.memsize'])))
+    return dict(system=platform.platform(),machine=platform.machine(),memory_bytes=int(subprocess.check_output(['/usr/sbin/sysctl','-n','hw.memsize'])))

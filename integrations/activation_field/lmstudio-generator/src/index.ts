@@ -50,11 +50,12 @@ export async function generate(ctl:GeneratorController,chat:Chat){
  const filtered:typeof messages=[];
  for(let i=mapping.cut;i<messages.length;i++){if(messages[i].role==='user'&&messages[i].content.startsWith('/field ')){if(messages[i+1]?.role==='assistant')i++;continue;}filtered.push(messages[i]);}
  if(ctl.abortSignal.aborted)return;
- const cancel=()=>{void api('/sessions/'+sid+'/requests/'+rid+'/cancel',{}).catch(()=>{});};
+ const cancel=()=>{void api('/sessions/'+sid).then(state=>api('/sessions/'+sid+'/requests/'+rid+'/cancel',{request_id:rid+'-cancel',expected_version:state.version})).catch(()=>{});};
  ctl.abortSignal.addEventListener('abort',cancel,{once:true});
  try{
   const res=await fetch('http://127.0.0.1:8791/sessions/'+sid+'/generate',{method:'POST',headers,body:JSON.stringify({request_id:rid,expected_version:s.version,messages:filtered,max_tokens:cfg.get('maxTokens'),temperature:0,stream:true})});
   if(!res.ok)throw Error(await res.text());if(!res.body)throw Error('Missing stream');
+  if(ctl.abortSignal.aborted)cancel();
   const reader=res.body.getReader();const decoder=new TextDecoder();let pending='';
   while(true){const part=await reader.read();if(part.done)break;pending+=decoder.decode(part.value,{stream:true});let split;
    while((split=pending.indexOf('\n\n'))>=0){const packet=pending.slice(0,split);pending=pending.slice(split+2);const line=packet.split('\n').find(l=>l.startsWith('data: '));if(!line)continue;

@@ -20,6 +20,8 @@ For single `request` turns, the adapter explicitly clears ordinary caches before
 
 Install the local generator from `lmstudio-generator` with `lms dev --install --yes --no-notify`. Select `biome/activation-field` as the generator and choose a unique **Field session** name in that chat's settings. Reusing a name deliberately selects its existing field. Enable **weight writes** when wanted; **Baseline pull — 0 is Off** stays at zero initially.
 
+The plugin is installed on the Mac. Its external SDK verification is pending because the current LM Studio API token lacks permission to use this plugin; the Biome agent calls the native service directly and has passed live generation.
+
 Controls include learning rate, amplitude/frequency gates, half-life, commit interval, role scales and read-only mode. Chat commands: `/field diagnostics`, `/field save`, `/field load CHECKPOINT_ID`, `/field fork`, `/field reset ordinary`, `/field reset weights`, `/field reset traces`, `/field reset all`. Management turns are excluded from model input. Reset/import/fork start the following conversation segment without silently replaying old content into the field.
 
 ## Native service and lifecycle
@@ -52,4 +54,4 @@ Encrypted AES-GCM chunks with authenticated tensor metadata, SHA256 checksums, a
 
 ## Evidence and limitations
 
-See `qualification.json` and `HANDOFF.md` for observed results, exact deployment state and unrun experiments. Engineering correctness does not establish useful memory. The C3/C4 matched-direction/replay controls are explicitly unexecuted until their exact synthetic receipts are available. Trajectory descriptors are unvalidated measurements, not correctness or confabulation detectors. Optional persistent homology is not enabled. Never interpret an unrun condition as a pass.
+See `evidence/qualification.json` and `HANDOFF.md` for observed results, exact deployment state and unrun experiments. Engineering correctness does not establish useful memory. The C3/C4 matched-direction/replay controls are explicitly unexecuted until their exact synthetic receipts are available. Trajectory descriptors are unvalidated measurements, not correctness or confabulation detectors. Optional persistent homology is not enabled. Never interpret an unrun condition as a pass.

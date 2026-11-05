@@ -67,4 +67,16 @@ class SessionControls(unittest.TestCase):
             with self.assertRaises(Conflict):sessions.start(sid,dict(body,request_id='two'))
             with self.assertRaises(Conflict):sessions.start(sid,dict(body,messages=[dict(role='user',content='changed')]))
 
+    def test_cancellation_version_and_idempotency(self):
+        sessions=self.sessions;sid=sessions.create(dict(request_id='new'))['session_id']
+        with patch.object(threading.Thread,'start'):
+            sessions.start(sid,dict(request_id='one',expected_version=0,messages=[]))
+        body=dict(request_id='cancel',expected_version=0)
+        receipt=sessions.cancel_request(sid,'one',body)
+        self.assertTrue(sessions.cancel[(sid,'one')].is_set())
+        self.assertEqual(receipt['version'],1)
+        self.assertEqual(sessions.cancel_request(sid,'one',body),receipt)
+        with self.assertRaises(Conflict):sessions.cancel_request(sid,'one',dict(body,request_id='stale'))
+        self.assertEqual(sessions.get(sid)['version'],1)
+
 if __name__=='__main__':unittest.main()

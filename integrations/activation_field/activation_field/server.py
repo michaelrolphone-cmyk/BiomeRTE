@@ -51,10 +51,7 @@ def app(root,manifest,initial_config=None):
     @api.get('/sessions/{sid}/requests/{rid}/events')
     def events(sid:str,rid:str,after:int=0):return StreamingResponse(sessions.stream(sid,rid,after),media_type='text/event-stream')
     @api.post('/sessions/{sid}/requests/{rid}/cancel')
-    def cancel(sid:str,rid:str):
-        event=sessions.cancel.get((sid,rid))
-        if event:event.set()
-        return dict(cancel_requested=event is not None,request_id=rid)
+    def cancel(sid:str,rid:str,body:dict):return sessions.cancel_request(sid,rid,body)
     @api.patch('/sessions/{sid}/config')
     def config(sid:str,body:dict):return sessions.configure(sid,body)
     @api.get('/sessions/{sid}/diagnostics')

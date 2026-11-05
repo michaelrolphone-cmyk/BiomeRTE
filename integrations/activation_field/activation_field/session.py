@@ -120,6 +120,24 @@ class Sessions:
                 except Exception as exc:receipt.update(status='failed',result=dict(code=type(exc).__name__,message=str(exc)))
                 self.vault.save_json(self.request_key(sid,receipt['request_id']),receipt)
 
+    def cancel_request(self,sid,target,body):
+        with self.guard:
+            rid=body['request_id'];key=self.request_key(sid,rid)
+            digest=hashlib.sha256(canonical(['cancel',target,body])).hexdigest()
+            try:
+                prior=self.vault.load_json(key)
+                if prior['digest']!=digest:raise Conflict('request_id_reused_with_different_content')
+                return prior
+            except FileNotFoundError:pass
+            s=self.get(sid)
+            if type(body.get('expected_version')) is not int or body['expected_version']!=s['version']:raise Conflict('stale_version')
+            receipt=self.receipt(sid,target)
+            event=self.cancel.get((sid,target));requested=receipt['status']=='running' and event is not None
+            if requested:event.set()
+            s['version']+=1;self.save(s)
+            out=dict(request_id=rid,session_id=sid,digest=digest,status='succeeded',version=s['version'],result=dict(target_request_id=target,cancel_requested=requested,committed_token_count=receipt.get('committed_token_count',0)))
+            self.vault.save_json(key,out);return out
+
     def mutate(self,sid,action,body,emit=None,prepared=None):
         with self.lock(sid):
             with self.guard:receipt,fresh=prepared or self.begin(sid,action,body)
@@ -137,6 +155,8 @@ class Sessions:
                     return self.finish(s,receipt,dict(closed=True))
                 def progress(info):
                     self.admission=info.get('stage','queued')
+                    cancel=self.cancel.get((sid,body['request_id']))
+                    if cancel and cancel.is_set():raise InterruptedError('cancelled_while_queued')
                     if emit:emit(dict(type='status',**info))
                 from .admission import model_slot
                 from .runtime import Engine
@@ -174,6 +194,7 @@ class Sessions:
                 # No automatic replay after a partial/crashed request. Saved
                 # checkpoint remains authoritative; token loss is explicit.
                 s=self.get(sid)
+                if isinstance(exc,InterruptedError):return self.finish(s,receipt,dict(text='',finish_reason='cancelled',committed_token_count=s.get('committed_tokens',0),last_checkpoint=s.get('checkpoint')))
                 error=dict(code=type(exc).__name__,message=str(exc)[:300],session_id=sid,request_id=body['request_id'],committed_token_count=s.get('committed_tokens',0),retryable=False,last_checkpoint=s.get('checkpoint'),partial=True)
                 return self.finish(s,receipt,error,'failed')
 
