@@ -141,7 +141,7 @@ an undefined retention ratio when its denominator is zero. Small denominators
 must be interpreted with the raw scores and uncertainty, not as stable retention.
 
 Passing mechanics does not demonstrate useful model memory or compression near
-1 MB. Consult the accompanying native qualification receipt for what was actually
-executed. The full parent experiment, optional continued-learning trial and any
+1 MB. Consult the [native qualification report](qualification/README.md) for what
+was actually executed. The full parent experiment, optional continued-learning trial and any
 unexecuted matched-noise controls remain separate scientific work. CPU binary64
 is the only transform evaluator delivered here; no Metal equivalence is claimed.

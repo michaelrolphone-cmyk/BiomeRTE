@@ -1,0 +1,54 @@
+{
+  "baseline": {
+    "architecture": "qwen3.5-9b",
+    "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+    "quantization": {
+      "bits": 4,
+      "group_size": 64,
+      "mode": "affine",
+      "packing": "uint32-low-nibble-first"
+    },
+    "repository": "mlx-community/Qwen3.5-9B-4bit",
+    "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+    "tensor_map_version": 1
+  },
+  "candidate": {
+    "id": "candidate-a940e6537235c7abbdd5",
+    "bytes": 149092,
+    "sha256": "0e23ded994da97f09bc2fb60ff588a0527425bfe06dd225ff52c159ed900b7f2",
+    "regions": 11,
+    "nonzero_tensor": "language_model.model.layers.0.linear_attn.in_proj_b",
+    "mapping_count": 248
+  },
+  "fit_run": "b3b31360dc2748f18fa55568dba076eb",
+  "fit_complete": false,
+  "fit_snapshot_version": 16,
+  "fit_snapshot_state": "queued by successful automatic resume after full quantized scan",
+  "source_code": "dc274ca296dfa14fd6c0db1d8a226c9eb849bf25",
+  "qualification_comparison": "8ab1a530c6144f64a6874b7ba8c7d1a8",
+  "materialization": "86a6b3e8e7ef41218be0e1ffa1b7213c",
+  "source_hash": "76f0760c4aab225cf895754db6bbab0327c562da4641610aefeedbfb04eefc9c",
+  "portability_source_code": "77d3bd79019005dc26ac5c70c15f4e23be8baaff",
+  "continued_fitting_interpretation": "exploratory after disclosed partial candidate final diagnostics",
+  "target_checkpoint": "afwt-qualification-source",
+  "target_hash": "080983ab1cb8276e03435e65194a546799e04b82ed5906aec883850f2147057c",
+  "resource": "model.field-transform.mac.95b20447b68a57272f47",
+  "capabilities": [
+    "model.field_transform.fit:1",
+    "model.field_transform.inspect:1",
+    "model.field_transform.materialize:1",
+    "model.field_transform.compare:1",
+    "model.field_transform.export:1",
+    "model.field_transform.status:1",
+    "model.field_transform.cancel:1",
+    "model.field_transform.assessment:1",
+    "model.field_transform.trial:1"
+  ],
+  "measurements_scope": "full model scan and B/T/R comparison of the selected partial candidate; full fitting incomplete",
+  "task_url": "https://tasker-workboard.cantikash.chatgpt.site/?task=47f9f416-2954-4223-950b-78504d135207",
+  "pull_request": "https://github.com/michaelrolphone-cmyk/BiomeRTE/pull/37",
+  "humus_context": "activation-field-functional-transform-20261105",
+  "scientific_usefulness": "unresolved",
+  "native_tests_passed": 75,
+  "fit_continuation_operation": "afwt-resume-after-quantized-metrics-20261105"
+}
