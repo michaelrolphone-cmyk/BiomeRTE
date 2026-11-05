@@ -14,9 +14,9 @@ the durable job's `status`. Starting a job is not completion.
 | Capability | Arguments |
 | --- | --- |
 | `model.field_transform.fit` | `expected_version: 0`, `target_checkpoint`, optional `config` |
-| `model.field_transform.status` | `run_id` |
+| `model.field_transform.status` | `run_id`, optional `details: true` for the complete report |
 | `model.field_transform.inspect` | fit `run_id`, `candidate_id` |
-| `model.field_transform.export` | fit `run_id`, `candidate_id`; returns explicit base64 AFWT and SHA-256 |
+| `model.field_transform.export` | fit `run_id`, `candidate_id`; returns the complete AFWT through checksum-verified Biome artifact parts |
 | `model.field_transform.materialize` | `expected_version: 0`, `fit_run_id`, `candidate_id` |
 | `model.field_transform.compare` | `expected_version: 0`, `target_checkpoint`, `restored_checkpoint`, `suite` |
 | `model.field_transform.cancel` | `run_id`, current `expected_version` |
@@ -29,6 +29,19 @@ operation ID. Inputs remain frozen. An identical retry returns the original
 receipt; reusing its ID with changed content fails. Cancel requests stop at a safe
 boundary. An OS file lock survives worker startup; a missing worker is reported
 as interrupted. There is no job timeout or default region-count limit.
+
+Export responses use `encoding: biome-artifact-tree/1` and an `artifact` reference.
+Call `artifact.get` for `artifact.root.sha256`, decode the returned base64, and
+parse that JSON manifest. A `kind: chunks` node lists raw parts to concatenate in
+order; `kind: nodes` lists child manifests to traverse in order. Verify each
+part's SHA-256/size and the final `artifact.sha256`/`artifact.bytes`. The reusable
+`transforms.transport.read_transfer(reference, get_bytes)` performs this check.
+Large status reports use the identical protocol under `result_artifact` with
+`result_encoding: biome-artifact-json/1`; decode the reconstructed JSON for the
+complete result. Small results remain inline. Transfers use 32 KiB frames and
+128-way manifests to fit the observed gateway request ceiling; they impose no
+limit on the complete function, candidate registry, or report. Retried uploads
+use immutable content hashes. Local HTTP export still returns complete base64.
 
 `trial` creates independent, read-only Baseline, Evolved and Restored sessions.
 With `blind: true`, it returns A/B/C labels and keeps the assignment encrypted.

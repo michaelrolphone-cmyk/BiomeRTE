@@ -189,6 +189,44 @@ def test_generic_worker_route_is_bound_by_offer_argv():
     with pytest.raises(ValueError):bind_contract(dict(contract='model.field_transform.fit:1'),'status')
 
 
+def test_export_transfer_exceeds_size_goal_and_reassembles_nested_parts():
+    import base64,hashlib
+    from activation_field.transforms.transport import transport_result,read_transfer,FRAME_BYTES,FANOUT
+    store={};sizes=[]
+    def put(data):
+        sha=hashlib.sha256(data).hexdigest();store[sha]=data;sizes.append(len(data))
+        return dict(sha256=sha,size=len(data))
+    data=np.random.default_rng(7).bytes(FRAME_BYTES*(FANOUT+1)+13)
+    value=dict(ok=True,filename='native.afwt',encoding='base64',data=base64.b64encode(data).decode(),
+               bytes=len(data),sha256=hashlib.sha256(data).hexdigest())
+    result=transport_result(value,put)
+    assert result['encoding']=='biome-artifact-tree/1' and 'data' not in result
+    assert max(sizes)<=FRAME_BYTES and len(json.dumps(result).encode())<FRAME_BYTES
+    assert read_transfer(result['artifact'],store.__getitem__)==data
+    assert transport_result(value,put)==result
+    root=result['artifact']['root'];store[root['sha256']]+=b'corrupt'
+    with pytest.raises(TransformError):read_transfer(result['artifact'],store.__getitem__)
+
+
+def test_large_status_report_preserves_full_data_and_inline_version():
+    import hashlib
+    from activation_field.transforms.transport import transport_result,read_transfer
+    store={}
+    def put(data):
+        sha=hashlib.sha256(data).hexdigest();store[sha]=data;return dict(sha256=sha,size=len(data))
+    value=dict(ok=True,run_id='run',version=7,status='running',result={'candidates':[{'id':i,'details':'x'*100} for i in range(500)]})
+    result=transport_result(value,put)
+    assert result['status']=='running' and result['version']==7
+    assert json.loads(read_transfer(result['result_artifact'],store.__getitem__))==value
+    small=dict(ok=True,run_id='run',version=7,status='queued')
+    assert transport_result(small)==small
+
+
+def test_transport_rejects_incorrect_storage_receipts():
+    from activation_field.transforms.transport import publish_bytes
+    with pytest.raises(TransformError):publish_bytes(b'abc',lambda data:dict(sha256='wrong',size=len(data)),'application/x-afwt')
+
+
 def test_centered_solver_matches_weighted_svd():
     from activation_field.transforms.fit import fit_coefficients,training_problem
     rng=np.random.default_rng(61);d=artifact()[0]['tensor_map'][0]
