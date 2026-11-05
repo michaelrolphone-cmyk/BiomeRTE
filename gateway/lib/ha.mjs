@@ -15,7 +15,7 @@ async function journalHead(db,site) {
 }
 export async function controllerDevice(req,env,path,node,legacy) {
  const db=env.DB,now=Date.now()/1000;
- const d=await limitedJSON(req,1500000);
+ const d=path==='/bridge/ha/append'?await req.json():await limitedJSON(req,1500000);
  if(path==='/bridge/ha/configure'){
   if(!legacy)return reply({error:'Commissioning credential required'},403);
   if(typeof d.site!=='string'||!Array.isArray(d.nodes)||!d.nodes.length)return reply({error:'Invalid configuration'},400);
@@ -45,7 +45,7 @@ export async function controllerDevice(req,env,path,node,legacy) {
   return reply({encoded:row?.entry??null});
  }
  if(path==='/bridge/ha/append'){
-  if(typeof d.entry!=='string'||d.entry.length>900000||!Number.isInteger(d.expected)||d.expected<0)return reply({error:'Invalid journal entry'},400);
+  if(typeof d.entry!=='string'||!Number.isInteger(d.expected)||d.expected<0)return reply({error:'Invalid journal entry'},400);
   const entry=JSON.parse(d.entry),hash=await hexHash(d.entry);
   if(entry.seq!==d.expected+1||typeof entry.prev!=='string'||!Array.isArray(entry.changes))return reply({error:'Invalid journal position'},400);
   await db.prepare("INSERT OR IGNORE INTO controller_journal(site,seq,hash,entry) SELECT ?,?,?,? WHERE COALESCE((SELECT MAX(seq) FROM controller_journal WHERE site=?),0)=? AND COALESCE((SELECT hash FROM controller_journal WHERE site=? ORDER BY seq DESC LIMIT 1),'')=?")

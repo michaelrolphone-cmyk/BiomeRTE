@@ -490,6 +490,17 @@ def compact_assistant_token(run, token, live):
     return removed
 
 
+def _compact_assistant_temporaries(run, version):
+    """Keep the recovery helper available for persisted-state maintenance."""
+    if not run.get('name', '').startswith('assistant.'):
+        return False
+    live = assistant_live_variables(version['graph']['nodes'])
+    removed = False
+    for token in run['tokens']:
+        removed = compact_assistant_token(run, token, live) or removed
+    return removed
+
+
 def tick(tx, ctx, budget=64):
     from .api import events_after
     budget = max(1, min(256, budget))

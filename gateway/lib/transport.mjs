@@ -85,6 +85,12 @@ export function controllerSocket(req,env,node){
   while(open){
    const live=await env.DB.prepare('SELECT * FROM controller_nodes WHERE id=? AND enabled=1').bind(node.id).first();
    if(!live){socket.close(1008,'Credential revoked');break}
+   // Delivery slots follow durable ownership, so a lost reply cannot leak capacity.
+   if(inflight.size>=live.capacity){
+    const claims=(await env.DB.prepare("SELECT id,lease FROM bridge_jobs WHERE controller=? AND state='claimed' AND lease_until>?").bind(node.id,Date.now()/1000).all()).results;
+    const owned=new Map(claims.map(row=>[row.id,row.lease]));
+    for(const [id,lease] of inflight)if(owned.get(id)!==lease)inflight.delete(id);
+   }
    // Match the same resource admission policy as the HTTP inbox.
    if(inflight.size<live.capacity){
     const job=await claimControllerJob(env.DB,live);

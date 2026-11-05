@@ -42,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/health':
-            return self.send(200, {'runtime': 'up', 'realms': dict(self.server.app.health)})
+            return self.send(200, {'runtime': 'up', 'realms': dict(self.server.app.health), 'background_errors': getattr(self.server.app, 'background_errors', {})})
         files = {'/': ('index.html', 'text/html'), '/ui.js': ('ui.js', 'application/javascript'),
                  '/ui.css': ('ui.css', 'text/css')}
         if self.path not in files:
@@ -119,9 +119,16 @@ def background(app, stop, realm):
         try:
             moved = app.tick(realm)
             app.health[realm] = 'ready'
+            if hasattr(app, 'background_errors'): app.background_errors.pop(realm, None)
             stop.wait(0.03 if moved else 0.6)
         except Exception as e:
             if app.health.get(realm) != str(e):
                 log.warning('%s: %s', realm, e)
-            app.health[realm] = str(e)
+            if not hasattr(app, 'background_errors'): app.background_errors = {}
+            app.background_errors[realm] = str(e)
+            try:
+                app.stores[realm].execute(lambda tx: None)
+                app.health[realm] = 'ready'
+            except Exception as health_error:
+                app.health[realm] = str(health_error)
             stop.wait(3)
