@@ -236,6 +236,41 @@ def finish(tx, run, state, result):
     tx.emit('process.' + state, {'run': run['id'], 'process': run['name']})
 
 
+
+def _compact_assistant_temporaries(run, version):
+    if not run.get('name', '').startswith('assistant.'):
+        return False
+    nodes = version['graph']['nodes']
+    def roots(value):
+        if isinstance(value, list):
+            return set().union(*(roots(v) for v in value)) if value else set()
+        if not isinstance(value, dict):
+            return set()
+        if set(value) == {'$'}:
+            return {value['$'].split('.')[0]}
+        return set().union(*(roots(v) for v in value.values())) if value else set()
+    live = {key: set() for key in nodes}
+    changed = True
+    while changed:
+        changed = False
+        for key, node in nodes.items():
+            uses = roots(node)
+            kills = {node.get('save')} | (set(node['values']) if node['type'] == 'set' else set())
+            for dest in targets(node):
+                uses.update(live.get(dest, set()) - kills)
+            uses.update(live.get(node.get('on_error'), set()))
+            if not uses <= live[key]:
+                live[key].update(uses)
+                changed = True
+    removed = False
+    for token in run['tokens']:
+        for key in list(token['vars']):
+            if key in token['vars'] and key not in live[token['at']]:
+                del token['vars'][key]
+                removed = True
+    return removed
+
+
 def advance(tx, ctx, r, t, n, version):
     """Advance one token. Return False for an unchanged durable wait."""
     kind, variables = n['type'], t['vars']
@@ -471,6 +506,8 @@ def tick(tx, ctx, budget=64):
     runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
         version = tx.need('process_versions', r['rev'])
+        if _compact_assistant_temporaries(r, version):
+            tx.put('runs', r['id'], r)
         for t in list(r['tokens']):
             if r['state'] != 'running' or moves >= budget:
                 break
@@ -483,6 +520,8 @@ def tick(tx, ctx, budget=64):
                 if r['steps'] >= 100000:
                     raise Fault('Step budget exhausted')
                 changed = advance(tx, ctx, r, t, n, version)
+                if _compact_assistant_temporaries(r, version):
+                    tx.put('runs', r['id'], r)
             except (Fault, ValueError, KeyError, IndexError, TypeError) as exc:
                 tx.db.execute('ROLLBACK TO activity')
                 tx.changes = change_backup

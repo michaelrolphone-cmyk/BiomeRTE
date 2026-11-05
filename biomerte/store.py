@@ -231,8 +231,6 @@ class Store:
                 if self.remote and tx.changes:
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
-                    if len(encode(entry).encode()) > 900000:
-                        raise Fault('Command exceeds shared transaction size. Split the work.', 413)
                     head = self.remote.append(version, entry)
                     db.execute('UPDATE position SET seq=?,hash=? WHERE id=1',
                                (head['seq'], head['hash']))
