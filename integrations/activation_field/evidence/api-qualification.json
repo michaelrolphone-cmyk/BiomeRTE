@@ -1,0 +1,30 @@
+{
+  "status": "passed",
+  "checks": {
+    "authentication_required": true,
+    "create_retry_identical": true,
+    "config_retry_identical": true,
+    "changed_retry_rejected": true,
+    "stale_version_rejected": true,
+    "other_session_unchanged": true,
+    "cancel_retry_identical": true,
+    "cancel_boundary_reported": true,
+    "stream_completion": true,
+    "no_replay_on_same_request": true
+  },
+  "cancel_receipt": {
+    "action": "generate",
+    "committed_token_count": 0,
+    "digest": "8990520a9b7bff0d284f8a2546c503b8d969eb31e1a9aeed2dad83df6fc71fc7",
+    "request_id": "85ec3c97-8e88-4bdd-9236-f1e75eff03a6",
+    "result": {
+      "committed_token_count": 0,
+      "finish_reason": "cancelled",
+      "last_checkpoint": null,
+      "text": ""
+    },
+    "session_id": "b5eeb517-ed3f-4002-8d0d-41b8302784b8",
+    "status": "succeeded",
+    "version": 2
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "status": "failed",
+  "label": "qualification-d0e1dea5-c693-4cb4-a3d9-289003803f1e",
+  "checks": {},
+  "error": "Error: Permission denied. The client \"B8ZVHCRA\" does not have the required permission: [{\"type\":\"plugins.use\",\"pluginIdentifier\":\"biome/activation-field\"}]. "
+}
