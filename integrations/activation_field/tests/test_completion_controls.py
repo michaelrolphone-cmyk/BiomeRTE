@@ -125,6 +125,15 @@ class CompletionControls(unittest.TestCase):
         for key in ('manifest','output'):
             with self.assertRaises(ValueError):jobs.start(dict(request_id=key,expected_version=0,config={key:'/tmp/unrelated'}))
 
+    def test_job_exposes_measured_report_without_raw_inputs(self):
+        jobs=ExperimentJobs(self.root,'manifest');self.addCleanup(jobs.db.close)
+        with patch.object(threading.Thread,'start'):
+            receipt=jobs.start(dict(request_id='stability',expected_version=0,config={'kind':'stability','tokens':8}))
+        atomic_json(jobs.root/receipt['run_id']/'stability.json',dict(status='complete',consumed_tokens=8,meets_duration=False,stability_target_met=False,baseline={'answers':['synthetic source text']}))
+        report=jobs.get(receipt['run_id'])['report']
+        self.assertFalse(report['meets_duration']);self.assertEqual(report['consumed_tokens'],8)
+        self.assertNotIn('baseline',report)
+
     def test_materialization_rejects_bad_map_without_resetting_engine(self):
         # A CPU fixture verifies the mutation boundary; Metal math remains separate.
         codes=np.zeros((1,8),np.uint32)

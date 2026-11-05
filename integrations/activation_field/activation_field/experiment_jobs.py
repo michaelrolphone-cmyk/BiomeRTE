@@ -29,7 +29,19 @@ class ExperimentJobs:
             result = dict(run_id=row['id'], version=row['version'], status=row['state'], error=row['error'])
         progress = self.root / run_id / 'progress.json'
         result['progress'] = json.loads(progress.read_text()) if progress.exists() else None
-        result['next_action'] = 'Resume explicitly with a new request_id and current version' if row['state'] in ('failed', 'interrupted') else 'Read this run_id for progress'
+        config=json.loads(row['config']);kind=config.get('kind','memory')
+        report_path=self.root/run_id/({'memory':'report/report.json','stability':'stability.json','descriptors':'descriptor-report.json'}[kind])
+        result['report']=None
+        if report_path.exists():
+            data=json.loads(report_path.read_text())
+            if kind=='descriptors':
+                result['report']={k:data[k] for k in ('label','generalization_scope','counts','heldout_auroc_target_met')}
+                result['report']['methods']={name:dict(coherence=method['coherence'],retrieval_accuracy=method['cross_domain_retrieval']['accuracy']) for name,method in data['methods'].items()}
+            elif kind=='stability':
+                result['report']={k:data[k] for k in ('status','consumed_tokens','checkpoint_tokens','nll_relative_increase','accuracy_change','meets_duration','stability_target_met','scientific_memory_claim') if k in data}
+            else:
+                result['report']={k:data[k] for k in ('conditions','comparisons','completed_trials','scientific_success','reason')}
+        result['next_action'] = 'Resume explicitly with a new request_id and current version' if row['state'] in ('failed', 'interrupted') else ('Review the measured report; this job is no longer running' if row['state'] in ('succeeded','partial') else 'Read this run_id for progress')
         return result
 
     def start(self, body):
