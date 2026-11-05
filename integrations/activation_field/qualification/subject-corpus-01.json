@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "afctx-subject-corpus-01",
+  "kind": "self-authored synthetic evaluation corpus",
+  "text": "The community orchard sits on a gentle slope above a small creek. Volunteers care for rows of apple and pear trees, a young plum section, and several old trees whose roots reach far beyond their canopies. Their notebook follows water, soil, and seasonal growth rather than counting fruit alone. Each visit begins with a walk along the irrigation lines to look for broken fittings, blocked emitters, and patches of unusually dry ground.\n\nIn early spring, the crew checks soil beneath the mulch before opening the water supply. The surface can look dry while the root zone remains moist. They compare several locations because the sandy corner drains differently from the heavier soil near the gate. Watering decisions use these observations together with recent rainfall, leaf condition, and the needs of newly planted trees. A calendar is useful for reminders, but it does not replace looking at the orchard.\n\nCompost and chipped branches cover the paths and the ground around the trees. Volunteers keep the material away from the trunks and leave room to inspect the bark. The mulch helps the ground stay shaded and reduces the need to pull weeds. When they add compost, they note where it went so that later changes in growth can be compared with earlier observations.\n\nDuring a hot week, one row develops pale leaves and weak new shoots. The first response is to inspect the water system rather than assume that every tree needs more fertilizer. A clogged filter has reduced flow to the far end of the row. After cleaning it, the crew checks individual emitters and returns over the next several days to see whether the soil and foliage respond.\n\nFlowers along the boundary attract bees and other insects. Volunteers avoid disturbing these strips while the fruit trees bloom. They watch for damaged leaves, fallen fruit, and crowded branches, recording what they see before choosing an intervention. Pruning tools are cleaned between work sessions, and removed branches are separated from the compost when their condition is uncertain.\n\nAt harvest, the orchard hosts a neighborhood workday. Fruit from different rows is kept in separate crates long enough to compare ripeness and damage. The crew talks about which watering changes helped, where the mulch needs renewal, and which young trees require support before winter. Their final notes connect the harvest with the season's irrigation repairs, soil observations, flowering periods, and routine care. The next year's plan begins with those records rather than a demand to repeat every action exactly.",
+  "word_count": 415,
+  "evaluation": {
+    "goal": "Recognizable subject realm and related concepts in the raw reconstructed context; wording, ordering, and length may vary.",
+    "reference_subject": "community orchard irrigation and soil care",
+    "related_concept_groups": [
+      "fruit trees and orchard seasons",
+      "soil moisture and drainage",
+      "irrigation equipment and water scheduling",
+      "mulch and compost",
+      "plant condition and maintenance",
+      "harvest and seasonal observations"
+    ],
+    "unrelated_foils": [
+      "computer networking",
+      "deep-space astronomy",
+      "railway timetables"
+    ],
+    "report": [
+      "raw reconstructed text and token IDs",
+      "qualitative topic alignment and related concepts",
+      "coherence and unsupported topic drift",
+      "literal overlap as diagnostic only",
+      "replay residual as diagnostic only"
+    ],
+    "exact_matching": "Neither required nor forced absent. Do not paraphrase or rewrite the output to make it appear relevant."
+  },
+  "generation": {
+    "operation": "afctx-corpus01-ingest",
+    "contract": "agent.activation_field.delegate:1",
+    "resource": "agent.activation-field.mac.079a0cdd8e67c087176f",
+    "context": {
+      "action": "generate",
+      "persist": true,
+      "config": {
+        "enabled": true,
+        "baseline_pull": 0,
+        "spectral_enabled": false,
+        "role_scales": {
+          "user": 1,
+          "assistant": 0,
+          "system": 0,
+          "tool": 0
+        },
+        "template_token_write_scale": 0
+      },
+      "max_tokens": 1,
+      "temperature": 0
+    },
+    "receipt": {
+      "id": "afctx-corpus01-ingest",
+      "lease": "d5417b036ef3e53da6fefebdd478f0f06f376dd4f428741067d5f839b0b45793",
+      "state": "queued"
+    }
+  },
+  "reconstruction": {
+    "purpose": "corpus trial 01",
+    "options": {
+      "max_tokens": 24,
+      "candidate_pool": 16,
+      "beam_width": 2,
+      "sketch_rank": 8,
+      "power_iterations": 4,
+      "role": "user",
+      "layout": "message"
+    },
+    "source_rule": "Pass only the frozen checkpoint ID to the reconstructor. No reference text, topic labels, evaluation vocabulary, source logits, or caches."
+  },
+  "status": "ingestion_queued"
+}
