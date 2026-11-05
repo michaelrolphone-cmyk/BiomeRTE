@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from urllib.request import Request,urlopen
 from ..provider import gateway
-from .capabilities import offers,adapter
+from .capabilities import offers,adapter,bind_contract
 
 ROOT=Path.home()/'.local/share/biome-field-transform'
 FIELD_ROOT=Path.home()/'.local/share/biome-activation-field'
@@ -35,7 +35,9 @@ def main():
     mode=sys.argv[1]
     if mode=='configure':print(json.dumps(configure()));return
     if mode=='adapter':
-        try:result=adapter(json.load(sys.stdin),api)
+        try:
+            result=adapter(bind_contract(json.load(sys.stdin),sys.argv[2] if len(sys.argv)>2 else None),api)
+            if result is None:raise ValueError('Transform operation route required')
         except Exception as exc:result=dict(ok=False,error=dict(code=type(exc).__name__,message=str(exc)[:300]))
         print(json.dumps(dict(result=result)));return
     if mode!='worker':raise ValueError(mode)

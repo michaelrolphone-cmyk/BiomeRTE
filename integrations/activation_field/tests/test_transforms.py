@@ -175,6 +175,20 @@ def test_stable_kl_and_capability_routing():
     assert result['ok'] and seen[0][1]['request_id']=='op1'
 
 
+def test_generic_worker_route_is_bound_by_offer_argv():
+    from activation_field.transforms.capabilities import offers,bind_contract,adapter
+    class Gateway:
+        def invoke(self,*args,**kwargs):pass
+    for offer in offers(Gateway(),'resource','activation_field.transforms.provider'):
+        operation=offer['argv'][-1]
+        payload=bind_contract(dict(operation='op',inputs={'arguments':{'run_id':'run'}}),operation)
+        assert payload['contract']==offer['contract']
+    payload=bind_contract(dict(operation='status-op',inputs={'arguments':{'run_id':'run'}}),'status')
+    result=adapter(payload,lambda path:dict(run_id='run',status='running',result=None))
+    assert isinstance(result,dict) and result['ok']
+    with pytest.raises(ValueError):bind_contract(dict(contract='model.field_transform.fit:1'),'status')
+
+
 def test_durable_jobs_versions_replay_encryption_and_recovery(tmp_path,monkeypatch):
     import activation_field.transforms.jobs as module
     monkeypatch.setattr(module,'read_manifest',lambda *args,**kw:dict(baseline_hash='a'*64))

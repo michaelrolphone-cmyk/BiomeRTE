@@ -24,8 +24,18 @@ def offers(gateway,resource,module='activation_field.provider'):
                    read_result='Check result.ok. A queued/running job is not completed; read model.field_transform.status:1 with its run_id. Completed materialize results provide checkpoint_id for independent read-only session import.')
         gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Activation Field functional transform: '+operation,usage=usage),rid='afwt-define-'+operation+'-v1')
         result.append(dict(contract=name+':1',resource=resource,service='activation-field',capacity=1,usage=usage,
-                           argv=[sys.executable,'-m',module,'adapter']))
+                           argv=[sys.executable,'-m',module,'adapter',operation]))
     return result
+
+
+def bind_contract(payload,operation=None):
+    # The generic worker deliberately sends operation ID and inputs only.
+    # Bind the route using the trusted per-offer argv, not user arguments.
+    if operation is None:return payload
+    if operation not in OPERATIONS:raise ValueError('Unknown configured operation')
+    contract=NAMESPACE+operation+':1'
+    if payload.get('contract',contract)!=contract:raise ValueError('Offer/contract mismatch')
+    return dict(payload,contract=contract)
 
 
 def adapter(payload,api):
