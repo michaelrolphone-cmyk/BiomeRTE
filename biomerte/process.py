@@ -236,41 +236,6 @@ def finish(tx, run, state, result):
     tx.emit('process.' + state, {'run': run['id'], 'process': run['name']})
 
 
-
-def _compact_assistant_temporaries(run, version):
-    if not run.get('name', '').startswith('assistant.'):
-        return False
-    nodes = version['graph']['nodes']
-    def roots(value):
-        if isinstance(value, list):
-            return set().union(*(roots(v) for v in value)) if value else set()
-        if not isinstance(value, dict):
-            return set()
-        if set(value) == {'$'}:
-            return {value['$'].split('.')[0]}
-        return set().union(*(roots(v) for v in value.values())) if value else set()
-    live = {key: set() for key in nodes}
-    changed = True
-    while changed:
-        changed = False
-        for key, node in nodes.items():
-            uses = roots(node)
-            kills = {node.get('save')} | (set(node['values']) if node['type'] == 'set' else set())
-            for dest in targets(node):
-                uses.update(live.get(dest, set()) - kills)
-            uses.update(live.get(node.get('on_error'), set()))
-            if not uses <= live[key]:
-                live[key].update(uses)
-                changed = True
-    removed = False
-    for token in run['tokens']:
-        for key in list(token['vars']):
-            if key in token['vars'] and key not in live[token['at']]:
-                del token['vars'][key]
-                removed = True
-    return removed
-
-
 def advance(tx, ctx, r, t, n, version):
     """Advance one token. Return False for an unchanged durable wait."""
     kind, variables = n['type'], t['vars']
@@ -486,6 +451,56 @@ def advance(tx, ctx, r, t, n, version):
     return True
 
 
+def assistant_live_variables(nodes):
+    """Conservative backwards liveness for compiler scratch variables."""
+    def reads(value):
+        if isinstance(value, dict):
+            if set(value) == {'$'} and isinstance(value['$'], str):
+                return {value['$'].split('.')[0]}
+            return set().union(*(reads(v) for v in value.values()))
+        if isinstance(value, list):
+            return set().union(*(reads(v) for v in value))
+        return set()
+    live = {key: set() for key in nodes}
+    changed = True
+    while changed:
+        changed = False
+        for key, node in nodes.items():
+            used = reads(node)
+            successors = targets(node)
+            killed = {node.get('save')} | (set(node.get('values', {})) if node['type'] == 'set' else set())
+            for successor in successors:
+                if successor != node.get('on_error'):
+                    used |= live.get(successor, set()) - killed
+            used |= live.get(node.get('on_error'), set())
+            if not used <= live[key]:
+                live[key] |= used
+                changed = True
+    return live
+
+
+def compact_assistant_token(run, token, live):
+    if not run['name'].startswith('assistant.'):
+        return False
+    removed = False
+    for key in list(token['vars']):
+        if key in token['vars'] and key not in live[token['at']]:
+            del token['vars'][key]
+            removed = True
+    return removed
+
+
+def _compact_assistant_temporaries(run, version):
+    """Keep the recovery helper available for persisted-state maintenance."""
+    if not run.get('name', '').startswith('assistant.'):
+        return False
+    live = assistant_live_variables(version['graph']['nodes'])
+    removed = False
+    for token in run['tokens']:
+        removed = compact_assistant_token(run, token, live) or removed
+    return removed
+
+
 def tick(tx, ctx, budget=64):
     from .api import events_after
     budget = max(1, min(256, budget))
@@ -506,12 +521,14 @@ def tick(tx, ctx, budget=64):
     runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
         version = tx.need('process_versions', r['rev'])
-        if _compact_assistant_temporaries(r, version):
-            tx.put('runs', r['id'], r)
+        live = assistant_live_variables(version['graph']['nodes']) if r['name'].startswith('assistant.') else None
         for t in list(r['tokens']):
             if r['state'] != 'running' or moves >= budget:
                 break
             n = version['graph']['nodes'][t['at']]
+            compacted = live is not None and compact_assistant_token(r, t, live)
+            if compacted:
+                tx.put('runs', r['id'], r)
             # Roll back partial effects and token mutations on a business error.
             backup = copy.deepcopy(r)
             change_backup = dict(tx.changes)
@@ -519,9 +536,7 @@ def tick(tx, ctx, budget=64):
             try:
                 if r['steps'] >= 100000:
                     raise Fault('Step budget exhausted')
-                changed = advance(tx, ctx, r, t, n, version)
-                if _compact_assistant_temporaries(r, version):
-                    tx.put('runs', r['id'], r)
+                changed = advance(tx, ctx, r, t, n, version) or compacted
             except (Fault, ValueError, KeyError, IndexError, TypeError) as exc:
                 tx.db.execute('ROLLBACK TO activity')
                 tx.changes = change_backup
@@ -553,6 +568,8 @@ def tick(tx, ctx, budget=64):
                 moves += 1
                 break
             tx.db.execute('RELEASE activity')
+            if live is not None and t in r['tokens'] and compact_assistant_token(r, t, live):
+                tx.put('runs', r['id'], r)
             if changed:
                 r['steps'] += 1
                 tx.put('runs', r['id'], r)

@@ -626,7 +626,10 @@ def before(tx,ctx,logical_process,task,frame):
             receipt={'id':pid,'revision':revision+1,'payload':f['checkpoint_payload']}
             tx.put('assistant_checkpoints',pid,receipt);f['checkpoint_receipt']={'id':pid,'revision':revision+1};result=outcome(f,data=f['checkpoint_receipt'])
     elif key=='dispatch.guard':
-        a=cli_action(tx,cfg,'assistant.episode_start',{'definition':{'id':f['episode_id'],'responsibility_id':f['responsibility_id'],'owner_epoch':f['owner_epoch'],'task_id':f['assignment']['id'],'frame':f}})
+        definition={'id':f['episode_id'],'responsibility_id':f['responsibility_id'],'owner_epoch':f['owner_epoch'],'task_id':f['assignment']['id'],'frame':copy.deepcopy(f)}
+        intent_digest=digest(definition)
+        tx.put('assistant_episode_intents',intent_digest,definition)
+        a=cli_action(tx,cfg,'assistant.episode_start',{'definition':{'id':f['episode_id'],'intent_digest':intent_digest}})
         f['proposal']=proposal(a,f,'Start one independent reasoning episode for the reserved task')
     elif key in ('registration.apply','revision_adoption.apply'):
         intent=f['controller_intent'];a=cli_action(tx,cfg,intent['operation'],intent['arguments']);f['proposal']=proposal(a,f,'Apply the exact reviewed controller responsibility definition')
@@ -727,7 +730,13 @@ def adopt(tx,ctx,definition):
 @op('assistant.episode_start','definition:obj')
 def episode_start(tx,ctx,definition):
     from .decisions import operator
-    operator(ctx);configuration(tx);require_keys(definition,['id','responsibility_id','owner_epoch','task_id','frame'],'episode definition')
+    operator(ctx);configuration(tx)
+    if 'intent_digest' in definition:
+        if set(definition)!={'id','intent_digest'}:raise Fault('Unexpected episode intent fields')
+        saved=tx.need('assistant_episode_intents',definition['intent_digest'])
+        if saved.get('id')!=definition['id'] or digest(saved)!=definition['intent_digest']:raise Fault('Episode intent digest mismatch')
+        definition=copy.deepcopy(saved)
+    require_keys(definition,['id','responsibility_id','owner_epoch','task_id','frame'],'episode definition')
     old=tx.get('assistant_episodes',definition['id'])
     if old:return old
     r=tx.need('assistant_responsibilities',definition['responsibility_id']);validate_owner(r,definition)

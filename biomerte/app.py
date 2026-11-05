@@ -98,14 +98,23 @@ class Application:
         return self.stores[realm].execute(transaction, cached=cached)
 
     def tick(self, realm):
+        budget = 64
         def run(tx):
             seed(tx)
             ctx = Context(self, scope=realm)
-            moved = process.tick(tx, ctx)
+            moved = process.tick(tx, ctx, budget=budget)
             providers.settle_submissions(tx, ctx)
             assistant_support.pump(tx, ctx)
             return moved
-        return self.stores[realm].execute(run)
+        while True:
+            try:
+                return self.stores[realm].execute(run)
+            except Fault as exc:
+                # A rolled-back batch has dispatched no durable effects.
+                # Reduce the batch, preserving each activity's atomic commit.
+                if exc.status != 413 or budget == 1:
+                    raise
+                budget = max(1, budget // 2)
 
     def begin_pair(self, pub, label):
         key = fingerprint(pub)
