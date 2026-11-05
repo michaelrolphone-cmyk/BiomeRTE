@@ -58,10 +58,16 @@ See `evidence/qualification.json` and `HANDOFF.md` for observed results, exact d
 
 
 
-## Durable experiments (continuation source)
+## Durable experiments
 
 `POST /experiments` accepts `request_id`, `expected_version: 0`, and `config` (the experiment fields shown in `configs/experiment-confirmatory.json`, excluding `manifest` and `output`, which the service supplies). It returns a durable `run_id`. Poll `GET /experiments/{run_id}` for state, completed trial count, current condition/seed/episode/gap and phase. Restart interrupts in-flight runs visibly; resume by POSTing a new `request_id`, that `run_id`, and its current `expected_version`, without a new config. Reusing a request ID with changed content is rejected. Identical retries return the original receipt.
 
 The CLI and service acquire the same per-run file lock. Resume requires exact config, baseline and corpus identity; an interrupted trial restarts from the immutable baseline while completed trials remain preserved. Model admission is acquired per trial. No execution timeout is added. Confirmatory trials are computationally expensive; progress and reports distinguish partial/unexecuted conditions from successful measurements. C3/C4 remain explicitly unexecuted pending exact matched replay.
 
-CPU regressions: `python -m unittest discover -s tests -p test_completion_controls.py -v` and `python -m unittest discover -s tests -p test_session_controls.py -v`. Native model/API qualification remains required before deploying the continuation.
+Job configuration chooses `kind`: `memory` (default), `stability`, or `descriptors`. Example configurations are in `configs/stability.json` and `configs/descriptors.json`. The stability runner defaults to 10,000 tokens and checkpoints every 512, releasing model admission between checkpoints. The descriptor runner derives correctness labels from executable oracles, splits templates before measurement, trains only on training data, and calibrates on validation data. Both save progress and an explicit result file; failure is visible and resume is explicit.
+
+Through Biome, use `context.action=experiment_start` with `context.experiment_config` (omit manifest/output), then `context.action=experiment_status` with the returned `run_id`. Starting a job returns immediately. For explicit resume, send `experiment_start`, `run_id`, and the reported `expected_version` with a new operation ID.
+
+Optional topology: install `.[topology]`, then set `persistent_homology=true` in a descriptor run or field configuration. H0/H1 use the flag complex of `1-S/max(S)`, without assuming a metric. [Ripser API](https://ripser.scikit-tda.org/en/latest/reference/stubs/ripser.ripser.html). Its utility is measured against the graph-only baseline.
+
+Native regressions: `python -m pytest -q`, `python tests/qualify_full_model.py`, `python tests/qualify_continuation.py`, and `python tests/qualify_api.py`. Qualification reports keep skipped, failed, unexecuted and measured results distinct.

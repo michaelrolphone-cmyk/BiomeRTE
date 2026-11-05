@@ -50,7 +50,7 @@ class ExperimentJobs:
                 row = self.db.execute('SELECT * FROM jobs WHERE id=?', (run_id,)).fetchone()
                 if row is None:
                     raise FileNotFoundError(run_id)
-                if body.get('expected_version') != row['version'] or row['state'] not in ('failed', 'interrupted'):
+                if type(body.get('expected_version')) is not int or body['expected_version'] != row['version'] or row['state'] not in ('failed', 'interrupted'):
                     raise ValueError('Stale experiment version or run is not resumable')
                 config = json.loads(row['config'])
                 if 'config' in body:
@@ -60,6 +60,7 @@ class ExperimentJobs:
             else:
                 if type(body.get('expected_version')) is not int or body['expected_version'] != 0:
                     raise ValueError('New experiment requires expected_version=0')
+                if not isinstance(body.get('config'),dict):raise ValueError('config must be an object')
                 config = dict(body['config'])
                 if 'output' in config or 'manifest' in config:
                     raise ValueError('API experiments use the installed manifest and managed output directory')

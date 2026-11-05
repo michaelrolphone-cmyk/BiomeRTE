@@ -36,7 +36,17 @@ def main():
         from experiments.evaluate import run
         print(run(json.loads(Path(args.config).read_text()),args.resume))
     else:
-        from experiments.evaluate import report
-        print(json.dumps(report(args.run,args.output),indent=2))
+        config=json.loads((Path(args.run)/'config.json').read_text())
+        kind=config.get('kind','memory')
+        if kind=='memory':
+            from experiments.evaluate import report
+            result=report(args.run,args.output)
+        else:
+            filename='stability.json' if kind=='stability' else 'descriptor-report.json'
+            result=json.loads((Path(args.run)/filename).read_text())
+            from experiments.storage import atomic_json
+            atomic_json(Path(args.output)/filename,result)
+        print(json.dumps(result,indent=2))
 
 if __name__=='__main__':main()
+

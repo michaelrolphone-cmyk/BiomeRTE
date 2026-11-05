@@ -24,7 +24,8 @@ def configure():
     node=json.loads(nodefile.read_text())['node'];site=g.invoke('system.info')['site']
     name='agent.activation_field.delegate';contract=name+':1';resource='agent.activation-field.mac.'+node[:20]
     usage=dict(before='Experimental full Qwen3.5 9B. Native Mac engine; shared model/image FIFO. Context config.enabled=true opts into weight writes. baseline_pull defaults to zero. This normal agent returns plaintext results through Biome; use synthetic/nonprivate test prompts here.',parameters={'request':'Text prompt for generation; ignored for management actions.','context':'action=generate|health|diagnostics|config|reset|checkpoint|fork|delete|import; session_id and expected_version required for existing sessions; config, messages, max_tokens, temperature and kind as appropriate. New sessions default field disabled. Reuse returned session_id and version. Full transcript messages must include the exact previous assistant response; otherwise supply request as a new turn through the adapter.'},example_inputs={'request':'Remember that my test marker is jade.','context':{'config':{'enabled':True,'baseline_pull':0},'max_tokens':32}},read_result='Read result.ok, result.session_id, result.version, result.response, and result.diagnostics. No scientific memory success is claimed.')
-    g.invoke('cap.define',dict(name=name,version=1,inputs={'request':'str','context':'obj'},outputs={'result':'obj'},description='Activation Field — Qwen3.5 9B: experimental writable quantized full-model agent.',usage=usage),rid='af-capability-definition-v1')
+    usage['parameters']['context']+=' Scientific jobs: action=experiment_start with experiment_config, or run_id and expected_version to resume; action=experiment_status with run_id. Jobs persist and run through the shared model queue; starting returns immediately.'
+    g.invoke('cap.define',dict(name=name,version=1,inputs={'request':'str','context':'obj'},outputs={'result':'obj'},description='Activation Field — Qwen3.5 9B: experimental writable quantized full-model agent.',usage=usage),rid='af-capability-definition-v2')
     cfg=dict(site=site,realm='site',parallelism=1,timeout=None,poll_seconds=2,retry_seconds=5,offers=[dict(contract=contract,resource=resource,service='activation-field',capacity=1,usage=usage,argv=[sys.executable,'-m','activation_field.provider','adapter'])])
     g.save_json(ROOT/'provider.json',cfg)
     return dict(provider=node,resource=resource,contract=contract)
@@ -33,6 +34,16 @@ def configure():
 def adapter(payload):
     context=payload['inputs']['context'];request=payload['inputs']['request'];action=context.get('action','generate');rid=payload['operation']
     if action=='health':return dict(ok=True,**api('/health'))
+    if action=='experiment_start':
+        body=dict(request_id=rid,expected_version=context.get('expected_version',0))
+        if 'run_id' in context:body['run_id']=context['run_id']
+        else:body['config']=context['experiment_config']
+        return dict(ok=True,**api('/experiments',body))
+    if action=='experiment_status':
+        run_id=context['run_id']
+        if not isinstance(run_id,str) or not run_id or any(c not in '0123456789abcdef' for c in run_id):raise ValueError('Invalid experiment run_id')
+        return dict(ok=True,**api('/experiments/'+run_id))
+    if action not in ('generate','import','diagnostics','config','reset','checkpoint','fork','delete'):raise ValueError('Unknown action')
     if action=='import':
         body={k:v for k,v in context.items() if k in ('checkpoint_id','config','persist','reset_native_state')}
         body.update(request_id=rid,expected_version=0)
@@ -83,3 +94,4 @@ def main():
         run_worker(str(ROOT),Remote(),cfg,False)
 
 if __name__=='__main__':main()
+

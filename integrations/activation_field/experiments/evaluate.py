@@ -11,7 +11,13 @@ CONDITIONS = ['C0','C1','C2','C3','C4','C5','C6','C7-8','C7-32','transcript']
 
 
 def validate_config(config):
-    allowed = {'manifest','output','corpus_seed','episodes','conditions','retention_gaps','probe_tokens','seed','seeds','spectral'}
+    kind=config.get('kind','memory')
+    if kind not in ('memory','stability','descriptors'):raise ValueError('Unknown experiment kind')
+    allowed = {'kind','manifest','output','corpus_seed'} | {
+        'memory':{'episodes','conditions','retention_gaps','probe_tokens','seed','seeds','spectral'},
+        'stability':{'tokens','checkpoint_tokens','probe_tokens','seed','spectral'},
+        'descriptors':{'examples_per_template','persistent_homology'},
+    }[kind]
     if set(config) - allowed:
         raise ValueError('Unknown experiment config field')
     conditions = config.get('conditions', CONDITIONS)
@@ -22,16 +28,23 @@ def validate_config(config):
     for values, minimum in ((seeds,0),(gaps,0)):
         if not isinstance(values,list) or not values or any(type(v) is not int or v < minimum for v in values) or len(set(values)) != len(values):
             raise ValueError('Seeds and gaps must be distinct nonnegative integers')
-    for key, default, minimum in [('episodes',200,2),('probe_tokens',32,1),('corpus_seed',42,0)]:
+    for key, default, minimum in [('episodes',200,2),('probe_tokens',32,1),('corpus_seed',42,0),('tokens',10000,1),('checkpoint_tokens',512,1),('examples_per_template',5,1)]:
         v = config.get(key,default)
         if type(v) is not int or v < minimum:
             raise ValueError('Invalid '+key)
-    if type(config.get('spectral',True)) is not bool:
-        raise ValueError('spectral must be boolean')
+    for key in ('spectral','persistent_homology'):
+        if type(config.get(key,False)) is not bool:raise ValueError(key+' must be boolean')
+    if any(v>=2**32 for v in seeds):raise ValueError('Seeds must be uint32')
 
 
 def run(config, resume=False):
     validate_config(config)
+    if config.get('kind')=='stability':
+        from .stability import run as stability
+        return stability(config,resume)
+    if config.get('kind')=='descriptors':
+        from .descriptors import run as descriptors
+        return descriptors(config,resume)
     with run_lock(config['output']):
         return _run(config, resume)
 

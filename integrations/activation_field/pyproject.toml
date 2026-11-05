@@ -9,6 +9,9 @@ description = "Full-model quantized activation-field experiment for Biome"
 requires-python = ">=3.12"
 dependencies = ["mlx-lm", "numpy", "scipy", "cryptography", "fastapi", "uvicorn", "huggingface-hub"]
 
+[project.optional-dependencies]
+topology = ["ripser==0.6.15"]
+
 [project.scripts]
 fieldctl = "activation_field.cli:main"
 
@@ -17,3 +20,4 @@ include = ["activation_field*", "experiments*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+

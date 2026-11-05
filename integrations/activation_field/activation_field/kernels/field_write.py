@@ -3,6 +3,58 @@ import mlx.core as mx
 
 _norm = None
 _write = {}
+_audit = {}
+
+
+def audit(before, after, scales, offsets, x, z, gate, norms, *, eta, role_scale,
+          step_fraction_max, baseline_pull=0., anchor=None, delta_n=1, **_):
+    """Per-row measured diagnostics, without a full floating point shadow.
+
+    One thread reduces a row into eight scalars. The output is O(rows), not
+    O(weights). Zero pull neither reads nor passes the baseline anchor.
+    """
+    import math
+    pull = baseline_pull > 0
+    if pull and anchor is None: raise ValueError('Anchor required')
+    if pull not in _audit:
+        names=['before','after','scales','offsets','x','z','gate','norms','settings']
+        if pull: names.append('anchor')
+        decay='float w0=b+s*float((anchor[index]>>(4*k))&15);proposal=w0+settings[3]*(proposal-w0);' if pull else ''
+        source=r'''
+          uint row=thread_position_in_grid.x;
+          if(row>=before_shape[0]) return;
+          uint words=before_shape[1];
+          float c=settings[0]*settings[1]*z[row]*float(gate[row]);
+          c*=min(1.0f,settings[2]/max(abs(c),1e-12f));
+          float changed=0,candidates=0,saturated=0,pnorm=0,rnorm=0,qerror=0;
+          for(uint j=0;j<words;j++) {
+            uint index=row*words+j,g=row*(words/8)+j/8;
+            float s=float(scales[g]),b=float(offsets[g]);
+            for(uint k=0;k<8;k++) {
+              uint old=(before[index]>>(4*k))&15,q=(after[index]>>(4*k))&15;
+              float w=b+s*float(old),actual=b+s*float(q);
+              float proposal=w+norms[row]*c*x[j*8+k];
+              DECAY
+              if(s!=0 && proposal!=w) {
+                candidates+=1;float raw=(proposal-b)/s;
+                saturated+=float(raw<0 || raw>15);
+              }
+              changed+=float(q!=old);
+              pnorm+=(proposal-w)*(proposal-w);
+              rnorm+=(actual-w)*(actual-w);
+              qerror+=(actual-proposal)*(actual-proposal);
+            }
+          }
+          metrics[row*8]=float(gate[row]);metrics[row*8+1]=float(changed>0);
+          metrics[row*8+2]=changed;metrics[row*8+3]=candidates;
+          metrics[row*8+4]=saturated;metrics[row*8+5]=pnorm;
+          metrics[row*8+6]=rnorm;metrics[row*8+7]=qerror;
+        '''.replace('DECAY',decay)
+        _audit[pull]=mx.fast.metal_kernel(name='af_audit_pull' if pull else 'af_audit_zero',input_names=names,output_names=['metrics'],source=source)
+    inputs=[before,after,scales,offsets,x,z,gate,norms,mx.array([eta,role_scale,step_fraction_max,math.exp(-baseline_pull*delta_n)],mx.float32)]
+    if pull: inputs.append(anchor)
+    rows=before.shape[0]
+    return _audit[pull](inputs=inputs,grid=(rows,1,1),threadgroup=(min(rows,256),1,1),output_shapes=[(rows,8)],output_dtypes=[mx.float32])[0]
 
 
 def row_norm(packed, scales, offsets):
@@ -77,3 +129,4 @@ def write(packed, scales, offsets, x, z, gate, norms, *, eta, role_scale,
     if pull: inputs.append(anchor)
     out,metric=_write[pull](inputs=inputs,template=[("AUDIT",False)],grid=(rows*words,1,1),threadgroup=(256,1,1),output_shapes=[packed.shape,(1,)],output_dtypes=[mx.uint32,mx.float32])
     return out
+

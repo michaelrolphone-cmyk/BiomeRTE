@@ -165,7 +165,11 @@ class Sessions:
                     try:
                         engine=Engine(self.manifest,FieldConfig.parse(s['config']))
                         engine.boundary_hook=lambda e:self.apply_config(sid,e)
-                        if s['checkpoint']:engine.restore(self.vault,s['checkpoint'],reset_native_state=s.get('reset_native_on_load',False))
+                        if s['checkpoint']:
+                            engine.restore(self.vault,s['checkpoint'],reset_native_state=s.get('reset_native_on_load',False))
+                            # The checkpoint records past settings; an explicitly
+                            # versioned configuration change after it remains authoritative.
+                            if engine.config.to_dict()!=s['config']:engine.patch_config(s['config'])
                         if action=='generate':
                             result=engine.generate(body['messages'],body.get('max_tokens',128),body.get('temperature',0.),self.cancel.get((sid,body['request_id'])),emit)
                         elif action=='reset':
@@ -237,3 +241,4 @@ class Sessions:
             for event in events:
                 yield 'id: '+str(cursor)+'\ndata: '+json.dumps(event,allow_nan=False)+'\n\n';cursor+=1
                 if event['type']=='complete':return
+

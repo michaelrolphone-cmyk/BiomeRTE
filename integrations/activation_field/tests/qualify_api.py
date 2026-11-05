@@ -34,7 +34,9 @@ try:
             request=Request('http://127.0.0.1:8791'+bpath+'/generate',json.dumps(generate).encode(),{'Authorization':'Bearer '+(ROOT/'api-token').read_text().strip(),'Content-Type':'application/json'})
             with urlopen(request) as response:
                 for raw in response:
-                    if raw.startswith(b'data: '):events.append(json.loads(raw[6:]));started.set()
+                    if raw.startswith(b'data: '):
+                        event=json.loads(raw[6:]);events.append(event)
+                        if event['type'] in ('token','complete'):started.set()
         except Exception as error:failures.append(str(error));started.set()
     worker=threading.Thread(target=read);worker.start();started.wait()
     if failures:raise RuntimeError(failures)
@@ -44,6 +46,7 @@ try:
     worker.join()
     if failures:raise RuntimeError(failures)
     receipt=api(bpath+'/requests/'+rid)
+    checked('active_token_observed_before_cancel',any(e['type']=='token' for e in events))
     checked('cancel_boundary_reported',receipt['status']=='succeeded' and receipt['result']['finish_reason']=='cancelled' and 'committed_token_count' in receipt)
     checked('stream_completion',any(e['type']=='complete' for e in events))
     prior_version=api(bpath)['version'];events.clear();read()
@@ -57,3 +60,4 @@ finally:
         if not state['busy']:api('/sessions/'+sid,dict(request_id=identity(),expected_version=state['version']),'DELETE')
     (ROOT/'api-qualification.json').write_text(json.dumps(result,indent=2))
     print(json.dumps(result))
+

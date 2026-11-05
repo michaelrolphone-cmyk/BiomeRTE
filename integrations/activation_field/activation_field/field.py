@@ -1,7 +1,7 @@
-import hashlib
+import hashlib,time
 import numpy as np
 import mlx.core as mx
-from .kernels.field_write import row_norm,write
+from .kernels.field_write import row_norm,write,audit
 from .quantized_writer import reference_write
 
 
@@ -60,18 +60,21 @@ class Field:
 
     def commit(self):
         if not self.pending:return
-        c=self.config;proposed={}; changed=[]; candidates=[]
+        started=time.monotonic()
+        c=self.config;proposed={}; proposed_norms={}; changed=[]; candidates=[]
+        layer_metrics=[mx.zeros((8,),mx.float32) for _ in range(32)]
         if c.baseline_pull==0 and all(c.eta*scale==0 for _,scale,_ in self.pending):
             self.receipts.append(dict(old_field_version=self.version,field_version=self.version,token_start=self.pending[0][2],token_end=self.pending[-1][2],changed_words=0,candidate_rows=0,baseline_pull=0,config_revision=self.config_revision,status='exact_noop'))
             self.receipts=self.receipts[-128:];self.pending.clear();return
         # Build all new arrays, force execution, then publish as one token boundary.
         # Current arrays and immutable anchors survive until the transaction commits.
-        for path,m,*_ in self.entries:
+        for path,m,_,_,layer,group in self.entries:
             current=m.weight
             norm=self.norm_cache.get(path)
             if norm is None:norm=row_norm(current,m.scales,m.biases)
             for activity,scale,token in self.pending:
                 x,z,gate=activity[path]
+                before=current
                 seed=int.from_bytes(hashlib.sha256(f"{c.seed}:{token}:{path}".encode()).digest()[:4],"little")
                 kwargs=dict(eta=c.eta,role_scale=scale,step_fraction_max=c.step_fraction_max,seed=seed,baseline_pull=c.baseline_pull,delta_n=1)
                 if c.baseline_pull>0:kwargs['anchor']=self.anchor[path]
@@ -81,20 +84,28 @@ class Field:
                     if 'anchor' in kwargs:kwargs['anchor']=np.array(kwargs['anchor'])
                     out,_=reference_write(np.array(current),np.array(m.scales.astype(mx.float32)),np.array(m.biases.astype(mx.float32)),np.array(x),np.array(z),np.array(gate),**kwargs)
                     current=mx.array(out,mx.uint32)
+                metrics=mx.sum(audit(before,current,m.scales,m.biases,x,z,gate,norm,**kwargs),axis=0)
+                layer_metrics[layer]=layer_metrics[layer]+metrics
                 norm=row_norm(current,m.scales,m.biases)
                 candidates.append(mx.sum(gate))
             changed.append(mx.sum(current!=m.weight))
             proposed[path]=current
             # Materialize per projection to bound lazy graph/transient lifetime.
-            mx.eval(current,norm,changed[-1])
-            self.norm_cache[path]=norm
+            mx.eval(current,norm,changed[-1],layer_metrics[layer])
+            proposed_norms[path]=norm
         mx.eval(proposed)
-        if not all(bool(mx.all(mx.isfinite(n)).item()) for n in self.norm_cache.values()):
+        if not bool(mx.all(mx.stack([mx.all(mx.isfinite(n)) for n in proposed_norms.values()])).item()):
             self.pending.clear();raise FloatingPointError("Nonfinite proposed field; old weights retained")
         count=int(mx.sum(mx.stack(changed)).item())
+        measured=np.array(mx.stack(layer_metrics))
+        if not np.isfinite(measured).all():
+            self.norm_cache.clear();self.pending.clear();raise FloatingPointError('Nonfinite write metrics; old weights retained')
         for path,m,*_ in self.entries:m.weight=proposed[path]
+        self.norm_cache=proposed_norms
         previous=self.version;self.version+=1;self.changed_words+=count
-        self.receipts.append(dict(old_field_version=previous,field_version=self.version,token_start=self.pending[0][2],token_end=self.pending[-1][2],changed_words=count,candidate_rows=int(mx.sum(mx.stack(candidates)).item()),baseline_pull=c.baseline_pull,config_revision=self.config_revision))
+        names=('candidate_row_events','changed_row_events','changed_codes','candidate_codes','saturated_codes','proposal_squared_norm','realized_squared_norm','quantization_squared_error')
+        per_layer=[dict(layer=i,**{k:(int(v) if j<5 else float(v)) for j,(k,v) in enumerate(zip(names,row))}) for i,row in enumerate(measured)]
+        self.receipts.append(dict(old_field_version=previous,field_version=self.version,token_start=self.pending[0][2],token_end=self.pending[-1][2],changed_words=count,candidate_rows=int(mx.sum(mx.stack(candidates)).item()),baseline_pull=c.baseline_pull,config_revision=self.config_revision,per_layer=per_layer,seconds=time.monotonic()-started,seed=c.seed,rng_counter_range=[self.pending[0][2],self.pending[-1][2]],status='committed'))
         self.receipts=self.receipts[-128:]
         self.pending.clear()
 
@@ -110,3 +121,4 @@ class Field:
 
     def diagnostics(self):
         return dict(field_version=self.version,consumed_tokens=self.token_count,eligible_layers=32,eligible_projections=len(self.entries),changed_words_total=self.changed_words,last_receipts=self.receipts[-8:],baseline_pull=self.config.baseline_pull,read_only=self.config.read_only,field_enabled=self.config.enabled,commit_every_tokens=self.config.commit_every_tokens,precision="fp32 proposal; uint32 packed affine4; fixed group64 scales/offsets",realized_step_bound=False)
+

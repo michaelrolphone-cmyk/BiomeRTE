@@ -51,3 +51,24 @@ def test_metal_matches_reference():
         expected,_=reference_write(p,s,b,x,z,g,anchor=anchor,**kwargs)
         actual=write(*arrays,norms,anchor=mx.array(anchor),**kwargs);mx.eval(actual)
         assert np.array_equal(np.array(actual),expected)
+
+
+def test_metal_audit_matches_measured_reference():
+    mx=pytest.importorskip('mlx.core')
+    from activation_field.kernels.field_write import write,row_norm,audit
+    p,s,b,x,z,g=fixture()
+    arrays=[mx.array(a) for a in (p,s,b,x,z,g)]
+    norm=row_norm(*arrays[:3])
+    for pull in (0.,1.):
+        anchor=pack(np.full((4,128),7,np.uint32))
+        kwargs=dict(eta=.005,role_scale=1,step_fraction_max=.01,seed=9,baseline_pull=pull)
+        expected,stats=reference_write(p,s,b,x,z,g,anchor=anchor,**kwargs)
+        actual=write(*arrays,norm,anchor=mx.array(anchor),**kwargs)
+        metrics=audit(arrays[0],actual,*arrays[1:],norm,anchor=mx.array(anchor),**kwargs)
+        mx.eval(actual,metrics)
+        summed=np.array(metrics).sum(axis=0)
+        assert summed[0]==sum(g)
+        assert summed[1]==np.any(expected!=p,axis=1).sum()
+        for i,name in enumerate(('changed_codes','candidate_codes','saturated_codes','proposal_squared_norm','realized_squared_norm','quantization_squared_error'),2):
+            assert np.isclose(summed[i],stats[name],rtol=5e-4,atol=1e-5),(name,summed[i],stats[name])
+

@@ -17,6 +17,7 @@ class FieldConfig:
     role_scales: dict = field(default_factory=lambda: dict(user=1., assistant=1., tool=1., system=1.))
     template_token_write_scale: float = 0
     spectral_enabled: bool = True
+    persistent_homology: bool = False
     window_tokens: int = 128
     stride_tokens: int = 32
     seed: int = 42
@@ -48,7 +49,7 @@ class FieldConfig:
             raise ValueError("All four substantive roles must be configured")
         if any(type(v) not in (int,float) or not math.isfinite(v) or v < 0 for v in out.role_scales.values()):
             raise ValueError("Role scales must be finite and nonnegative")
-        for name in ["enabled", "read_only", "spectral_enabled"]:
+        for name in ["enabled", "read_only", "spectral_enabled", "persistent_homology"]:
             if type(getattr(out, name)) is not bool:
                 raise ValueError(name + " must be boolean")
         if out.writer not in ("metal", "reference"):
@@ -57,3 +58,4 @@ class FieldConfig:
 
     def to_dict(self):
         return asdict(self)
+

@@ -26,7 +26,7 @@ class Engine:
         mx.set_cache_limit(256*1024**2)
         self.field=Field(entries,self.config)
         install(self.model,self.field.tap)
-        self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens)
+        self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology)
         self.cache=self.make_cache();self.native_tokens=0;self.consumed_tokens=0;self.native_resets=0
         self.sample_counter=0;self.last_logits=None;self.prefix_hashes=[]
         self.load_seconds=time.monotonic()-started;self.forward_seconds=0.;self.write_seconds=0.
@@ -116,20 +116,21 @@ class Engine:
 
     def reset(self,kind,retain_traces=False):
         if kind not in ['ordinary_state','activity_traces','weights','entire_session']:raise ValueError("Unknown reset kind")
+        if kind=='ordinary_state':self.field.commit()
         if kind in ['ordinary_state','weights','entire_session']:
             self.requires_reset=False
             self.cache=self.make_cache();self.native_tokens=0;self.native_resets+=1;self.last_logits=None;self.prefix_hashes=[]
         self.field.reset(kind,retain_traces)
         if kind in ['activity_traces','entire_session'] or (kind=='weights' and not retain_traces):
-            self.trajectory.close();self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens)
+            self.trajectory.close();self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology)
 
     def patch_config(self,patch):
         merged=self.config.to_dict();merged.update(patch);config=FieldConfig.parse(merged)
         if config.context_length!=self.config.context_length and self.native_tokens:
             raise ValueError("Reset ordinary state before changing context length")
         self.field.commit()
-        if (config.window_tokens,config.stride_tokens)!=(self.config.window_tokens,self.config.stride_tokens):
-            self.trajectory.close();self.trajectory=Trajectory(config.window_tokens,config.stride_tokens)
+        if (config.window_tokens,config.stride_tokens,config.persistent_homology)!=(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology):
+            self.trajectory.close();self.trajectory=Trajectory(config.window_tokens,config.stride_tokens,config.persistent_homology)
         self.config=config;self.field.config=config;self.field.config_revision+=1
 
     def state(self,field_only=False):
@@ -189,11 +190,16 @@ class Engine:
             raise ValueError('Invalid trajectory state')
         counters={key:meta[key] for key in ('field_version','field_tokens','config_revision','changed_words','consumed_tokens','sample_counter','native_tokens')}
         if any(type(v) is not int or v<0 for v in counters.values()):raise ValueError('Invalid checkpoint counter')
+        if not isinstance(meta['receipts'],list) or not isinstance(meta['prefix_hashes'],list) or any(not isinstance(h,str) or len(h)!=64 for h in meta['prefix_hashes']):
+            raise ValueError('Invalid checkpoint receipts or transcript identity')
+        if type(meta.get('requires_reset',False)) is not bool:raise ValueError('Invalid reset flag')
+        if meta['kind'] not in ('complete','field_only'):raise ValueError('Invalid checkpoint kind')
+        if meta['kind']=='complete' and meta['native_tokens'] and meta['cache'] is None:raise ValueError('Complete checkpoint missing native state')
         newcache=[ArraysCache(size=2) if l.is_linear else RotatingKVCache(max_size=restored_config.context_length,keep=0) for l in self.model.layers]
         if not reset_native_state and meta['cache'] is not None:
             for c,v in zip(newcache,meta['cache'],strict=True):c.state=decode(v)
         # Publish only after every encrypted shard and state tree validates.
-        newtrajectory=Trajectory(restored_config.window_tokens,restored_config.stride_tokens)
+        newtrajectory=Trajectory(restored_config.window_tokens,restored_config.stride_tokens,restored_config.persistent_homology)
         newtrajectory.restore(trajectory)
         for p,m in entries.items():m.weight=proposed.get(p,self.field.anchor[p]);self.field.frequency[p]=frequencies[p]
         self.config=restored_config;self.field.config=restored_config

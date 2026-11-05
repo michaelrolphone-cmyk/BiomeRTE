@@ -16,6 +16,13 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def source_identity():
+    root=Path(__file__).resolve().parents[1]
+    return digest({str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest()
+                   for folder in ('activation_field','experiments')
+                   for p in sorted((root/folder).rglob('*.py'))})
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -54,7 +61,7 @@ def run_lock(root):
 def prepare(root, config, data, baseline_hash, resume):
     """Resume only the identical frozen experiment, never mix changed results."""
     root = Path(root)
-    identity = dict(schema_version=1, config_hash=digest(config),
+    identity = dict(schema_version=2, config_hash=digest(config),source_hash=source_identity(),
                     corpus_hash=data['sha256'], baseline_hash=baseline_hash)
     path = root / 'identity.json'
     if path.exists():
