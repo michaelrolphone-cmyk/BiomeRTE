@@ -97,29 +97,40 @@ test('cached clients reach the same receiver registration through biome_invoke',
  assert.equal(grokCall({name:'biome_invoke',arguments:{operation:'work.list',arguments:{}}}),null);
 });
 
-test('OAuth discovery lists Grok tools and cached clients can follow a complete bounded snapshot',async()=>{
- const {sql,send,rpc,deviceKey}=fixture();
- await send('/mcp',rpc('tools/call',{name:'bad'}),{'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@test.invalid'});
+test('native and OAuth discovery forward controller pages, including continuation and realm',async()=>{
+ const {sql,send,rpc,owner,deviceKey}=fixture();
+ await send('/mcp',rpc('tools/call',{name:'bad'}),owner);
  const token='p'.repeat(43),auth={Authorization:'Bearer '+token},link={Authorization:'Bearer '+deviceKey};
  sql.prepare("INSERT INTO biome_oauth_tokens(hash,kind,grant_id,client_id,principal,resource,expires) VALUES(?,'access','grant','client','owner',?,?)").run(createHash('sha256').update(token).digest('base64url'),base+'/api/mcp',Date.now()/1000+60);
- const call=async(method,params)=>(await (await send('/api/mcp',rpc(method,params),auth)).json()).result;
- const names=(await call('tools/list')).tools.map(t=>t.name);
- for(const name of ['biome_register_grok_webhook','biome_list_grok_webhooks'])assert.ok(names.includes(name));
- const pending=call('tools/call',{name:'biome_discover',arguments:{}});
- let job;
- for(let i=0;i<30;i++){await new Promise(r=>setTimeout(r,10));job=await(await send('/bridge/next',{},link)).json();if(job.id)break;}
- const large='😀"'.repeat(9000);
- const doc={operations:[{name:'test'}],capabilities:{contracts:[],offers:[{large}]},capability_caller_guide:{a:1}};
- await send('/bridge/complete',{id:job.id,lease:job.lease,result:{content:[{type:'text',text:JSON.stringify(doc)}]}},link);
- let response=await pending, fragments=[],seen=[];
- for(let i=0;i<200;i++){
-  assert.ok(Buffer.byteLength(JSON.stringify(response))<20000);
-  const page=JSON.parse(response.content[0].text);
-  for(const item of page.items){seen.push(item.section);if(item.section==='offers')fragments.push(item.fragment);}
-  if(!page.next_cursor)break;
-  response=await call('tools/call',page.next_call);
+ const pages=[
+  {section:'operations',items:[{name:'cap.acquire'}],next_cursor:'native-cursor',complete:false,next_call:{operation:'system.discovery',arguments:{cursor:'native-cursor'},request_id:'next'}},
+  {section:'offers',items:[{contract:'host.terminal.run:1'}],next_cursor:null,complete:true},
+  {section:'guide',items:[{caller:['cap.acquire']}],next_cursor:null,complete:true}
+ ];
+ const calls=[
+  ['/api/mcp',auth,'biome_discover',{}, {},'site'],
+  ['/mcp',owner,'biome_discover',{section:'offers'},{section:'offers'},'site'],
+  ['/mcp',owner,'biome_invoke',{operation:'discovery.page',arguments:{cursor:'native-cursor'},realm:'local',request_id:'alias'},{cursor:'native-cursor'},'local']
+ ];
+ for(const [i,[path,headers,name,args,expected,realm]] of calls.entries()){
+  const pending=send(path,rpc('tools/call',{name,arguments:args}),headers);
+  let job;
+  for(let n=0;n<100;n++){await new Promise(r=>setTimeout(r,5));job=await(await send('/bridge/next',{},link)).json();if(job.id)break;}
+  assert.equal(job.request.name,'biome_invoke');
+  assert.equal(job.request.arguments.operation,'system.discovery');
+  assert.deepEqual(job.request.arguments.arguments,expected);
+  assert.equal(job.request.arguments.realm,realm);
+  const answer={content:[{type:'text',text:JSON.stringify(pages[i])}]};
+  await send('/bridge/complete',{id:job.id,lease:job.lease,result:answer},link);
+  const response=await pending;assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).result,answer);
  }
- assert.equal(JSON.parse(fragments.join('')).large,large);assert.ok(seen.includes('operations')&&seen.includes('guide'));sql.close();
+ for(const args of [{section:'bad'},{cursor:5},{cursor:'discovery-legacy:offers:0'}]){
+  const res=await send('/mcp',rpc('tools/call',{name:'biome_discover',arguments:args}),owner);
+  assert.equal(res.status,200);assert.equal((await res.json()).result.isError,true);
+ }
+ assert.equal(sql.prepare("SELECT count(*) AS n FROM bridge_jobs WHERE state!='done'").get().n,0);
+ sql.close();
 });
 
 test('private receiver verifies challenge, deduplicates signed deliveries and acknowledges only its inbox',async()=>{

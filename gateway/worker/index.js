@@ -49,8 +49,8 @@ async function dispatch(req,env) {
  const owner=bearerOwner||await ownerPrincipal(req,env);
  if(!owner)return reply({error:'Owner sign-in required'},403);
  const args=params.arguments??{};
- if(params.name==='biome_discover' && (external || Object.keys(args).length))return ok(await discoverPage(env,args));
- if(params.name==='biome_invoke' && args.operation==='discovery.page')return ok(await discoverPage(env,args.arguments??{}));
+ if(params.name==='biome_discover')return ok(await discoverPage(env,args));
+ if(params.name==='biome_invoke' && args.operation==='discovery.page')return ok(await discoverPage(env,args.arguments??{},args.realm??'site'));
  const grok=grokCall(params);
  if(grok){
   const grant=await eventGrant(req,env,external);
