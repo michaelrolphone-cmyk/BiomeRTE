@@ -1,7 +1,7 @@
 {
   "project_id": "YOUR_SITE_PROJECT_ID",
   "d1": "DB",
-  "r2": null,
+  "r2": "JOURNAL_ARCHIVE",
   "capabilities": [
     "mcp"
   ]

@@ -1,3 +1,4 @@
+import {storedJournal,journalText,archiveJournalBatch} from './journal-storage.mjs';
 import {reply,limitedJSON,hexHash} from './bridge.mjs';
 import {sealGrokJob,openGrokJob} from './grok.mjs';
 
@@ -33,6 +34,7 @@ export async function controllerDevice(req,env,path,node,legacy) {
  const config=await db.prepare('SELECT * FROM controller_config WHERE id=1').first();
  if(!config)return reply({error:'Cluster not configured'},409);
  if(path==='/bridge/ha/heartbeat'){
+  await archiveJournalBatch(env,config.site);
   if(!Number.isInteger(d.position)||d.position<0||typeof d.ready!=='boolean'||!Number.isFinite(d.load)||typeof d.host!=='string')return reply({error:'Invalid heartbeat'},400);
   await db.prepare('UPDATE controller_nodes SET seen=?,ready=?,position=?,load=?,host=? WHERE id=?').bind(now,Number(d.ready),d.position,d.load,d.host.slice(0,160),node.id).run();
   return reply(await controllerStatus(db));
@@ -41,15 +43,16 @@ export async function controllerDevice(req,env,path,node,legacy) {
  if(path==='/bridge/ha/read'){
   if(d.key==='head'){const head=await journalHead(db,config.site);return reply({value:head.seq?head:null,version:String(head.seq)});}
   if(!/^log\/\d{20}$/.test(d.key))return reply({error:'Invalid journal key'},400);
-  const row=await db.prepare('SELECT entry FROM controller_journal WHERE site=? AND seq=?').bind(config.site,Number(d.key.slice(4))).first();
-  return reply({encoded:row?.entry??null});
+  const row=await db.prepare('SELECT entry,hash FROM controller_journal WHERE site=? AND seq=?').bind(config.site,Number(d.key.slice(4))).first();
+  return reply({encoded:await journalText(env,config.site,row)});
  }
  if(path==='/bridge/ha/append'){
   if(typeof d.entry!=='string'||!Number.isInteger(d.expected)||d.expected<0)return reply({error:'Invalid journal entry'},400);
   const entry=JSON.parse(d.entry),hash=await hexHash(d.entry);
   if(entry.seq!==d.expected+1||typeof entry.prev!=='string'||!Array.isArray(entry.changes))return reply({error:'Invalid journal position'},400);
+  const stored=await storedJournal(env,config.site,d.entry,hash);
   await db.prepare("INSERT OR IGNORE INTO controller_journal(site,seq,hash,entry) SELECT ?,?,?,? WHERE COALESCE((SELECT MAX(seq) FROM controller_journal WHERE site=?),0)=? AND COALESCE((SELECT hash FROM controller_journal WHERE site=? ORDER BY seq DESC LIMIT 1),'')=?")
-   .bind(config.site,entry.seq,hash,d.entry,config.site,d.expected,config.site,entry.prev).run();
+   .bind(config.site,entry.seq,hash,stored,config.site,d.expected,config.site,entry.prev).run();
   const row=await db.prepare('SELECT seq,hash FROM controller_journal WHERE site=? AND seq=?').bind(config.site,entry.seq).first();
   return row?.hash===hash?reply(row):reply({error:'Shared head advanced. Retry the same request ID.'},409);
  }
