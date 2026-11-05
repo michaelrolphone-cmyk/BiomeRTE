@@ -50,12 +50,25 @@ s=ThreadingHTTPServer(('127.0.0.1',0),H)
             label = 'org.biomerte.watchdog-qualification-' + str(os.getpid())
             domain = 'gui/' + str(os.getuid())
             plist = root / 'test.plist'
-            plist.write_bytes(plistlib.dumps({'Label': label, 'ProgramArguments': [sys.executable, '-S', str(script), str(root)], 'RunAtLoad': True}))
+            # launchd does not inherit the test runner's interpreter environment.
+            # Preserve only Python runtime paths (never CI credentials) and retain
+            # service diagnostics when a fixture fails before publishing its port.
+            runtime_env = {key: os.environ[key] for key in
+                           ('PATH', 'PYTHONHOME', 'PYTHONPATH', 'DYLD_LIBRARY_PATH',
+                            'DYLD_FRAMEWORK_PATH', '__PYVENV_LAUNCHER__') if key in os.environ}
+            plist.write_bytes(plistlib.dumps({'Label': label,
+                'ProgramArguments': [sys.executable, '-S', str(script), str(root)],
+                'EnvironmentVariables': runtime_env, 'RunAtLoad': True,
+                'StandardOutPath': str(root / 'stdout'),
+                'StandardErrorPath': str(root / 'stderr')}))
             def port():
                 deadline = time.monotonic() + 10
                 while not (root / 'port').exists():
                     if time.monotonic() > deadline:
-                        self.fail('Disposable launchd service did not start')
+                        status = subprocess.run(['/bin/launchctl', 'print', domain + '/' + label],
+                                                capture_output=True, text=True)
+                        errors = (root / 'stderr').read_text() if (root / 'stderr').exists() else ''
+                        self.fail('Disposable launchd service did not start: ' + errors + status.stdout)
                     time.sleep(.05)
                 return 'http://127.0.0.1:' + (root / 'port').read_text()
             try:
