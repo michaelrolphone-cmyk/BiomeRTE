@@ -55,3 +55,13 @@ Encrypted AES-GCM chunks with authenticated tensor metadata, SHA256 checksums, a
 ## Evidence and limitations
 
 See `evidence/qualification.json` and `HANDOFF.md` for observed results, exact deployment state and unrun experiments. Engineering correctness does not establish useful memory. The C3/C4 matched-direction/replay controls are explicitly unexecuted until their exact synthetic receipts are available. Trajectory descriptors are unvalidated measurements, not correctness or confabulation detectors. Optional persistent homology is not enabled. Never interpret an unrun condition as a pass.
+
+
+
+## Durable experiments (continuation source)
+
+`POST /experiments` accepts `request_id`, `expected_version: 0`, and `config` (the experiment fields shown in `configs/experiment-confirmatory.json`, excluding `manifest` and `output`, which the service supplies). It returns a durable `run_id`. Poll `GET /experiments/{run_id}` for state, completed trial count, current condition/seed/episode/gap and phase. Restart interrupts in-flight runs visibly; resume by POSTing a new `request_id`, that `run_id`, and its current `expected_version`, without a new config. Reusing a request ID with changed content is rejected. Identical retries return the original receipt.
+
+The CLI and service acquire the same per-run file lock. Resume requires exact config, baseline and corpus identity; an interrupted trial restarts from the immutable baseline while completed trials remain preserved. Model admission is acquired per trial. No execution timeout is added. Confirmatory trials are computationally expensive; progress and reports distinguish partial/unexecuted conditions from successful measurements. C3/C4 remain explicitly unexecuted pending exact matched replay.
+
+CPU regressions: `python -m unittest discover -s tests -p test_completion_controls.py -v` and `python -m unittest discover -s tests -p test_session_controls.py -v`. Native model/API qualification remains required before deploying the continuation.

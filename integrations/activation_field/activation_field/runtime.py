@@ -165,7 +165,7 @@ class Engine:
                 if p not in entries or p not in indices or a.dtype!=np.uint32 or a.shape!=(len(indices[p]),8):raise ValueError("Invalid packed change data")
                 m=entries[p];base=self.field.anchor[p].reshape(-1,8)
                 idx=indices.pop(p)
-                if len(idx) and (np.max(idx)>=base.shape[0] or len(np.unique(idx))!=len(idx)):raise ValueError("Invalid group index")
+                if idx.dtype!=np.uint32 or idx.ndim!=1 or (len(idx) and (np.max(idx)>=base.shape[0] or len(np.unique(idx))!=len(idx))):raise ValueError("Invalid group index")
                 # MLX arrays have value semantics; assignment creates new storage.
                 changed=mx.array(base);changed[mx.array(idx)]=mx.array(a)
                 proposed[p]=changed.reshape(m.weight.shape);mx.eval(proposed[p])
@@ -181,15 +181,28 @@ class Engine:
                 return a.view(mx.bfloat16) if value['mlx_dtype']=='bfloat16' else a
             if isinstance(value,list):return [decode(v) for v in value]
             return value
-        newcache=self.make_cache()
+        restored_config=FieldConfig.parse(meta['config'])
+        frequencies={p:other[p+'.frequency'] for p in entries}
+        restored_logits=None if reset_native_state else decode(meta['last_logits'])
+        trajectory=meta['trajectory']
+        if not isinstance(trajectory.get('tokens'),int) or not isinstance(trajectory.get('buffer'),list) or not isinstance(trajectory.get('descriptors'),list):
+            raise ValueError('Invalid trajectory state')
+        counters={key:meta[key] for key in ('field_version','field_tokens','config_revision','changed_words','consumed_tokens','sample_counter','native_tokens')}
+        if any(type(v) is not int or v<0 for v in counters.values()):raise ValueError('Invalid checkpoint counter')
+        newcache=[ArraysCache(size=2) if l.is_linear else RotatingKVCache(max_size=restored_config.context_length,keep=0) for l in self.model.layers]
         if not reset_native_state and meta['cache'] is not None:
             for c,v in zip(newcache,meta['cache'],strict=True):c.state=decode(v)
         # Publish only after every encrypted shard and state tree validates.
-        for p,m in entries.items():m.weight=proposed.get(p,self.field.anchor[p]);self.field.frequency[p]=other[p+'.frequency']
+        newtrajectory=Trajectory(restored_config.window_tokens,restored_config.stride_tokens)
+        newtrajectory.restore(trajectory)
+        for p,m in entries.items():m.weight=proposed.get(p,self.field.anchor[p]);self.field.frequency[p]=frequencies[p]
+        self.config=restored_config;self.field.config=restored_config
+        self.field.pending.clear();self.field.captured.clear()
         self.field.version=meta['field_version'];self.field.token_count=meta['field_tokens'];self.field.config_revision=meta['config_revision'];self.field.changed_words=meta['changed_words'];self.field.receipts=meta['receipts']
         self.field.norm_cache.clear()
         self.cache=newcache;self.native_tokens=0 if reset_native_state else meta['native_tokens'];self.consumed_tokens=meta['consumed_tokens'];self.sample_counter=meta['sample_counter'];self.prefix_hashes=[] if reset_native_state else meta['prefix_hashes']
-        self.last_logits=None if reset_native_state else decode(meta['last_logits']);self.trajectory.restore(meta['trajectory'])
+        self.last_logits=restored_logits
+        oldtrajectory=self.trajectory;self.trajectory=newtrajectory;oldtrajectory.close()
         self.requires_reset=False if reset_native_state else meta.get('requires_reset',False)
 
     def diagnostics(self):
@@ -199,3 +212,4 @@ class Engine:
         self.trajectory.close();self.field.pending.clear();self.field.captured.clear()
         self.model=None;self.cache=None;self.last_logits=None;self.field=None
         gc.collect();mx.clear_cache()
+

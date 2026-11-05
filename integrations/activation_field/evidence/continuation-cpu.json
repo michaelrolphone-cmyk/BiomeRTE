@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "environment": "Linux CPU; no MLX/Metal or FastAPI",
+  "continuation_unittests": 14,
+  "existing_session_control_unittests": 6,
+  "python_compile": "passed",
+  "mac_deployment": "not_performed",
+  "native_regression": "not_run",
+  "live_installed_agent_health": "ready; model unloaded; writes default off",
+  "terminal_inspection_operation": "af-finish-inspect-mac-1",
+  "terminal_inspection_state": "queued; no claim observed",
+  "scientific_success": "not_established"
+}

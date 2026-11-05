@@ -1,5 +1,5 @@
 """Streaming extension seam for deferred domain-transform experiments."""
-import hashlib,uuid
+import hashlib,uuid,json
 import numpy as np
 import mlx.core as mx
 from .quantized_writer import unpack
@@ -54,20 +54,44 @@ class FieldStore:
     def export_changes(self,iterator,destination=None,protection_policy=None):
         # Authenticated encryption is mandatory; no private-stream auto capture.
         if protection_policy and protection_policy.get('encrypted') is False:raise ValueError('Change maps require encryption')
+        if self.engine.field.pending:raise ValueError('Export requires a committed field boundary')
         entries=[]
+        policy=protection_policy or {}
+        source_name='map-source-'+uuid.uuid4().hex
+        source_meta,source_tensors=self.engine.state(field_only=True)
+        source_ref=self.vault.save(source_name,source_meta,source_tensors)
+        source_tensors=None
         def tensors():
             for n,entry in enumerate(iterator):
+                metadata['approximate']=metadata.get('approximate',False) or entry.get('approximate',False)
                 meta={k:v for k,v in entry.items() if not isinstance(v,np.ndarray)}
                 meta['part']=n;entries.append(meta)
                 for key in ('flat_indices','replacement_packed','signed_delta'):yield str(n)+'.'+key,entry[key]
         name=destination or 'map-'+uuid.uuid4().hex
         metadata=dict(kind='change_map',schema_version=1,baseline_hash=self.engine.manifest['baseline_hash'],tensor_map_version=1,entries=entries,source_run_ref=protection_policy.get('source_run_ref') if protection_policy else None,field_version=self.engine.field.version,token_count=self.engine.field.token_count,config_ref=self.engine.config.to_dict(),rng_identity=self.engine.config.seed)
-        return self.vault.save(name,metadata,tensors())
+        metadata.update(map_id=name,baseline_ref=metadata['baseline_hash'],final_field_ref=source_ref,
+                        final_checkpoint_hash=source_ref['sha256'],run_id=policy.get('source_run_ref') or source_name,
+                        input_stream_ref=policy.get('input_stream_ref'),
+                        input_stream_digest=policy.get('input_stream_digest') or hashlib.sha256(json.dumps(self.engine.prefix_hashes).encode()).hexdigest(),
+                        input_digest_scope='transcript-message-hashes; raw token streams require caller-supplied digest',
+                        source_revision=source_meta['source_revision'],source_versions=source_meta['versions'],
+                        config_revision=self.engine.field.config_revision,role_settings=self.engine.config.role_scales,
+                        quantization_ref=dict(mode='affine',bits=4,group_size=64),
+                        selection_policy=policy.get('selection_policy',{'kind':'iterator_defined; consult entry approximation flags'}),
+                        sampling_rng_counter=self.engine.sample_counter)
+        try:return self.vault.save(name,metadata,tensors())
+        except Exception:
+            self.vault.delete(source_name)
+            raise
 
     def materialize_state(self,baseline_ref,change_map_ref,destination=None):
         m=self.vault.manifest(change_map_ref)['metadata']
         if m['baseline_hash']!=baseline_ref or baseline_ref!=self.engine.manifest['baseline_hash']:raise ValueError('Baseline mismatch')
-        self.engine.reset('entire_session');entries={p:module for p,module,*_ in self.engine.field.entries}
+        if self.engine.field.pending:raise ValueError('Materialization requires a committed field boundary')
+        if m.get('kind')!='change_map' or m.get('schema_version')!=1 or m.get('tensor_map_version')!=1:raise ValueError('Unsupported change-map format')
+        entries={p:module for p,module,*_ in self.engine.field.entries}
+        from .change_validation import validate_entry
+        seen={}
         arrays=iter(self.vault.arrays(change_map_ref));pending={}
         for entry in m['entries']:
             part=entry['part'];data={}
@@ -76,15 +100,32 @@ class FieldStore:
                 if name!=str(part)+'.'+key:raise ValueError('Invalid map order')
                 data[key]=a
             p=entry['module_path'];module=entries[p];idx=data['flat_indices'];codes=data['replacement_packed']
-            if codes.dtype!=np.uint32 or codes.shape!=(len(idx),8) or np.any(idx>=module.weight.size//8):raise ValueError('Invalid replacement groups')
+            validate_entry(entry,data,module.weight.shape,seen.setdefault(p,set()))
             import mlx.core as mx
-            weight=pending.get(p,module.weight).reshape(-1,8)
+            weight=mx.array(pending.get(p,self.engine.field.anchor[p])).reshape(-1,8)
             weight[mx.array(idx)]=mx.array(codes);pending[p]=weight.reshape(module.weight.shape)
-        for p,weight in pending.items():entries[p].weight=weight
-        meta,tensors=self.engine.state(field_only=True)
-        return self.vault.save(destination or 'materialized-'+uuid.uuid4().hex,meta,tensors)
+        if next(arrays,None) is not None:raise ValueError('Unexpected trailing map tensors')
+        mx.eval(pending)
+        # Saving a materialized branch never publishes into the active Engine.
+        meta,_=self.engine.state(field_only=True)
+        meta.update(field_version=m['field_version'],field_tokens=m['token_count'],consumed_tokens=m['token_count'],
+                    config=m['config_ref'],changed_words=0,receipts=[],prefix_hashes=[],native_tokens=0,
+                    cache=None,last_logits=None,requires_reset=False,source_change_map=change_map_ref,
+                    trajectory=dict(tokens=0,buffer=[],descriptors=[],window=self.engine.config.window_tokens,stride=self.engine.config.stride_tokens))
+        def tensors():
+            for p,module in entries.items():
+                if p in pending:
+                    weights=pending[p].reshape(-1,8);base=self.engine.field.anchor[p].reshape(-1,8)
+                    indices=np.flatnonzero(np.array(mx.any(weights!=base,axis=1))).astype(np.uint32)
+                    if len(indices):
+                        yield p+'.indices',indices
+                        yield p+'.codes',weights[mx.array(indices)]
+                yield p+'.frequency',mx.zeros_like(self.engine.field.frequency[p])
+        return self.vault.save(destination or 'materialized-'+uuid.uuid4().hex,meta,tensors())
 
     def import_field(self,checkpoint_ref,new_session=True,reset_native_state=True):
         if not new_session:raise ValueError('Transform trials require an independent Engine/session')
-        self.engine.reset('entire_session');self.engine.restore(self.vault,checkpoint_ref,reset_native_state=reset_native_state)
+        if self.engine.consumed_tokens or self.engine.field.pending:raise ValueError('Import requires a fresh independent Engine/session')
+        self.engine.restore(self.vault,checkpoint_ref,reset_native_state=reset_native_state)
         return dict(baseline_ref=self.engine.manifest['baseline_hash'],field_version=self.engine.field.version,independent=True,native_state_reset=reset_native_state)
+

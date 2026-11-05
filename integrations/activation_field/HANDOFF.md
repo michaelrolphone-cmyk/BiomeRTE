@@ -34,3 +34,15 @@ Per-layer saturation/drift/update-norm reporting needs expansion beyond current 
 The LM Studio SDK currently resolves to dependencies for which npm reports a constrained-collection validation advisory in Zod 3. No incompatible major upgrade or SDK downgrade was applied.
 
 Rhizome task `dd592c62-c65e-4026-ad3c-c5e75acecc27` retains remaining qualification. The external BPMN Intake projection did not materialize its Rhizome execution; that workflow was checkpointed without fabricating completion. The actual development execution and evidence are recorded separately.
+
+
+
+## Completion continuation — source changes awaiting Mac qualification
+
+The continuation adds durable POST/GET experiment jobs, explicit restart/resume with request identity and version checks, per-trial progress, atomic result publication, an exclusive run lock, frozen config/corpus/baseline identity, multi-seed execution, paired episode-bootstrap reports, reverse/preference probes, disjoint split templates, teacher-forced role segments, and a transcript-available reference. Existing legacy experiment directories are preserved; use a new output directory for this corpus version. `configs/experiment-confirmatory.json` pins the specified five seeds. This configuration is prepared, not executed.
+
+Change-map exports now retain an encrypted source checkpoint and provenance. Materializing a map creates a separate saved branch without resetting/publishing into the active Engine. Invalid layout, duplicate/out-of-range groups, nonfinite deltas and checksum mismatches are rejected before activation. Checkpoint restore validates config/frequencies/counters before publishing and restores the saved configuration. These changes still require native full-model regression testing.
+
+CPU validation: 14 continuation regressions and six existing session-control tests passed; all Python source compiles. No FastAPI route test or Metal regression was run in this continuation. The source changes are not deployed. The live installed agent's health action succeeded through Biome: ready, model unloaded, learning default false, baseline pull default zero. Normal Mac terminal operation `af-finish-inspect-mac-1` remains queued without a provider claim; its lease is `207c3628627912cf92296c2c913e9b2371733d6b398f309a77eea34cb6a7c153`. Read its original status before dispatching another command.
+
+Remaining: exact C3/C4 replay, expanded per-layer quantization/drift metrics, the 10,000-token stability and executable-suite runner, calibrated cross-domain retrieval/coherence evaluator, optional homology, full scientific trials, native regression/deployment, and LM Studio permission/hosted verification. Full completion is not claimed. Run recovery must use the normal Biome terminal; the separate maintenance channel requires Michael's explicit confirmation.

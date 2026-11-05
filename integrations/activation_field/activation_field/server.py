@@ -14,6 +14,12 @@ def app(root,manifest,initial_config=None):
     def auth(authorization:str=Header(default='')):
         if not hmac.compare_digest(authorization,'Bearer '+token):raise HTTPException(401,'Unauthorized')
     api=FastAPI(title='Activation Field',docs_url=None,redoc_url=None,dependencies=[Depends(auth)])
+    from .experiment_jobs import ExperimentJobs
+    experiments=ExperimentJobs(root,manifest)
+    @api.post('/experiments')
+    def experiment_create(body:dict):return experiments.start(body)
+    @api.get('/experiments/{run_id}')
+    def experiment_status(run_id:str):return experiments.get(run_id)
     @api.exception_handler(Conflict)
     async def conflict(request,exc):
         from fastapi.responses import JSONResponse
@@ -78,3 +84,4 @@ def app(root,manifest,initial_config=None):
         s['checkpoint']=name;s['reset_native_on_load']=body.get('reset_native_state',True);sessions.save(s)
         return created
     return api
+
