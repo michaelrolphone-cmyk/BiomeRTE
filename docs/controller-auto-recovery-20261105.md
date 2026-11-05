@@ -1,8 +1,8 @@
 # Controller restoration and automatic recovery — 2026-11-05
 
-The hosted gateway tried to decode a controller-native discovery page as a full legacy snapshot (`snapshot.capabilities`). This raised an exception and returned HTTP503 while ordinary `system.discovery` and terminal execution still worked. Gateway version29 now forwards default/filtered discovery and the legacy alias to the controller's `system.discovery`, preserving its continuation and realm. Native and OAuth route regression tests cover the actual response shape. Old snapshot cursors return a restart-discovery error instead of an infrastructure failure.
+The hosted gateway tried to decode a controller-native discovery page as a full legacy snapshot (`snapshot.capabilities`). This raised an exception and returned HTTP 503 while ordinary `system.discovery` and terminal execution still worked. Gateway version 29 now forwards default/filtered discovery and the legacy alias to the controller's `system.discovery`, preserving its continuation and realm. Native and OAuth route regression tests cover the actual response shape. Old snapshot cursors return a restart-discovery error instead of an infrastructure failure.
 
-A second failure path existed in `ControllerLink.next`: an open WebSocket suppressed the durable HTTP inbox forever, even when socket delivery stopped. Empty sockets now fall back to that same durable inbox every2 seconds. HTTP and socket delivery keep the same job IDs, lease ownership and durable controller receipts; this does not create a new command or replay uncertain provider effects.
+A second failure path existed in `ControllerLink.next`: an open WebSocket suppressed the durable HTTP inbox forever, even when socket delivery stopped. Empty sockets now fall back to that same durable inbox every 2 seconds. HTTP and socket delivery keep the same job IDs, lease ownership and durable controller receipts; this does not create a new command or replay uncertain provider effects.
 
 ## Independent supervision
 
@@ -21,13 +21,17 @@ The watchdog does not terminate terminal/model/provider jobs, rewrite journals, 
 
 On the Mac, configuration and status are below `~/.local/share/biomerte-controller/recovery/`. `config.json` contains endpoint and key-file paths, not copied secrets. Credentials are reread for rotation. `status.json` atomically records last observations, exact failure categories, restart counters, cooldowns and actions. Logs never include keys, request headers or response error bodies.
 
-Defaults: 15 seconds between probe passes;15 seconds per network probe;3 failed passes;60-second initial restart cooldown, doubling to300 seconds while failure persists. These are configurable diagnostic and restart scheduling intervals, not job duration/CPU limits. There is no retry-count cutoff. Add a `paused` file or set `enabled:false` for deliberate maintenance; remove it to resume. Independent launchd KeepAlive restarts the watchdog itself.
+Defaults: 15 seconds between probe passes; 15 seconds per network probe; 3 failed passes; 60-second initial restart cooldown, doubling to 300 seconds while failure persists. These are configurable diagnostic and restart scheduling intervals, not job duration/CPU limits. There is no retry-count cutoff. Add a `paused` file or set `enabled:false` for deliberate maintenance; remove it to resume. Independent launchd KeepAlive restarts the watchdog itself.
 
 ## Qualification
 
--44 hosted gateway tests passed; deployed version29; normal filtered discovery and `discovery.page` both verified against the running Mac.
--9 recovery tests passed on Linux and native Darwin arm64. A disposable server kept `/health` green while MCP requests hung; supervision recovered it while an independent subprocess completed normally.
--Tests cover an open-but-idle socket, preserved inbox identities, transient failures, repeated connector failure, restart cooldown persistence, upstream outage without restart, fixed restart targets, credential rotation and atomic status.
--Live Mac pre-install probes all passed: local, site, upstream and delivery.
+- 44 hosted gateway tests passed; deployed version 29; normal filtered discovery and `discovery.page` both verified against the running Mac.
+- 10 recovery tests passed on native Darwin arm64 (9 passed on Linux, with the launchd test skipped). A disposable server kept `/health` green while MCP requests hung; supervision recovered it while an independent subprocess completed normally. A separate native test bootstrapped a disposable launchd service, deliberately stalled its request path, and verified recovery through an actual `launchctl kickstart -k`. Production controller processes were not faulted.
+- Tests cover an open-but-idle socket, preserved inbox identities, transient failures, repeated connector failure, restart cooldown persistence, upstream outage without restart, fixed restart targets, credential rotation and atomic status.
+- Live Mac pre-install and post-install probes all passed: local, site, upstream and delivery.
+- A real terminal job ran for 679.75 seconds (11 minutes 19 seconds), crossed the connector restart, and completed with exit code 0. Operation: `controller-recovery-longjob-20261105`; result SHA-256: `1020c85b98c8a19e2bcb90a34fc2ce205c953a53676ed9c0a4a15d5dae2bdd1f`. This exceeds the reported ten-minute recurrence interval but is not a prolonged soak.
+- Native test operation: `controller-recovery-launchd-tests-20261105`; all 10 passed in 13.85 seconds. Install operation: `controller-watchdog-install-20261105`.
+
+The watchdog and HTTP fallback were installed on the active Mac at 05:15 UTC. All four live probes remained healthy after the connector restart. The release stage is `~/.local/share/biomerte-releases/recovery-20261105/`; the prior connector module is preserved as `persistent_link.py.before-recovery-20261105`.
 
 The Pi is offline. This change qualifies the active Mac path; it does not claim a physical Pi rollout or exhaustive reliability under all failures. Deterministic application defects and unreachable upstream services remain failures requiring their own repair; restart is not treated as proof of repair.

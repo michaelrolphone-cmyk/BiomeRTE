@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import plistlib
 import queue
 import subprocess
 import sys
@@ -28,6 +30,54 @@ def observation(local=True, site=True, upstream=True, delivery=True):
 
 
 class RecoveryTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'darwin', 'native launchd qualification')
+    def test_launchd_recovers_disposable_service(self):
+        with tempfile.TemporaryDirectory(prefix='biome-watchdog-test-') as root:
+            root = Path(root)
+            script = root / 'server.py'
+            script.write_text('''import pathlib,time,sys
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+root=pathlib.Path(sys.argv[1])
+class H(BaseHTTPRequestHandler):
+ def log_message(self,*a): pass
+ def do_GET(self): self.send_response(200);self.end_headers();self.wfile.write(b'{"runtime":"up"}')
+ def do_POST(self):
+  if not (root/'recover').exists(): time.sleep(60)
+  self.send_response(200);self.end_headers();self.wfile.write(b'{"ok":true}')
+s=ThreadingHTTPServer(('127.0.0.1',0),H)
+(root/'port').write_text(str(s.server_port));s.serve_forever()
+''')
+            label = 'org.biomerte.watchdog-qualification-' + str(os.getpid())
+            domain = 'gui/' + str(os.getuid())
+            plist = root / 'test.plist'
+            plist.write_bytes(plistlib.dumps({'Label': label, 'ProgramArguments': [sys.executable, '-S', str(script), str(root)], 'RunAtLoad': True}))
+            def port():
+                deadline = time.monotonic() + 10
+                while not (root / 'port').exists():
+                    if time.monotonic() > deadline:
+                        self.fail('Disposable launchd service did not start')
+                    time.sleep(.05)
+                return 'http://127.0.0.1:' + (root / 'port').read_text()
+            try:
+                subprocess.run(['/bin/launchctl', 'bootstrap', domain, str(plist)], check=True, capture_output=True)
+                url = port()
+                self.assertEqual(watchdog.request_json(url + '/health')['runtime'], 'up')
+                recovery = watchdog.Recovery({'failure_threshold': 2})
+                def restart(service):
+                    (root / 'port').unlink()
+                    (root / 'recover').touch()
+                    with patch.dict(watchdog.LABELS, {'controller': label}):
+                        watchdog.restart_service(service)
+                for now in (1, 2):
+                    with self.assertRaises(watchdog.ProbeError):
+                        watchdog.request_json(url + '/mcp', {}, timeout=.1)
+                    recovery.observe(observation(local=False), restart, now)
+                self.assertEqual(recovery.state['last_action']['outcome'], 'restart_issued')
+                self.assertTrue(watchdog.request_json(port() + '/mcp', {})['ok'])
+                self.assertEqual(recovery.observe(observation(), restart, 3)['status'], 'healthy')
+            finally:
+                subprocess.run(['/bin/launchctl', 'bootout', domain + '/' + label], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def test_three_failed_requests_restart_controller_despite_green_health(self):
         recovery = watchdog.Recovery({})
         actions = []
