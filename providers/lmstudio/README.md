@@ -136,7 +136,7 @@ prompt/response bodies. context-lengths.json remains capacity metadata for the
 non-macOS fallback; it cannot override macOS RAM selection. Coding requests also
 explicitly disable a saved output-token cap while retaining their checkpoints.
 
-Validation includes 43 native adapter/recovery/memory-policy tests. Both 32K and
+Validation includes 44 native adapter/recovery/memory-policy tests. Both 32K and
 64K loaded on the 24-GiB Mac with unchanged swap usage and no extra swap-outs.
 Run the suite with python3 -S -m unittest discover -s providers/lmstudio -p
  'test_*.py' -v. Live ownership-review qualification is recorded separately.

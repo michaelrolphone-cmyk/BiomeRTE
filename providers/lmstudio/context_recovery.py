@@ -79,6 +79,9 @@ def complete(api, body, cache_path=None, log=lambda message: None, context_selec
                     body['model'] = grow(api, model, loaded, checked['target'])
                     model, loaded, size, maximum = loaded_model(api, body['model'])
                 memory = dict(checked, target=size, rechecked_target=checked['target'])
+        if any(attempt['context_length'] == size for attempt in history):
+            raise ValueError('Context recovery made no capacity progress after memory changed; '
+                             + json.dumps({'context_length': size, 'memory': memory}, sort_keys=True))
         result = api('/v1/chat/completions', body)
         if result.get('model') != body['model']:
             raise RuntimeError('Delegated inference returned a different model')

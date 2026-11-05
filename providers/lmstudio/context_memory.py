@@ -22,7 +22,7 @@ def estimate(model, context, parallel, run=subprocess.check_output):
     cmd = [str(Path.home()/'.lmstudio/bin/lms'), 'load', model,
            '--context-length', str(context), '--estimate-only']
     if parallel is not None: cmd += ['--parallel', str(parallel)]
-    output = run(cmd, text=True)
+    output = run(cmd, text=True, stderr=subprocess.STDOUT)
     output = re.sub(r'\x1b\[[0-9;]*m', '', output)
     match = re.search(r'Estimated Total Memory:\s*([\d.]+)\s*(GiB|MiB|GB|MB)', output)
     if not match: raise RuntimeError('LM Studio did not return a memory estimate')

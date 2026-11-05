@@ -115,6 +115,12 @@ class RecoveryTests(unittest.TestCase):
         result=complete(server,self.body,context_selector=lambda *a:{'target':next(picks)})
         self.assertEqual([x['context_length'] for x in server.loads],[65536,32768])
         self.assertEqual(result['biome_inference']['attempts'][0]['context_length'],32768)
+    def test_memory_change_cannot_replay_an_identical_insufficient_window(self):
+        server=FakeServer(size=32768,maximum=262144,responses=[response('length',20000,12767)])
+        picks=iter([32768,65536,32768,32768])
+        with self.assertRaisesRegex(ValueError,'no capacity progress'):
+            complete(server,self.body,context_selector=lambda *a:{'target':next(picks)})
+        self.assertEqual(len(server.requests),1)
     def test_ignored_shrink_is_a_failure(self):
         server=FakeServer(size=65536,maximum=262144);server.actual_size=65536
         with self.assertRaisesRegex(RuntimeError,'not confirmed'):

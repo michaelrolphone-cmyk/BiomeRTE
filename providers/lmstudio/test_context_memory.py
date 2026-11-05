@@ -34,7 +34,10 @@ class MemoryPolicyTests(unittest.TestCase):
         self.assertEqual(snap['available_bytes'],350*16384)
     def test_estimation_does_not_load_model_and_preserves_parallelism(self):
         calls=[]
-        def run(cmd,**kw):calls.append(cmd);return 'Estimated Total Memory: 10.04 GiB\n'
+        def run(cmd,**kw):
+            import subprocess
+            self.assertEqual(kw['stderr'],subprocess.STDOUT)
+            calls.append(cmd);return 'Estimated Total Memory: 10.04 GiB\n'
         self.assertEqual(estimate('qwen',65536,4,run),int(10.04*G))
         self.assertIn('--estimate-only',calls[0])
         self.assertEqual(calls[0][-2:],['--parallel','4'])
