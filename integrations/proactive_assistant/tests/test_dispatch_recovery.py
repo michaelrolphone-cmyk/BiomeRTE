@@ -30,6 +30,13 @@ class DispatchRecovery(Delivery):
         self.assertEqual(self.execute(lambda tx:a.release_dispatch_assignment(tx,self.ctx,f)),(True,'released'))
         self.assertIsNone(self.execute(lambda tx:tx.get('assistant_assignment','task')))
 
+    def test_old_intent_cannot_start_episode_for_new_reservation(self):
+        f,_,_=self.seed()
+        self.execute(lambda tx:tx.put('assistant_assignment','task',{'task':'task','epoch':1,'cycle':'replacement'}))
+        with self.assertRaisesRegex(Fault,'Stale assignment cycle'):
+            self.execute(lambda tx:a.episode_start(tx,self.ctx,{'id':'late','responsibility_id':'r','owner_epoch':1,'task_id':'task','frame':f}))
+        self.assertEqual(self.execute(lambda tx:tx.rows('assistant_episodes')),[])
+
     def test_stale_dispatch_cannot_release_replacement(self):
         f,_,_=self.seed()
         self.execute(lambda tx:tx.put('assistant_assignment','task',{'task':'task','epoch':2,'cycle':'new'}))
@@ -91,12 +98,14 @@ class DispatchRecovery(Delivery):
     def test_retry_refuses_unreconciled_effect(self):
         f,row,run=self.seed();f['operation_id']='effect';run['result']['frame']=f
         def block(tx):
+            tx.put('runs',run['id'],run)
             tx.put('_submissions','effect',{'contract':'host.terminal.run:1','inputs':{}})
             with patch.object(a,'action_status',return_value=('unresolved',{})):
                 a.reconcile_dispatch(tx,self.ctx,row,run)
         self.execute(block)
-        with self.assertRaisesRegex(Fault,'Reconcile'):
-            self.execute(lambda tx:a.retry_dispatch(tx,self.ctx,'r','task','dispatch'))
+        with patch.object(a,'action_status',return_value=('unresolved',{})):
+            with self.assertRaisesRegex(Fault,'Reconcile'):
+                self.execute(lambda tx:a.retry_dispatch(tx,self.ctx,'r','task','dispatch'))
 
 for name in list(dir(Delivery)):
     if name.startswith('test_') and name not in DispatchRecovery.__dict__:setattr(DispatchRecovery,name,None)

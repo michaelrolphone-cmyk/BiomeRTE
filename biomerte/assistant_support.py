@@ -748,7 +748,9 @@ def reconcile_dispatch(tx,ctx,row,run):
     if task and reason not in ('episode_exists','superseded_assignment'):
         failure={'task_id':task,'responsibility_id':row['responsibility_id'],'run_id':run['id'],
                  'disposition':result.get('disposition','faulted'),'result_code':result.get('result_code','engine_fault'),
-                 'reservation_released':released,'recovery_state':reason,'evidence_refs':f.get('evidence_refs',[])}
+                 'reservation_released':released,'recovery_state':reason,'evidence_refs':f.get('evidence_refs',[]),
+                 'operations':{key:value.get('operation') for key,value in f.get('_operations',{}).items()},
+                 'effect_operation':f.get('operation_id')}
         if failure['disposition']=='completed':
             failure.update(disposition='unresolved',result_code='episode_receipt_missing')
         tx.put('assistant_dispatch_failures',task,failure)
@@ -781,7 +783,9 @@ def retry_dispatch(tx,ctx,id,task_id,failure_run_id):
     if failure['responsibility_id']!=id or failure['run_id']!=failure_run_id:
         raise Fault('Dispatch failure changed; inspect assistant.status',409)
     if not failure['reservation_released'] or tx.get('assistant_assignment',task_id):
-        raise Fault('Reconcile the existing operation before retrying dispatch',409)
+        run=tx.need('runs',failure_run_id)
+        released,_=release_dispatch_assignment(tx,ctx,(run.get('result') or {}).get('frame',{}))
+        if not released:raise Fault('Reconcile the existing operation before retrying dispatch',409)
     if r['desired']!='run':raise Fault('Admission is paused',409)
     if tx.need('work',task_id)['state']!='open':raise Fault('Task is no longer open',409)
     tx.drop('assistant_dispatch_failures',task_id)
@@ -824,6 +828,7 @@ def episode_start(tx,ctx,definition):
     if r['desired']!='run':raise Fault('Admission is paused',409)
     assignment=tx.need('assistant_assignment',definition['task_id'])
     if assignment['epoch']!=r['epoch']:raise Fault('Stale task assignment',409)
+    if assignment.get('cycle')!=definition['frame'].get('cycle_id'):raise Fault('Stale assignment cycle',409)
     frame=copy.deepcopy(definition['frame']);frame['episode_id']=definition['id'];frame['goal']=frame['assignment'].get('goal',frame['goal']);frame['runtime_phase']='reasoning'
     key='assistant.task.'+definition['task_id'];document=tx.get('documents',key)
     if document:
@@ -835,7 +840,9 @@ def episode_start(tx,ctx,definition):
         frame.update(copy.deepcopy(body));frame.setdefault('evidence_refs',[]).append(revision['rev']);frame.setdefault('evidence',[]).append({'source':key,'revision':revision['rev'],'body':body})
 
     run=process.new_run(tx,r['episode_definition'],{'frame':frame},pin=r['episode_revision'])
-    row={'id':definition['id'],'responsibility_id':r['id'],'task_id':definition['task_id'],'run_id':run['id'],'state':'running','epoch':r['epoch']};tx.put('assistant_episodes',row['id'],row);return row
+    row={'id':definition['id'],'responsibility_id':r['id'],'task_id':definition['task_id'],'run_id':run['id'],'state':'running','epoch':r['epoch']};tx.put('assistant_episodes',row['id'],row)
+    tx.drop('assistant_dispatch_failures',definition['task_id'])
+    return row
 
 @op('assistant.input','wait_id:str value:obj')
 def operator_input(tx,ctx,wait_id,value):
