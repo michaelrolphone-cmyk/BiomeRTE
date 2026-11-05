@@ -37,6 +37,11 @@ class RecoveryTests(unittest.TestCase):
             script = root / 'server.py'
             script.write_text('''import pathlib,time,sys
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from socketserver import TCPServer
+class FixtureServer(ThreadingHTTPServer):
+ def server_bind(self):
+  TCPServer.server_bind(self)
+  self.server_name='localhost';self.server_port=self.server_address[1]
 root=pathlib.Path(sys.argv[1])
 class H(BaseHTTPRequestHandler):
  def log_message(self,*a): pass
@@ -44,12 +49,14 @@ class H(BaseHTTPRequestHandler):
  def do_POST(self):
   if not (root/'recover').exists(): time.sleep(60)
   self.send_response(200);self.end_headers();self.wfile.write(b'{"ok":true}')
-s=ThreadingHTTPServer(('127.0.0.1',0),H)
+s=FixtureServer(('127.0.0.1',0),H)
 (root/'port').write_text(str(s.server_port));s.serve_forever()
 ''')
             label = 'org.biomerte.watchdog-qualification-' + str(os.getpid())
             domain = 'gui/' + str(os.getuid())
             plist = root / 'test.plist'
+            # The loopback fixture deliberately avoids HTTPServer's reverse-DNS lookup;
+            # resolver latency is unrelated to the restart behavior under test.
             # launchd does not inherit the test runner's interpreter environment.
             # Preserve only Python runtime paths (never CI credentials) and retain
             # service diagnostics when a fixture fails before publishing its port.
@@ -201,13 +208,18 @@ s=ThreadingHTTPServer(('127.0.0.1',0),H)
         # Disposable server only: GET health stays green while POST stalls.
         server_code = '''import sys,time,json
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from socketserver import TCPServer
+class FixtureServer(ThreadingHTTPServer):
+ def server_bind(self):
+  TCPServer.server_bind(self)
+  self.server_name='localhost';self.server_port=self.server_address[1]
 class H(BaseHTTPRequestHandler):
  def log_message(self,*a): pass
  def do_GET(self): self.send_response(200);self.end_headers();self.wfile.write(b'{"runtime":"up"}')
  def do_POST(self):
   if sys.argv[1]=='hang': time.sleep(60)
   self.send_response(200);self.end_headers();self.wfile.write(b'{"ok":true}')
-s=ThreadingHTTPServer(('127.0.0.1',0),H);print(s.server_port,flush=True);s.serve_forever()
+s=FixtureServer(('127.0.0.1',0),H);print(s.server_port,flush=True);s.serve_forever()
 '''
         children = []
         def start(mode):
