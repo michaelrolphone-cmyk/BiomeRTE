@@ -860,6 +860,8 @@ def episode_start(tx,ctx,definition):
         require_keys(body,['goal','verification_action','verification_probes'],'task inputs')
         frame.update(copy.deepcopy(body));frame.setdefault('evidence_refs',[]).append(revision['rev']);frame.setdefault('evidence',[]).append({'source':key,'revision':revision['rev'],'body':body})
 
+    # Preserve admission evidence even if the engine fails before its first stage.
+    record_frame(tx,frame)
     run=process.new_run(tx,r['episode_definition'],{'frame':frame},pin=r['episode_revision'])
     row={'id':definition['id'],'responsibility_id':r['id'],'task_id':definition['task_id'],'run_id':run['id'],'state':'running','epoch':r['epoch']};tx.put('assistant_episodes',row['id'],row)
     tx.drop('assistant_dispatch_failures',definition['task_id'])
