@@ -147,12 +147,20 @@ def prompt_phase(tx,ctx,f,key,entry):
         action=copy.deepcopy(previous['action'])
     else:
         context=copy.deepcopy(f.get('context',{}));context.update(workspace=f.get('workspace_context'), source_request=f.get('source_request'), source_snapshot=f.get('source_snapshot'), publication=f.get('publication'), observation=f.get('last_result'),prediction=f.get('hypotheses',[]),test_evidence=f.get('test_evidence'),review_feedback=f.get('review'),goal=f.get('goal',{}),proposal=f.get('proposal'),evidence=f.get('evidence',[]),previous_findings=f.get('findings',[]),inventory=f.get('inventory',[]),system=f.get('current_system'),tool_schemas=[{'id':c['id'],'inputs':c['inputs'],'outputs':c['outputs']} for c in tx.rows('contracts')])
+        # The reviewed action's contract is essential evidence, not optional
+        # registry history. Preserve it when the rest of the registry is omitted.
+        proposed=[(f.get('proposal') or {}).get('action'),f.get('proposed_action')]
+        required_ids=sorted({x['contract'] for x in proposed if isinstance(x,dict) and x.get('contract')})
+        context['required_tool_schemas']=[]
+        for contract_id in required_ids:
+            contract=tx.need('contracts',contract_id)
+            context['required_tool_schemas'].append({k:copy.deepcopy(contract[k]) for k in ('id','inputs','outputs')})
         observation=context['observation']
         if isinstance(observation,dict) and observation and all(k in context and context[k]==v for k,v in observation.items()):
             # Protocol reads already placed these exact fields in the context.
             # Retain them once, with an explicit digest-bound observation reference.
             context['observation']={'same_as_context_fields':sorted(observation),'sha256':digest(observation)}
-        essential={k:context[k] for k in ('goal','proposal','system','observation','prediction','test_evidence','review_feedback','workspace','source_request','source_snapshot')}
+        essential={k:context[k] for k in ('goal','proposal','system','observation','prediction','test_evidence','review_feedback','workspace','source_request','source_snapshot','required_tool_schemas')}
         if f.get('runtime_phase')=='development':
             context['workspace_tool_schemas']={k:assistant_workspaces.SCHEMAS[k] for k in ('exec','git','file.write')}
             essential['workspace_tool_schemas']=context['workspace_tool_schemas']
@@ -170,7 +178,7 @@ def prompt_phase(tx,ctx,f,key,entry):
         # the validator accepts. A field path or the answer itself is not evidence.
         context_ref='context:'+digest(context)
         context['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+[context_ref]))
-        prompt=entry['prompt']+'\nCite facts only with exact strings from context.evidence_refs. Field paths are not evidence IDs. Keep unsupported claims in assumptions. Registry ready state is advertised availability, not a verified live health check. Omitted tool schemas remain available in the registry; do not infer that a capability is missing. Return proposed_action:null unless the supplied schema and all required argument values are known.'
+        prompt=entry['prompt']+'\nCite facts only with exact strings from context.evidence_refs. Field paths are not evidence IDs. Keep unsupported claims in assumptions. Registry ready state is advertised availability, not a verified live health check. The exact contracts for the current proposed action are in context.required_tool_schemas. Other omitted tool schemas remain available in the registry; do not infer that a capability is missing. Return proposed_action:null unless the supplied schema and all required argument values are known.'
         action={'contract':'agent.lmstudio.delegate:1','resource':select_resource(tx,'agent.lmstudio.delegate:1','llm',cfg),'inputs':{'request':prompt,'context':context}}
     supplied=set(action['inputs']['context'].get('evidence_refs',[]))
     f['evidence_refs']=list(dict.fromkeys(f.get('evidence_refs',[])+sorted(supplied)))
