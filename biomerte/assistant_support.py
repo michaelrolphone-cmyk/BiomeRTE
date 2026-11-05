@@ -818,7 +818,17 @@ def adopt(tx,ctx,definition):
     from .decisions import operator
     operator(ctx);configuration(tx);r=tx.need('assistant_responsibilities',definition['id'])
     if r['revision']!=definition['expected_revision'] or r['active_cycle']:raise Fault('Adoption requires a cycle boundary and matching revision',409)
-    tx.need('process_versions',definition['binding_revision']);r.update(binding_revision=definition['binding_revision'],revision=r['revision']+1,epoch=r['epoch']+1);tx.put('assistant_responsibilities',r['id'],r);return r
+    current=tx.need('process_versions',r['binding_revision'])
+    candidate=tx.need('process_versions',definition['binding_revision'])
+    if candidate['name']!=r['cycle_definition']:
+        raise Fault('Workflow revision belongs to another process',409)
+    for boundary in ('inputs','outputs'):
+        if current['graph'].get(boundary,{})!=candidate['graph'].get(boundary,{}):
+            raise Fault('Workflow schema change requires explicit migration',409)
+    # Binding adoption changes the next cycle, not the controller's ownership.
+    # Active episodes retain their pinned graph and valid ownership epoch.
+    r.update(binding_revision=definition['binding_revision'],revision=r['revision']+1)
+    tx.put('assistant_responsibilities',r['id'],r);return r
 
 @op('assistant.episode_start','definition:obj')
 def episode_start(tx,ctx,definition):
