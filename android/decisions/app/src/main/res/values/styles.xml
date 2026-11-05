@@ -8,4 +8,11 @@
   <item name="android:windowActionModeOverlay">true</item><item name="android:windowSoftInputMode">adjustResize</item>
  </style>
  <string name="app_name">Biome Decisions</string>
+ <style name="WidgetDialogTheme" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+  <item name="android:fontFamily">sans-serif</item><item name="android:colorAccent">@color/accent</item>
+  <item name="android:windowBackground">@color/canvas</item><item name="android:colorBackground">@color/canvas</item>
+  <item name="android:textColorPrimary">@color/ink</item><item name="android:textColorSecondary">@color/muted</item>
+  <item name="android:windowMinWidthMajor">90%</item><item name="android:windowMinWidthMinor">95%</item>
+  <item name="android:windowCloseOnTouchOutside">true</item><item name="android:windowSoftInputMode">adjustResize</item>
+ </style>
 </resources>

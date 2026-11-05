@@ -6,6 +6,7 @@
  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
  <application android:name=".App" android:label="Biome Decisions" android:theme="@style/AppTheme" android:icon="@mipmap/ic_launcher" android:allowBackup="false" android:usesCleartextTraffic="false">
   <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+  <activity android:name=".DecisionDialogActivity" android:exported="false" android:theme="@style/WidgetDialogTheme" android:excludeFromRecents="true" android:taskAffinity="org.biomerte.decisions.widget" android:launchMode="singleTop"/>
   <receiver android:name=".DecisionWidget" android:exported="false" android:label="Biome Decisions"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/decisions_widget"/></receiver>
   <receiver android:name=".AnswerReceiver" android:exported="false"/>
   <receiver android:name=".BootReceiver" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
