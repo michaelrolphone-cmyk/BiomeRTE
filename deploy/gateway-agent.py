@@ -31,9 +31,7 @@ def fetch(url, payload=None, token=None, timeout=18, site_access=None):
         headers['OAI-Sites-Authorization'] = 'Bearer ' + site_access
     req = Request(url, data=data, headers=headers)
     with opener.open(req, timeout=timeout) as res:
-        body = res.read(470001)
-    if len(body) > 470000:
-        raise ValueError('Controller response exceeds the gateway size limit. Use a narrower operation.')
+        body = res.read()
     return json.loads(body.decode('utf-8'))
 
 
@@ -42,11 +40,19 @@ def dispatch(job, local, conf):
     name, args = call['name'], call.get('arguments', {})
     if name == 'biome_status':
         status = fetch(local + '/health')
+        rpc = {'jsonrpc': '2.0', 'id': str(job['id']) + '-progress', 'method': 'tools/call',
+               'params': {'name': 'invoke', 'arguments': {'operation': 'system.progress', 'arguments': {}}}}
+        try:
+            progress = fetch(local + '/mcp', rpc, conf['admin_token'])['result']
+            status['consumer_health'] = (json.loads(progress['content'][0]['text']) if not progress.get('isError')
+                                         else {'state': 'unavailable', 'reason': progress['content'][0]['text']})
+        except Exception as error:
+            status['consumer_health'] = {'state': 'unavailable', 'reason': type(error).__name__}
         return {'content': [{'type': 'text', 'text': json.dumps({'host': socket.gethostname(), 'node': conf['node'], 'health': status})}]}
     if name == 'biome_work_list':
         target, inputs = 'invoke', {'operation': 'work.list', 'arguments': {}}
     elif name == 'biome_discover':
-        target, inputs = 'discover', {}
+        target, inputs = 'invoke', {'operation': 'discovery.page', 'arguments': args}
     elif name == 'biome_invoke':
         target, inputs = 'invoke', args
         if not inputs.get('request_id'):
