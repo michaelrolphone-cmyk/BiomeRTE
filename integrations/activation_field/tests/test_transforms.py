@@ -17,7 +17,7 @@ from activation_field.transforms.coordinates import pack,unpack,quantize,split_i
 from activation_field.transforms.fit import configuration,fit
 from activation_field.transforms.source import RuntimeSource
 from activation_field.transforms.materialize import materialize
-from activation_field.transforms.evaluate import paired_kl
+from activation_field.transforms.evaluate import paired_kl,numerical_scan
 
 
 class FixtureSource:
@@ -118,6 +118,30 @@ def test_split_independent_of_tiles():
     whole=split_ids('x',(32,64),0,32,5,[.8,.1,.1])
     tiled=np.concatenate([split_ids('x',(32,64),i,min(7,32-i),5,[.8,.1,.1]) for i in range(0,32,7)])
     np.testing.assert_array_equal(whole,tiled)
+
+
+def test_numerical_scan_distinguishes_floating_and_quantized_reconstruction():
+    source=FixtureSource(shape=(4,8));source.target_codes=source.base.copy()
+    source.target_codes[0,0]=9;source.target_codes[3,7]=7;source.characterize()
+    manifest=source.manifest(configuration())
+    # A broad sub-half-step field is nonzero in floating arithmetic, but every
+    # restored code remains baseline. The two target edits are therefore lost.
+    regions=[Region(0,0,.5,.5,2.,2.,0.,.04)]
+    report=numerical_scan(source,(manifest,regions),configuration())
+    row,col=np.indices(source.base.shape)
+    predicted=evaluate_delta(regions,manifest['tensor_map'][0],row,col,source.base)
+    floating=predicted-(source.target_codes.astype(float)-source.base)
+    quantized=source.base.astype(float)-source.target_codes
+    measured=report['global_metrics']
+    assert measured['rmse']==pytest.approx(np.sqrt(np.mean(floating**2)))
+    assert measured['mae']==pytest.approx(np.mean(np.abs(floating)))
+    assert measured['quantized_rmse']==pytest.approx(np.sqrt(np.mean(quantized**2)))
+    assert measured['quantized_mae']==pytest.approx(np.mean(np.abs(quantized)))
+    assert measured['quantized_changed_rmse']==1 and measured['quantized_changed_mae']==1
+    assert measured['quantized_unchanged_rmse']==0 and measured['quantized_unchanged_mae']==0
+    assert measured['relative_delta_error']==1
+    assert measured['quantized_rmse']!=measured['rmse']
+    assert report['per_tensor'][0]['quantized_mae']==measured['quantized_mae']
 
 
 def test_identity_and_restoration_resume(tmp_path):

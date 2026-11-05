@@ -130,7 +130,11 @@ Directories are private and source checkpoints are never overwritten.
 
 Jobs use the same FIFO model/image admission as existing agents. The model is
 released when work ends. Numerical reports distinguish full streamed measurements
-from sampled validation scores. Comparison uses identical teacher-forced prefixes
+from sampled validation scores. Numerical `rmse`/`mae` describe the real-valued fitted delta;
+`quantized_rmse`/`quantized_mae` and their changed/unchanged variants describe
+the actual restored quantized weights. `relative_delta_error` also uses the
+restored quantized weights. These stages remain separate because rounding can
+erase small fitted changes. Comparison uses identical teacher-forced prefixes
 for KL, separate free-generation trials, fresh native state for every probe, no
 writes and no baseline decay. It records raw B/T/R scores, paired uncertainty and
 an undefined retention ratio when its denominator is zero. Small denominators
