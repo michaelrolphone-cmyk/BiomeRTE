@@ -220,6 +220,9 @@ def admit(tx,ctx,r,trigger,successor=None):
     else:
         cycle_id=successor or 'cycle-'+uid();r.update(active_cycle=cycle_id,cycle_permit=True,revision=r['revision']+1)
         data={'responsibility_id':r['id'],'cycle_id':cycle_id,'owner_epoch':r['epoch'],'expected_revision':r['revision'],'binding_revision':r['binding_revision'],'goal':r['goal'],'trigger_id':trigger}
+        # Retain the identities coalesced during the prior cycle or pause.
+        data['trigger_ids']=list(dict.fromkeys([trigger]+r.get('pending_triggers',[])))
+        r['pending_triggers']=[]
         tx.put('assistant_cycle_inputs',cycle_id,data);tx.put('assistant_start_outbox',cycle_id,{'id':cycle_id,'frame':data,'definition':r['cycle_definition'],'revision':r['binding_revision'],'state':'pending'})
         tx.put('assistant_responsibilities',r['id'],r);result={'state':'reserved','cycle_id':cycle_id}
     tx.put('assistant_trigger_receipts',digest([r['id'],trigger]),result);return result
@@ -231,7 +234,7 @@ def finalize(tx,f,r,runnable):
     if f.get('expected_revision')!=r['revision']:raise Fault('Responsibility revision changed',409)
     if f.get('binding_revision')!=r['binding_revision']:raise Fault('Workflow binding changed',409)
     r['active_cycle']=None;r['cycle_permit']=False;r['checkpoint']=copy.deepcopy(f);r['revision']+=1
-    if r['desired']=='run' and runnable:
+    if r['desired']=='run' and (runnable or r.get('pending_triggers')):
         sid='successor-'+digest([key,r['binding_revision']]);coverage={'kind':'successor','cycle_id':sid}
         tx.put('assistant_wake_outbox',sid,{'id':sid,'responsibility':r['id'],'trigger':'successor:'+key,'successor':sid,'ready':True})
     elif r['desired']=='run':
@@ -241,7 +244,7 @@ def finalize(tx,f,r,runnable):
         wid='wait-'+digest([key,r['binding_revision']])
         tx.put('assistant_wake_outbox',wid,{'id':wid,'responsibility':r['id'],'trigger':wid,'due_at':due,'topics':topics,'cursor':f.get('event_cursor',0)})
     else:coverage={'kind':r['desired'],'events':['operator_resume']}
-    r['coverage']=coverage;r['pending_triggers']=[];tx.put('assistant_responsibilities',r['id'],r)
+    r['coverage']=coverage;tx.put('assistant_responsibilities',r['id'],r)
     receipt={'cycle_id':key,'coverage':coverage,'revision':r['revision'],'epoch':r['epoch']};tx.put('assistant_finalizations',key,receipt);return receipt
 
 def protocol_stage(tx,ctx,f,p,s):
