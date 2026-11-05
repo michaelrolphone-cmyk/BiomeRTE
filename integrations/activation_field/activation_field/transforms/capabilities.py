@@ -46,6 +46,15 @@ def adapter(payload,api):
     if not contract.startswith(NAMESPACE):return None
     action=contract[len(NAMESPACE):].split(':')[0]
     if action not in OPERATIONS:raise ValueError('Unknown transform action')
+    raw_api=api
+    def api(*args):
+        from urllib.error import HTTPError
+        from .common import TransformError
+        try:return raw_api(*args)
+        except HTTPError as exc:
+            try:error=json.loads(exc.read()).get('error',{})
+            except (ValueError,TypeError):error={}
+            raise TransformError(error.get('code','http_error'),error.get('message',str(exc))) from exc
     body=dict(payload['inputs']['arguments']);body.pop('request_id',None)
     if action=='status':
         from .jobs import identifier

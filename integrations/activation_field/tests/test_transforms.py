@@ -227,6 +227,17 @@ def test_transport_rejects_incorrect_storage_receipts():
     with pytest.raises(TransformError):publish_bytes(b'abc',lambda data:dict(sha256='wrong',size=len(data)),'application/x-afwt')
 
 
+def test_capability_preserves_typed_service_errors():
+    from urllib.error import HTTPError
+    from activation_field.transforms.capabilities import adapter
+    def api(*args):
+        raise HTTPError('http://localhost/transforms/materialize',400,'Bad Request',{},
+                        io.BytesIO(b'{"error":{"code":"baseline_mismatch","message":"Pinned baseline differs"}}'))
+    with pytest.raises(TransformError) as error:
+        adapter(dict(contract='model.field_transform.materialize:1',operation='op',inputs={'arguments':{}}),api)
+    assert error.value.code=='baseline_mismatch' and str(error.value)=='Pinned baseline differs'
+
+
 def test_centered_solver_matches_weighted_svd():
     from activation_field.transforms.fit import fit_coefficients,training_problem
     rng=np.random.default_rng(61);d=artifact()[0]['tensor_map'][0]

@@ -86,9 +86,11 @@ def main():
     mode=sys.argv[1]
     if mode=='configure':print(json.dumps(configure()));return
     if mode=='adapter':
+        from .transforms.common import TransformError
         try:
             from .transforms.capabilities import bind_contract
             result=adapter(bind_contract(json.load(sys.stdin),sys.argv[2] if len(sys.argv)>2 else None))
+        except TransformError as exc:result=dict(ok=False,error=dict(code=exc.code,message=str(exc)[:300]))
         except Exception as exc:result=dict(ok=False,error=dict(code=type(exc).__name__,message=str(exc)[:300]))
         print(json.dumps(dict(result=result)));return
     if mode=='worker':
