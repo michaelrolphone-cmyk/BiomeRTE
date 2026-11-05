@@ -1,0 +1,11 @@
+{
+  "operation": "afwt-resume-after-quantized-metrics-20261105",
+  "receipt": {
+    "ok": true,
+    "run_id": "b3b31360dc2748f18fa55568dba076eb",
+    "status": "queued",
+    "version": 16
+  },
+  "native_driver": "afwt-native-quantized-scan-and-resume",
+  "native_exit_code": 0
+}
