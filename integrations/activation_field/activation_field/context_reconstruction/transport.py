@@ -58,7 +58,11 @@ def read_transfer(reference, get):
 def transport_result(value, put=None):
     export = value.get('encoding') == 'base64' and value.get('filename', '').endswith('.afwt')
     serialized = canonical(value)
-    if not export and len(serialized) <= FRAME_BYTES:return value
+    # Controller JSON may normalize 0.0 to 0 and -0.0 to 0. Preserve the
+    # original JSON bytes for every signed context, even a small report.
+    artifact = value.get('artifact')
+    signed_context = isinstance(artifact, dict) and artifact.get('integrity', {}).get('schema') == 'afctx.context/1'
+    if not export and not signed_context and len(serialized) <= FRAME_BYTES:return value
     if put is None:
         from ..provider import gateway
         g = gateway()

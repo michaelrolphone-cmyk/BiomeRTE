@@ -83,6 +83,22 @@ class ContextTests(unittest.TestCase):
         integrity=a.pop('integrity');self.assertEqual(integrity['sha256'],hashlib.sha256(canonical(a)).hexdigest())
         self.assertEqual(a['evidence_map'][1]['kind'],'hypothesis')
         self.assertIn('Not performed',a['reinjection'])
+    def test_small_signed_context_preserves_float_spelling(self):
+        blobs={}
+        def put(data):
+            h=hashlib.sha256(data).hexdigest();blobs[h]=data;return dict(sha256=h,size=len(data))
+        report=context_artifact(dict(context_text='jade',candidates=[{'token_ids':[42],'relative_squared_error':0.0}],
+                target_squared_norm=1.0,uncertainty_and_gaps=['Unknown history'],negative_zero=-0.0),{'sha256':'abc'},'test','id')
+        wrapped=transport_result(dict(ok=True,artifact=report),put)
+        self.assertIn('result_artifact',wrapped)
+        # Simulate the controller's numeric normalization of the outer envelope.
+        wire=json.loads(json.dumps(wrapped),parse_float=lambda s:int(float(s)) if float(s).is_integer() else float(s))
+        raw=read_transfer(wire['result_artifact'],blobs.__getitem__)
+        restored=json.loads(raw)['artifact'];integrity=restored.pop('integrity')
+        self.assertEqual(integrity['sha256'],hashlib.sha256(canonical(restored)).hexdigest())
+        self.assertIn(b'"negative_zero":-0.0',raw)
+        self.assertIn(b'"relative_squared_error":0.0',raw)
+
     def test_large_report_transport_is_complete(self):
         blobs={}
         def put(data):

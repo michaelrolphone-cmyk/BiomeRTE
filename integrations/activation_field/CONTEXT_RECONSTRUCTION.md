@@ -27,7 +27,7 @@ Resume a cancelled, failed, or interrupted job by calling start with only `resum
 
 Options are caller-visible search budgets, not hidden caps: max_tokens=8, candidate_pool=16, beam_width=2, sketch_rank=8, power_iterations=2, vocabulary_batch=512, seed=42, role=user, layout=raw. Layout may be message for one ChatML role block. Search cost grows with pool size, beam width and token depth; the entire vocabulary is scanned for proposals. No time or total export-size limit is imposed.
 
-Inputs, source snapshots, replay scores and results are encrypted under local state protection. Explicit export reveals linguistic content through the authenticated capability. Large exports use a checksum-verified artifact tree; recursively read its chunks/nodes via artifact.get. Source checkpoints and baseline files are never changed. Export does not reinject context, reinforce the model or record a human endorsement.
+Inputs, source snapshots, replay scores and results are encrypted under local state protection. Explicit export reveals linguistic content through the authenticated capability. Context exports use a checksum-verified artifact tree even for small reports, preserving numeric formatting and signed-report integrity through JSON-normalizing controllers. They; recursively read its chunks/nodes via artifact.get. Source checkpoints and baseline files are never changed. Export does not reinject context, reinforce the model or record a human endorsement.
 
 ## Installation and qualification
 

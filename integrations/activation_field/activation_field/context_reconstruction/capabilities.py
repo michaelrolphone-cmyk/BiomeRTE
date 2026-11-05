@@ -8,7 +8,7 @@ def offers(gateway,resource,module='activation_field.context_reconstruction.prov
         'start':'target_checkpoint, purpose, options (max_tokens, candidate_pool, beam_width, sketch_rank, power_iterations, vocabulary_batch, seed, role, layout). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Options are explicit search budgets; no runtime cap.',
         'status':'run_id. Reports state, progress and measured residual; no reconstructed text is disclosed.',
         'cancel':'run_id, expected_version. Cooperatively stop at a safe boundary; keep replay measurements for explicit resume.',
-        'export':'run_id, expected_version, allow_plaintext=true. Explicitly disclose the protected context and estimated token stream. A large response is returned through result_artifact; recursively retrieve chunks/nodes with artifact.get and verify digests.'}
+        'export':'run_id, expected_version, allow_plaintext=true. Explicitly disclose the protected context and estimated token stream. Every signed context report is returned losslessly through result_artifact; recursively retrieve chunks/nodes with artifact.get and verify digests.'}
     result=[]
     for operation in OPERATIONS:
         name=NAMESPACE+operation
