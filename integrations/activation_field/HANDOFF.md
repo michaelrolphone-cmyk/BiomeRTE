@@ -39,7 +39,7 @@ Rhizome task `dd592c62-c65e-4026-ad3c-c5e75acecc27` retains remaining qualificat
 
 ## Recovery and continuation — November 5
 
-The normal terminal recovered: original operation `af-finish-inspect-mac-1` succeeded. Commit `950fc3c96d540c7e2076ce421ac0c4d94d5e2428` was staged separately on the Mac and passed all 35 pytest tests and all 13 full-model assertions in operation `af-native-qualify-950fc3c`. Enabled cost was 1.6011964 seconds/token and disabled 0.1372970; this remains batch-only against the 30% interactive overhead target. The old installed source remains intact until the expanded continuation passes native qualification.
+The normal terminal recovered: original operation `af-finish-inspect-mac-1` succeeded. Commit `950fc3c96d540c7e2076ce421ac0c4d94d5e2428` was staged separately on the Mac and passed all 35 pytest tests and all 13 full-model assertions in operation `af-native-qualify-950fc3c`. Enabled cost was 1.6011964 seconds/token and disabled 0.1372970; this remains batch-only against the 30% interactive overhead target. The expanded continuation has now been deployed; the previous installed source is retained in source-before-cf30944.
 
 The expanded continuation fixes pending batched writes being discarded on ordinary-cache reset, and preserves an explicit session configuration change made after a checkpoint when that checkpoint is later restored. Checkpoint metadata is validated before publication. Per-layer norm caches now publish alongside the actual weight transaction.
 
@@ -49,4 +49,16 @@ Resume freezes source hash as well as baseline/config/corpus identity. A changed
 
 LM Studio was retested during recovery and still denied the existing client permission `plugins.use` for `biome/activation-field`. Auth was not bypassed. Hosted streaming/session switching/cancellation remains blocked on that credential permission. The separately authenticated native API and Biome agent do not depend on it.
 
-Qualification and deployment receipts will be added after the new native boundary and API tests. No full-spec completion is claimed by this source checkpoint.
+## Deployed continuation evidence
+
+Installed source commit: `cf30944cb73771befb6cbbdc265ad1a47b803cc6`. The normal terminal path deployed it and restarted only its two LaunchAgents. Launchd initially reported its removal transition in progress; service absence was read back before normal bootstrap. No controller maintenance bypass was used.
+
+- `af-reconcile-launchagent-restart`: 46 pytest tests passed on installed source. Eleven live authenticated API checks passed, including cancellation after a real streamed token and identical-request retry without replay.
+- The same operation passed six live persisted-session assertions: enabled generation changed weights; a later explicit disabled/read-only toggle survived restoration; field version and changed-word count stayed unchanged while native token count advanced.
+- `af-native-bfloat-drift-fix`: 11 native full-model assertions passed, including batched-tail commit, configuration restoration, per-layer measured norms/quantization error, invalid metadata rejection, and finite drift measurements across all 32 layers. The test exposed and fixed BF16-to-NumPy conversion in bounded drift tiles.
+- `af-health-after-deploy-cf30944`: actual Biome provider returned ready, model unloaded, default learning false and baseline pull zero.
+- `af-stability-engineering-smoke-cf30944`: started durable run `f68b23838bf14b4581bd3e24fa542097` through the live agent. It completed successfully and its status was read through the live Biome experiment_status action. It is an eight-token harness qualification with short probes, not the 10,000-token stability study. The report correctly records meets_duration=false and stability_target_met=false; baseline/post suite accuracy was 1/6 and NLL was 4.8242/4.8194, which is not evidence of useful memory.
+
+The final installed-source full-model rerun (`af-final-full-model-cf30944`) passed all 13 assertions. With expanded measurement enabled it measured 2.41535 seconds/token versus 0.12423 disabled on this short two-token check. Interactive overhead remains above target; designated batch-only. Exact results are in `evidence/recovery-cf30944.json` and `evidence/live-final-cf30944.json`.
+
+The capability is available for on-demand testing. Long scientific studies have executable configurations but are not silently started as ordinary background learning. Full scientific outcomes remain unestablished. LM Studio hosted qualification remains permission-blocked, so this record does not claim full specification acceptance.
