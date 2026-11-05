@@ -58,6 +58,36 @@ class PromptBudget(Delivery):
                 if expected=='unresolved':self.assertEqual(result['result_code'],'unknown_evidence_reference')
             self.execute(run)
 
+    def test_reviewed_action_schema_survives_optional_registry_trimming(self):
+        f=self.frame();f['proposal']={'action':{'contract':'reviewed:1','resource':'terminal.test','inputs':{'argv':['/bin/bash','-c','true']}}}
+        required={'id':'reviewed:1','inputs':{'argv':{'type':'list','required':True}},'outputs':{'exit_code':{'type':'int','required':True}}}
+        def run(tx):
+            cfg=tx.need('assistant_config','current');cfg['context_bytes']=6000;tx.put('assistant_config','current',cfg)
+            tx.put('contracts','reviewed:1',required)
+            tx.put('contracts','unrelated:1',{'id':'unrelated:1','inputs':{'data':{'type':'str','description':'x'*10000}},'outputs':{}})
+            tx.put('offers','llm-test',{'contract':'agent.lmstudio.delegate:1','resource':'llm.test','state':'ready'})
+            with patch.object(a,'capability',return_value=a.outcome(f,'pending','test')) as call:
+                result=a.prompt_phase(tx,self.ctx,f,'test',{'prompt':'Review command','schema':{}})
+                action=call.call_args.args[4]
+            sent=action['inputs']['context']
+            self.assertEqual(result['disposition'],'pending')
+            self.assertEqual(sent['required_tool_schemas'],[required])
+            self.assertEqual(sent['tool_schemas'],[])
+            self.assertIn('tool_schemas',[r['field'] for r in sent['omitted_refs']])
+            self.assertIn('context.required_tool_schemas',action['inputs']['request'])
+        self.execute(run)
+
+    def test_oversized_required_action_schema_is_not_silently_dropped(self):
+        f=self.frame();f['proposal']={'action':{'contract':'reviewed:1','resource':'terminal.test','inputs':{}}}
+        def run(tx):
+            cfg=tx.need('assistant_config','current');cfg['context_bytes']=1000;tx.put('assistant_config','current',cfg)
+            tx.put('contracts','reviewed:1',{'id':'reviewed:1','inputs':{'data':{'type':'str','description':'x'*2000}},'outputs':{}})
+            with patch.object(a,'capability') as call:
+                result=a.prompt_phase(tx,self.ctx,f,'test',{'prompt':'Review command','schema':{}})
+            call.assert_not_called()
+            self.assertEqual(result['result_code'],'essential_context_does_not_fit')
+        self.execute(run)
+
 for name in list(dir(Delivery)):
     if name.startswith('test_') and name not in PromptBudget.__dict__:setattr(PromptBudget,name,None)
 del Delivery
