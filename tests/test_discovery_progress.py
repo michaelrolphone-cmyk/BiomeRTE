@@ -9,8 +9,8 @@ class Tx:
 class Discovery(unittest.TestCase):
     def test_operations_page_uses_caller_permissions(self):
         from types import SimpleNamespace
-        result=discovery.page(Tx(),SimpleNamespace(allowed=lambda name:name=='system.info'))
-        self.assertEqual([x['name'] for x in result['items']], ['system.info'])
+        result=discovery.page(Tx(),SimpleNamespace(allowed=lambda name:name=='cap.discover'))
+        self.assertEqual([x['name'] for x in result['items']], ['cap.discover'])
 
     def test_pages_retain_every_item_and_can_progress_across_sections(self):
         rows=[dict(id=str(n).zfill(3),description='x'*9000) for n in range(5)]

@@ -8,6 +8,7 @@ from . import providers
 SECTIONS = ('operations', 'contracts', 'offers', 'guide')
 PAGE_BYTES = 16000  # Transport page target, never an inventory or item limit.
 
+@op('system.discovery', 'section?:str cursor?:str', False)
 @op('discovery.page', 'section?:str cursor?:str', False)
 def page(tx, ctx, section='', cursor=''):
     from .mcp import CALLER_GUIDE
@@ -54,7 +55,7 @@ def page(tx, ctx, section='', cursor=''):
               'next_cursor': cursor, 'complete': following is None,
               'consistency': 'live keyset; inventory may change between pages'}
     if cursor:
-        result['next_call'] = {'operation': 'discovery.page', 'arguments': {'cursor': cursor},
+        result['next_call'] = {'operation': 'system.discovery', 'arguments': {'cursor': cursor},
                                'request_id': 'discovery-' + uid()}
     return result
 
