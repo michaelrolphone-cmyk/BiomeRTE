@@ -42,7 +42,9 @@ try:
             result['disabled_seconds_per_token']=(time.monotonic()-start)/len(ids)
             error=float(mx.max(mx.abs(plain.astype(mx.float32)-trace)).item());result['disabled_max_logit_error']=error
             checked('field_disabled_reference_equivalence',error==0)
-            e.reset('entire_session');e.patch_config({'enabled':True})
+            e.sample_counter=7;e.reset('entire_session')
+            checked('entire_reset_clears_sampling_and_token_counters',e.sample_counter==0 and e.consumed_tokens==0)
+            e.patch_config({'enabled':True})
             anchor=e.field.anchor
             class Forbidden(dict):
                 def __getitem__(self,key):raise AssertionError('Zero pull accessed baseline')
@@ -57,6 +59,7 @@ try:
             with tempfile.TemporaryDirectory(prefix='af-qualification-',dir=root) as tmp:
                 vault=Vault(tmp);e.patch_config({'read_only':True,'enabled':False})
                 meta,tensors=e.state();vault.save('resume',meta,tensors);tensors=None
+                checked('opaque_stream_and_source_provenance',len(meta['input_stream_digest'])==64 and meta['input_stream_digest']!=hashlib.sha256(b'').hexdigest() and meta['source_revision'].startswith('sha256:'))
                 weights_before=digest([(p,mod.weight) for p,mod,*_ in e.field.entries])
                 freq_before=digest(list(e.field.frequency.items()))
                 e.reset('ordinary_state');updated=e.consume(ids[0]);mx.eval(updated)
@@ -67,6 +70,7 @@ try:
                 e.restore(vault,'resume')
                 checked('complete_checkpoint_weights_roundtrip',digest([(p,mod.weight) for p,mod,*_ in e.field.entries])==weights_before)
                 checked('complete_checkpoint_native_state',e.native_tokens==meta['native_tokens'] and all(not c.empty() for c in e.cache))
+                checked('stream_identity_checkpoint_roundtrip',e.input_stream_digest==meta['input_stream_digest'])
                 next_a=np.array(e.consume(ids[1]));e.restore(vault,'resume')
                 next_b=np.array(e.consume(ids[1]))
                 checked('complete_resume_next_logits_bitexact',np.array_equal(next_a,next_b))
@@ -86,3 +90,4 @@ try:
 except Exception as exc:
     result['status']='failed';result['error']=type(exc).__name__+': '+str(exc);publish();raise
 print(json.dumps(result,indent=2))
+

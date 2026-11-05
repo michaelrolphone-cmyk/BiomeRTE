@@ -9,6 +9,9 @@ class FieldStore:
     def __init__(self,engine,vault):self.engine=engine;self.vault=vault
 
     def enumerate_state(self,checkpoint_ref=None,selection=None):
+        if checkpoint_ref:
+            metadata=self.vault.manifest(checkpoint_ref)['metadata']
+            if metadata['baseline_hash']!=self.engine.manifest['baseline_hash'] or metadata.get('tensor_map_version')!=1:raise ValueError('Baseline or tensor map mismatch')
         for path,m,*_ in self.engine.field.entries:
             if selection and not any(path.startswith(prefix) for prefix in selection):continue
             yield dict(module_path=path,tensor_name='weight',logical_shape=[m.weight.shape[0],m.weight.shape[1]*8],packed_shape=list(m.weight.shape),dtype='uint32',quantization=dict(mode='affine',bits=4,group_size=64),baseline_ref=self.engine.manifest['baseline_hash'],tensor_map_version=1)
@@ -72,8 +75,9 @@ class FieldStore:
         metadata.update(map_id=name,baseline_ref=metadata['baseline_hash'],final_field_ref=source_ref,
                         final_checkpoint_hash=source_ref['sha256'],run_id=policy.get('source_run_ref') or source_name,
                         input_stream_ref=policy.get('input_stream_ref'),
-                        input_stream_digest=policy.get('input_stream_digest') or hashlib.sha256(json.dumps(self.engine.prefix_hashes).encode()).hexdigest(),
-                        input_digest_scope='transcript-message-hashes; raw token streams require caller-supplied digest',
+                        input_stream_digest=policy.get('input_stream_digest') or self.engine.input_stream_digest,
+                        input_digest_scope='caller supplied' if policy.get('input_stream_digest') else 'resumable opaque token/role/template hash chain',
+                        input_digest_origin='caller supplied' if policy.get('input_stream_digest') else self.engine.input_digest_origin,
                         source_revision=source_meta['source_revision'],source_versions=source_meta['versions'],
                         config_revision=self.engine.field.config_revision,role_settings=self.engine.config.role_scales,
                         quantization_ref=dict(mode='affine',bits=4,group_size=64),
@@ -112,6 +116,9 @@ class FieldStore:
                     config=m['config_ref'],changed_words=0,receipts=[],prefix_hashes=[],native_tokens=0,
                     cache=None,last_logits=None,requires_reset=False,source_change_map=change_map_ref,
                     trajectory=dict(tokens=0,buffer=[],descriptors=[],window=self.engine.config.window_tokens,stride=self.engine.config.stride_tokens))
+        if m.get('input_stream_digest'):meta['input_stream_digest']=m['input_stream_digest']
+        meta['input_digest_origin']=m.get('input_digest_origin','legacy_change_map_origin_unknown')
+        meta['sample_counter']=m.get('sampling_rng_counter',0)
         def tensors():
             for p,module in entries.items():
                 if p in pending:

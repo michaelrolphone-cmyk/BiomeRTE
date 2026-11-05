@@ -13,7 +13,8 @@ from .manifest import hardware
 
 class Engine:
     def __init__(self,manifest,config=None):
-        started=time.monotonic();self.manifest=manifest;self.config=config or FieldConfig()
+        from experiments.storage import source_identity
+        started=time.monotonic();self.manifest=dict(manifest,source_revision='sha256:'+source_identity());self.config=config or FieldConfig()
         self.hardware=hardware()
         self.model,self.tokenizer=load(manifest['path'])
         entries=projections(self.model)
@@ -29,6 +30,8 @@ class Engine:
         self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology)
         self.cache=self.make_cache();self.native_tokens=0;self.consumed_tokens=0;self.native_resets=0
         self.sample_counter=0;self.last_logits=None;self.prefix_hashes=[]
+        self.input_stream_digest=hashlib.sha256(b'').hexdigest()
+        self.input_digest_origin='complete_token_chain'
         self.load_seconds=time.monotonic()-started;self.forward_seconds=0.;self.write_seconds=0.
         self.boundary_hook=None;self.cancel_event=None
 
@@ -48,6 +51,10 @@ class Engine:
         if self.config.spectral_enabled and not self.config.read_only:self.trajectory.add(self.field.last_regions)
         self.write_seconds+=time.monotonic()-start
         self.native_tokens+=1;self.consumed_tokens+=1;self.last_logits=logits
+        # A resumable opaque chain identifies even raw-token experiments without
+        # storing token text or relying on message-prefix hashes being present.
+        event=json.dumps([int(token),role,bool(template)],separators=(',',':')).encode()
+        self.input_stream_digest=hashlib.sha256(bytes.fromhex(self.input_stream_digest)+event).hexdigest()
         return logits
 
     def ingest_text(self,text,role='user',template=False):
@@ -121,6 +128,9 @@ class Engine:
             self.requires_reset=False
             self.cache=self.make_cache();self.native_tokens=0;self.native_resets+=1;self.last_logits=None;self.prefix_hashes=[]
         self.field.reset(kind,retain_traces)
+        if kind=='entire_session':
+            self.input_stream_digest=hashlib.sha256(b'').hexdigest();self.input_digest_origin='complete_token_chain'
+            self.sample_counter=0;self.consumed_tokens=0
         if kind in ['activity_traces','entire_session'] or (kind=='weights' and not retain_traces):
             self.trajectory.close();self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology)
 
@@ -153,6 +163,8 @@ class Engine:
             raise ValueError("Unsupported cache state")
         metadata=dict(baseline_hash=self.manifest['baseline_hash'],tensor_map_version=1,kind='field_only' if field_only else 'complete',config=self.config.to_dict(),field_version=self.field.version,field_tokens=self.field.token_count,consumed_tokens=self.consumed_tokens,sample_counter=self.sample_counter,native_tokens=0 if field_only else self.native_tokens,config_revision=self.field.config_revision,changed_words=self.field.changed_words,receipts=self.field.receipts,trajectory=self.trajectory.state(),prefix_hashes=[] if field_only else self.prefix_hashes,cache=None if field_only else [encode(c.state,'cache.'+str(i)) for i,c in enumerate(self.cache)],last_logits=None if field_only or self.last_logits is None else encode(self.last_logits,'last_logits'),versions=self.manifest['versions'],source_revision=self.manifest.get('source_revision','uncommitted'))
         metadata['requires_reset']=getattr(self,'requires_reset',False)
+        metadata['input_stream_digest']=self.input_stream_digest
+        metadata['input_digest_origin']=self.input_digest_origin
         return metadata,tensors
 
     def restore(self,vault,name,reset_native_state=False):
@@ -193,6 +205,18 @@ class Engine:
         if not isinstance(meta['receipts'],list) or not isinstance(meta['prefix_hashes'],list) or any(not isinstance(h,str) or len(h)!=64 for h in meta['prefix_hashes']):
             raise ValueError('Invalid checkpoint receipts or transcript identity')
         if type(meta.get('requires_reset',False)) is not bool:raise ValueError('Invalid reset flag')
+        stream_digest=meta.get('input_stream_digest')
+        digest_origin=meta.get('input_digest_origin','complete_token_chain')
+        if stream_digest is None:
+            # Older checkpoints remain readable, but their missing prefix is
+            # explicitly represented rather than invented as a known stream.
+            stream_digest=hashlib.sha256(('legacy-prefix:'+name).encode()).hexdigest()
+            digest_origin='legacy_checkpoint_prefix_unknown:'+name
+        if not isinstance(digest_origin,str):raise ValueError('Invalid input digest origin')
+        if not isinstance(stream_digest,str) or len(stream_digest)!=64:
+            raise ValueError('Invalid input stream digest')
+        try:bytes.fromhex(stream_digest)
+        except ValueError as exc:raise ValueError('Invalid input stream digest') from exc
         if meta['kind'] not in ('complete','field_only'):raise ValueError('Invalid checkpoint kind')
         if meta['kind']=='complete' and meta['native_tokens'] and meta['cache'] is None:raise ValueError('Complete checkpoint missing native state')
         newcache=[ArraysCache(size=2) if l.is_linear else RotatingKVCache(max_size=restored_config.context_length,keep=0) for l in self.model.layers]
@@ -208,6 +232,8 @@ class Engine:
         self.field.norm_cache.clear()
         self.cache=newcache;self.native_tokens=0 if reset_native_state else meta['native_tokens'];self.consumed_tokens=meta['consumed_tokens'];self.sample_counter=meta['sample_counter'];self.prefix_hashes=[] if reset_native_state else meta['prefix_hashes']
         self.last_logits=restored_logits
+        self.input_stream_digest=stream_digest
+        self.input_digest_origin=digest_origin
         oldtrajectory=self.trajectory;self.trajectory=newtrajectory;oldtrajectory.close()
         self.requires_reset=False if reset_native_state else meta.get('requires_reset',False)
 
