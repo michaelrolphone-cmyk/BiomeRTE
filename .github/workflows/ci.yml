@@ -15,6 +15,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m unittest discover -v
+      - name: Qualify assistant workflows and recovery
+        run: python3 -S -m unittest discover -s integrations/proactive_assistant/tests -v
       - name: Qualify the LM Studio coding adapter
         run: python3 -S -m unittest discover -s providers/lmstudio -p 'test_coding.py' -v
       - name: Start a fresh clone and run an actual work cycle

@@ -32,6 +32,31 @@ class CodingTests(unittest.TestCase):
         self.calls=[{'type':'tool_call','tool':'command_status','output':'{"exit_code":0}'}]
         self.response={'model_instance_id':'qwen3.5-9b','response_id':'resp_test','output':self.calls+[{'type':'message','content':'Fixed; tests passed.'}]}
 
+    def test_workflow_schema_is_used_directly_without_text_double_encoding(self):
+        schema={'type':'object','properties':{'facts':{'type':'array'}},'required':['facts']}
+        self.wait['context'].update(coding=False,purpose='workflow_reasoning',response_schema=schema)
+        response={'model':agent.MODEL,'choices':[{'finish_reason':'stop','message':{'content':'{"facts":[]}'}}]}
+        with patch.object(agent,'model_ready'),patch.object(agent,'api',return_value=response) as api:
+            result=agent.infer_text(self.wait)
+        body=api.call_args.args[1]
+        self.assertEqual(body['response_format']['json_schema']['schema'],schema)
+        self.assertEqual(body['max_tokens'],-1)
+        self.assertEqual(json.loads(result['result']['text']),{'facts':[]})
+        self.assertEqual(result['result']['model'],agent.MODEL)
+
+    def test_truncated_workflow_output_remains_a_failure(self):
+        self.wait['context'].update(coding=False,purpose='workflow_reasoning',response_schema={})
+        response={'model':agent.MODEL,'choices':[{'finish_reason':'length','message':{'content':'{"facts":[]}'}}]}
+        with patch.object(agent,'model_ready'),patch.object(agent,'api',return_value=response):
+            with self.assertRaisesRegex(ValueError,'finish reason: length'):agent.infer_text(self.wait)
+
+    def test_generic_text_schema_preserves_existing_envelope(self):
+        response={'model':agent.MODEL,'choices':[{'finish_reason':'stop','message':{'content':'{"text":"Hello"}'}}]}
+        with patch.object(agent,'model_ready'),patch.object(agent,'api',return_value=response) as api:
+            result=agent.infer_text(self.wait)
+        self.assertEqual(result['result']['text'],'Hello')
+        self.assertEqual(api.call_args.args[1]['response_format']['json_schema']['schema']['properties'],{'text':{'type':'string'}})
+
     def test_native_results_are_checkpointed_with_evidence(self):
         with patch.object(agent,'ROOT',self.root),patch.object(agent,'model_ready'),patch.object(agent,'api',return_value=self.response) as api:
             result=agent.infer(self.wait)
