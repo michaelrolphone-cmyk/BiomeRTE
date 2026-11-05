@@ -23,6 +23,8 @@ class ControllerLink:
         self.send_lock = threading.Lock()
         self.pending = {}
         self.lock = threading.Lock()
+        self.last_http_poll = 0
+        self.http_poll_interval = 2.0
         thread = threading.Thread(target=self.run)
         thread.daemon = True
         thread.start()
@@ -90,7 +92,14 @@ class ControllerLink:
         try:
             return self.jobs.get(timeout=.1)
         except queue.Empty:
-            return {'idle': True} if self.socket is not None else None
+            # A live socket/pong does not prove its delivery loop is progressing.
+            # Periodically consult the same durable HTTP inbox, preserving job
+            # IDs and leases. This is a poll cadence, not a command time limit.
+            now = time.monotonic()
+            if self.socket is None or now - self.last_http_poll >= self.http_poll_interval:
+                self.last_http_poll = now
+                return None
+            return {'idle': True}
 
     def complete(self, body):
         ws = self.socket
@@ -113,3 +122,4 @@ class ControllerLink:
         finally:
             with self.lock:
                 self.pending.pop(body['id'], None)
+
