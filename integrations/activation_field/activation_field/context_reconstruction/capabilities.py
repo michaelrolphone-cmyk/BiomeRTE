@@ -15,10 +15,12 @@ def offers(gateway,resource,module='activation_field.context_reconstruction.prov
         usage=dict(before='Approximate reverse propagation on the native pinned Qwen model. Quality is unmeasured. Shared model/image admission. Does not modify the source or use its conversation, native caches or logits.',
                    parameters={'arguments':descriptions[operation]+' Biome operation IDs provide idempotency.'},
                    read_result='Read result.ok and job status. Queue acceptance is not completion. Text stays encrypted locally until explicit export. Reconstruction does not reinject or reinforce the model.')
-        revision=hashlib.sha256(json.dumps(usage,sort_keys=True).encode()).hexdigest()[:16]
+        definition=dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},
+                        description='Weight changes to context: '+operation,usage=usage)
+        revision=hashlib.sha256(json.dumps(definition,sort_keys=True).encode()).hexdigest()[:16]
         # Description is part of the immutable v1 contract schema. Current
         # mechanism guidance belongs in the separately revisable usage object.
-        gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Weight changes to context: '+operation,usage=usage),rid='afctx-define-'+operation+'-'+revision)
+        gateway.invoke('cap.define',definition,rid='afctx-define-'+operation+'-'+revision)
         result.append(dict(contract=name+':1',resource=resource,service='activation-field',capacity=1,usage=usage,argv=[sys.executable,'-m',module,'adapter',operation]))
     return result
 
