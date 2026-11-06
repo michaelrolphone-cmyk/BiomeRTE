@@ -147,6 +147,11 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
                         source_changed_groups=target.changed_groups,target_squared_norm=target.energy)
             blocks,dimension,paths=target.proposal_blocks()
             if not dimension or not target.energy:
+                if options.mode=='first_pass':
+                    result=first_pass_result([],engine.tokenizer.decode)
+                    result.update(status='insufficient_signal',
+                                  uncertainty_and_gaps=['No usable first-layer input-projection delta; no context inferred.'])
+                    return dict(**common,**result,seconds=time.monotonic()-started)
                 return dict(**common,status='insufficient_signal',context_text='',candidates=[],
                             uncertainty_and_gaps=['No usable first-layer input-projection delta; no context inferred.'])
             progress(dict(phase='delta_subspace',projection_count=len(paths)))
