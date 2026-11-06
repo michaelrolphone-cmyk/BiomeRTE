@@ -111,27 +111,35 @@ def recover_finished(remote, cfg):
         operations = [r[0] for r in db.execute("SELECT id FROM actions WHERE state='uncertain'")]
     finally:
         db.close()
+    failures = []
     for operation in operations:
-        directory = ROOT / 'terminal-results' / hashlib.sha256(operation.encode()).hexdigest()
-        path = directory / 'receipt.json'
-        if not path.exists():
-            continue
-        with (directory / 'lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            saved = json.loads(path.read_text())
-            if saved['state'] != 'finished':
-                continue
-            action = remote.call('cap.status', {'operation': operation})
-            expected = hashlib.sha256(json.dumps([operation, action['inputs'], cfg['terminal_profile']],
-                                                 sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-            if saved['signature'] != expected or saved['operation'] != operation:
-                raise RuntimeError('Terminal recovery identity mismatch')
-            result = dict(saved['result'], streams={})
-            for name in ('stdout', 'stderr'):
-                result[name], result['streams'][name] = store_stream(directory / name, remote, 48 * 1024)
-            reconcile_receipt(str(ROOT), remote, operation, 'succeeded', result)
-            save_receipt(directory / 'published.json', result)
+        try:
+            recover_one_finished(remote, cfg, operation, reconcile_receipt)
+        except Exception as exc:
+            failures.append({'operation': operation, 'error': type(exc).__name__})
+    return failures
 
+
+def recover_one_finished(remote, cfg, operation, reconcile_receipt):
+    directory = ROOT / 'terminal-results' / hashlib.sha256(operation.encode()).hexdigest()
+    path = directory / 'receipt.json'
+    if not path.exists():
+        return
+    with (directory / 'lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        saved = json.loads(path.read_text())
+        if saved['state'] != 'finished':
+            return
+        action = remote.call('cap.status', {'operation': operation})
+        expected = hashlib.sha256(json.dumps([operation, action['inputs'], cfg['terminal_profile']],
+                                             sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if saved['signature'] != expected or saved['operation'] != operation:
+            raise RuntimeError('Terminal recovery identity mismatch')
+        result = dict(saved['result'], streams={})
+        for name in ('stdout', 'stderr'):
+            result[name], result['streams'][name] = store_stream(directory / name, remote, 48 * 1024)
+        reconcile_receipt(str(ROOT), remote, operation, 'succeeded', result)
+        save_receipt(directory / 'published.json', result)
 
 if __name__ == '__main__':
     os.umask(0o077)

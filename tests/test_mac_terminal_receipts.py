@@ -68,5 +68,23 @@ class TerminalReceiptTests(unittest.TestCase):
         result = self.adapter.execute({'operation': 'slow', 'inputs': {'argv': ['/bin/bash', '-c', 'sleep .05; echo done']}}, self.cfg, object())
         self.assertEqual(result['stdout'], 'done\n'); self.assertEqual(result['exit_code'], 0)
 
+    def test_one_conflicting_receipt_does_not_block_independent_publication(self):
+        requests = {op: dict(self.request, operation=op) for op in ('bad', 'good')}
+        for request in requests.values(): self.adapter.execute(request, self.cfg, object())
+        for receipt in (self.root / 'terminal-results').glob('*/receipt.json'):
+            value = json.loads(receipt.read_text())
+            if value['operation'] == 'bad':
+                value['signature'] = 'mismatched'; receipt.write_text(json.dumps(value))
+        db = sqlite3.connect(self.root / 'worker.sqlite'); db.execute('CREATE TABLE actions(id TEXT,state TEXT)')
+        db.executemany("INSERT INTO actions VALUES(?,'uncertain')", [(op,) for op in requests]); db.commit(); db.close()
+        calls = []; worker = types.ModuleType('biomerte.worker')
+        worker.reconcile_receipt = lambda directory, remote, operation, state, result: calls.append(operation)
+        class Remote:
+            def call(inner, name, args): return requests[args['operation']]
+        with patch.dict(sys.modules, {'biomerte': types.ModuleType('biomerte'), 'biomerte.worker': worker}):
+            failures = self.adapter.recover_finished(Remote(), self.cfg)
+        self.assertEqual(calls, ['good']); self.assertEqual(failures, [{'operation': 'bad', 'error': 'RuntimeError'}])
+        self.assertEqual(self.counter.read_text(), 'run\nrun\n')
+
 
 if __name__ == '__main__': unittest.main()

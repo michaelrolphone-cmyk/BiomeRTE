@@ -17,7 +17,8 @@ def main():
         while True:
             try:
                 cfg = json.loads((ROOT / 'terminal-manifest.json').read_text())
-                recover_finished(Remote(cfg), cfg)
+                for failure in recover_finished(Remote(cfg), cfg):
+                    logging.warning("Terminal receipt %s paused: %s", failure["operation"], failure["error"])
             except Exception as exc:
                 logging.warning('Terminal receipt publication paused: %s', type(exc).__name__)
             time.sleep(5)
