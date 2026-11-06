@@ -85,3 +85,28 @@ def test_boundary_subclass_preserves_parameter_paths_and_forward_values():
     actual=model(x);mx.eval(actual)
     assert before.keys()==after.keys()
     np.testing.assert_array_equal(np.asarray(output),np.asarray(actual))
+
+
+def test_real_attention_head_size_reference_forward_and_vjp():
+    from mlx.utils import tree_flatten
+    from mlx_lm.models.qwen3_next import Qwen3NextAttention
+    from mlx_lm.models.cache import KVCache
+    from activation_field.adapters.qwen35_reverse import _install_reverse_attention
+    args=TextModelArgs(hidden_size=64,intermediate_size=128,num_hidden_layers=4,
+        num_attention_heads=16,num_key_value_heads=4,head_dim=256,vocab_size=64)
+    attention=Qwen3NextAttention(args);nn.quantize(attention,group_size=64,bits=4)
+    x=mx.random.normal((1,1,64));keys=mx.random.normal((1,4,1,256));values=mx.random.normal((1,4,1,256))
+    def cached():
+        cache=KVCache();cache.update_and_fetch(keys,values);return cache
+    before=dict(tree_flatten(attention.parameters()))
+    expected=attention(x,cache=cached());mx.eval(expected)
+    original=Qwen3NextAttention.__call__
+    _install_reverse_attention(attention)
+    actual=attention(x,cache=cached());mx.eval(actual)
+    np.testing.assert_allclose(np.asarray(actual),np.asarray(expected),rtol=2e-5,atol=2e-5)
+    assert before.keys()==dict(tree_flatten(attention.parameters())).keys()
+    assert Qwen3NextAttention.__call__ is original
+    _,gradients=mx.vjp(lambda z:attention(z,cache=cached()),[x],[mx.ones_like(actual)])
+    mx.eval(gradients)
+    assert gradients[0].shape==x.shape
+    assert bool(mx.all(mx.isfinite(gradients[0])).item())

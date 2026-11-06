@@ -77,6 +77,17 @@ class ContextTests(unittest.TestCase):
         out=adapter(bind_contract(p,'status'),lambda path:dict(path=path))
         self.assertEqual(out['path'],'/context/jobs/abc')
         with self.assertRaises(ValueError):bind_contract(dict(p,contract='wrong'),'status')
+    def test_current_usage_preserves_immutable_v1_descriptions(self):
+        from activation_field.context_reconstruction.capabilities import offers
+        class Registry:
+            def invoke(self,operation,body,rid=None):
+                self_test.assertEqual(operation,'cap.define')
+                action=body['name'].split('.')[-1]
+                self_test.assertEqual(body['description'],'Weight changes to context: '+action)
+        self_test=self
+        result=offers(Registry(),'test-resource')
+        self.assertEqual(len(result),4)
+        self.assertIn('mode=reverse only',result[0]['usage']['parameters']['arguments'])
     def test_export_digest_and_hypothesis_labels(self):
         result=dict(context_text='jade',candidates=[{'token_ids':[42]}],target_squared_norm=1,uncertainty_and_gaps=['Unknown history'])
         a=context_artifact(result,{'sha256':'abc'},'handoff','export')

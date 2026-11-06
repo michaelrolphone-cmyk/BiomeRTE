@@ -7,10 +7,48 @@ They are not exact inverses and do not optimize a match to source activations.
 """
 import numpy as np
 import mlx.core as mx
+from types import FunctionType
 from mlx_lm.models.cache import ArraysCache, KVCache
 from ..boundaries import ReverseTrajectory
 from ..directions import normalized
 from ..reverse import Operation, ReverseUnavailable
+
+
+def _reference_attention(queries,keys,values,*,cache,scale,mask):
+    """Differentiable grouped attention for the private aggregate reverse call.
+
+    MLX's single-query vector SDPA kernel has no VJP for some real head sizes.
+    Use the same attention arithmetic with ordinary differentiable primitives.
+    The reverse call has one aggregate cell plus the current cell, no mask.
+    """
+    if mask is not None:
+        raise ValueError('Aggregate reverse attention expects no mask')
+    batch,heads,length,dimension=queries.shape
+    kv_heads=keys.shape[1]
+    if heads % kv_heads:
+        raise ValueError('Invalid grouped attention heads')
+    q=queries.reshape(batch,kv_heads,heads//kv_heads,length,dimension)
+    k=mx.expand_dims(keys,2)
+    v=mx.expand_dims(values,2)
+    scores=(q*scale) @ mx.swapaxes(k,-1,-2)
+    probabilities=mx.softmax(scores.astype(mx.float32),axis=-1).astype(q.dtype)
+    return (probabilities @ v).reshape(batch,heads,length,values.shape[-1])
+
+
+def _install_reverse_attention(attention):
+    """Keep the installed attention body, changing only its private SDPA binding."""
+    original=type(attention).__call__
+    if 'scaled_dot_product_attention' not in original.__globals__:
+        raise ReverseUnavailable('attention_counterpart_unavailable',
+                                 'Installed Qwen attention has an unsupported implementation')
+    namespace=dict(original.__globals__,scaled_dot_product_attention=_reference_attention)
+    call=FunctionType(original.__code__,namespace,original.__name__,
+                      original.__defaults__,original.__closure__)
+    call.__kwdefaults__=original.__kwdefaults__
+    # A transparent subclass keeps all parameters, projections, norms, RoPE,
+    # cache handling, output gate and parameter paths unchanged. No global patch.
+    private=type('Reverse'+type(attention).__name__,(type(attention),),{'__call__':call})
+    object.__setattr__(attention,'__class__',private)
 
 
 class Qwen35ReverseAdapter:
@@ -21,6 +59,8 @@ class Qwen35ReverseAdapter:
         self.operations=[]
         self.counterparts={}
         for i,layer in enumerate(engine.model.layers):
+            if not layer.is_linear:
+                _install_reverse_attention(layer.self_attn)
             name='layer.'+str(i)
             self.operations.append(Operation(name,('state.'+str(i),),'state.'+str(i+1)))
             self.counterparts[name]=self._layer_counterpart(layer,i)

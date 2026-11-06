@@ -16,7 +16,9 @@ def offers(gateway,resource,module='activation_field.context_reconstruction.prov
                    parameters={'arguments':descriptions[operation]+' Biome operation IDs provide idempotency.'},
                    read_result='Read result.ok and job status. Queue acceptance is not completion. Text stays encrypted locally until explicit export. Reconstruction does not reinject or reinforce the model.')
         revision=hashlib.sha256(json.dumps(usage,sort_keys=True).encode()).hexdigest()[:16]
-        gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Field state to tokens: '+operation,usage=usage),rid='afctx-define-'+operation+'-'+revision)
+        # Description is part of the immutable v1 contract schema. Current
+        # mechanism guidance belongs in the separately revisable usage object.
+        gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Weight changes to context: '+operation,usage=usage),rid='afctx-define-'+operation+'-'+revision)
         result.append(dict(contract=name+':1',resource=resource,service='activation-field',capacity=1,usage=usage,argv=[sys.executable,'-m',module,'adapter',operation]))
     return result
 
