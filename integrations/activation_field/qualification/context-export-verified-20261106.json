@@ -1,0 +1,54 @@
+{
+  "observed_at": "2026-11-06T02:52:34.202253+00:00",
+  "native_tests": 65,
+  "installed_revision": "c37b8e27dba66206ad2ecc28820c4ee64a161a70",
+  "operation": "afctx-c37-export-requalification-afterinstall",
+  "result": {
+    "evidence": {
+      "duration_seconds": 642.524,
+      "executed": true,
+      "executor_identity": {
+        "executable": "/bin/bash",
+        "executable_sha256": "fde343ee184953c1fa1185abddeaa8be61c6acbebae4eb54db5d6b55b09a5755",
+        "machine": "arm64",
+        "system": "Darwin"
+      },
+      "exit_code": 0,
+      "host": "Micahels-Mac-mini.local",
+      "process_identity": {
+        "pgid": 2627,
+        "pid": 2627
+      },
+      "quiescent": true,
+      "reason": "exited"
+    },
+    "exit_code": 0,
+    "stderr": "From https://github.com/michaelrolphone-cmyk/BiomeRTE\n * branch            feature/inverse-weight-context -> FETCH_HEAD\n",
+    "stdout": "{\"status\": \"passed\", \"checks\": {\"single_job_succeeded\": true, \"single_lossless_transport\": true, \"single_integrity\": true, \"single_source_unchanged\": true, \"single_no_history_used\": true, \"single_full_model_replay\": true, \"single_exact\": true, \"sequence_job_succeeded\": true, \"sequence_lossless_transport\": true, \"sequence_integrity\": true, \"sequence_source_unchanged\": true, \"sequence_no_history_used\": true, \"sequence_full_model_replay\": true, \"zero_job_succeeded\": true, \"zero_lossless_transport\": true, \"zero_integrity\": true, \"zero_source_unchanged\": true, \"zero_no_history_used\": true, \"zero_no_invented_tokens\": true, \"cancelled_terminal\": true}, \"observed_at\": \"2026-11-06T02:52:34.202253+00:00\", \"path\": \"/Users/micahelbyrns/.local/share/biome-activation-field/context-export-requalification.json\", \"cases\": {\"single\": {\"estimated\": [82082], \"exact\": true, \"residual\": 0.0}, \"sequence\": {\"estimated\": [82082], \"exact\": false, \"residual\": 0.5358201129950034}, \"zero\": {\"estimated\": [], \"exact\": true, \"residual\": null}}}\n",
+    "streams": {
+      "stderr": {
+        "chunks": [
+          {
+            "sha256": "a7c29b76fdd4afe27d5a5dca8eccdde291c05ed9f646054035fc4c9c7a84566c",
+            "size": 120
+          }
+        ],
+        "preview_truncated": false,
+        "sha256": "a7c29b76fdd4afe27d5a5dca8eccdde291c05ed9f646054035fc4c9c7a84566c",
+        "size": 120
+      },
+      "stdout": {
+        "chunks": [
+          {
+            "sha256": "fb0469e090894d9817af6f2db7f355b20d0cff877c84fbc1d34143fb47a616c6",
+            "size": 1029
+          }
+        ],
+        "preview_truncated": false,
+        "sha256": "fb0469e090894d9817af6f2db7f355b20d0cff877c84fbc1d34143fb47a616c6",
+        "size": 1029
+      }
+    }
+  },
+  "corpus": "Pending. Topic and related concepts assessed from raw result, not exact wording."
+}
