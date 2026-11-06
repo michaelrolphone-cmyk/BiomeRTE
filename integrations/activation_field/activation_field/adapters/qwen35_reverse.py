@@ -11,7 +11,7 @@ from types import FunctionType
 from mlx_lm.models.cache import ArraysCache, KVCache
 from ..boundaries import ReverseTrajectory
 from ..directions import normalized
-from ..reverse import Operation, ReverseUnavailable
+from ..reverse import Operation, ReverseUnavailable, combine_write_moments
 
 
 def _reference_attention(queries,keys,values,*,cache,scale,mask):
@@ -52,10 +52,11 @@ def _install_reverse_attention(attention):
 
 
 class Qwen35ReverseAdapter:
-    def __init__(self, engine, records, token_readout):
+    def __init__(self, engine, records, token_readout, debug=None):
         self.engine=engine
         self.records=records
         self.token_readout=token_readout
+        self.debug=debug
         self.operations=[]
         self.counterparts={}
         for i,layer in enumerate(engine.model.layers):
@@ -82,12 +83,18 @@ class Qwen35ReverseAdapter:
             # accumulated signed write directions condition the local signal.
             family='linear_attn' if layer.is_linear else 'self_attn'
             attention_output='out_proj' if layer.is_linear else 'o_proj'
-            combined=np.array(signal,np.float32)
+            writes={}
             for suffix in (family+'.'+attention_output,'mlp.down_proj'):
                 path=f'language_model.model.layers.{index}.'+suffix
                 projection=self.engine.field.directions.get(path)
                 if projection is not None:
-                    combined+=normalized(np.asarray(projection.arrays['write_mean']))
+                    writes[suffix]=np.asarray(projection.arrays['write_mean'])
+            combined=combine_write_moments(signal,writes.values())
+            if self.debug is not None:
+                write_norms={name:float(np.linalg.norm(write.astype(np.float64))) for name,write in writes.items()}
+                bias=combine_write_moments(np.zeros_like(signal),writes.values())
+                self.debug.conditioning('layer.'+str(index),signal,combined,write_norms,bias)
+                self.debug.observe('layer.'+str(index)+'.conditioned',normalized(combined))
             incoming=mx.array(normalized(combined)).reshape(x.shape)
             if layer.is_linear:
                 cache=ArraysCache(size=2)
@@ -106,6 +113,7 @@ class Qwen35ReverseAdapter:
             _,gradients=mx.vjp(lambda value:layer(value,cache=cache),[x],[incoming])
             value=gradients[0].reshape(-1).astype(mx.float32)
             mx.eval(value)
+            if self.debug is not None:self.debug.observe('layer.'+str(index)+'.pullback',np.asarray(value))
             return {'state.'+str(index):np.asarray(value)}
         return apply
 
@@ -118,11 +126,14 @@ class Qwen35ReverseAdapter:
         return {'state.'+str(len(self.engine.model.layers)):normalized(scaled)}
 
     def begin(self,present_state,directions,weights):
-        return ReverseTrajectory(self.records['final_norm'])
+        return ReverseTrajectory(self.records['final_norm'],debug=self.debug)
 
     def finished(self,trajectory):return trajectory.done
     def signals(self,trajectory):return {'present':trajectory.value}
-    def readout(self,flow,trajectory):return self.token_readout.readout(flow['state.0'])
+    def readout(self,flow,trajectory):
+        if self.debug is None:return self.token_readout.readout(flow['state.0'])
+        return self.token_readout.readout(flow['state.0'],
+            trace=self.debug.readout)
     def advance(self,trajectory,flow):
         trajectory.advance()
         return trajectory

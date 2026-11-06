@@ -110,3 +110,45 @@ def test_real_attention_head_size_reference_forward_and_vjp():
     mx.eval(gradients)
     assert gradients[0].shape==x.shape
     assert bool(mx.all(mx.isfinite(gradients[0])).item())
+
+
+def test_debug_preserves_native_reverse_and_observes_conditioning():
+    from activation_field.reverse_debug import ReverseDebug
+    model,field=tiny()
+    cache=[ArraysCache(size=2) if layer.is_linear else RotatingKVCache(16) for layer in model.layers]
+    for token in (1,2,3):
+        output=model(mx.array([[token]]),cache=cache);mx.eval(output)
+        field.observe('user')
+    field.commit()
+    # Nonzero accumulated write moments exercise the existing conditioning
+    # arithmetic. They are a synthetic fixture, not a model-quality claim.
+    for record in field.directions.values():
+        record.arrays['write_mean']=mx.ones_like(record.arrays['write_mean'])*.01
+    embedding=np.array(model.model.embed_tokens(mx.arange(64)).astype(mx.float32))
+    readout=PartitionTokenReadout.from_embeddings(embedding)
+    engine=SimpleNamespace(model=model,field=field)
+    restored=boundaries.restore(boundaries.metadata(field.boundaries,field.version),
+        dict(boundaries.tensors(field.boundaries)),field.version,boundary_dimensions(model))
+    plain=Qwen35ReverseAdapter(engine,restored,readout)
+    baseline=reconstruct_with_adapter(plain,restored,restored,field.entries,str)
+    debug=ReverseDebug()
+    traced=Qwen35ReverseAdapter(engine,restored,readout,debug=debug)
+    actual=reconstruct_with_adapter(traced,restored,restored,field.entries,str,debug=debug)
+    report=actual.pop('debug')
+    assert actual==baseline
+    assert len(report['steps'])==len(actual['estimated_token_ids'])
+    for index in range(4):
+        name='layer.'+str(index)
+        assert name+'.incoming' in report['signal_names']
+        assert name+'.conditioned' in report['signal_names']
+        assert name+'.pullback' in report['signal_names']
+        assert len(report['write_directions'][name]['raw_write_norms'])==2
+        assert all(norm>0 for norm in report['write_directions'][name]['raw_write_norms'].values())
+        assert report['write_directions'][name]['combined_write_norm']==pytest.approx(2*.01*np.sqrt(64),rel=1e-6)
+
+
+def test_debug_off_keeps_one_argument_readout_protocol():
+    class PlainReadout:
+        def readout(self,value):return 17
+    adapter=SimpleNamespace(debug=None,token_readout=PlainReadout())
+    assert Qwen35ReverseAdapter.readout(adapter,{'state.0':np.ones(2)},None)==17

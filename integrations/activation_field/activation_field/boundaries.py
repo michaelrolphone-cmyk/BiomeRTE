@@ -108,8 +108,9 @@ def restore(meta, tensors, version, dimensions, xp=np):
 
 class ReverseTrajectory:
     """Move through accumulated directed state until recorded motion is spent."""
-    def __init__(self, record):
+    def __init__(self, record, debug=None):
         self.record = record
+        self.debug = debug
         self.value = normalized(record.arrays['current_output']+normalized(record.arrays['output_mean']))
         self.remaining = record.motion
         self.step = record.motion/max(1,record.samples-1)
@@ -117,11 +118,23 @@ class ReverseTrajectory:
 
     def advance(self):
         if self.remaining <= 1e-12 or self.step <= 1e-12:
+            if self.debug is not None:
+                self.debug.movement(self.value,None,self.value,self.remaining,
+                                    self.remaining,self.step,
+                                    'motion_exhausted' if self.remaining <= 1e-12 else 'step_below_tolerance')
             self.done = True
             return
         delta = self.record.arrays['backward_flow'] @ features(self.value)
         if float(np.linalg.norm(delta)) <= 1e-12:
+            if self.debug is not None:
+                self.debug.movement(self.value,delta,self.value,self.remaining,
+                                    self.remaining,self.step,'zero_direction')
             self.done = True
             return
+        previous = self.value
+        remaining_before = self.remaining
         self.value = normalized(self.value+min(self.step,self.remaining)*normalized(delta))
         self.remaining = max(0.,self.remaining-self.step)
+        if self.debug is not None:
+            self.debug.movement(previous,delta,self.value,remaining_before,
+                                self.remaining,self.step)

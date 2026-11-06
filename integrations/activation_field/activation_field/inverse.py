@@ -11,15 +11,18 @@ from scipy import sparse
 @dataclass
 class InverseOptions:
     mode: str = 'reverse'
+    debug: bool = False
 
     @classmethod
     def parse(cls, value=None):
         value = {} if value is None else value
-        if not isinstance(value, dict) or set(value)-{'mode'}:
+        if not isinstance(value, dict) or set(value)-{'mode','debug'}:
             raise ValueError('Reverse propagation accepts no token-search or fixed-length options')
         out = cls(**value)
         if out.mode != 'reverse':
             raise ValueError('Vocabulary first-pass and replay modes are retired; use reverse propagation')
+        if type(out.debug) is not bool:
+            raise ValueError('Reverse debug must be a boolean')
         return out
 
     def to_dict(self):

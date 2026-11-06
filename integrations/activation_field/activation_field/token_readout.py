@@ -178,7 +178,7 @@ class PartitionTokenReadout:
     def __call__(self, embedding):
         return self.readout(embedding)
 
-    def readout(self, embedding):
+    def readout(self, embedding, trace=None):
         """Map one reverse-propagated embedding signal directly to one ID."""
         vector = np.asarray(embedding, dtype=np.float32)
         if vector.shape != (self.dimension,) or not np.isfinite(vector).all():
@@ -188,8 +188,22 @@ class PartitionTokenReadout:
             if norm > 0:
                 vector = (vector / norm).astype(np.float32)
         index = 0
+        branches = [] if trace is not None else None
+        minimum_margin = closest_split = None
         while True:
             node = self._nodes[index]
             if node.axis < 0:
+                if trace is not None:
+                    trace(dict(vector=vector, leaf=index, token_id=node.token,
+                        branches=branches, minimum_margin=minimum_margin,
+                        closest_split=closest_split))
                 return node.token
-            index = node.left if float(vector[node.axis]) < node.threshold else node.right
+            coordinate = float(vector[node.axis])
+            went_left = coordinate < node.threshold
+            if trace is not None:
+                branches.append([index, node.axis, node.threshold, went_left])
+                margin = abs(coordinate - node.threshold)
+                if minimum_margin is None or margin < minimum_margin:
+                    minimum_margin = margin
+                    closest_split = dict(node=index, coordinate=coordinate)
+            index = node.left if went_left else node.right

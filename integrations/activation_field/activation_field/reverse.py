@@ -22,6 +22,23 @@ class Operation:
     output: str
 
 
+def combine_write_moments(signal, moments):
+    """Condition a signal using the recorded signed write magnitudes.
+
+    A write mean is a bounded coefficient, not a unit direction. Normalizing
+    each mean separately amplifies weak or cancelled writes to full signal
+    strength repeatedly across layers. Keep its measured magnitude instead;
+    normalization of the combined signal belongs to the layer counterpart.
+    """
+    combined = np.array(signal, dtype=np.float32, copy=True)
+    for moment in moments:
+        value = np.asarray(moment, dtype=np.float32)
+        if value.shape != combined.shape:
+            raise ValueError('Write moment and reverse signal dimensions disagree')
+        combined += value
+    return combined
+
+
 def quantized_backprojection(output, packed, scales, offsets, tile_rows=16):
     """Tiled transpose propagation through current affine4 weights.
 
@@ -46,7 +63,8 @@ def quantized_backprojection(output, packed, scales, offsets, tile_rows=16):
     return normalized(result)
 
 
-def reverse_operations(operations, signals, directions, weights, counterparts, check=lambda: None):
+def reverse_operations(operations, signals, directions, weights, counterparts, check=lambda: None,
+                       debug=None):
     """Traverse a supplied forward DAG backwards and normalize merged flow.
 
     Counterparts receive the combined output, aggregate direction record and
@@ -63,7 +81,9 @@ def reverse_operations(operations, signals, directions, weights, counterparts, c
         check()
         if op.output not in flow or op.name not in directions:
             raise ReverseUnavailable('reverse_direction_missing', op.name)
-        inputs = counterparts[op.name](normalized(flow.pop(op.output)), directions[op.name], weights)
+        incoming = normalized(flow.pop(op.output))
+        if debug is not None:debug.observe(op.name+'.incoming', incoming)
+        inputs = counterparts[op.name](incoming, directions[op.name], weights)
         if set(inputs) != set(op.inputs):
             raise ValueError('Counterpart returned wrong inputs: '+op.name)
         for key, value in inputs.items():
@@ -78,7 +98,7 @@ def reverse_operations(operations, signals, directions, weights, counterparts, c
     return {key: normalized(value) for key, value in flow.items()}
 
 
-def emit_tokens(adapter, present_state, directions, weights, check=lambda: None):
+def emit_tokens(adapter, present_state, directions, weights, check=lambda: None, debug=None):
     """Emit until the adapter's trajectory/readout ends, without a length cap.
 
     The readout returns a single token ID (or None for its end signal), not a
@@ -88,13 +108,16 @@ def emit_tokens(adapter, present_state, directions, weights, check=lambda: None)
     trajectory = adapter.begin(present_state, directions, weights)
     while not adapter.finished(trajectory):
         check()
+        if debug is not None:debug.begin_step()
         flow = reverse_operations(adapter.operations, adapter.signals(trajectory),
-                                  directions, weights, adapter.counterparts, check)
+                                  directions, weights, adapter.counterparts, check, debug)
         token = adapter.readout(flow, trajectory)
         if token is None:
+            if debug is not None:debug.end_step(None)
             return
         if type(token) is not int or token < 0:
             raise ValueError('Reverse readout must return one nonnegative token ID')
         # This is the state for the next emission, not a post-output analysis.
         trajectory = adapter.advance(trajectory, flow)
+        if debug is not None:debug.end_step(token)
         yield token

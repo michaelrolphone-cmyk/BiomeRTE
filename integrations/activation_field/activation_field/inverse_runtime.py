@@ -96,7 +96,7 @@ def token_readout(engine,cache_root,check=lambda:None,progress=lambda event:None
 
 def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:None,
                 check=lambda:None,readout_cache=None):
-    InverseOptions.parse(options)
+    options=InverseOptions.parse(options)
     check()
     source=vault.manifest(checkpoint);metadata=source['metadata']
     if (metadata.get('baseline_hash')!=manifest['baseline_hash'] or
@@ -108,19 +108,21 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
     from .config import FieldConfig
     from .admission import model_slot
     from .adapters.qwen35_reverse import Qwen35ReverseAdapter
+    from .reverse_debug import ReverseDebug
+    debug=ReverseDebug() if options.debug else None
     config=FieldConfig.parse(dict(metadata['config'],enabled=False,read_only=True,spectral_enabled=False))
     with model_slot(lambda event:progress(dict(phase='admission',**event))):
         engine=Engine(manifest,config)
         try:
             records=load_present_state(engine,vault,checkpoint,metadata,check)
             readout=token_readout(engine,readout_cache or (vault.root.parent/'token-readout'),check,progress)
-            adapter=Qwen35ReverseAdapter(engine,records,readout)
+            adapter=Qwen35ReverseAdapter(engine,records,readout,debug=debug)
             tokens=[]
-            for token in emit_tokens(adapter,records,records,engine.field.entries,check):
+            for token in emit_tokens(adapter,records,records,engine.field.entries,check,debug):
                 tokens.append(token)
                 progress(dict(phase='reverse_propagation',emitted_tokens=len(tokens)))
             # No replay, activation comparison, quality gate or subsequent model stage.
-            return dict(status='complete',method='approximate_reverse_propagation',
+            result=dict(status='complete',method='approximate_reverse_propagation',
                 estimated_token_ids=tokens,context_text=engine.tokenizer.decode(tokens),
                 token_order='reverse_trajectory',source_modified=False,
                 source_refs=[dict(checkpoint_id=checkpoint,sha256=hashlib.sha256(canonical(source)).hexdigest(),
@@ -128,14 +130,19 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
                 uses_source_transcript=False,uses_input_token_history=False,uses_source_logits=False,
                 uses_recurrent_present_state=True,uses_attention_aggregate=True,
                 readout='frozen_embedding_partition',termination='accumulated_motion_or_zero_direction',
+                write_conditioning='recorded_signed_magnitude',
                 approximation='local operation adjoints at aggregate state; semantic quality unmeasured')
+            if debug is not None:result['debug']=debug.report()
+            return result
         finally:
             engine.close()
 
 
-def reconstruct_with_adapter(adapter,present_state,directions,weights,decode,check=lambda:None):
+def reconstruct_with_adapter(adapter,present_state,directions,weights,decode,check=lambda:None,debug=None):
     """Generic operation adapter integration, also used by mechanical tests."""
-    tokens=list(emit_tokens(adapter,present_state,directions,weights,check))
-    return dict(status='complete',method='approximate_reverse_propagation',
+    tokens=list(emit_tokens(adapter,present_state,directions,weights,check,debug))
+    result=dict(status='complete',method='approximate_reverse_propagation',
                 estimated_token_ids=tokens,context_text=decode(tokens),
                 token_order='reverse_trajectory',source_modified=False)
+    if debug is not None:result['debug']=debug.report()
+    return result
