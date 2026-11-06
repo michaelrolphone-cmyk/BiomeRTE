@@ -63,4 +63,4 @@ async function dispatch(req,env) {
  }
  return ok(await runTool(env,params.name,params.arguments));
 }
-export default {async fetch(req,env){try{return await dispatch(req,env)}catch{return Response.json({error:'Controller gateway unavailable'},{status:503,headers:{'Cache-Control':'no-store'}})}}};
+export default {async fetch(req,env){try{return await dispatch(req,env)}catch(error){console.error('controller_gateway_failure',{path:new URL(req.url).pathname,name:error?.name,message:String(error?.message??'Unknown failure').slice(0,600)});return Response.json({error:'Controller gateway unavailable'},{status:503,headers:{'Cache-Control':'no-store'}})}}};

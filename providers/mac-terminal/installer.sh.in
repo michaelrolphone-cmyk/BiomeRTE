@@ -10,6 +10,7 @@ if [ -z "$PYTHON" ]; then echo 'Python 3.8 or newer is required. Install Python 
 PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"
 APP="$HOME/.local/share/biome-mac-terminal"
 LABEL=org.biomerte.mac-terminal
+RECOVERY_LABEL=org.biomerte.terminal-receipt-recovery
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 MODE="${1:-install}"
 if [ "$MODE" = '--status' ]; then
@@ -23,6 +24,8 @@ mkdir -p "$APP"
 chmod 700 "$APP"
 echo 'Installing the boot service as your user. macOS may request your administrator password.'
 sudo -v
+launchctl bootout "gui/$(id -u)/$RECOVERY_LABEL" 2>/dev/null || true
+sudo launchctl bootout "system/$RECOVERY_LABEL" 2>/dev/null || true
 # Stop old v1/v2 login services and an existing boot service before touching OAuth or the ledger.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 sudo launchctl bootout "system/$LABEL" 2>/dev/null || true
@@ -62,11 +65,19 @@ obj = {'Label': label, 'UserName': user,
        'EnvironmentVariables': {'HOME': home, 'USER': user, 'LOGNAME': user, 'PATH': os.path.dirname(python) + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', 'PYTHONUNBUFFERED': '1'}}
 with open(app + '/service.plist', 'wb') as f:
     plistlib.dump(obj, f)
+recovery = dict(obj, Label='org.biomerte.terminal-receipt-recovery',
+                ProgramArguments=[python, app + '/terminal_receipt_recovery.py'],
+                StandardOutPath=app + '/receipt-recovery.log',
+                StandardErrorPath=app + '/receipt-recovery-error.log')
+with open(app + '/receipt-recovery-service.plist', 'wb') as f:
+    plistlib.dump(recovery, f)
 PLIST_PY
 sudo install -o root -g wheel -m 644 "$APP/service.plist" "$PLIST"
 sudo launchctl bootstrap system "$PLIST"
 sudo launchctl kickstart -k "system/$LABEL"
 sudo launchctl print "system/$LABEL"
+sudo install -o root -g wheel -m 644 "$APP/receipt-recovery-service.plist" "/Library/LaunchDaemons/$RECOVERY_LABEL.plist"
+sudo launchctl bootstrap system "/Library/LaunchDaemons/$RECOVERY_LABEL.plist"
 echo
 echo 'Installed and terminal command verified. You can close Terminal and disconnect the display.'
 echo 'Starts at boot as your user; prevents idle sleep while running; reconnects automatically.'
