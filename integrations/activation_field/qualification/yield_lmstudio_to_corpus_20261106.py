@@ -35,14 +35,17 @@ with (ROOT/'subject-corpus-01.lock').open('a+b') as corpus:
  except BlockingIOError:pass
 record={'service':SERVICE,'domain':DOMAIN,'plist':str(plists[0]),'before':queue(),'action':'prepared','source_pid':pid}
 save(record)
-helper="import datetime,fcntl,json,subprocess,time\nfrom pathlib import Path\nroot=Path.home()/'.local/share/biome-activation-field'\nstate=root/'lmstudio-corpus-resume-20261106.json'\ndef save(**x):\n x['observed_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()\n p=state.with_suffix('.tmp');p.write_text(json.dumps(x));p.chmod(0o600);p.replace(state)\nwith (root/'lmstudio-corpus-resume.lock').open('a+b') as guard:\n fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)\n save(status='armed')\n with (root/'lmstudio-corpus-handoff.lock').open('a+b') as gate:\n  fcntl.flock(gate,fcntl.LOCK_EX)\n with (root/'subject-corpus-01.lock').open('a+b') as corpus:\n  save(status='waiting_for_corpus_exit')\n  fcntl.flock(corpus,fcntl.LOCK_EX)\n  cfg=json.loads((root/'lmstudio-corpus-pause-20261106.json').read_text())\n  while True:\n   found=subprocess.run(['/bin/launchctl','print',cfg['service']],capture_output=True,text=True)\n   if found.returncode==0:\n    save(status='service_available',service=cfg['service']);break\n   result=subprocess.run(['/bin/launchctl','bootstrap',cfg['domain'],cfg['plist']],capture_output=True,text=True)\n   save(status='restore_requested',exit_code=result.returncode,stderr=result.stderr)\n   time.sleep(2)\n"
+helper="import datetime,fcntl,json,os,subprocess,time\nfrom pathlib import Path\nroot=Path.home()/'.local/share/biome-activation-field'\nstate=root/'lmstudio-corpus-resume-20261106.json'\ndef save(**x):\n x['observed_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()\n p=state.with_suffix('.tmp');p.write_text(json.dumps(x));p.chmod(0o600);p.replace(state)\nwith (root/'lmstudio-corpus-resume.lock').open('a+b') as guard:\n fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB)\n save(status='armed',pid=os.getpid())\n with (root/'lmstudio-corpus-handoff.lock').open('a+b') as gate:\n  fcntl.flock(gate,fcntl.LOCK_EX)\n with (root/'subject-corpus-01.lock').open('a+b') as corpus:\n  save(status='waiting_for_corpus_exit')\n  fcntl.flock(corpus,fcntl.LOCK_EX)\n  cfg=json.loads((root/'lmstudio-corpus-pause-20261106.json').read_text())\n  while True:\n   found=subprocess.run(['/bin/launchctl','print',cfg['service']],capture_output=True,text=True)\n   if found.returncode==0:\n    save(status='service_available',service=cfg['service']);break\n   result=subprocess.run(['/bin/launchctl','bootstrap',cfg['domain'],cfg['plist']],capture_output=True,text=True)\n   save(status='restore_requested',exit_code=result.returncode,stderr=result.stderr)\n   time.sleep(2)\n"
 with (ROOT/'lmstudio-corpus-handoff.lock').open('a+b') as gate:
  fcntl.flock(gate,fcntl.LOCK_EX)
  with (ROOT/'lmstudio-corpus-resume.log').open('ab',buffering=0) as log:
   child=subprocess.Popen([sys.executable,'-S','-c',helper],stdout=log,stderr=log,start_new_session=True)
  ready=ROOT/'lmstudio-corpus-resume-20261106.json'
- while not ready.exists():
+ while True:
   if child.poll() is not None:raise RuntimeError('Resumption guard failed before pause')
+  if ready.exists():
+   state=json.loads(ready.read_text())
+   if state.get('pid')==child.pid and state.get('status')=='armed':break
   time.sleep(.1)
  assert child.poll() is None,'Resumption guard exited before pause'
  record['resume_guard_pid']=child.pid;save(record)
