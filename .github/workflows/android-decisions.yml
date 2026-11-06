@@ -1,0 +1,44 @@
+name: Biome Decisions Android
+on:
+  push:
+    paths:
+      - 'android/decisions/**'
+      - '.github/workflows/android-decisions.yml'
+  pull_request:
+    paths:
+      - 'android/decisions/**'
+      - '.github/workflows/android-decisions.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the repository Android toolchain
+        run: docker build --tag biome-decisions-build android/decisions
+      - name: Test and build review APKs
+        run: |
+          docker run --rm \
+            --volume "$PWD/android/decisions:/source" \
+            --workdir /source biome-decisions-build \
+            gradle --no-daemon testDebugUnitTest assembleDebug assembleRelease
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: biome-decisions-test-reports
+          path: |
+            android/decisions/app/build/reports/tests/
+            android/decisions/app/build/test-results/
+          if-no-files-found: warn
+      - name: Preserve review APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: biome-decisions-review-apks
+          path: |
+            android/decisions/app/build/outputs/apk/debug/app-debug.apk
+            android/decisions/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
