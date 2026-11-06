@@ -1,46 +1,36 @@
-"""First-pass delta-derived token hypotheses and optional sequence replay.
+"""Reverse options and retained legacy offline experiment helpers.
 
-This module never accepts a source transcript. A delta is generally many-to-one;
-search scores are fit errors, not probabilities of historical truth.
+Legacy helpers below are not used by the service or reverse runtime. They are
+kept for reading prior experimental artifacts, not as a fallback decoder.
 """
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 import numpy as np
 from scipy import sparse
 
 
 @dataclass
 class InverseOptions:
-    mode: str = 'first_pass'
-    max_tokens: int = 8
-    candidate_pool: int = 16
-    beam_width: int = 2
-    sketch_rank: int = 8
-    power_iterations: int = 2
-    vocabulary_batch: int = 512
-    seed: int = 42
-    role: str = 'user'
-    layout: str = 'raw'
+    mode: str = 'reverse'
 
     @classmethod
     def parse(cls, value=None):
-        value={} if value is None else value
-        if not isinstance(value,dict) or set(value)-{f.name for f in fields(cls)}:
-            raise ValueError('Unknown inverse search option')
-        out=cls(**value)
-        if out.mode not in ('first_pass','replay'):
-            raise ValueError('mode must be first_pass or replay')
-        for key in ('max_tokens','candidate_pool','beam_width','sketch_rank','vocabulary_batch'):
-            if type(getattr(out,key)) is not int or getattr(out,key)<1:
-                raise ValueError(key+' must be a positive integer')
-        if type(out.power_iterations) is not int or out.power_iterations<0:
-            raise ValueError('power_iterations must be nonnegative')
-        if type(out.seed) is not int or not 0<=out.seed<2**32:
-            raise ValueError('seed must be uint32')
-        if out.role not in ('user','assistant','system','tool') or out.layout not in ('raw','message'):
-            raise ValueError('Unsupported replay role or layout')
+        value = {} if value is None else value
+        if not isinstance(value, dict) or set(value)-{'mode'}:
+            raise ValueError('Reverse propagation accepts no token-search or fixed-length options')
+        out = cls(**value)
+        if out.mode != 'reverse':
+            raise ValueError('Vocabulary first-pass and replay modes are retired; use reverse propagation')
         return out
 
-    def to_dict(self):return asdict(self)
+    def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class LegacyReplayOptions:
+    """Offline historical helper only. Not accepted by the service."""
+    max_tokens: int = 8
+    beam_width: int = 2
 
 
 def delta_basis(blocks, dimension, rank, power_iterations, seed):
@@ -115,3 +105,4 @@ def beam_reconstruct(token_candidates, score, options, progress=lambda event:Non
         if level[0]['relative_squared_error']==0:break
     evaluated.sort(key=lambda item:(item['relative_squared_error'],len(item['token_ids']),item['token_ids']))
     return evaluated
+

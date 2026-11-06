@@ -71,3 +71,12 @@ Through Biome, use `context.action=experiment_start` with `context.experiment_co
 Optional topology: install `.[topology]`, then set `persistent_homology=true` in a descriptor run or field configuration. H0/H1 use the flag complex of `1-S/max(S)`, without assuming a metric. [Ripser API](https://ripser.scikit-tda.org/en/latest/reference/stubs/ripser.ripser.html). Its utility is measured against the graph-only baseline.
 
 Native regressions: `python -m pytest -q`, `python tests/qualify_full_model.py`, `python tests/qualify_continuation.py`, and `python tests/qualify_api.py`. Qualification reports keep skipped, failed, unexecuted and measured results distinct.
+
+
+## Approximate reverse propagation
+
+See [CONTEXT_RECONSTRUCTION.md](CONTEXT_RECONSTRUCTION.md) for the current
+direction-accumulation and reverse-to-token path. Newly collected state is
+required; older weight-only checkpoints cannot retroactively acquire it. The
+former vocabulary-ranking/replay service modes are retired. Full-model semantic
+quality remains unmeasured; this code update does not run inference experiments.

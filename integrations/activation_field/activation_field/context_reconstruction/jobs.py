@@ -60,7 +60,7 @@ class ContextJobs:
                         progress=json.loads(row['progress']) if row['progress'] else None,error=json.loads(row['error']) if row['error'] else None)
         if row['state']=='succeeded':
             data=Vault(self.jobs/job_id/'result').load_json('result.enc')
-            result['result']={k:data.get(k) for k in ('status','candidate_kind','best_relative_squared_error','replay_evaluations','source_modified','scientific_reconstruction_success')}
+            result['result']={k:data.get(k) for k in ('status','method','token_order','source_modified')}
             result['export_available']=True
         return result
 
@@ -189,13 +189,8 @@ class ContextJobs:
                 if model['baseline_hash']!=config['baseline_hash']:raise ContextError('baseline_mismatch','Installed baseline changed')
                 from ..inverse_runtime import reconstruct
                 from .report import context_artifact
-                private=Vault(folder/'replay')
-                try:memo=private.load_json('scores.enc')
-                except FileNotFoundError:memo={}
-                def save_score(key,value):
-                    memo[key]=value;private.save_json('scores.enc',memo)
                 result=reconstruct(model,Vault(folder/'source'),'source',config['options'],
-                                   progress=progress,check=check,memo=memo,save_score=save_score)
+                                   progress=progress,check=check,readout_cache=self.root/'context-token-readout')
                 import resource
                 result['cost']=dict(peak_process_ram_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024),
                                     job_disk_bytes=sum(p.stat().st_size for p in folder.rglob('*') if p.is_file()),
@@ -211,3 +206,4 @@ if __name__=='__main__':
     _,mode,root,manifest,job_id,*fds=sys.argv
     if mode!='worker':raise ValueError(mode)
     ContextJobs(root,manifest,launch=False).worker(job_id,int(fds[0]) if fds else None)
+

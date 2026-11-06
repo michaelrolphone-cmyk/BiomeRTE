@@ -19,7 +19,7 @@ class ContextTests(unittest.TestCase):
         self.reader=patch('activation_field.context_reconstruction.jobs.read_manifest',return_value={'baseline_hash':'abc'})
         self.reader.start();self.addCleanup(self.reader.stop)
         self.jobs=ContextJobs(self.root,'manifest',launch=False);self.addCleanup(self.jobs.db.close)
-        self.body=dict(request_id='first',expected_version=0,target_checkpoint='target',options={'max_tokens':1})
+        self.body=dict(request_id='first',expected_version=0,target_checkpoint='target',options={'mode':'reverse'})
     def test_source_snapshot_never_opens_cache_shards(self):
         v=Vault(self.root/'state');m=v.manifest('target')
         cache=next(i for i in m['tensors'] if i['name']=='cache.0')
@@ -121,3 +121,4 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(json.loads(read_transfer(wrapped['result_artifact'],blobs.__getitem__)),value)
 
 if __name__=='__main__':unittest.main()
+

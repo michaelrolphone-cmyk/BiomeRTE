@@ -1,13 +1,13 @@
 import unittest
 import numpy as np
-from activation_field.inverse import InverseOptions,delta_basis,beam_reconstruct,first_pass_result
+from activation_field.inverse import InverseOptions,LegacyReplayOptions,delta_basis,beam_reconstruct,first_pass_result
 
 
 class InverseMechanics(unittest.TestCase):
-    def test_first_pass_is_default_and_replay_is_opt_in(self):
-        self.assertEqual(InverseOptions.parse().mode,'first_pass')
-        self.assertEqual(InverseOptions.parse({'mode':'replay'}).mode,'replay')
-        with self.assertRaises(ValueError):InverseOptions.parse({'mode':'guess'})
+    def test_reverse_is_the_only_service_mode(self):
+        self.assertEqual(InverseOptions.parse().mode,'reverse')
+        for mode in ('first_pass', 'replay', 'guess'):
+            with self.assertRaises(ValueError):InverseOptions.parse({'mode':mode})
 
     def test_first_pass_returns_all_ranked_tokens_without_quality_gate(self):
         proposals=[dict(token_id=5,proposal_score=0.),dict(token_id=2,proposal_score=-1.)]
@@ -43,16 +43,17 @@ class InverseMechanics(unittest.TestCase):
         def score(seq):
             desired=(3,1)
             return {'relative_squared_error':sum(a!=b for a,b in zip(seq,desired))+abs(len(seq)-2)}
-        result=beam_reconstruct([1,3],score,InverseOptions(max_tokens=2,beam_width=2))
+        result=beam_reconstruct([1,3],score,LegacyReplayOptions(max_tokens=2,beam_width=2))
         self.assertEqual(result[0]['token_ids'],[3,1]);self.assertEqual(result[0]['relative_squared_error'],0)
 
     def test_search_settings_are_explicit_and_not_hidden_hard_caps(self):
-        self.assertEqual(InverseOptions.parse({'max_tokens':10000}).max_tokens,10000)
+        with self.assertRaises(ValueError):InverseOptions.parse({'max_tokens':10000})
         for bad in ({'max_tokens':0},{'beam_width':True},{'seed':-1},{'unknown':1},{'layout':'guess'}):
             with self.assertRaises(ValueError):InverseOptions.parse(bad)
 
     def test_invalid_replay_measurement_does_not_publish_candidate(self):
-        with self.assertRaises(ValueError):beam_reconstruct([1],lambda seq:{'relative_squared_error':float('nan')},InverseOptions())
+        with self.assertRaises(ValueError):beam_reconstruct([1],lambda seq:{'relative_squared_error':float('nan')},LegacyReplayOptions())
 
 
 if __name__=='__main__':unittest.main()
+

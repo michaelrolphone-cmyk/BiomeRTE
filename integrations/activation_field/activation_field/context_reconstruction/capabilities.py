@@ -5,18 +5,18 @@ OPERATIONS=('start','status','cancel','export')
 
 def offers(gateway,resource,module='activation_field.context_reconstruction.provider'):
     descriptions={
-        'start':'target_checkpoint, purpose, options (mode, max_tokens, candidate_pool, beam_width, sketch_rank, power_iterations, vocabulary_batch, seed, role, layout). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Default mode=first_pass returns approximate token hypotheses immediately after the vocabulary pass, in proposal-score order, without sequence replay. mode=replay explicitly enables the former sequence search. No runtime cap.',
-        'status':'run_id. Reports state, progress and measured residual; no reconstructed text is disclosed.',
-        'cancel':'run_id, expected_version. Cooperatively stop at a safe boundary; keep replay measurements for explicit resume.',
+        'start':'target_checkpoint, purpose, options (mode=reverse only). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Uses accumulated projection and operation state, current adjusted weights, numerical reverse counterparts and a reusable direct embedding partition readout. Checkpoints without the accumulated state fail explicitly. No vocabulary search, replay fallback or fixed token limit.',
+        'status':'run_id. Reports state, progress and explicit missing-component errors; no token text is disclosed.',
+        'cancel':'run_id, expected_version. Cooperatively stop at a safe boundary.',
         'export':'run_id, expected_version, allow_plaintext=true. Explicitly disclose the protected context and estimated token stream. Every signed context report is returned losslessly through result_artifact; recursively retrieve chunks/nodes with artifact.get and verify digests.'}
     result=[]
     for operation in OPERATIONS:
         name=NAMESPACE+operation
-        usage=dict(before='Experimental delta-only input reconstruction on the native pinned model. Shared model/image admission. Does not modify the source or use its conversation, native caches or logits. Results are hypotheses, not recovered history.',
+        usage=dict(before='Approximate reverse propagation on the native pinned Qwen model. Quality is unmeasured. Shared model/image admission. Does not modify the source or use its conversation, native caches or logits.',
                    parameters={'arguments':descriptions[operation]+' Biome operation IDs provide idempotency.'},
                    read_result='Read result.ok and job status. Queue acceptance is not completion. Text stays encrypted locally until explicit export. Reconstruction does not reinject or reinforce the model.')
         revision=hashlib.sha256(json.dumps(usage,sort_keys=True).encode()).hexdigest()[:16]
-        gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Weight changes to context: '+operation,usage=usage),rid='afctx-define-'+operation+'-'+revision)
+        gateway.invoke('cap.define',dict(name=name,version=1,inputs={'arguments':'obj'},outputs={'result':'obj'},description='Field state to tokens: '+operation,usage=usage),rid='afctx-define-'+operation+'-'+revision)
         result.append(dict(contract=name+':1',resource=resource,service='activation-field',capacity=1,usage=usage,argv=[sys.executable,'-m',module,'adapter',operation]))
     return result
 
@@ -51,3 +51,4 @@ def adapter(payload,api):
         except (ValueError,TypeError):error={}
         raise ContextError(error.get('code','http_error'),error.get('message',str(exc))) from exc
     return transport_result(dict(ok=True,**value))
+
