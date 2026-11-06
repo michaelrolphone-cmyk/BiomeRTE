@@ -17,26 +17,31 @@ public class DecisionWidget extends AppWidgetProvider {
  @Override public void onReceive(Context c,Intent i){super.onReceive(c,i);if("biome.decisions.next".equals(i.getAction()))refresh(c,true);}
  public static boolean locked(Context c){return c.getSystemService(KeyguardManager.class).isDeviceLocked();}
  public static List<RemoteViews> rows(Context c,JSONObject row,boolean locked,boolean submitted)throws Exception{
-  ArrayList<RemoteViews> rows=new ArrayList<>();JSONObject request=row==null?null:row.getJSONObject("request");
+  ArrayList<RemoteViews> rows=new ArrayList<>();
+  String problem=locked||row==null?"":DecisionModel.problem(row);
+  JSONObject request=locked||row==null?null:row.optJSONObject("request");
   RemoteViews question=new RemoteViews(c.getPackageName(),R.layout.widget_question);
   question.setTextViewText(R.id.title,locked?"Biome Decisions":request==null?"Biome Decisions":request.optString("title","Decision"));
-  question.setTextViewText(R.id.question,locked?"Unlock to review":request==null?"Open to connect":request.getString("question")+"\n\n"+DecisionModel.describe(request));rows.add(question);
+  question.setTextViewText(R.id.question,locked?"Unlock to review":!problem.isEmpty()?"This request cannot be reviewed.\n"+problem+"\nOpen the inbox to refresh.":request==null?"Open inbox":request.getString("question")+"\n\n"+DecisionModel.describe(request));rows.add(question);
+  if(!problem.isEmpty())return rows;
   if(!locked&&request!=null&&!submitted){JSONArray choices=request.getJSONArray("choices");for(int n=0;n<choices.length();n++){JSONObject option=choices.getJSONObject(n);RemoteViews view=new RemoteViews(c.getPackageName(),R.layout.widget_choice);view.setTextViewText(R.id.widget_choice,option.getString("label"));view.setContentDescription(R.id.widget_choice,option.getString("label"));view.setOnClickFillInIntent(R.id.widget_choice,new Intent().putExtra("choice",option.getString("id")));rows.add(view);}}
   return rows;
  }
  public static void update(Context c)throws Exception{
   AppWidgetManager m=AppWidgetManager.getInstance(c);int[] ids=m.getAppWidgetIds(new ComponentName(c,DecisionWidget.class));if(ids.length==0)return;
-  JSONObject s=new State(c).read();JSONArray ready=State.pending(s);boolean isLocked=locked(c);
+  JSONObject s=new State(c).read();JSONArray ready=State.pending(s);boolean isLocked=locked(c);int invalid=State.invalidRows(s).length(),attention=State.attentionCount(s);
   JSONObject row=ready.length()==0?null:ready.getJSONObject(Math.floorMod(s.optInt("index"),ready.length()));
   for(int id:ids){
    // Never show the all-clear for an unpaired or unobserved inbox.
-   if(row==null&&s.has("config")&&s.optLong("last_sync")>0&&s.optString("status").isEmpty()){
+   if(row==null&&invalid==0&&attention==0&&s.has("config")&&s.optLong("last_sync")>0&&s.optString("status").isEmpty()){
     RemoteViews empty=new RemoteViews(c.getPackageName(),R.layout.widget_empty);empty.setOnClickPendingIntent(R.id.empty_label,open(c,""));m.updateAppWidget(id,empty);continue;
    }
    RemoteViews view=new RemoteViews(c.getPackageName(),R.layout.widget);String key=row==null?"":row.getString("id"),digest=row==null?"":row.getString("digest");
    view.setTextViewText(R.id.count,"Biome Decisions · "+ready.length());view.setOnClickPendingIntent(R.id.count,open(c,key));
    String status=isLocked?"":s.optString("status");boolean submitted=row!=null&&State.submitted(s,key);
-   if(submitted)status="Reply saved · sending";
+   if(!isLocked&&submitted)status=State.deliveryLabel(State.delivery(s,key));
+   else if(!isLocked&&invalid>0)status=invalid+" request(s) cannot be reviewed; open inbox";
+   else if(!isLocked&&attention>0)status="Saved replies need attention; open inbox";
    view.setTextViewText(R.id.response_status,status);view.setViewVisibility(R.id.response_status,status.isEmpty()?View.GONE:View.VISIBLE);
    view.setTextViewText(R.id.connection,s.optString("status").isEmpty()?(s.has("config")?"Connected to Biome":"Open to pair with Biome"):isLocked?"Open to review connection":s.optString("status"));
    Intent choice=new Intent(c,AnswerReceiver.class).setAction("biome.decision.choice").setData(Uri.parse("biome-decisions://choice/"+id+"/"+key+"/"+digest));
