@@ -30,7 +30,7 @@ try:
                 check('source_changed_packed_weights',engine.field.changed_words>0)
                 original=hashlib.sha256(canonical(vault.manifest('source'))).hexdigest()
             finally:engine.close()
-        reconstructed=reconstruct(manifest,vault,'source',dict(max_tokens=1,candidate_pool=4,beam_width=2,sketch_rank=1,power_iterations=4))
+        reconstructed=reconstruct(manifest,vault,'source',dict(mode='replay',max_tokens=1,candidate_pool=4,beam_width=2,sketch_rank=1,power_iterations=4))
         result['result']=reconstructed;result['synthetic_expected_token_ids']=ids;publish()
         check('source_checkpoint_unchanged',original==hashlib.sha256(canonical(vault.manifest('source'))).hexdigest())
         check('no_transcript_cache_or_logits_used',all(reconstructed[key] is False for key in ('uses_source_transcript','uses_source_native_caches','uses_source_logits')))

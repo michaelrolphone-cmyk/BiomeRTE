@@ -19,9 +19,10 @@ from activation_field.context_reconstruction.transport import read_transfer
 from activation_field.context_reconstruction.common import atomic_bytes
 
 CONTEXT_RESOURCE = 'model.context-reconstruction.mac.a0e62492364bd9ddd423'
-PREFIX = 'afctx-corpus01'
 fixture = json.loads(Path(sys.argv[1]).read_text())
-out = ROOT/'subject-corpus-01.json'
+MODE = fixture['reconstruction']['options'].get('mode','first_pass')
+PREFIX = 'afctx-corpus01-'+MODE.replace('_','-')
+out = ROOT/('subject-corpus-01-'+MODE.replace('_','-')+'.json')
 g = gateway()
 
 
@@ -73,7 +74,7 @@ def run():
         check('source_generation_succeeded', ingest.get('status') == 'succeeded')
         save(stage='checkpoint')
         checkpoint = call(fixture['generation']['contract'],fixture['generation']['resource'],
-            PREFIX+'-checkpoint',dict(request='',context=dict(action='checkpoint',
+            'afctx-corpus01-checkpoint',dict(request='',context=dict(action='checkpoint',
                 session_id=ingest['session_id'],expected_version=ingest['version'],field_only=True)))
         evidence['stages']['checkpoint'] = checkpoint
         source = checkpoint['response']
@@ -114,11 +115,17 @@ def run():
         check('source_not_modified', report['source_modified'] is False)
         check('no_source_history_inputs', all(report[k] is False for k in
               ('uses_source_transcript','uses_source_native_caches','uses_source_logits')))
-        check('full_model_replay', bool(report.get('candidates')) and all(
-            c['scored_projections'] == 248 and c['scored_layers'] == 32 for c in report['candidates']))
+        if MODE == 'first_pass':
+            check('first_pass_without_replay', report['replay_evaluations'] == 0
+                  and report['candidate_kind'] == 'ranked_token_hypotheses'
+                  and report['sequence_order_inferred'] is False)
+        else:
+            check('full_model_replay', bool(report.get('candidates')) and all(
+                c['scored_projections'] == 248 and c['scored_layers'] == 32 for c in report['candidates']))
         # Retain output unchanged. No overlap target, anti-copy rule or automatic semantic pass.
         save(status='awaiting_subject_review', stage='subject review',
              raw_reconstructed_text=report['estimated_context'],
+             output_kind=report.get('candidate_kind'),token_order=report.get('token_order'),
              evaluation=fixture['evaluation'],
              semantic_verdict=None,
              note='Topic relevance, related concepts, coherence and drift require review of raw output.')
@@ -131,7 +138,7 @@ def run():
         raise
 
 
-with (ROOT/'subject-corpus-01.lock').open('a+b') as lock:
+with out.with_suffix('.lock').open('a+b') as lock:
     try:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:

@@ -83,6 +83,19 @@ class ContextTests(unittest.TestCase):
         integrity=a.pop('integrity');self.assertEqual(integrity['sha256'],hashlib.sha256(canonical(a)).hexdigest())
         self.assertEqual(a['evidence_map'][1]['kind'],'hypothesis')
         self.assertIn('Not performed',a['reinjection'])
+    def test_ranked_tokens_export_all_ids_without_sequence_claim(self):
+        from activation_field.inverse import first_pass_result
+        result=first_pass_result([dict(token_id=4,proposal_score=.1),
+                                  dict(token_id=2,proposal_score=.05)],lambda ids: str(ids))
+        result['target_squared_norm']=1.
+        a=context_artifact(result,{'sha256':'abc'},'first pass','export')
+        self.assertEqual(a['estimated_token_ids'],[4,2])
+        self.assertEqual(a['estimated_context'],'[4, 2]')
+        self.assertIn('not recovered source order',a['context_text'])
+        self.assertIn('no replay',a['evidence_map'][1]['measurement'])
+        integrity=a.pop('integrity')
+        self.assertEqual(integrity['sha256'],hashlib.sha256(canonical(a)).hexdigest())
+
     def test_small_signed_context_preserves_float_spelling(self):
         blobs={}
         def put(data):

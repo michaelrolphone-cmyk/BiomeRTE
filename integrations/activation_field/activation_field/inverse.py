@@ -1,4 +1,4 @@
-"""Delta-derived proposals and explicit, bounded-by-request sequence search.
+"""First-pass delta-derived token hypotheses and optional sequence replay.
 
 This module never accepts a source transcript. A delta is generally many-to-one;
 search scores are fit errors, not probabilities of historical truth.
@@ -10,6 +10,7 @@ from scipy import sparse
 
 @dataclass
 class InverseOptions:
+    mode: str = 'first_pass'
     max_tokens: int = 8
     candidate_pool: int = 16
     beam_width: int = 2
@@ -26,6 +27,8 @@ class InverseOptions:
         if not isinstance(value,dict) or set(value)-{f.name for f in fields(cls)}:
             raise ValueError('Unknown inverse search option')
         out=cls(**value)
+        if out.mode not in ('first_pass','replay'):
+            raise ValueError('mode must be first_pass or replay')
         for key in ('max_tokens','candidate_pool','beam_width','sketch_rank','vocabulary_batch'):
             if type(getattr(out,key)) is not int or getattr(out,key)<1:
                 raise ValueError(key+' must be a positive integer')
@@ -67,6 +70,25 @@ def delta_basis(blocks, dimension, rank, power_iterations, seed):
     keep=singular>max(float(singular[0])*1e-8,1e-20)
     basis=(q@rotation.T)[:,keep]
     return basis.astype(np.float32),dict(energy=total_energy,singular_values=singular[keep].tolist(),rank=int(keep.sum()))
+
+
+def first_pass_result(proposals, decode):
+    """Return the proposal ranking immediately, without inventing sequence order."""
+    tokens=[int(item['token_id']) for item in proposals]
+    candidates=[dict(token_ids=[int(item['token_id'])],
+                     text=decode([int(item['token_id'])]),
+                     proposal_score=float(item['proposal_score'])) for item in proposals]
+    return dict(status='complete',context_text=decode(tokens),
+                estimated_token_ids=tokens,candidate_kind='ranked_token_hypotheses',
+                token_order='proposal_score_descending',sequence_order_inferred=False,
+                candidates=candidates,token_proposals=proposals,replay_evaluations=0,
+                best_relative_squared_error=None,
+                uncertainty_and_gaps=[
+                    'Approximate token hypotheses from the first vocabulary pass; no sequence replay was performed.',
+                    'Text concatenates tokens in proposal-score order, not recovered source order.',
+                    'Proposal scores rank compatibility with aggregate weight changes, not historical probabilities.',
+                    'Original wording, repetition, order and topic relevance are unverified.'],
+                scientific_reconstruction_success='not_established')
 
 
 def beam_reconstruct(token_candidates, score, options, progress=lambda event:None):

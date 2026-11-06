@@ -5,7 +5,7 @@ OPERATIONS=('start','status','cancel','export')
 
 def offers(gateway,resource,module='activation_field.context_reconstruction.provider'):
     descriptions={
-        'start':'target_checkpoint, purpose, options (max_tokens, candidate_pool, beam_width, sketch_rank, power_iterations, vocabulary_batch, seed, role, layout). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Options are explicit search budgets; no runtime cap.',
+        'start':'target_checkpoint, purpose, options (mode, max_tokens, candidate_pool, beam_width, sketch_rank, power_iterations, vocabulary_batch, seed, role, layout). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Default mode=first_pass returns approximate token hypotheses immediately after the vocabulary pass, in proposal-score order, without sequence replay. mode=replay explicitly enables the former sequence search. No runtime cap.',
         'status':'run_id. Reports state, progress and measured residual; no reconstructed text is disclosed.',
         'cancel':'run_id, expected_version. Cooperatively stop at a safe boundary; keep replay measurements for explicit resume.',
         'export':'run_id, expected_version, allow_plaintext=true. Explicitly disclose the protected context and estimated token stream. Every signed context report is returned losslessly through result_artifact; recursively retrieve chunks/nodes with artifact.get and verify digests.'}

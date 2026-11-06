@@ -1,9 +1,26 @@
 import unittest
 import numpy as np
-from activation_field.inverse import InverseOptions,delta_basis,beam_reconstruct
+from activation_field.inverse import InverseOptions,delta_basis,beam_reconstruct,first_pass_result
 
 
 class InverseMechanics(unittest.TestCase):
+    def test_first_pass_is_default_and_replay_is_opt_in(self):
+        self.assertEqual(InverseOptions.parse().mode,'first_pass')
+        self.assertEqual(InverseOptions.parse({'mode':'replay'}).mode,'replay')
+        with self.assertRaises(ValueError):InverseOptions.parse({'mode':'guess'})
+
+    def test_first_pass_returns_all_ranked_tokens_without_quality_gate(self):
+        proposals=[dict(token_id=5,proposal_score=0.),dict(token_id=2,proposal_score=-1.)]
+        decode=lambda ids: ''.join({5:' odd',2:' output'}[i] for i in ids)
+        result=first_pass_result(proposals,decode)
+        self.assertEqual(result['context_text'],' odd output')
+        self.assertEqual(result['estimated_token_ids'],[5,2])
+        self.assertEqual(result['replay_evaluations'],0)
+        self.assertIsNone(result['best_relative_squared_error'])
+        self.assertFalse(result['sequence_order_inferred'])
+        self.assertEqual(result['candidate_kind'],'ranked_token_hypotheses')
+        self.assertEqual([c['token_ids'] for c in result['candidates']],[[5],[2]])
+
     def test_recovers_input_direction_from_signed_outer_product(self):
         rng=np.random.default_rng(7);x=rng.normal(size=128);x/=np.linalg.norm(x)
         coefficients=rng.normal(size=40);delta=np.outer(coefficients,x)

@@ -61,7 +61,7 @@ def run():
         jobs=ContextJobs(root,root/'model-manifest.json',launch=False)
         for label in ('single','sequence','zero'):
             case=evidence['cases'][label]
-            options=dict(max_tokens=max(1,len(expected[label])),candidate_pool=4,beam_width=2,sketch_rank=2,power_iterations=4)
+            options=dict(mode='replay',max_tokens=max(1,len(expected[label])),candidate_pool=4,beam_width=2,sketch_rank=2,power_iterations=4)
             operation='afctx-native-'+label+'-'+source_identity()[:16]
             receipt=capability('start',dict(expected_version=0,target_checkpoint=case['checkpoint_id'],purpose='native synthetic qualification',options=options),operation)
             case['capability_operation']=operation

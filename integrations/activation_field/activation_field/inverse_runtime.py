@@ -5,7 +5,7 @@ import mlx.core as mx
 from .checkpoint import canonical
 from .context_reconstruction.snapshot import weight_arrays
 from .config import FieldConfig
-from .inverse import InverseOptions, delta_basis, beam_reconstruct
+from .inverse import InverseOptions, delta_basis, beam_reconstruct, first_pass_result
 from .quantized_writer import unpack
 
 
@@ -140,7 +140,8 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
             engine.boundary_hook=lambda _:check()
             target=DeltaTarget(engine,vault,checkpoint,check)
             source_ref=dict(checkpoint_id=checkpoint,sha256=target.source_hash,baseline_hash=manifest['baseline_hash'])
-            common=dict(schema_version=1,source_refs=[source_ref],method='delta_gate_signature_vocabulary_then_full_model_replay',
+            common=dict(schema_version=1,source_refs=[source_ref],method=('delta_gate_signature_vocabulary_first_pass' if options.mode=='first_pass'
+                                else 'delta_gate_signature_vocabulary_then_full_model_replay'),
                         options=options.to_dict(),source_revision=source_identity(),uses_source_transcript=False,
                         uses_source_native_caches=False,uses_source_logits=False,source_modified=False,
                         source_changed_groups=target.changed_groups,target_squared_norm=target.energy)
@@ -153,6 +154,13 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
             blocks=None
             if not basis.shape[1]:raise ValueError('No nonzero delta directions')
             proposals=propose_tokens(engine,target,basis,options,progress);basis=None
+            if options.mode=='first_pass':
+                check()
+                if hashlib.sha256(canonical(vault.manifest(checkpoint))).hexdigest()!=target.source_hash:
+                    raise ValueError('Source checkpoint changed during reconstruction')
+                result=first_pass_result(proposals,engine.tokenizer.decode)
+                return dict(**common,**result,proposal_projections=paths,
+                            proposal_diagnostics=diagnostics,seconds=time.monotonic()-started)
             replay_config=source_config.to_dict();replay_config.update(enabled=True,read_only=False,spectral_enabled=False)
             engine.patch_config(replay_config)
             def score(ids):

@@ -66,7 +66,8 @@
       "sketch_rank": 8,
       "power_iterations": 4,
       "role": "user",
-      "layout": "message"
+      "layout": "message",
+      "mode": "first_pass"
     },
     "source_rule": "Pass only the frozen checkpoint ID to the reconstructor. No reference text, topic labels, evaluation vocabulary, source logits, or caches."
   },
