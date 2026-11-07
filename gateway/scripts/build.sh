@@ -3,4 +3,4 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p dist/.openai dist/server
 cp .openai/hosting.json dist/.openai/hosting.json
-cat lib/access.mjs lib/oauth.mjs lib/bridge.mjs lib/ha.mjs lib/discovery.mjs lib/events.mjs lib/grok.mjs lib/agent-inbox.mjs lib/transport.mjs lib/decisions.mjs worker/index.js | sed '/^import .* from /d' > dist/server/index.js
+cat lib/access.mjs lib/oauth.mjs lib/bridge.mjs lib/native-provider.mjs lib/ha.mjs lib/discovery.mjs lib/events.mjs lib/grok.mjs lib/agent-inbox.mjs lib/transport.mjs lib/decisions.mjs worker/index.js | sed '/^import .* from /d' > dist/server/index.js

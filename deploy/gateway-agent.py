@@ -40,6 +40,9 @@ def fetch(url, payload=None, token=None, timeout=18, site_access=None):
 def dispatch(job, local, conf):
     call = job['request']
     name, args = call['name'], call.get('arguments', {})
+    if name == 'biome_native_provider':
+        from native_provider import dispatch_native_provider
+        return dispatch_native_provider(args, local, conf)
     if name == 'biome_status':
         status = fetch(local + '/health')
         rpc = {'jsonrpc': '2.0', 'id': str(job['id']) + '-progress', 'method': 'tools/call',

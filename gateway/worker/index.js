@@ -1,3 +1,4 @@
+import {nativeProvider,nativeProviderAck} from '../lib/native-provider.mjs';
 import {agentInbox} from '../lib/agent-inbox.mjs';
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
 import {eventGrant,changeSubscription,delegationEvent,leaseEvent} from '../lib/events.mjs';
@@ -14,6 +15,8 @@ async function dispatch(req,env) {
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
  if(path==='/api/decisions')return mobileDecision(req,env);
  if(path==='/api/exchange')return exchangeStream(req,env,conf);
+ if(path==='/api/provider/ack')return nativeProviderAck(req,env);
+ if(path==='/api/provider/call')return nativeProvider(req,env);
  if(path==='/api/provider/connect')return providerSocket(req,env,conf);
  if (path.startsWith('/agent-events/')) return agentInbox(req,conf,path);
  if (path.startsWith('/bridge/')) return device(req,env,path);
