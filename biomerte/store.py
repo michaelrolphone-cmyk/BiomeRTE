@@ -8,13 +8,19 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import ssl
+import sys
+import threading
 import time
 import uuid
 from urllib.request import Request, build_opener, HTTPSHandler
 from urllib.parse import urlparse
+
+
+log = logging.getLogger('biomerte.store')
 
 
 class Fault(Exception):
@@ -172,6 +178,8 @@ class Store:
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        self._writer_diagnostic = None
+        self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript('CREATE TABLE IF NOT EXISTS records(kind TEXT,id TEXT,value TEXT,'
@@ -183,6 +191,42 @@ class Store:
         con = sqlite3.connect(self.path, timeout=12, isolation_level=None)
         con.execute('PRAGMA synchronous=FULL')
         return con
+
+    def _report_writer_timeout(self):
+        # Diagnostic only: never emit record values, callback arguments or locals.
+        try:
+            with self._writer_diagnostic_lock:
+                owner = self._writer_diagnostic
+                snapshot = tuple(owner) if owner is not None else None
+            if snapshot is None:
+                log.warning('SQLite writer timeout database=%s owner=untracked',
+                            os.path.basename(self.path))
+                return
+            ident, phase, started = snapshot
+            frame = sys._current_frames().get(ident)
+            stack = []
+            while frame is not None and len(stack) < 16:
+                stack.append('%s:%s:%s' % (os.path.basename(frame.f_code.co_filename),
+                                          frame.f_lineno, frame.f_code.co_name))
+                frame = frame.f_back
+            with self._writer_diagnostic_lock:
+                unchanged = self._writer_diagnostic is owner
+            if not unchanged:
+                log.warning('SQLite writer timeout database=%s owner_changed_during_snapshot',
+                            os.path.basename(self.path))
+                return
+            log.warning('SQLite writer timeout database=%s owner=%s phase=%s held_seconds=%.3f stack=%s',
+                        os.path.basename(self.path), ident, phase,
+                        time.monotonic() - started, ' <- '.join(stack))
+        except Exception:
+            # Reporting must not replace the original SQLite error.
+            pass
+
+    def _clear_writer_diagnostic(self, owner):
+        # A successor can acquire the lock immediately after commit releases it.
+        with self._writer_diagnostic_lock:
+            if self._writer_diagnostic is owner:
+                self._writer_diagnostic = None
 
     def execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict
@@ -231,7 +275,15 @@ class Store:
                 db.rollback()
             # Network catch-up never holds the mirror's writer lock. Another
             # local caller may already have applied part of this same history.
-            db.execute('BEGIN IMMEDIATE')
+            try:
+                db.execute('BEGIN IMMEDIATE')
+            except sqlite3.OperationalError as exc:
+                if str(exc) == 'database is locked':
+                    self._report_writer_timeout()
+                raise
+            owner = [threading.get_ident(), 'replay', time.monotonic()]
+            with self._writer_diagnostic_lock:
+                self._writer_diagnostic = owner
             try:
                 tx = Records(db)
                 seq, previous = db.execute('SELECT seq,hash FROM position WHERE id=1').fetchone()
@@ -256,25 +308,31 @@ class Store:
                 if read_only:
                     # Catch-up is already authoritative. Release its writer lock
                     # before callbacks (which may perform remote status reads).
+                    owner[1] = 'commit-catchup'
                     db.commit()
+                    self._clear_writer_diagnostic(owner)
                     db.execute('BEGIN')
                     db.execute('SELECT seq FROM position WHERE id=1').fetchone()
                     db.execute('PRAGMA query_only=ON')
                     tx = Records(db, 'Read-only operation changed records')
                 if self.remote and not cached and not read_only:
                     db.execute('SAVEPOINT proposal')
+                owner[1] = 'callback'
                 result = fn(tx)
                 if (cached or read_only) and tx.changes:
                     raise Fault('Read-only operation changed records', 409)
                 if self.remote and tx.changes:
+                    owner[1] = 'encode-proposal'
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
                     expected_head = {'seq': entry['seq'], 'hash': digest(entry)}
                     # Only validated catch-up may commit locally before CAS.
                     # The proposal and its receipt are not yet authoritative.
+                    owner[1] = 'commit-catchup'
                     db.execute('ROLLBACK TO proposal')
                     db.execute('RELEASE proposal')
                     db.commit()
+                    self._clear_writer_diagnostic(owner)
                     # A slow or lost response must never pin the mirror writer.
                     head = self.remote.append(version, entry)
                     if (not isinstance(head, dict) or type(head.get('seq')) is not int or
@@ -290,8 +348,12 @@ class Store:
                     # Reuse normal chain validation rather than committing the
                     # staged proposal. Another caller may have applied it already.
                     self.execute(confirmed, read_only=True)
+                owner[1] = 'commit'
                 db.commit()
                 return result
             except BaseException:
+                owner[1] = 'rollback'
                 db.rollback()
                 raise
+            finally:
+                self._clear_writer_diagnostic(owner)
