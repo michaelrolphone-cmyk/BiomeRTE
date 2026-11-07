@@ -22,6 +22,9 @@ from urllib.parse import urlparse
 
 log = logging.getLogger('biomerte.store')
 
+# Disposable scalar projections; canonical values remain in records/journal.
+LOOKUP_FIELDS = {'runs': ('state',), 'leases': ('state', 'task'), 'actions': ('lease', 'state')}
+
 
 class Fault(Exception):
     def __init__(self, message, status=400):
@@ -85,12 +88,48 @@ class Records:
         rows = self.db.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,))
         return [json.loads(row[0]) for row in rows]
 
+    def matching(self, kind, field, values):
+        """Ordered records matching an indexed scalar, without decoding history."""
+        if field not in LOOKUP_FIELDS.get(kind, ()):
+            raise ValueError('Field is not indexed')
+        if not values:
+            return []
+        placeholders = ','.join('?' for unused in values)
+        # Dirty rows cover writes by older binaries or direct SQL. Never trust
+        # an outdated projection, even before the next startup repairs it.
+        sql = ("SELECT r.id,r.value FROM record_lookup l CROSS JOIN records r "
+               "ON r.kind=l.kind AND r.id=l.id WHERE l.kind=? AND l.field=? "
+               "AND l.value IN (" + placeholders + ") AND NOT EXISTS "
+               "(SELECT 1 FROM record_lookup_dirty d WHERE d.kind=r.kind AND d.id=r.id) "
+               "UNION SELECT r.id,r.value FROM record_lookup_dirty d CROSS JOIN records r "
+               "ON r.kind=d.kind AND r.id=d.id WHERE d.kind=? ORDER BY 1")
+        encoded_values = [encode(value) for value in values]
+        args = [kind, field] + encoded_values + [kind]
+        result = []
+        for key, encoded in self.db.execute(sql, args):
+            value = json.loads(encoded)
+            if field in value and encode(value[field]) in encoded_values:
+                result.append(value)
+        return result
+
+    def _index(self, kind, key, value):
+        if kind not in LOOKUP_FIELDS:
+            return
+        self.db.execute('DELETE FROM record_lookup WHERE kind=? AND id=?', (kind, key))
+        if value is not None:
+            for field in LOOKUP_FIELDS[kind]:
+                if field in value:
+                    self.db.execute('INSERT INTO record_lookup VALUES (?,?,?,?)',
+                                    (kind, key, field, encode(value[field])))
+        self.db.execute('DELETE FROM record_lookup_dirty WHERE kind=? AND id=?', (kind, key))
+
     def put(self, kind, key, value):
         if self.read_only:
             raise Fault(self.read_only, 409)
         text(key, 'record id', 512)
         self.db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)',
                         (kind, key, encode(value)))
+        self._index(kind, key, value)
         self.changes[(kind, key)] = value
         return value
 
@@ -98,6 +137,7 @@ class Records:
         if self.read_only:
             raise Fault(self.read_only, 409)
         self.db.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, key))
+        self._index(kind, key, None)
         self.changes[(kind, key)] = None
 
     def emit(self, topic, payload):
@@ -186,6 +226,43 @@ class Store:
                              ' PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS position('
                              'id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER,hash TEXT);'
                              "INSERT OR IGNORE INTO position VALUES(1,0,'');")
+            self._initialize_lookup(db)
+
+    def _initialize_lookup(self, db):
+        # One transactional backfill per mirror, then only dirty records on
+        # startup. Triggers keep downgrade/direct-SQL writes detectable.
+        schema = [
+            'CREATE TABLE IF NOT EXISTS record_lookup('
+            'kind TEXT,id TEXT,field TEXT,value TEXT,PRIMARY KEY(kind,field,value,id))',
+            'CREATE INDEX IF NOT EXISTS record_lookup_id ON record_lookup(kind,id)',
+            'CREATE TABLE IF NOT EXISTS record_lookup_dirty('
+            'kind TEXT,id TEXT,PRIMARY KEY(kind,id))',
+            'CREATE TABLE IF NOT EXISTS record_lookup_version(version INTEGER PRIMARY KEY)']
+        kinds = ','.join("'" + kind + "'" for kind in sorted(LOOKUP_FIELDS))
+        for event, prefix in (('INSERT', 'NEW'), ('DELETE', 'OLD'), ('UPDATE', 'OLD')):
+            schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_' + event.lower() +
+                          ' AFTER ' + event + ' ON records WHEN ' + prefix + '.kind IN (' + kinds + ') '
+                          'BEGIN INSERT OR REPLACE INTO record_lookup_dirty VALUES (' +
+                          prefix + '.kind,' + prefix + '.id); END')
+        schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_update_new AFTER UPDATE ON records '
+                      'WHEN NEW.kind IN (' + kinds + ') BEGIN INSERT OR REPLACE INTO record_lookup_dirty '
+                      'VALUES (NEW.kind,NEW.id); END')
+        try:
+            # Execute the DDL inside SQL BEGIN, avoiding Python <3.6 cursor DDL
+            # implicit-commit behavior. Data backfill stays in this transaction.
+            db.executescript('BEGIN IMMEDIATE;' + ';'.join(schema) + ';')
+            if not db.execute('SELECT 1 FROM record_lookup_version WHERE version=1').fetchone():
+                db.execute('INSERT OR IGNORE INTO record_lookup_dirty SELECT kind,id FROM records '
+                           'WHERE kind IN (' + kinds + ')')
+            dirty = db.execute('SELECT kind,id FROM record_lookup_dirty').fetchall()
+            tx = Records(db)
+            for kind, key in dirty:
+                tx._index(kind, key, tx.get(kind, key))
+            db.execute('INSERT OR IGNORE INTO record_lookup_version VALUES(1)')
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
 
     def connect(self):
         con = sqlite3.connect(self.path, timeout=12, isolation_level=None)

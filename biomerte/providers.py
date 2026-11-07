@@ -138,7 +138,8 @@ def capacity_of(tx, offer):
 
 
 def active_on(tx, resource):
-    return [l for l in tx.rows('leases') if l['resource'] == resource and l['state'] in ('fencing', 'bound')]
+    return [l for l in tx.matching('leases', 'state', ('fencing', 'bound'))
+            if l['resource'] == resource]
 
 
 def reservation_policy(tx, lease):
@@ -155,17 +156,13 @@ def touch_reservation(tx, lease):
 
 def recover_reservations(tx, ctx):
     now = time.time()
-    actions = {}
-    for action in tx.rows('actions'):
-        actions.setdefault(action['lease'], []).append(action)
     recovered = 0
-    for lease in tx.rows('leases'):
-        if lease['state'] not in ('bound', 'fencing'):
-            continue
+    for lease in tx.matching('leases', 'state', ('bound', 'fencing')):
         policy = reservation_policy(tx, lease)
         if not policy:
             continue
-        work = [a for a in actions.get(lease['id'], []) if a['generation'] == lease['generation']]
+        work = [a for a in tx.matching('actions', 'lease', (lease['id'],))
+                if a['generation'] == lease['generation']]
         if any(a['state'] not in ('succeeded', 'failed') for a in work):
             continue
         # Combined submissions retain enough information to repair dispatch.
@@ -317,8 +314,8 @@ def release(tx, l):
         l['state'] = 'released'
         tx.put('leases', l['id'], l)
         return True
-    if any(a['lease'] == l['id'] and a['state'] in ('queued', 'claimed', 'uncertain')
-           for a in tx.rows('actions')):
+    if any(a['state'] in ('queued', 'claimed', 'uncertain')
+           for a in tx.matching('actions', 'lease', (l['id'],))):
         return False
     guard = tx.need('guards', l['guard'])
     if guard['holder'] == l['id'] and guard['generation'] == l['generation']:
@@ -330,8 +327,8 @@ def release(tx, l):
 
 
 def release_task(tx, task):
-    for l in tx.rows('leases'):
-        if l['task'] == task and l['state'] != 'released':
+    for l in tx.matching('leases', 'task', (task,)):
+        if l['state'] != 'released':
             release(tx, l)
 
 
@@ -386,9 +383,9 @@ def dispatch(tx, ctx, lease, inputs, operation):
 def pending(tx, ctx, provider):
     """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
     owner(ctx, provider)
-    leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
-    actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
-               ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
+    leases = [l for l in tx.matching('leases', 'state', ('fencing',)) if l['provider'] == provider]
+    actions = [a for a in tx.matching('actions', 'state', ('queued', 'claimed'))
+               if a['provider'] == provider and tx.need('leases', a['lease'])['state'] == 'bound']
     activations = [a for a in tx.rows('activations') if a['provider']
                    == provider and a['state'] == 'pending']
     first, rest, seen = [], [], set()

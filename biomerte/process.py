@@ -516,7 +516,7 @@ def tick(tx, ctx, budget=64):
                 moves += 1
                 if moves == budget:
                     return moves
-    runs = [r for r in tx.rows('runs') if r['state'] == 'running']
+    runs = tx.matching('runs', 'state', ('running',))
     cursor = tx.get('_meta', 'last_run', '')
     runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
