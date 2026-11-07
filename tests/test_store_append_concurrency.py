@@ -74,6 +74,10 @@ class StoreAppendConcurrency(unittest.TestCase):
         self.held_append(False)
 
     def concurrent_writers(self, same_request):
+        # These tests race real CAS and subsequent local receipt/catch-up work.
+        # Use the production busy timeout for legitimate local transactions;
+        # the append barrier independently detects a retained network lock.
+        self.store.connect = lambda: Store.connect(self.store)
         barrier = threading.Barrier(2, timeout=3)
         first_append = threading.Event()
         original = self.journal.append
