@@ -63,3 +63,20 @@ operation deadline. Cloud request duration, memory and subrequest quotas still
 apply to final full-result reconstruction and delivery. This patch removes the
 500,000-byte frame failure and prevents slow results becoming unreachable by a
 same-request discovery retry; it does not promise unlimited hosted result sizes.
+
+## Controller-side regression found during hosted qualification
+
+The exact-live Pi connector retained an older `fetch` implementation that read
+470,001 bytes and rejected responses over 470,000 bytes. That rejected full local
+discovery before the completion helper ran, leaving the chunk table empty even
+with a healthy new gateway. The repository connector already used `res.read()`.
+The Pi overlay removes only this obsolete total-response ceiling; no gateway or
+Mac change is needed for that cause. Remaining Pi-specific behavior is preserved.
+
+Run `tests/test_gateway_large_response.py` on each deployment's actual interpreter.
+Set `BIOME_GATEWAY_AGENT` to the exact staged gateway-agent.py and, if its support
+modules are elsewhere, `BIOME_GATEWAY_SUPPORT` to their directory. The test hosts
+a loopback-only MCP response larger than 548,554 bytes, invokes the actual agent
+HTTP fetch through dispatch, and then verifies complete framed reconstruction and
+digest. It fails against the legacy Pi guard and passes after its removal. Helper-
+only tests cannot detect pre-framing ceilings in deployment-specific connectors.
