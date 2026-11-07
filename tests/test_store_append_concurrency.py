@@ -75,10 +75,12 @@ class StoreAppendConcurrency(unittest.TestCase):
 
     def concurrent_writers(self, same_request):
         barrier = threading.Barrier(2, timeout=3)
+        first_append = threading.Event()
         original = self.journal.append
         errors, results = [], []
         def append(version, entry):
             if version == '0':
+                first_append.set()
                 barrier.wait()
             return original(version, entry)
         self.journal.append = append
@@ -89,10 +91,18 @@ class StoreAppendConcurrency(unittest.TestCase):
             except BaseException as exc:
                 errors.append(exc)
         workers = [threading.Thread(target=write, args=(index,)) for index in range(2)]
+        # Race remote CAS, not local staging/fsync against a 50 ms timeout.
+        # The first writer must release SQLite before the second can stage.
+        workers[0].start()
+        entered = first_append.wait(3)
+        if entered:
+            workers[1].start()
+        else:
+            barrier.abort()
         for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join(6)
+            if worker.ident is not None:
+                worker.join(6)
+        self.assertTrue(entered, 'First writer did not reach remote append')
         self.assertTrue(all(not worker.is_alive() for worker in workers))
         self.assertEqual(errors, [])
         self.assertEqual(len(results), 2)
