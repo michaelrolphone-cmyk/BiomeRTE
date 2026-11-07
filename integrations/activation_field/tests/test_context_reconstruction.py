@@ -26,7 +26,7 @@ class ContextTests(unittest.TestCase):
         for c in cache['chunks']:(v.root/'target'/c['file']).write_bytes(b'unreadable secret cache')
         receipt=self.jobs.start('reconstruct',self.body)
         frozen=Vault(self.jobs.jobs/receipt['run_id']/'source')
-        self.assertEqual(set(frozen.manifest('source')['metadata']),{'baseline_hash','tensor_map_version','kind','config'})
+        self.assertEqual(set(frozen.manifest('source')['metadata']),{'baseline_hash','tensor_map_version','kind','config','snapshot_schema_version','snapshot_state'})
         self.assertEqual([k for k,_ in frozen.arrays('source')],['p.indices','p.codes'])
     def test_idempotency_and_changed_request(self):
         r=self.jobs.start('reconstruct',self.body)

@@ -3,10 +3,11 @@
 Only running moments and the current boundary are kept. Attention history is
 reduced to aggregate context by the model adapter before it reaches this module.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import numpy as np
 from .directions import normalized
+from .attention_summary import CROSS, legacy_shapes, validate_summary
 
 PREFIX = 'boundary.'
 
@@ -17,6 +18,7 @@ class BoundaryRecord:
     samples: int
     motion: float
     arrays: dict
+    context_metadata: dict = field(default_factory=dict)
 
 
 def features(value, xp=np):
@@ -27,11 +29,17 @@ def features(value, xp=np):
     return xp.tanh(value[xp.array(indices)] * math.sqrt(size)) / math.sqrt(count)
 
 
-def accumulate(record, x, y, context, mass, xp=np):
+def accumulate(record, x, y, context, mass, xp=np, context_metadata=None):
     if not math.isfinite(mass) or mass < 0:
         raise ValueError('Invalid boundary mass')
     if not mass:
-        return record
+        if record is None:return None
+        # Zero-write template/footer tokens still move native caches. Refresh
+        # only final context; weighted moments, motion and write semantics stay
+        # unchanged. Without any contributing sample there is no reverse state.
+        arrays = {key:value for key,value in record.arrays.items() if not key.startswith('context.')}
+        arrays.update({'context.'+key:xp.array(value,dtype=xp.float32) for key,value in context.items()})
+        return BoundaryRecord(record.mass,record.samples,record.motion,arrays,dict(context_metadata or {}))
     x, y = xp.array(x, dtype=xp.float32).reshape(-1), xp.array(y, dtype=xp.float32).reshape(-1)
     unit = normalized(y, xp)
     phi = features(unit, xp)
@@ -40,7 +48,7 @@ def accumulate(record, x, y, context, mass, xp=np):
         arrays = dict(input_mean=x, output_mean=y, current_output=unit,
                       backward_flow=xp.zeros((y.size, phi.size), dtype=xp.float32))
         arrays.update(context)
-        return BoundaryRecord(mass, 1, 0., arrays)
+        return BoundaryRecord(mass, 1, 0., arrays, dict(context_metadata or {}))
     if x.shape != record.arrays['input_mean'].shape or y.shape != record.arrays['output_mean'].shape:
         raise ValueError('Boundary dimensions changed')
     total = record.mass+mass
@@ -55,12 +63,13 @@ def accumulate(record, x, y, context, mass, xp=np):
     motion = record.motion+float(xp.linalg.norm(backward).item())
     if not math.isfinite(total) or not math.isfinite(motion):
         raise ValueError('Boundary accumulation overflow')
-    return BoundaryRecord(total, record.samples+1, motion, arrays)
+    return BoundaryRecord(total, record.samples+1, motion, arrays, dict(context_metadata or {}))
 
 
 def metadata(records, version):
-    return dict(schema_version=1, field_version=version,
+    return dict(schema_version=2, field_version=version,
                 operations={name:dict(mass=r.mass,samples=r.samples,motion=r.motion,
+                                     context=r.context_metadata,
                                      shapes={key:list(a.shape) for key,a in r.arrays.items()})
                             for name,r in records.items()})
 
@@ -76,14 +85,16 @@ def restore(meta, tensors, version, dimensions, xp=np):
     if meta is None:
         if data:raise ValueError('Boundary tensors without metadata')
         return {}
-    if meta.get('schema_version') != 1 or type(meta.get('field_version')) is not int or meta['field_version'] != version:
+    if type(meta.get('schema_version')) is not int or meta['schema_version'] not in (1,2) or type(meta.get('field_version')) is not int or meta['field_version'] != version:
         raise ValueError('Boundary schema or field version mismatch')
     operations = meta.get('operations')
     if not isinstance(operations,dict) or set(operations)-set(dimensions):
         raise ValueError('Unknown boundary operation')
     records = {}
     for name, info in operations.items():
-        if not isinstance(info,dict) or set(info) != {'mass','samples','motion','shapes'}:
+        fields = {'mass','samples','motion','shapes'}
+        if meta['schema_version'] == 2:fields.add('context')
+        if not isinstance(info,dict) or set(info) != fields:
             raise ValueError('Invalid boundary metadata')
         mass, samples, motion = info['mass'],info['samples'],info['motion']
         if (type(mass) not in (int,float) or not math.isfinite(mass) or mass <= 0 or
@@ -91,6 +102,12 @@ def restore(meta, tensors, version, dimensions, xp=np):
                 not math.isfinite(motion) or motion < 0):
             raise ValueError('Invalid boundary counters')
         inputs,outputs,contexts = dimensions[name]
+        context_meta = info.get('context',{})
+        if not isinstance(context_meta,dict):raise ValueError('Invalid boundary context metadata')
+        if context_meta:
+            if CROSS not in contexts:raise ValueError('Unexpected attention summary metadata')
+        else:
+            contexts = legacy_shapes(contexts)
         expected = dict(input_mean=[inputs],output_mean=[outputs],current_output=[outputs],
                         backward_flow=[outputs,max(1,int(math.sqrt(outputs)))])
         expected.update({'context.'+key:list(shape) for key,shape in contexts.items()})
@@ -101,7 +118,8 @@ def restore(meta, tensors, version, dimensions, xp=np):
             if value.dtype != np.float32 or list(value.shape) != shape or not np.isfinite(value).all():
                 raise ValueError('Invalid boundary tensor')
             arrays[key] = xp.array(value, dtype=xp.float32)
-        records[name] = BoundaryRecord(float(mass),samples,float(motion),arrays)
+        if context_meta:validate_summary(context_meta, {k:np.asarray(v) for k,v in arrays.items()})
+        records[name] = BoundaryRecord(float(mass),samples,float(motion),arrays,dict(context_meta))
     if data:raise ValueError('Unknown boundary tensor')
     return records
 

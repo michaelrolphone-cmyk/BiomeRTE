@@ -76,7 +76,10 @@ Native regressions: `python -m pytest -q`, `python tests/qualify_full_model.py`,
 ## Approximate reverse propagation
 
 See [CONTEXT_RECONSTRUCTION.md](CONTEXT_RECONSTRUCTION.md) for the current
-direction-accumulation and reverse-to-token path. Newly collected state is
+direction-accumulation and reverse-to-token path, including fixed-size paired
+attention summaries and exact final rotary/cache descriptors in boundary schema 2.
+Legacy mean-cell checkpoints remain readable; new paired state must be collected
+by forward observation. Newly collected state is
 required; older weight-only checkpoints cannot retroactively acquire it. The
 former vocabulary-ranking/replay service modes are retired. Full-model semantic
 quality remains unmeasured; this code update does not run inference experiments.

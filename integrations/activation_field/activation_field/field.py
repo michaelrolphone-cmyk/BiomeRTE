@@ -38,11 +38,11 @@ class Field:
         z=mx.clip(y/mx.sqrt(mx.mean(y*y)+1e-12),-4,4)
         self.captured[path]=(xunit,z)
 
-    def boundary_tap(self,path,x,y,context):
+    def boundary_tap(self,path,x,y,context,context_metadata=None):
         if not self.capture:return
         if x.shape[:-1]!=(1,1) or y.shape[:-1]!=(1,1):
             raise ValueError("Online boundaries require exactly one token")
-        self.boundary_captured[path]=(x.astype(mx.float32),y.astype(mx.float32),context)
+        self.boundary_captured[path]=(x.astype(mx.float32),y.astype(mx.float32),context,context_metadata)
 
     def observe(self,role,template=False):
         c=self.config
@@ -67,8 +67,8 @@ class Field:
         self.last_regions=np.array(regions)
         if c.enabled:
             proposed=dict(self.boundaries if self.pending_boundaries is None else self.pending_boundaries)
-            for path,(x,y,context) in self.boundary_captured.items():
-                record=boundaries.accumulate(proposed.get(path),x,y,context,scale,xp=mx)
+            for path,(x,y,context,context_metadata) in self.boundary_captured.items():
+                record=boundaries.accumulate(proposed.get(path),x,y,context,scale,xp=mx,context_metadata=context_metadata)
                 if record is not None:
                     mx.eval(*record.arrays.values())
                     proposed[path]=record

@@ -7,6 +7,7 @@ from mlx_lm.models.cache import ArraysCache,RotatingKVCache
 from .adapters.qwen35 import projections,install,install_boundaries,boundary_dimensions
 from .field import Field
 from . import directions,boundaries
+from .attention_summary import restore_context_tracker,context_tracker_is_current
 from .trajectory import Trajectory
 from .config import FieldConfig
 from .manifest import hardware
@@ -171,6 +172,10 @@ class Engine:
             if value is None or isinstance(value,(int,float,str,bool)):return value
             raise ValueError("Unsupported cache state")
         metadata=dict(baseline_hash=self.manifest['baseline_hash'],tensor_map_version=1,kind='field_only' if field_only else 'complete',config=self.config.to_dict(),field_version=self.field.version,field_tokens=self.field.token_count,consumed_tokens=self.consumed_tokens,sample_counter=self.sample_counter,native_tokens=0 if field_only else self.native_tokens,config_revision=self.field.config_revision,changed_words=self.field.changed_words,receipts=self.field.receipts,trajectory=self.trajectory.state(),prefix_hashes=[] if field_only else self.prefix_hashes,cache=None if field_only else [encode(c.state,'cache.'+str(i)) for i,c in enumerate(self.cache)],last_logits=None if field_only or self.last_logits is None else encode(self.last_logits,'last_logits'),versions=self.manifest['versions'],source_revision=self.manifest.get('source_revision','uncommitted'))
+        metadata['attention_tracker_current']=[] if field_only else [
+            i for i,(layer,cache) in enumerate(zip(self.model.layers,self.cache))
+            if not layer.is_linear and 'layer.'+str(i) in self.field.boundaries and
+            context_tracker_is_current(cache,self.field.boundaries['layer.'+str(i)].context_metadata)]
         metadata['boundaries']=boundaries.metadata(self.field.boundaries,self.field.version)
         metadata['directions']=directions.metadata(self.field.directions,self.field.version)
         metadata['requires_reset']=getattr(self,'requires_reset',False)
@@ -240,6 +245,18 @@ class Engine:
         boundary_state=boundaries.restore(meta.get('boundaries'),
             {k:v for k,v in other.items() if k.startswith(boundaries.PREFIX)},
             meta['field_version'],boundary_dimensions(self.model),xp=mx)
+        tracker_current=meta.get('attention_tracker_current',[])
+        if (not isinstance(tracker_current,list) or
+                any(type(i) is not int or not 0 <= i < len(newcache) for i in tracker_current) or
+                len(tracker_current) != len(set(tracker_current))):
+            raise ValueError('Invalid attention tracker freshness metadata')
+        if not reset_native_state and meta['cache'] is not None:
+            for i in tracker_current:
+                record=boundary_state.get('layer.'+str(i))
+                if (self.model.layers[i].is_linear or record is None or
+                        not restore_context_tracker(newcache[i],record.arrays,record.context_metadata,
+                                                    xp=mx,confirmed_current=True)):
+                    raise ValueError('Attention tracker freshness disagrees with saved boundary')
         # Publish only after every encrypted shard and state tree validates.
         newtrajectory=Trajectory(restored_config.window_tokens,restored_config.stride_tokens,restored_config.persistent_homology)
         newtrajectory.restore(trajectory)

@@ -129,6 +129,9 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
                                   baseline_hash=manifest['baseline_hash'])],
                 uses_source_transcript=False,uses_input_token_history=False,uses_source_logits=False,
                 uses_recurrent_present_state=True,uses_attention_aggregate=True,
+                attention_context={name:('paired_elu_kernel' if record.context_metadata else 'legacy_mean_cell')
+                                   for name,record in records.items()
+                                   if any(key.startswith('context.attention_') or key=='context.key_mean' for key in record.arrays)},
                 readout='frozen_embedding_partition',termination='accumulated_motion_or_zero_direction',
                 write_conditioning='recorded_signed_magnitude',
                 approximation='local operation adjoints at aggregate state; semantic quality unmeasured')

@@ -26,6 +26,8 @@ def snapshot(source,name,destination):
     for key in ('directions','boundaries'):
         if key in meta:selected[key]=meta[key]
     selected['kind']='field_only'
+    selected['snapshot_schema_version']=2
+    selected['snapshot_state']='final_accumulated_aggregates'
     destination.save('source',selected,field_arrays(source,name))
     return dict(checkpoint_id=name,sha256=hashlib.sha256(canonical(manifest)).hexdigest(),
                 baseline_hash=meta['baseline_hash'])

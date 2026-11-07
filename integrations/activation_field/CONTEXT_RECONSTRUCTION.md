@@ -14,9 +14,39 @@ when weight commits are batched; no per-token boundary history is kept.
 
 Linear-attention layers retain their current recurrent matrix, which is already
 an aggregate state, and the mean of the convolution context. Full-attention
-layers reduce the currently attended keys and values to one mean cell per head.
-They do not retain a sequence of KV entries for reverse propagation. These
-summaries are approximate context for the reverse operations.
+layers now retain fixed-size **paired** moments for each KV head:
+
+- `S = sum(phi(rotated_key) outer value)` and `z = sum(phi(rotated_key))`.
+- `phi(x) = max(ELU(x * head_dim**(-1/4)) + 1, 1e-6)`.
+- An exact integer descriptor records the query's absolute rotary position,
+  cache kind/capacity, preserved-prefix count, surviving-past count and tail
+  position range. Positions are JSON integers, never float32 tensors.
+
+Capture occurs before the final query updates the native cache. The summary
+contains only historical cells that survive that query's native eviction; it
+excludes the current cell. The private reverse call computes its current key
+and value once at the saved rotary position. This preserves key/value pairing
+and query sensitivity without storing any sequence of keys, values, tokens or
+positions. Ring overwrites, preserved prefixes, and trimming after oversized
+prefill follow the actual MLX cache layout. Unsupported masks/cache types fail
+explicitly instead of silently summarizing a different attention window.
+
+These moments describe the surviving window in the current ordinary-cache
+segment, not every evicted token from earlier input. Only one final summary is
+saved. Their tensor shapes are independent of sequence length: each KV head
+stores `head_dim * value_dim + head_dim` float32 values. The cache descriptor
+is also fixed-size. During online capture, a disposable aggregate tracker adds
+the current pair and subtracts the evicted pair. It is rebuilt at ring wraps
+and after unobserved intervals, rather than reducing the full window at every
+token. The tracker is evaluated eagerly and stores no deferred token graph.
+At the model's 4 KV heads, dimension 256 and 8 full-attention layers, the saved
+paired moments occupy about 8 MiB in total.
+
+Once weighted boundary state exists, zero-write template/footer tokens refresh
+its final context and position without changing weighted means, current weighted
+output, motion, sample counts or weight writes. Disabled/read-only capture still
+collects no new state. The terminal trajectory remains weighted accumulated
+state; it is not an exact reconstruction of the final token's original Jacobian.
 
 Direction and boundary tensors use the existing authenticated encrypted
 checkpoint format. Snapshots include the adjusted packed weights and those
@@ -25,13 +55,42 @@ cache shards. Legacy checkpoints still load for ordinary use, but cannot supply
 direction information that was never collected. Reverse jobs on them fail
 explicitly instead of reverting to token search.
 
+Boundary checkpoint schema 2 adds the exact context descriptor and paired-moment
+shapes. Schema 1 remains readable for ordinary use and its existing approximate
+mean-cell reverse path; re-saving it does not manufacture paired information or
+absolute rotary phase. A later observed forward step collects the new context.
+The encrypted container format is unchanged. Field-only reconstruction snapshots
+are marked schema 2 and retain only baseline/config identity, packed changes and
+accumulated direction/boundary state. They never open ordinary-cache shards.
+Complete checkpoints retain their existing native-cache behavior. A fixed per-layer
+freshness marker is saved only when the actual live cache tracker matches the
+final observed boundary. With that marker and matching cache descriptors, the
+disposable tracker is recreated from the persisted pre-query summary and the
+already-existing current native cell, preserving its update arithmetic without
+another stored array. Offset equality alone is not treated as matching history:
+ordinary-state resets followed by disabled ingestion cannot hydrate stale moments.
+The marker is excluded from field-only reconstruction snapshots.
+A rebuild after an unobserved interval can differ by float32 reduction roundoff;
+it does not change native forward outputs.
+
 ## Reverse operations
 
 The runtime loads the current adjusted weights into a private engine. A numerical
 vector-Jacobian product through each actual Qwen decoder layer supplies its
 approximate counterpart, including its residual, normalization, nonlinear gate,
 attention, convolution and recurrent operations. It is evaluated at accumulated
-boundary state with aggregate context. The two hidden-output branches also add
+boundary state with aggregate context. New full-attention counterparts use
+`phi(query) @ S / (phi(query) @ z)` after adding the newly computed current pair.
+All moment reductions and normalization use float32. Historical moments remain
+constant, while current queries, keys and values remain in the differentiated
+path. The original Qwen projections, head norms, rotary transform, grouped-head
+mapping, output gate and output projection remain intact. This positive-kernel
+surrogate is **not softmax-equivalent**. Neither pairing nor phase metadata makes
+this an exact attention inverse. Legacy mean-cell records keep their prior
+softmax counterpart at the old synthetic offset, with that limitation explicit
+in the result's `attention_context` labels.
+
+The two hidden-output branches also add
 their accumulated signed write means at their recorded coefficient magnitudes.
 Each mean is no longer independently amplified to unit length. Only the
 combined incoming signal is normalized. This conditioning remains approximate,
@@ -113,3 +172,23 @@ unchanged. Consecutive normalized readout movement increased from roughly
 validates removal of the measured signal collapse, not semantic reconstruction.
 The native suite passed 172 tests with no skips. No new ingestion, corpus trial
 or training was performed for this validation.
+
+## Final-state context validation (2026-11-07)
+
+The cloud CPU suite exercises actual MLX 0.32.4 and mlx-lm 0.32.2 Qwen/cache
+classes, including dimension-256 grouped attention and Q/K/V VJPs. Tests compare
+paired response and gradients to an independent dense positive-kernel oracle;
+they do not claim equality with softmax. Coverage includes equal separate means
+with different pairings, empty/current-only history, repeated ring wraps, retained
+prefixes, oversized prefill trimming, disabled intervals, final zero-write
+footers, checkpoint continuation, exact integer positions beyond 2**24, malformed
+schema rejection, legacy reverse, encrypted snapshot exclusion and fixed tensor
+size. Captured and uncaptured native forward outputs are identical in the tiny
+Qwen regression. Full pretrained-model performance and semantic quality remain
+unmeasured for this change. No live service, active experiment or saved source
+checkpoint was modified during these tests.
+
+Validation result: **213 passed, 3 skipped**. Skips are the two existing Metal
+writer tests (no Metal backend on the cloud CPU) and optional Ripser topology.
+Compilation and whitespace checks passed. See
+`qualification/final-state-context-20261107.json` for source hashes and scope.

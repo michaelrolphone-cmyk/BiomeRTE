@@ -10,6 +10,7 @@ import mlx.core as mx
 from types import FunctionType
 from mlx_lm.models.cache import ArraysCache, KVCache
 from ..boundaries import ReverseTrajectory
+from ..attention_summary import CROSS, MASS, paired_attention, validate_descriptor
 from ..directions import normalized
 from ..reverse import Operation, ReverseUnavailable, combine_write_moments
 
@@ -23,6 +24,10 @@ def _reference_attention(queries,keys,values,*,cache,scale,mask):
     """
     if mask is not None:
         raise ValueError('Aggregate reverse attention expects no mask')
+    if isinstance(cache,PairedSummaryCache):
+        if not np.isclose(scale,queries.shape[-1]**-.5):
+            raise ValueError('Unsupported paired attention scale')
+        return paired_attention(queries,keys,values,cache.summary,xp=mx)
     batch,heads,length,dimension=queries.shape
     kv_heads=keys.shape[1]
     if heads % kv_heads:
@@ -33,6 +38,22 @@ def _reference_attention(queries,keys,values,*,cache,scale,mask):
     scores=(q*scale) @ mx.swapaxes(k,-1,-2)
     probabilities=mx.softmax(scores.astype(mx.float32),axis=-1).astype(q.dtype)
     return (probabilities @ v).reshape(batch,heads,length,values.shape[-1])
+
+
+class PairedSummaryCache:
+    """Private reverse cache: absolute RoPE phase, no invented KV sequence."""
+    def __init__(self,record):
+        validate_descriptor(record.context_metadata)
+        self.offset=record.context_metadata['query_position']
+        self.summary={key:mx.array(record.arrays['context.'+key]) for key in (CROSS,MASS)}
+
+    def update_and_fetch(self,keys,values):
+        if keys.shape[2] != 1 or values.shape[2] != 1:
+            raise ValueError('Paired reverse attention requires one current cell')
+        self.offset+=1
+        # Historical moments remain constants. The freshly computed K/V are
+        # passed through the native body, keeping both in the differentiated path.
+        return keys,values
 
 
 def _install_reverse_attention(attention):
@@ -103,13 +124,14 @@ class Qwen35ReverseAdapter:
                 # slots. No original convolution-token window is stored/read.
                 cache[0]=mx.repeat(mx.array(context['context.conv_mean']),layer.linear_attn.conv_kernel_size-1,axis=1)
                 cache[1]=mx.array(context['context.recurrent'])
+            elif record.context_metadata:
+                cache=PairedSummaryCache(record)
             else:
+                # Schema-v1 checkpoints lack paired moments and absolute phase.
+                # Preserve their original mean-cell counterpart, never invent v2 state.
                 cache=KVCache()
-                # A single aggregate memory cell stands for the attended past.
                 cache.update_and_fetch(mx.array(record.arrays['context.key_mean']),
                                        mx.array(record.arrays['context.value_mean']))
-                # KVCache offset is also its physical length. Retain one cell;
-                # absolute rotary phase is intentionally not reconstructed.
             _,gradients=mx.vjp(lambda value:layer(value,cache=cache),[x],[incoming])
             value=gradients[0].reshape(-1).astype(mx.float32)
             mx.eval(value)
