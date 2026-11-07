@@ -10,8 +10,10 @@ from .store import Fault, digest
 from .api import invoke
 
 ROOT = Path(__file__).resolve().parent
-SCHEMAS = json.loads((ROOT / 'workspace-contracts.json').read_text())
-RUNNER = (ROOT / 'assistant_workspace_runner.py').read_text()
+with (ROOT / 'workspace-contracts.json').open(encoding='utf-8') as stream:
+    SCHEMAS = json.load(stream)
+with (ROOT / 'assistant_workspace_runner.py').open(encoding='utf-8') as stream:
+    RUNNER = stream.read()
 
 def owner_run(f):
     return f.get('workspace_run_id') or f['_runtime']['run_id']
@@ -37,7 +39,7 @@ def decode(tx, ctx, raw):
             parts.append(part)
         encoded = b''.join(parts)
         if len(encoded) != manifest['size'] or hashlib.sha256(encoded).hexdigest() != manifest['sha256']: raise Fault('Artifact digest mismatch')
-        data = json.loads(encoded)
+        data = json.loads(encoded.decode('utf-8'))
     return data
 
 def descriptor(f):

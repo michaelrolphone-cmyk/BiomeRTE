@@ -5,13 +5,14 @@ import hashlib
 import json
 import os
 import socket
+import ssl
 import sys
 import time
 import threading
 from mcp_events import EventStore, CallbackError
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHandler
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -19,7 +20,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-opener = build_opener(NoRedirect)
+opener = build_opener(NoRedirect, HTTPSHandler(context=ssl.create_default_context()))
 
 
 def fetch(url, payload=None, token=None, timeout=18, site_access=None):

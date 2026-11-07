@@ -1,6 +1,7 @@
 """Shared, compare-and-swap journal through the authenticated MCP gateway."""
 import json
-from urllib.request import Request, urlopen
+import ssl
+from urllib.request import Request, build_opener, HTTPSHandler
 from urllib.error import HTTPError
 from .store import Fault, encode
 
@@ -26,7 +27,8 @@ class GatewayJournal:
                           {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
                            'User-Agent': 'BiomeRTE-Controller-Link/1.0'})
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            opener = build_opener(HTTPSHandler(context=ssl.create_default_context()))
+            with opener.open(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode('utf-8'))
         except HTTPError as exc:
             if exc.code == 409 and path == 'append':
