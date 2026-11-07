@@ -135,9 +135,12 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
                 attention_context={name:('paired_elu_kernel' if record.context_metadata else 'legacy_mean_cell')
                                    for name,record in records.items()
                                    if any(key.startswith('context.attention_') or key=='context.key_mean' for key in record.arrays)},
-                readout='frozen_embedding_partition',termination='accumulated_motion_or_zero_direction',
+                readout='frozen_embedding_partition',termination='all_boundary_motion_and_projection_flow_exhausted',
+                reverse_state='evolving_layer_and_projection_aggregates',
+                projection_direction_count=len(engine.field.directions),
+                context_reverse='inferred_paired_removal_and_ridge_predecessor_step',
                 write_conditioning='recorded_signed_magnitude',
-                approximation='local operation adjoints at aggregate state; semantic quality unmeasured')
+                approximation='boundary-conditioned surrogate projection pullbacks and evolving aggregate contexts; not an inverse; semantic quality unmeasured')
             if debug is not None:result['debug']=debug.report()
             return result
         finally:

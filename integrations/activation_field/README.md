@@ -85,3 +85,8 @@ by forward observation. Newly collected state is
 required; older weight-only checkpoints cannot retroactively acquire it. The
 former vocabulary-ranking/replay service modes are retired. Full-model semantic
 quality remains unmeasured; this code update does not run inference experiments.
+
+The reverse engine now uses direction records at all 248 projection counterparts
+and evolves layer, projection, attention, recurrent, convolution and gate state
+between emissions. These are private approximate predecessor states, not recovered
+history. See the equations and limitations in CONTEXT_RECONSTRUCTION.md.

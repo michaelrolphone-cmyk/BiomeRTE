@@ -18,8 +18,8 @@ from activation_field.inverse_runtime import reconstruct_with_adapter
 from activation_field.token_readout import PartitionTokenReadout
 
 
-def tiny():
-    args=TextModelArgs(hidden_size=64,intermediate_size=128,num_hidden_layers=4,
+def tiny(num_hidden_layers=4):
+    args=TextModelArgs(hidden_size=64,intermediate_size=128,num_hidden_layers=num_hidden_layers,
         num_attention_heads=2,num_key_value_heads=1,head_dim=32,vocab_size=64,
         linear_num_value_heads=2,linear_num_key_heads=1,linear_key_head_dim=32,
         linear_value_head_dim=32,linear_conv_kernel_dim=4)
@@ -142,9 +142,13 @@ def test_debug_preserves_native_reverse_and_observes_conditioning():
         assert name+'.incoming' in report['signal_names']
         assert name+'.conditioned' in report['signal_names']
         assert name+'.pullback' in report['signal_names']
-        assert len(report['write_directions'][name]['raw_write_norms'])==2
-        assert all(norm>0 for norm in report['write_directions'][name]['raw_write_norms'].values())
-        assert report['write_directions'][name]['combined_write_norm']==pytest.approx(2*.01*np.sqrt(64),rel=1e-6)
+    assert len(report['write_directions'])==31
+    for path,record in field.directions.items():
+        for stage in ('incoming','conditioned','pullback','input_boundary','output_boundary'):
+            assert path+'.'+stage in report['signal_names']
+        assert report['write_directions'][path]['combined_write_norm']==pytest.approx(
+            .01*np.sqrt(record.arrays['write_mean'].size),rel=1e-6)
+
 
 
 def test_debug_off_keeps_one_argument_readout_protocol():

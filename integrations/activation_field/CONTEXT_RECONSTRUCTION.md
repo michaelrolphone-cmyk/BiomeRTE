@@ -75,33 +75,86 @@ it does not change native forward outputs.
 
 ## Reverse operations
 
-The runtime loads the current adjusted weights into a private engine. A numerical
-vector-Jacobian product through each actual Qwen decoder layer supplies its
-approximate counterpart, including its residual, normalization, nonlinear gate,
-attention, convolution and recurrent operations. It is evaluated at accumulated
-boundary state with aggregate context. New full-attention counterparts use
-`phi(query) @ S / (phi(query) @ z)` after adding the newly computed current pair.
-All moment reductions and normalization use float32. Historical moments remain
-constant, while current queries, keys and values remain in the differentiated
-path. The original Qwen projections, head norms, rotary transform, grouped-head
-mapping, output gate and output projection remain intact. This positive-kernel
-surrogate is **not softmax-equivalent**. Neither pairing nor phase metadata makes
-this an exact attention inverse. Legacy mean-cell records keep their prior
-softmax counterpart at the old synthetic offset, with that limitation explicit
-in the result's `attention_context` labels.
+The runtime loads current adjusted weights into a private engine. The installed
+Qwen layer bodies retain residuals, norms, nonlinear gates, attention,
+convolution and recurrence. Each of the 248 executing quantized projections now
+has its **own** approximate counterpart. Missing projection records are explicit
+errors rather than silently omitting their directions.
 
-The two hidden-output branches also add
-their accumulated signed write means at their recorded coefficient magnitudes.
-Each mean is no longer independently amplified to unit length. Only the
-combined incoming signal is normalized. This conditioning remains approximate,
-not a derived inverse of the weight update. The terminal RMS normalization uses
-a directional scale reversal so a radial signal is not erased by its derivative.
+For each projection, initialize input/output directions as the normalized sum
+of its recorded current and mean directions. Evaluate the local projection on
+an equal blend of its incoming value and its recorded input direction at that
+value's magnitude. Blend its output with its recorded output direction in the
+same way. These equal blends are explicit surrogate-model assumptions, not
+recovered activation values. In backward traversal, the custom rule applies
+the selected native weight transpose to `incoming + write_mean`. The bounded
+signed write mean is added at that projection's output coordinates, **not** at
+a layer's hidden output and never independently normalized. This includes Q/K/V,
+recurrent QKV/z/a/b, attention output, and all MLP gate/up/down projections.
 
-The reverse trajectory begins from the normalized combined current/mean terminal
-state. The accumulated movement matrix supplies its backward movement. Recorded
-motion determines how far it advances; a vanished movement direction ends it.
-There is no configured token count, replay search, source-activation match,
-restored-state requirement or quality threshold.
+This custom backward rule is deliberately **not the derivative of the boundary
+blend**, and not an inverse. Norms, residuals and gates use their ordinary local
+adjoints around those surrogate values. The terminal norm retains the earlier
+directional scale reversal rather than erasing a radial signal with a norm VJP.
+Current-weight and explicit delta-weight modes use the same state mechanics.
+Delta mode still means exactly `Wcurrent-W0` for eligible projection matrices.
+
+### Evolving aggregate state
+
+Each layer and the terminal boundary now have independent movement trajectories.
+A layer's changed output direction conditions its next incoming reverse signal;
+its pulled-back signal steers its input direction by that layer's measured
+output movement distance, retaining its aggregate input magnitude. Projection
+input/output directions move against their recorded mean forward flows, keeping
+those flow magnitudes. Each projection can spend at most its recorded
+`samples-1` transitions; a zero aggregate flow has no movement. Traversal stops
+when all boundary trajectories and projection movement are exhausted or
+stationary. Terminal stagnation alone no longer hides movement below it. This
+is a data-derived traversal horizon, not a configured token count or a learned
+end-of-language decision.
+
+All evolving states are private, fixed-size copies initialized from the final
+snapshot. Source records, packed weights, scales and biases are not changed.
+There is no per-input activation, token, gate or KV sequence. A previous output
+token is not fed back into the model.
+
+### Approximate context predecessors
+
+- **Paired attention:** evaluate the existing positive-kernel summary plus one
+  differentiable current K/V cell. Between emissions, infer a predecessor cell
+  by transporting the current local key one rotary step backwards and retaining
+  its local value. This is a local-constancy approximation, not identification
+  of a historical cell. Subtract that pair's features from the summary; project
+  the removed feature mass onto available nonnegative mass and use the same
+  projected features for cross-moment subtraction. Empty rows are zeroed. Move
+  the query phase and available-cell count backwards. An evicted rotating-cache
+  cell cannot be recovered, so no invented older cells replenish the window.
+  Saved prefix/tail ranges identify gaps: preserve the surviving prefix summary
+  while traversing an evicted middle range, then remove it only at prefix positions.
+  The initial final phase is exact; subsequent cells/states are approximate.
+- **Recurrence:** with local Q/K/V and a/b gates fixed for this step, let `F(z)`
+  be the installed differentiable native state transition, `c` the current
+  inferred state, and `p` the saved final aggregate. Compute the state-only
+  residual pullback `J_F(c)^T (c-F(c))`, then set
+  `c_next = (c + p + J_F(c)^T (c-F(c))) / 2`. This is one gradient step for
+  `.5||F(z)-c||² + .5||z-p||²`, starting at `c`. The normalized delta recurrence
+  has state operator norm at most one; the half step is its analytic
+  smoothness bound with unit ridge regularization. It regularizes unidentifiable
+  history toward the saved aggregate, rather than dividing by decayed gates or
+  claiming an inverse. It is not an iterative activation-matching solve.
+- **Convolution:** retain only the mean-window surrogate. For `m` slots,
+  `F(c)=((m-1)c+qkv)/m`; apply the same single ridge predecessor step using
+  `F'(c)=(m-1)/m`. A one-slot window has no recoverable predecessor component.
+  No token window is reconstructed.
+- **Gates:** z/a/b, the full-attention output gate and the MLP gate are recomputed
+  from their evolving projection boundaries. No missing gate history is
+  fabricated or persisted.
+- **Legacy attention:** schema-v1 mean K/V cells continue through their legacy
+  softmax counterpart and a regularized mean-cell predecessor heuristic. They
+  are not upgraded to paired moments or given invented absolute-position data.
+
+The positive-kernel summary remains **not softmax-equivalent**. None of these
+updates identifies the original sequence or establishes semantic quality.
 
 ## Direct token readout
 
@@ -135,7 +188,9 @@ tokens, source text, full reverse vectors, or a forward activation history.
 
 The trace records each emission's signal norm, change from the preceding
 emission, cosine, and normalized chord change. Layer measurements bracket the
-existing write-direction addition and the VJP. Separate measurements report
+layer conditioning and the VJP. Every projection also reports its own incoming,
+conditioned and pulled-back signals and its evolving input/output directions.
+Per-layer context measurements reveal whether aggregate buffers move. Separate measurements report
 the raw write-mean norms, combined write magnitude, and how much
 conditioning changes the incoming direction. Trajectory measurements report
 the raw movement, its radial and tangential components, actual normalized-state
