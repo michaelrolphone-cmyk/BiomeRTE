@@ -5,7 +5,7 @@ OPERATIONS=('start','status','cancel','export')
 
 def offers(gateway,resource,module='activation_field.context_reconstruction.provider'):
     descriptions={
-        'start':'target_checkpoint, purpose, options (mode=reverse only). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Uses accumulated projection and operation state, current adjusted weights, numerical reverse counterparts and a reusable direct embedding partition readout. Checkpoints without the accumulated state fail explicitly. No vocabulary search, replay fallback or fixed token limit.',
+        'start':'target_checkpoint, purpose, options (mode=reverse only; weight_mode=current|delta, default current; debug boolean). New jobs require expected_version=0. Resume with only resume_run_id and expected_version. Uses accumulated projection and operation state, current adjusted weights or explicit delta projections (Wcurrent-W0), numerical reverse counterparts and a reusable direct embedding partition readout. Checkpoints without the accumulated state fail explicitly. No vocabulary search, replay fallback or fixed token limit.',
         'status':'run_id. Reports state, progress and explicit missing-component errors; no token text is disclosed.',
         'cancel':'run_id, expected_version. Cooperatively stop at a safe boundary.',
         'export':'run_id, expected_version, allow_plaintext=true. Explicitly disclose the protected context and estimated token stream. Every signed context report is returned losslessly through result_artifact; recursively retrieve chunks/nodes with artifact.get and verify digests.'}

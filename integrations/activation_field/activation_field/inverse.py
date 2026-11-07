@@ -12,17 +12,20 @@ from scipy import sparse
 class InverseOptions:
     mode: str = 'reverse'
     debug: bool = False
+    weight_mode: str = 'current'
 
     @classmethod
     def parse(cls, value=None):
         value = {} if value is None else value
-        if not isinstance(value, dict) or set(value)-{'mode','debug'}:
+        if not isinstance(value, dict) or set(value)-{'mode','debug','weight_mode'}:
             raise ValueError('Reverse propagation accepts no token-search or fixed-length options')
         out = cls(**value)
         if out.mode != 'reverse':
             raise ValueError('Vocabulary first-pass and replay modes are retired; use reverse propagation')
         if type(out.debug) is not bool:
             raise ValueError('Reverse debug must be a boolean')
+        if out.weight_mode not in ('current', 'delta'):
+            raise ValueError('Reverse weight_mode must be current or delta')
         return out
 
     def to_dict(self):

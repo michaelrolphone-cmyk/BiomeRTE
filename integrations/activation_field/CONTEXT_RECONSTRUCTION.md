@@ -192,3 +192,27 @@ Validation result: **213 passed, 3 skipped**. Skips are the two existing Metal
 writer tests (no Metal backend on the cloud CPU) and optional Ripser topology.
 Compilation and whitespace checks passed. See
 `qualification/final-state-context-20261107.json` for source hashes and scope.
+
+## Explicit delta-only projection mode
+
+`options: {"mode": "reverse", "weight_mode": "delta", "debug": true}`
+selects ΔW = Wcurrent − W0 for every eligible quantized projection in the
+private reverse engine. Omitting `weight_mode` preserves `current` behavior.
+Other values are rejected. This is subtraction, not the reflected operator
+W0 − ΔW. Results record `weight_mode`, `projection_operator`, and
+`projection_bias`.
+
+Each delta counterpart computes two quantized products using FP32 input,
+scales and offsets, subtracts in FP32, and returns the activation dtype.
+Both products participate in the VJP; no full-model floating-point weight
+matrix is allocated. Packed codes, baseline anchors, scales and offsets
+remain unchanged. Frozen ordinary projection bias cancels, as in
+(x Wcurrentᵀ + b) − (x W0ᵀ + b).
+
+Delta mode applies only to field-eligible projection matrices. Embeddings,
+normalizations, convolutions, residual connections, recorded recurrent state,
+paired attention summaries and the frozen embedding readout remain in place.
+Thus a zero projection delta does not imply zero whole-layer output or an empty
+emitted stream: residual and recorded-state paths can still carry a signal.
+This mode is an approximate local counterpart at the saved aggregate state,
+not proof of semantic reconstruction or recovery of the original transcript.

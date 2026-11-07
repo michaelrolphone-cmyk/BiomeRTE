@@ -116,13 +116,16 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
         try:
             records=load_present_state(engine,vault,checkpoint,metadata,check)
             readout=token_readout(engine,readout_cache or (vault.root.parent/'token-readout'),check,progress)
-            adapter=Qwen35ReverseAdapter(engine,records,readout,debug=debug)
+            adapter=Qwen35ReverseAdapter(engine,records,readout,debug=debug,weight_mode=options.weight_mode)
             tokens=[]
             for token in emit_tokens(adapter,records,records,engine.field.entries,check,debug):
                 tokens.append(token)
                 progress(dict(phase='reverse_propagation',emitted_tokens=len(tokens)))
             # No replay, activation comparison, quality gate or subsequent model stage.
             result=dict(status='complete',method='approximate_reverse_propagation',
+                weight_mode=options.weight_mode,
+                projection_operator=('Wcurrent-W0' if options.weight_mode=='delta' else 'Wcurrent'),
+                projection_bias=('cancelled_frozen_bias' if options.weight_mode=='delta' else 'current'),
                 estimated_token_ids=tokens,context_text=engine.tokenizer.decode(tokens),
                 token_order='reverse_trajectory',source_modified=False,
                 source_refs=[dict(checkpoint_id=checkpoint,sha256=hashlib.sha256(canonical(source)).hexdigest(),
@@ -145,6 +148,8 @@ def reconstruct_with_adapter(adapter,present_state,directions,weights,decode,che
     """Generic operation adapter integration, also used by mechanical tests."""
     tokens=list(emit_tokens(adapter,present_state,directions,weights,check,debug))
     result=dict(status='complete',method='approximate_reverse_propagation',
+                weight_mode=getattr(adapter,'weight_mode','current'),
+                projection_operator=('Wcurrent-W0' if getattr(adapter,'weight_mode','current')=='delta' else 'Wcurrent'),
                 estimated_token_ids=tokens,context_text=decode(tokens),
                 token_order='reverse_trajectory',source_modified=False)
     if debug is not None:result['debug']=debug.report()

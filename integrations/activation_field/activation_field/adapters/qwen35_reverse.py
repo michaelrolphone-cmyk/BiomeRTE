@@ -2,7 +2,7 @@
 
 Layer vector-Jacobian products carry a signed signal backwards through the actual
 normalization, residual, nonlinear, attention, convolution and recurrent
-operations at aggregate boundary state, using the current adjusted weights.
+operations at aggregate boundary state, using current adjusted weights or explicitly selected delta projections.
 They are not exact inverses and do not optimize a match to source activations.
 """
 import numpy as np
@@ -73,7 +73,13 @@ def _install_reverse_attention(attention):
 
 
 class Qwen35ReverseAdapter:
-    def __init__(self, engine, records, token_readout, debug=None):
+    def __init__(self, engine, records, token_readout, debug=None, weight_mode='current'):
+        if weight_mode not in ('current', 'delta'):
+            raise ValueError('Reverse weight_mode must be current or delta')
+        self.weight_mode=weight_mode
+        if weight_mode == 'delta':
+            from .delta_projection import install_delta_engine
+            install_delta_engine(engine)
         self.engine=engine
         self.records=records
         self.token_readout=token_readout
