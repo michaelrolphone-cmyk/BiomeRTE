@@ -23,6 +23,72 @@ export async function limitedJSON(req, max) {
  return JSON.parse(new TextDecoder().decode(data));
 }
 
+// Each frame fits both the HTTP parser and D1 value limits. The result itself
+// has no framing-size limit and is published only after all bytes are verified.
+const resultChunkSize = 65536;
+async function readResultChunks(db,id,lease,digest,parts,progress=async()=>{}) {
+ const chunks=[];
+ for(let start=0;start<parts;start+=16) {
+  await progress();
+  const rows=(await db.prepare('SELECT part,data FROM bridge_result_chunks WHERE job=? AND lease=? AND digest=? AND part>=? AND part<? ORDER BY part')
+   .bind(id,lease,digest,start,Math.min(start+16,parts)).all()).results;
+  for(const row of rows) {
+   if(row.part!==chunks.length)throw Error('Incomplete controller result');
+   chunks.push(row.data);
+  }
+ }
+ if(chunks.length!==parts)throw Error('Incomplete controller result');
+ const encoded=chunks.join('');
+ if(await hexHash(encoded)!==digest)throw Error('Controller result digest mismatch');
+ const value=JSON.parse(encoded);
+ if(!Array.isArray(value?.content))throw Error('Invalid controller result');
+ return value;
+}
+export async function readBridgeResult(db,id,encoded) {
+ const value=JSON.parse(encoded);
+ if(Array.isArray(value?.content))return value;
+ const ref=value?.bridge_result_chunks;
+ if(!ref)throw Error('Invalid stored controller result');
+ return readResultChunks(db,id,ref.lease,ref.digest,ref.parts);
+}
+async function renewResultClaim(db,node,d) {
+ const now=epoch();
+ const row=await db.prepare("UPDATE bridge_jobs SET lease_until=?,deadline=max(deadline,?),updated=? WHERE id=? AND lease=? AND state='claimed' AND lease_until>=? AND (controller IS NULL OR controller=?) RETURNING id")
+  .bind(now+35,now+35,now,d.id,d.lease,now,node?.id??'').first();
+ if(!row)throw Error('Controller result ownership expired or changed');
+}
+async function resultFrame(db,node,d,path,time) {
+ if(typeof d.id!=='string'||typeof d.lease!=='string'||!(/^[a-f0-9]{64}$/).test(d.digest))
+  return reply({error:'Invalid result frame'},400);
+ const owned=await db.prepare("SELECT state,result FROM bridge_jobs WHERE id=? AND lease=? AND (controller IS NULL OR controller=?)")
+  .bind(d.id,d.lease,node?.id??'').first();
+ if(!owned)return reply({accepted:false},409);
+ if(owned.state==='done') {
+  const ref=JSON.parse(owned.result)?.bridge_result_chunks;
+  return reply({accepted:ref?.digest===d.digest},ref?.digest===d.digest?200:409);
+ }
+ if(owned.state!=='claimed')return reply({accepted:false},409);
+ if(path==='/bridge/result-chunk') {
+  if(!Number.isSafeInteger(d.part)||d.part<0||typeof d.data!=='string'||!d.data.length||
+     new TextEncoder().encode(d.data).length>resultChunkSize)return reply({error:'Invalid result chunk'},400);
+  try { await renewResultClaim(db,node,d); } catch { return reply({accepted:false},409); }
+  // Immutable, retryable chunks. Recheck ownership in the write, not just above.
+  const row=await db.prepare("INSERT INTO bridge_result_chunks(job,lease,digest,part,data) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND lease=? AND state='claimed' AND lease_until>=? AND (controller IS NULL OR controller=?)) ON CONFLICT(job,lease,digest,part) DO UPDATE SET data=excluded.data WHERE data=excluded.data RETURNING part")
+   .bind(d.id,d.lease,d.digest,d.part,d.data,d.id,d.lease,epoch(),node?.id??'').first();
+  return reply({accepted:!!row},row?200:409);
+ }
+ if(!Number.isSafeInteger(d.parts)||d.parts<1)return reply({error:'Invalid result manifest'},400);
+ const count=await db.prepare('SELECT count(*) n,min(part) first,max(part) last FROM bridge_result_chunks WHERE job=? AND lease=? AND digest=?')
+  .bind(d.id,d.lease,d.digest).first();
+ if(count.n!==d.parts||count.first!==0||count.last!==d.parts-1)return reply({error:'Incomplete controller result'},409);
+ try { await readResultChunks(db,d.id,d.lease,d.digest,d.parts,()=>renewResultClaim(db,node,d)); }
+ catch { return reply({error:'Invalid controller result'},400); }
+ const manifest=JSON.stringify({bridge_result_chunks:{lease:d.lease,digest:d.digest,parts:d.parts}});
+ const row=await db.prepare("UPDATE bridge_jobs SET state='done',request=CASE WHEN id LIKE 'event-%' THEN '{}' ELSE request END,result=?,updated=? WHERE id=? AND lease=? AND state='claimed' AND lease_until>=? AND (controller IS NULL OR controller=?) RETURNING id")
+  .bind(manifest,epoch(),d.id,d.lease,epoch(),node?.id??'').first();
+ return reply({accepted:!!row},row?200:409);
+}
+
 export async function device(req, env, path) {
  const token = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.get('Authorization')||'')?.[1];
  const legacy=!!token&&!!env.BIOME_BRIDGE_PIN&&sameSecret(await hexHash(await hexHash(token)+'\n'),env.BIOME_BRIDGE_PIN);
@@ -52,6 +118,8 @@ export async function device(req, env, path) {
    request={name:'grok_receiver_change',arguments:await openGrokJob(env,job.id,request.arguments)};
   return reply({id:job.id,lease,request});
  }
+ if(path==='/bridge/result-chunk'||path==='/bridge/result-commit')
+  return resultFrame(db,node,await limitedJSON(req,500000),path,time);
  if (path === '/bridge/complete') {
   const d = await limitedJSON(req,500000);
   if (typeof d.id !== 'string' || typeof d.lease !== 'string' || !Array.isArray(d.result?.content))
@@ -84,9 +152,11 @@ export async function runTool(env, name, args={}) {
       Object.keys(args).some(k=>!['operation','arguments','request_id','realm'].includes(k)) ||
       !['site','local'].includes(args.realm??'site')) return toolError('Expected operation, arguments, request_id and optional realm');
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
+ // Discovery request_id identifies a resumable snapshot, including if upload
+ // outlasts the HTTP waiter. A new request_id requests fresh discovery.
  // A status read must see later transitions even when a client repeats the
  // exact next_call returned in a queued receipt. Mutation retries stay durable.
- const liveRead=name==='biome_invoke' && ['cap.status','cap.submission','cap.lease','cap.leases','cap.discover','bus.inbox','provider.poll'].includes(args.operation);
+ const liveRead=name==='biome_invoke' && ['cap.status','cap.submission','cap.lease','cap.leases','bus.inbox','provider.poll'].includes(args.operation);
  const key = name==='biome_invoke' && !liveRead ? 'invoke-'+await hexHash((args.realm||'site')+'\n'+args.request_id) : crypto.randomUUID();
  return enqueue(env,name,args,key);
 }
@@ -99,12 +169,12 @@ export async function enqueue(env,name,args,key){
  let row=await db.prepare('SELECT request,state,result,deadline FROM bridge_jobs WHERE id=?').bind(key).first();
  if(!row) return toolError('Controller queue is busy. Retry with the same request_id.');
  if(key.startsWith('invoke-') && row.request!==payload) return toolError('request_id already belongs to a different request.');
- if(row.state==='done') return JSON.parse(row.result);
+ if(row.state==='done') return readBridgeResult(db,key,row.result);
  if(row.deadline<time) await db.prepare("UPDATE bridge_jobs SET deadline=?,updated=? WHERE id=? AND state!='done'").bind(time+22,time,key).run();
  for(let turn=0;turn<80;turn++){
   await wait(250);
   row=await db.prepare('SELECT result FROM bridge_jobs WHERE id=?').bind(key).first();
-  if(row?.result) return JSON.parse(row.result);
+  if(row?.result) return readBridgeResult(db,key,row.result);
  }
  return toolError('The controller has not replied yet. Retry with the same request_id to recover the result.');
 }

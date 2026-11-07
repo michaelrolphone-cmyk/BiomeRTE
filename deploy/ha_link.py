@@ -44,14 +44,15 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     status = {'primary': None, 'ready': False}
     event_lock = threading.Lock()
     from persistent_link import ControllerLink
+    from result_delivery import complete
     persistent = ControllerLink(origin, token, site_access)
 
     def call(path, body):
+        def send(target, payload):
+            return fetch(origin + '/bridge/' + target, payload, token, timeout=45, site_access=site_access)
         if path == 'complete':
-            acknowledged = persistent.complete(body)
-            if acknowledged is not None:
-                return acknowledged
-        return fetch(origin + '/bridge/' + path, body, token, timeout=45, site_access=site_access)
+            return complete(body, send, persistent)
+        return send(path, body)
 
     def heartbeat():
         while True:

@@ -10,6 +10,7 @@ import sys
 import time
 import threading
 from mcp_events import EventStore, CallbackError
+from result_delivery import complete
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHandler
@@ -184,7 +185,8 @@ def main():
             except Exception as exc:
                 result = {'isError': True, 'content': [{'type': 'text', 'text': 'Controller request failed: ' + str(exc)}]}
             try:
-                fetch(origin + '/bridge/complete', {'id': job['id'], 'lease': job['lease'], 'result': result}, token, site_access=site_access)
+                complete({'id': job['id'], 'lease': job['lease'], 'result': result},
+                    lambda path, body: fetch(origin + '/bridge/' + path, body, token, site_access=site_access))
             except HTTPError as exc:
                 if exc.code != 409:
                     raise
