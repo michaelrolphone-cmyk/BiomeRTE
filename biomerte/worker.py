@@ -217,21 +217,25 @@ class Worker:
                     self.configure(a, found['configure_argv'])
             except Exception as error:
                 failure('activation', a, error)
-        fenced = 0
-        for lease in queue['fences']:
-            try:
-                self.fence(lease)
-                fenced += 1
-            except Exception as error:
-                failure('fence', lease, error)
         actions = [a for a in queue['actions']
                    if a.get('guard', a['resource']) not in blocked]
         if pool is not None:
-            count = fenced + pool.dispatch(actions)
+            # Admission may need slow remote reconciliation. Isolate it by the
+            # same fenced slot as execution rather than blocking the poller and
+            # every unrelated slot while one uncertain effect is inspected.
+            count = pool.dispatch(actions, fences=queue['fences'])
             errors.extend(getattr(pool, 'failures', {}).values())
         else:
-            count = fenced
+            count = 0
+            for lease in queue['fences']:
+                try:
+                    self.fence(lease)
+                    count += 1
+                except Exception as error:
+                    failure('fence', lease, error)
             for a in actions:
+                if a.get('guard', a['resource']) in blocked:
+                    continue
                 try:
                     self.perform(a)
                     count += 1
@@ -249,33 +253,44 @@ class ActionPool:
         self.limit = limit
         self.executor = ThreadPoolExecutor(max_workers=limit)
         self.running = {}
+        self.items = {}
         self.failures = {}
 
-    def perform(self, action):
+    def perform(self, action, fence=False):
         w = self.worker
         child = Worker(w.path, w.remote, w.offers, w.timeout)
         try:
-            child.perform(action)
+            if fence:
+                child.fence(action)
+            else:
+                child.perform(action)
         finally:
             child.db.close()
 
-    def dispatch(self, actions):
+    def dispatch(self, actions, fences=()):
         import logging
         for guard, future in list(self.running.items()):
             if future.done():
                 del self.running[guard]
+                kind, identifier = self.items.pop(guard)
                 if future.exception():
-                    self.failures[guard] = {'kind': 'action', 'guard': guard, 'error': type(future.exception()).__name__, 'reason': str(future.exception())}
-                    logging.warning('Provider operation paused: %s', future.exception())
+                    self.failures[guard] = {'kind': kind, 'id': identifier, 'guard': guard,
+                                            'error': type(future.exception()).__name__, 'reason': str(future.exception())}
+                    logging.warning('Provider %s %s paused: %s', kind, identifier, future.exception())
                 else:
                     self.failures.pop(guard, None)
         started = 0
-        for action in actions:
+        # A pending fence takes precedence over an action for the same guard.
+        # A guard has at most one future, preserving both fencing and execution
+        # serialization while other guards can make progress independently.
+        candidates = [('fence', lease) for lease in fences] + [('action', action) for action in actions]
+        for kind, action in candidates:
             if len(self.running) >= self.limit:
                 break
             guard = action.get('guard', action['resource'])
             if guard not in self.running:
-                self.running[guard] = self.executor.submit(self.perform, action)
+                self.items[guard] = (kind, action['id'])
+                self.running[guard] = self.executor.submit(self.perform, action, kind == 'fence')
                 started += 1
         return started
 

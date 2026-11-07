@@ -50,7 +50,7 @@ class WorkerRecovery(unittest.TestCase):
                            'actions':[dict(id='independent',resource='terminal',guard='slot-b')]}
         class Pool:
             failures={}
-            def dispatch(s,actions): s.actions=actions; return len(actions)
+            def dispatch(s,actions,fences=()): s.actions=actions; s.fences=fences; return len(actions)
         pool=Pool();self.w.once(pool)
         self.assertEqual([a['id'] for a in pool.actions],['independent'])
     def test_quiescent_reconciliation_repairs_local_ledger_before_fence(self):

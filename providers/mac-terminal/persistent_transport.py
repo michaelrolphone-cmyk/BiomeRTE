@@ -12,10 +12,18 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'transport_vendor'))
 
 
+class ReplyPending(ConnectionError):
+    """The control RPC may have executed; retry only its original durable ID."""
+
+
 class PersistentTransport:
-    def __init__(self, origin, credentials):
+    def __init__(self, origin, credentials, reply_timeout=90):
         self.origin = origin
         self.credentials = credentials
+        # Match the existing HTTP transport's response horizon. This only
+        # returns an unanswered control RPC to durable fallback; it neither
+        # cancels nor places a lifetime limit on the capability/job it refers to.
+        self.reply_timeout = reply_timeout
         self.lock = threading.RLock()
         self.send_lock = threading.Lock()
         self.socket = None
@@ -94,11 +102,20 @@ class PersistentTransport:
         try:
             with self.send_lock:
                 ws.send(json.dumps({'type': 'invoke', 'id': ident, 'arguments': args}))
-            # There is deliberately no job deadline. Disconnect wakes all callers.
-            item['ready'].wait()
-            if 'error' in item:
-                raise item['error']
-            return {'result': item['result']}
+            ready = item['ready'].wait(self.reply_timeout)
+            with self.lock:
+                # A response may arrive at the timeout boundary.
+                if not ready and not item['ready'].is_set():
+                    raise ReplyPending('Persistent reply pending; durable request identity retained')
+                if 'error' in item:
+                    raise item['error']
+                return {'result': item['result']}
+        except ReplyPending:
+            # Healthy heartbeats do not prove that this particular RPC replied.
+            # Keep unrelated multiplexed calls alive. The caller's HTTP fallback
+            # uses the same request_id, so a late mutation is never replayed as
+            # a new logical operation.
+            raise
         except Exception:
             self._disconnect(ws)
             raise
