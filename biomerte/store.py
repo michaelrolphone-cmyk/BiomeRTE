@@ -8,13 +8,22 @@ import base64
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import ssl
+import sys
+import threading
 import time
 import uuid
 from urllib.request import Request, build_opener, HTTPSHandler
 from urllib.parse import urlparse
+
+
+log = logging.getLogger('biomerte.store')
+
+# Disposable scalar projections; canonical values remain in records/journal.
+LOOKUP_FIELDS = {'runs': ('state',), 'leases': ('state', 'task'), 'actions': ('lease', 'state')}
 
 
 class Fault(Exception):
@@ -79,12 +88,48 @@ class Records:
         rows = self.db.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,))
         return [json.loads(row[0]) for row in rows]
 
+    def matching(self, kind, field, values):
+        """Ordered records matching an indexed scalar, without decoding history."""
+        if field not in LOOKUP_FIELDS.get(kind, ()):
+            raise ValueError('Field is not indexed')
+        if not values:
+            return []
+        placeholders = ','.join('?' for unused in values)
+        # Dirty rows cover writes by older binaries or direct SQL. Never trust
+        # an outdated projection, even before the next startup repairs it.
+        sql = ("SELECT r.id,r.value FROM record_lookup l CROSS JOIN records r "
+               "ON r.kind=l.kind AND r.id=l.id WHERE l.kind=? AND l.field=? "
+               "AND l.value IN (" + placeholders + ") AND NOT EXISTS "
+               "(SELECT 1 FROM record_lookup_dirty d WHERE d.kind=r.kind AND d.id=r.id) "
+               "UNION SELECT r.id,r.value FROM record_lookup_dirty d CROSS JOIN records r "
+               "ON r.kind=d.kind AND r.id=d.id WHERE d.kind=? ORDER BY 1")
+        encoded_values = [encode(value) for value in values]
+        args = [kind, field] + encoded_values + [kind]
+        result = []
+        for key, encoded in self.db.execute(sql, args):
+            value = json.loads(encoded)
+            if field in value and encode(value[field]) in encoded_values:
+                result.append(value)
+        return result
+
+    def _index(self, kind, key, value):
+        if kind not in LOOKUP_FIELDS:
+            return
+        self.db.execute('DELETE FROM record_lookup WHERE kind=? AND id=?', (kind, key))
+        if value is not None:
+            for field in LOOKUP_FIELDS[kind]:
+                if field in value:
+                    self.db.execute('INSERT INTO record_lookup VALUES (?,?,?,?)',
+                                    (kind, key, field, encode(value[field])))
+        self.db.execute('DELETE FROM record_lookup_dirty WHERE kind=? AND id=?', (kind, key))
+
     def put(self, kind, key, value):
         if self.read_only:
             raise Fault(self.read_only, 409)
         text(key, 'record id', 512)
         self.db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)',
                         (kind, key, encode(value)))
+        self._index(kind, key, value)
         self.changes[(kind, key)] = value
         return value
 
@@ -92,6 +137,7 @@ class Records:
         if self.read_only:
             raise Fault(self.read_only, 409)
         self.db.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, key))
+        self._index(kind, key, None)
         self.changes[(kind, key)] = None
 
     def emit(self, topic, payload):
@@ -172,17 +218,92 @@ class Store:
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        self._writer_diagnostic = None
+        self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript('CREATE TABLE IF NOT EXISTS records(kind TEXT,id TEXT,value TEXT,'
                              ' PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS position('
                              'id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER,hash TEXT);'
                              "INSERT OR IGNORE INTO position VALUES(1,0,'');")
+            self._initialize_lookup(db)
+
+    def _initialize_lookup(self, db):
+        # One transactional backfill per mirror, then only dirty records on
+        # startup. Triggers keep downgrade/direct-SQL writes detectable.
+        schema = [
+            'CREATE TABLE IF NOT EXISTS record_lookup('
+            'kind TEXT,id TEXT,field TEXT,value TEXT,PRIMARY KEY(kind,field,value,id))',
+            'CREATE INDEX IF NOT EXISTS record_lookup_id ON record_lookup(kind,id)',
+            'CREATE TABLE IF NOT EXISTS record_lookup_dirty('
+            'kind TEXT,id TEXT,PRIMARY KEY(kind,id))',
+            'CREATE TABLE IF NOT EXISTS record_lookup_version(version INTEGER PRIMARY KEY)']
+        kinds = ','.join("'" + kind + "'" for kind in sorted(LOOKUP_FIELDS))
+        for event, prefix in (('INSERT', 'NEW'), ('DELETE', 'OLD'), ('UPDATE', 'OLD')):
+            schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_' + event.lower() +
+                          ' AFTER ' + event + ' ON records WHEN ' + prefix + '.kind IN (' + kinds + ') '
+                          'BEGIN INSERT OR REPLACE INTO record_lookup_dirty VALUES (' +
+                          prefix + '.kind,' + prefix + '.id); END')
+        schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_update_new AFTER UPDATE ON records '
+                      'WHEN NEW.kind IN (' + kinds + ') BEGIN INSERT OR REPLACE INTO record_lookup_dirty '
+                      'VALUES (NEW.kind,NEW.id); END')
+        try:
+            # Execute the DDL inside SQL BEGIN, avoiding Python <3.6 cursor DDL
+            # implicit-commit behavior. Data backfill stays in this transaction.
+            db.executescript('BEGIN IMMEDIATE;' + ';'.join(schema) + ';')
+            if not db.execute('SELECT 1 FROM record_lookup_version WHERE version=1').fetchone():
+                db.execute('INSERT OR IGNORE INTO record_lookup_dirty SELECT kind,id FROM records '
+                           'WHERE kind IN (' + kinds + ')')
+            dirty = db.execute('SELECT kind,id FROM record_lookup_dirty').fetchall()
+            tx = Records(db)
+            for kind, key in dirty:
+                tx._index(kind, key, tx.get(kind, key))
+            db.execute('INSERT OR IGNORE INTO record_lookup_version VALUES(1)')
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
 
     def connect(self):
         con = sqlite3.connect(self.path, timeout=12, isolation_level=None)
         con.execute('PRAGMA synchronous=FULL')
         return con
+
+    def _report_writer_timeout(self):
+        # Diagnostic only: never emit record values, callback arguments or locals.
+        try:
+            with self._writer_diagnostic_lock:
+                owner = self._writer_diagnostic
+                snapshot = tuple(owner) if owner is not None else None
+            if snapshot is None:
+                log.warning('SQLite writer timeout database=%s owner=untracked',
+                            os.path.basename(self.path))
+                return
+            ident, phase, started = snapshot
+            frame = sys._current_frames().get(ident)
+            stack = []
+            while frame is not None and len(stack) < 16:
+                stack.append('%s:%s:%s' % (os.path.basename(frame.f_code.co_filename),
+                                          frame.f_lineno, frame.f_code.co_name))
+                frame = frame.f_back
+            with self._writer_diagnostic_lock:
+                unchanged = self._writer_diagnostic is owner
+            if not unchanged:
+                log.warning('SQLite writer timeout database=%s owner_changed_during_snapshot',
+                            os.path.basename(self.path))
+                return
+            log.warning('SQLite writer timeout database=%s owner=%s phase=%s held_seconds=%.3f stack=%s',
+                        os.path.basename(self.path), ident, phase,
+                        time.monotonic() - started, ' <- '.join(stack))
+        except Exception:
+            # Reporting must not replace the original SQLite error.
+            pass
+
+    def _clear_writer_diagnostic(self, owner):
+        # A successor can acquire the lock immediately after commit releases it.
+        with self._writer_diagnostic_lock:
+            if self._writer_diagnostic is owner:
+                self._writer_diagnostic = None
 
     def execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict
@@ -231,7 +352,15 @@ class Store:
                 db.rollback()
             # Network catch-up never holds the mirror's writer lock. Another
             # local caller may already have applied part of this same history.
-            db.execute('BEGIN IMMEDIATE')
+            try:
+                db.execute('BEGIN IMMEDIATE')
+            except sqlite3.OperationalError as exc:
+                if str(exc) == 'database is locked':
+                    self._report_writer_timeout()
+                raise
+            owner = [threading.get_ident(), 'replay', time.monotonic()]
+            with self._writer_diagnostic_lock:
+                self._writer_diagnostic = owner
             try:
                 tx = Records(db)
                 seq, previous = db.execute('SELECT seq,hash FROM position WHERE id=1').fetchone()
@@ -256,25 +385,31 @@ class Store:
                 if read_only:
                     # Catch-up is already authoritative. Release its writer lock
                     # before callbacks (which may perform remote status reads).
+                    owner[1] = 'commit-catchup'
                     db.commit()
+                    self._clear_writer_diagnostic(owner)
                     db.execute('BEGIN')
                     db.execute('SELECT seq FROM position WHERE id=1').fetchone()
                     db.execute('PRAGMA query_only=ON')
                     tx = Records(db, 'Read-only operation changed records')
                 if self.remote and not cached and not read_only:
                     db.execute('SAVEPOINT proposal')
+                owner[1] = 'callback'
                 result = fn(tx)
                 if (cached or read_only) and tx.changes:
                     raise Fault('Read-only operation changed records', 409)
                 if self.remote and tx.changes:
+                    owner[1] = 'encode-proposal'
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
                     expected_head = {'seq': entry['seq'], 'hash': digest(entry)}
                     # Only validated catch-up may commit locally before CAS.
                     # The proposal and its receipt are not yet authoritative.
+                    owner[1] = 'commit-catchup'
                     db.execute('ROLLBACK TO proposal')
                     db.execute('RELEASE proposal')
                     db.commit()
+                    self._clear_writer_diagnostic(owner)
                     # A slow or lost response must never pin the mirror writer.
                     head = self.remote.append(version, entry)
                     if (not isinstance(head, dict) or type(head.get('seq')) is not int or
@@ -290,8 +425,12 @@ class Store:
                     # Reuse normal chain validation rather than committing the
                     # staged proposal. Another caller may have applied it already.
                     self.execute(confirmed, read_only=True)
+                owner[1] = 'commit'
                 db.commit()
                 return result
             except BaseException:
+                owner[1] = 'rollback'
                 db.rollback()
                 raise
+            finally:
+                self._clear_writer_diagnostic(owner)
