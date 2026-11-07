@@ -159,12 +159,43 @@ print(json.dumps(result,sort_keys=True))
 '''
 
 
+LISTENER_OWNERS = r'''
+import errno,json,os,sys
+port=int(sys.argv[1]);inodes=set();owners={};unreadable=[]
+for name in ('tcp','tcp6'):
+    try:
+        with open('/proc/net/'+name) as stream:
+            for line in list(stream)[1:]:
+                parts=line.split()
+                if parts[3]=='0A' and int(parts[1].rsplit(':',1)[1],16)==port:
+                    inodes.add(parts[9])
+    except OSError as e:
+        if name!='tcp6' or e.errno!=errno.ENOENT:raise
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():continue
+    try:
+        for fd in os.listdir('/proc/'+pid+'/fd'):
+            try:link=os.readlink('/proc/'+pid+'/fd/'+fd)
+            except OSError as e:
+                if e.errno in (errno.ENOENT,errno.ESRCH):continue
+                raise
+            if link.startswith('socket:[') and link[8:-1] in inodes:
+                owners.setdefault(link[8:-1],[]).append(int(pid))
+    except OSError as e:
+        if e.errno not in (errno.ENOENT,errno.ESRCH):unreadable.append(int(pid))
+print(json.dumps({'inodes':sorted(inodes),'owners':owners,'unreadable':unreadable}))
+'''
+
+
 class Bootstrap:
-    def __init__(self, manifest, ca, home, source, url, target_host, target_user, snapshot_file=None):
+    def __init__(self, manifest, ca, home, source, url, target_host, target_user, snapshot_file=None,
+                 recover_degraded_controller=False):
         self.manifest, self.ca = manifest, ca
         self.home, self.source, self.url = os.path.abspath(home), os.path.abspath(source), url
         self.target_host, self.target_user = target_host, target_user
         self.snapshot_file = os.path.abspath(snapshot_file) if snapshot_file else None
+        require(type(recover_degraded_controller) is bool, 'Invalid degraded recovery option')
+        self.recover_degraded_controller = recover_degraded_controller
         self.db_path = os.path.join(self.home, 'gateway-' + manifest.get('site', '') + '.sqlite')
         self.paths = [self.db_path + suffix for suffix in ('', '-wal', '-shm')]
         self.stage = self.backup = None
@@ -313,19 +344,45 @@ class Bootstrap:
                 require(exc.errno == errno.ECONNREFUSED, 'Controller listener status is uncertain')
         if host is None:
             return {'listening': False, 'healthy': False}
-        healthy = False
+        healthy, degraded = False, False
         url = 'http://%s:%d/health' % ('[' + host + ']' if ':' in host else host, self.config['port'])
         try:
             with build_opener(ProxyHandler({}), NoRedirect).open(url, timeout=2) as response:
                 value = json.loads(response.read(65536).decode('utf-8'))
             healthy = value.get('runtime') == 'up' and value.get('realms', {}).get('site') == 'ready'
+            degraded = (value.get('runtime') == 'up' and value.get('realms', {}).get('local') == 'ready' and
+                        value.get('realms', {}).get('site') == 'Gateway journal HTTP 503' and
+                        value.get('background_errors') == {})
         except Exception:
             pass
-        return {'listening': True, 'healthy': healthy}
+        return {'listening': True, 'healthy': healthy, 'degraded': degraded}
+
+    def verify_controller_listener(self):
+        value = self.unit(CONTROLLER)
+        pid = int(value.get('MainPID', '0'))
+        require(value.get('ActiveState') == 'active' and pid > 0, 'Listener controller is not active')
+        require(all(value.get(key) == item for key, item in self.units[CONTROLLER].items()),
+                'Listener controller configuration changed')
+        expected = json.loads(self.units[CONTROLLER]['ExecStart'])['argv']
+        require(os.path.realpath('/proc/%d/cwd' % pid) == self.source and
+                process_argv('/proc/%d/cmdline' % pid) == expected, 'Unexpected listener process')
+        owners = json.loads(self.command(['sudo', '-n', sys.executable, '-B', '-S', '-c',
+                                         LISTENER_OWNERS, str(self.config['port'])]))
+        require(owners['inodes'] and not owners['unreadable'] and
+                set(owners['owners']) == set(owners['inodes']) and
+                all(set(pids) == {pid} for pids in owners['owners'].values()),
+                'Listener ownership is not the expected controller')
+        fresh = self.unit(CONTROLLER)
+        require(fresh.get('MainPID') == str(pid) and fresh.get('ActiveState') == 'active',
+                'Listener controller changed during verification')
 
     def no_longer_needed(self):
-        if self.probe()['listening']:
-            return 'controller_listening'
+        health = self.probe()
+        if health['listening']:
+            if not self.recover_degraded_controller or health['healthy']:
+                return 'controller_listening'
+            require(health.get('degraded'), 'Listener is not a recognized degraded controller')
+            self.verify_controller_listener()
         if position(self.db_path)[0] >= self.manifest['sequence']:
             return 'mirror_already_caught_up'
         return None
@@ -619,7 +676,8 @@ if __name__ == '__main__':
         signal.signal(signal.SIGHUP, interrupted)
         bootstrap = Bootstrap(preparation['manifest'], preparation.get('ca_pem', ''), preparation['home'],
                               preparation['source'], preparation.get('download_url', ''), preparation['target_host'],
-                              preparation['target_user'], preparation.get('snapshot_file'))
+                              preparation['target_user'], preparation.get('snapshot_file'),
+                              preparation.get('recover_degraded_controller', False))
         result = bootstrap.run()
         print(json.dumps(result, sort_keys=True))
         if result['state'] == 'installed_not_ready':

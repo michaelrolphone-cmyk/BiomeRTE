@@ -40,7 +40,12 @@ class Fake(helper.Bootstrap):
 
     def probe(self):
         self.probe_count += 1
+        if getattr(self, 'degraded', False) and 'stop' not in self.calls:
+            return {'listening': True, 'healthy': False, 'degraded': True}
         return {'listening': self.probe_count == getattr(self, 'listens_at', -1), 'healthy': False}
+
+    def verify_controller_listener(self):
+        self.calls.append('verify_listener')
 
     def verify_remote(self):
         self.calls.append('remote')
@@ -111,6 +116,89 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(self.job.run()['state'], 'unchanged')
         self.assertIsNone(self.job.stage)
         self.assertEqual(self.job.calls, [])
+
+    def test_degraded_recovery_requires_explicit_option(self):
+        self.job.degraded = True
+        self.assertEqual(self.job.run()['state'], 'unchanged')
+        self.assertEqual(self.job.calls, [])
+
+    def test_verified_degraded_recovery_uses_existing_stop_and_backup(self):
+        self.job.degraded = self.job.recover_degraded_controller = True
+        result = self.job.run()
+        self.assertEqual(result['state'], 'installed')
+        self.assertEqual(self.job.calls.count('verify_listener'), 2)
+        self.assertLess(self.job.calls.index('remote'), self.job.calls.index('stop'))
+        self.assertEqual(helper.file_digest(os.path.join(result['backup'], os.path.basename(self.job.db_path))), self.original)
+
+    def test_degraded_preparation_failure_does_not_stop_original_services(self):
+        self.job.degraded = self.job.recover_degraded_controller = True
+        self.job.bad_remote = True
+        with self.assertRaises(helper.Refused):
+            self.job.run()
+        self.assertNotIn('stop', self.job.calls)
+        self.original_restored()
+
+    def test_degraded_partial_stop_retains_original_service_restore(self):
+        self.job.degraded = self.job.recover_degraded_controller = True
+        self.job.bad_stop = True
+        with self.assertRaises(helper.Refused):
+            self.job.run()
+        self.assertIn(('restore', (helper.CONTROLLER, helper.GATEWAY)), self.job.calls)
+        self.original_restored()
+
+    def test_degraded_option_does_not_accept_healthy_or_unknown_listener(self):
+        self.job.recover_degraded_controller = True
+        with patch.object(self.job, 'probe', return_value={'listening': True, 'healthy': True}):
+            self.assertEqual(self.job.run()['reason'], 'controller_listening')
+        with patch.object(self.job, 'probe', return_value={'listening': True, 'healthy': False}):
+            with self.assertRaises(helper.Refused):
+                self.job.run()
+        self.assertNotIn('stop', self.job.calls)
+
+    def test_degraded_health_must_match_recognized_complete_response(self):
+        self.job.config = {'listen': '127.0.0.1', 'port': 8740}
+        good = {'runtime': 'up', 'realms': {'local': 'ready', 'site': 'Gateway journal HTTP 503'},
+                'background_errors': {}}
+        values = [good, {'runtime': 'up', 'realms': {'local': 'ready', 'site': 'unknown'}},
+                  {'runtime': 'up', 'realms': {'local': 'unavailable', 'site': 'Gateway journal HTTP 503'}},
+                  {'runtime': 'up', 'realms': {'local': 'ready', 'site': 'ready'}}, None]
+        for index, value in enumerate(values):
+            opener = Mock()
+            if value is None:
+                opener.open.side_effect = helper.socket.timeout()
+            else:
+                opener.open.return_value = io.BytesIO(json.dumps(value).encode('utf-8'))
+            with patch.object(helper.socket, 'create_connection', return_value=Mock()), \
+                    patch.object(helper, 'build_opener', return_value=opener):
+                self.assertEqual(helper.Bootstrap.probe(self.job)['degraded'], index == 0)
+
+    def test_listener_must_belong_only_to_expected_current_controller(self):
+        self.job.config = {'port': 8740}
+        self.job.units = {helper.CONTROLLER: {'ExecStart': json.dumps({'argv': ['expected']})}}
+        unit = dict(self.job.units[helper.CONTROLLER], ActiveState='active', MainPID='123')
+        valid = {'inodes': ['42'], 'owners': {'42': [123]}, 'unreadable': []}
+        invalid = [dict(valid, owners={'42': [456]}), dict(valid, owners={'42': [123, 456]}),
+                   dict(valid, owners={}), dict(valid, unreadable=[999]), dict(valid, inodes=[])]
+        with patch.object(helper.os.path, 'realpath', return_value=self.job.source), \
+                patch.object(helper, 'process_argv', return_value=['expected']), \
+                patch.object(self.job, 'unit', return_value=unit):
+            with patch.object(self.job, 'command', return_value=json.dumps(valid)):
+                helper.Bootstrap.verify_controller_listener(self.job)
+            for value in invalid:
+                with patch.object(self.job, 'command', return_value=json.dumps(value)):
+                    with self.assertRaises(helper.Refused):
+                        helper.Bootstrap.verify_controller_listener(self.job)
+            with patch.object(self.job, 'command', return_value=json.dumps(valid)), \
+                    patch.object(self.job, 'unit', side_effect=[unit, dict(unit, MainPID='124')]):
+                with self.assertRaises(helper.Refused):
+                    helper.Bootstrap.verify_controller_listener(self.job)
+
+    def test_degraded_option_still_rejects_listener_after_stop(self):
+        self.job.degraded = self.job.recover_degraded_controller = True
+        self.job.listens_at = 3
+        self.assertEqual(self.job.run()['state'], 'unchanged')
+        self.assertIn(('restore', (helper.CONTROLLER, helper.GATEWAY)), self.job.calls)
+        self.original_restored()
 
     def test_already_caught_up_before_preparation_does_nothing(self):
         with patch.object(helper, 'position', return_value=(20, 'a' * 64)):
