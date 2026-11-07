@@ -95,7 +95,9 @@ class Application:
                 if name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot':
                     raise Fault('Operator action', 403)
             return command(tx, ctx, name, args, request_id)
-        return self.stores[realm].execute(transaction, cached=cached)
+        operation = OPERATIONS.get(name)
+        read_only = operation is not None and not operation[2]
+        return self.stores[realm].execute(transaction, cached=cached, read_only=read_only)
 
     def tick(self, realm):
         budget = 64

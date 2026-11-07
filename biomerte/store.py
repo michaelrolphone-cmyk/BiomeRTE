@@ -59,8 +59,9 @@ def text(value, label='name', maximum=160):
 
 
 class Records:
-    def __init__(self, db):
+    def __init__(self, db, read_only=False):
         self.db = db
+        self.read_only = read_only
         self.changes = {}
 
     def get(self, kind, key, default=None):
@@ -79,6 +80,8 @@ class Records:
         return [json.loads(row[0]) for row in rows]
 
     def put(self, kind, key, value):
+        if self.read_only:
+            raise Fault(self.read_only, 409)
         text(key, 'record id', 512)
         self.db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)',
                         (kind, key, encode(value)))
@@ -86,6 +89,8 @@ class Records:
         return value
 
     def drop(self, kind, key):
+        if self.read_only:
+            raise Fault(self.read_only, 409)
         self.db.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, key))
         self.changes[(kind, key)] = None
 
@@ -179,17 +184,17 @@ class Store:
         con.execute('PRAGMA synchronous=FULL')
         return con
 
-    def execute(self, fn, cached=False):
+    def execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict
         while True:
             try:
-                return self._execute(fn, cached)
+                return self._execute(fn, cached, read_only)
             except JournalConflict:
                 # A competing committed transaction won. Re-read its receipt and
                 # re-evaluate against that history instead of replaying old changes.
                 time.sleep(0.01)
 
-    def _execute(self, fn, cached=False):
+    def _execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict
         with contextlib.closing(self.connect()) as db:
             entries = {}
@@ -201,6 +206,29 @@ class Store:
                     raise Fault('Shared journal rolled back. Inspect membership and backup.', 409)
                 for number in range(observed + 1, last + 1):
                     entries[number], unused = self.remote.read('log/%020d' % number)
+            if cached or read_only:
+                # A WAL reader must not reserve the writer lock just to inspect
+                # committed state while another caller waits for journal append.
+                db.execute('BEGIN')
+                seq, previous = db.execute('SELECT seq,hash FROM position WHERE id=1').fetchone()
+                if self.remote and not cached and seq > last:
+                    db.rollback()
+                    raise JournalConflict('Local mirror advanced during catch-up', 409)
+                if not self.remote or cached or seq == last:
+                    try:
+                        if self.remote and not cached and previous != (head['hash'] if head else ''):
+                            raise Fault('Shared journal history mismatch', 409)
+                        db.execute('PRAGMA query_only=ON')
+                        result = fn(Records(db, 'Cached site view is read-only' if cached
+                                            else 'Read-only operation changed records'))
+                        db.commit()
+                        return result
+                    except BaseException:
+                        db.rollback()
+                        raise
+                # Fresh reads still apply and validate missing journal entries.
+                # End the snapshot before acquiring a write transaction.
+                db.rollback()
             # Network catch-up never holds the mirror's writer lock. Another
             # local caller may already have applied part of this same history.
             db.execute('BEGIN IMMEDIATE')
@@ -225,9 +253,14 @@ class Store:
                         raise Fault('Shared journal history mismatch', 409)
                     db.execute('UPDATE position SET seq=?,hash=? WHERE id=1', (seq, previous))
                     tx.changes.clear()
+                if read_only:
+                    # Catch-up is the only permitted write for a fresh reader.
+                    # Guard both Records helpers and direct callback SQL.
+                    db.execute('PRAGMA query_only=ON')
+                    tx = Records(db, 'Read-only operation changed records')
                 result = fn(tx)
-                if cached and tx.changes:
-                    raise Fault('Cached site view is read-only', 409)
+                if (cached or read_only) and tx.changes:
+                    raise Fault('Read-only operation changed records', 409)
                 if self.remote and tx.changes:
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
