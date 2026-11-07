@@ -1,0 +1,35 @@
+{
+  "kind": "reverse_propagation_code_update",
+  "date": "2026-11-06",
+  "base_commit": "e254469d6df8e07206380f7ebb1e49dd4ab7fb3e",
+  "local_tests": {
+    "command": "python -m pytest -q",
+    "passed": 120,
+    "skipped": 4,
+    "failed": 0,
+    "skip_reason": "Three MLX-dependent skips and one optional-ripser skip"
+  },
+  "compileall": "passed",
+  "installed_native_versions": {
+    "mlx-lm": "0.32.2"
+  },
+  "native_operation_mechanics": {
+    "status": "passed",
+    "scope": "Tiny instances of installed Qwen linear-attention and full-attention layers; finite vector-Jacobian products with quantized projections. Not the final integration or a pretrained-model experiment."
+  },
+  "native_final_integration": {
+    "status": "passed",
+    "passed": 126,
+    "skipped": 0,
+    "failed": 0,
+    "seconds": 4.28,
+    "command": "python -m pytest -q -rs",
+    "scope": "Final edited source in isolated Mac temporary directory; includes tiny actual Qwen layer capture/checkpoint/reverse/readout wiring. Does not load pretrained 9B model.",
+    "source_bundle_sha256": "fcf44cddb429766b76834feb799ad38a8a5f30d1e8617173f20d7b895fc9352d",
+    "output_sha256": "dfd9072c315cb86731ca723d5570c7c8b6eccd7d1af524ca1c6554c46c9b767e"
+  },
+  "pretrained_model_run": "not_run",
+  "training": "not_run",
+  "deployment": "not_performed",
+  "semantic_quality": "unmeasured"
+}

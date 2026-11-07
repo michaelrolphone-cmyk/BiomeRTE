@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-11-07",
+  "source_base_commit": "a268147b253c5f26d072b86019d88dff0c8c2741",
+  "source_code_sha256": {
+    "activation_field/attention_summary.py": "1098c8907135e53dd72d9ff4da05b8f71aef7ab5fa289f3c673b4167e55ab2cc",
+    "activation_field/adapters/qwen35.py": "ea8a64f35c927cc68efffe513d4304a8b443ee15bed21f563ce6c0028c675c7d",
+    "activation_field/adapters/qwen35_reverse.py": "ee20b403d3dd226e9eb56d25d74c08bd5aa0ef6bcdff763dfd482b465bb4b345",
+    "activation_field/boundaries.py": "55ada01cf32da0e54f54f1acf7915080058133b69b6a2b04950c611fba89ba32",
+    "activation_field/field.py": "b772fd1a18b1193673c8f776434381217d795d105b082b853d249d9697f5484d",
+    "activation_field/runtime.py": "11e5dce3619411b0b221e1773bf4a6edbe455cad37ea2cd7e3cbffa843569a5c",
+    "activation_field/inverse_runtime.py": "e02c9b592212c04cdcafd9838f3692773bf414dbf58cd7802ff74b937668db2c",
+    "activation_field/context_reconstruction/snapshot.py": "4c7458adea3ac3b6d38e2550165d81227554fb7509b4fb5c7509e3e583e288aa",
+    "tests/test_attention_summary.py": "9313ffaa07fba3dae7571eca64a7c92a3f88c44c8d21a58e90a32e120a9b4c48",
+    "tests/test_attention_summary_native.py": "44ef135b53a0ff1a5fd1740e159900967604e7472e30d729b7f09bec2c9c48a1",
+    "tests/test_writer.py": "6d7a8c90c64f964fd10d3f6b91336ef6ed6063cae968554b3ef860dba3bf4dc1",
+    "tests/test_context_reconstruction.py": "39e99d8ff14b9bf8c49416f1d3142601a1b532eba019a7cfa475ecfd64560355"
+  },
+  "environment": {
+    "platform": "Linux x86_64 CPU",
+    "python": "3.12.14",
+    "mlx": "0.32.4",
+    "mlx_cpu": "0.32.4",
+    "mlx_lm": "0.32.2",
+    "numpy": "2.3.5",
+    "pytest": "9.2.0",
+    "metal_available": false
+  },
+  "suite": {
+    "command": "python -m pytest -q -ra",
+    "passed": 213,
+    "failed": 0,
+    "skipped": 3,
+    "skips": [
+      {
+        "test": "tests.test_studies.StudyControls::test_topology_known_cycle",
+        "reason": "optional ripser unavailable"
+      },
+      {
+        "test": "tests.test_writer::test_metal_matches_reference",
+        "reason": "Metal backend unavailable; CPU MLX cannot run Metal kernels"
+      },
+      {
+        "test": "tests.test_writer::test_metal_audit_matches_measured_reference",
+        "reason": "Metal backend unavailable; CPU MLX cannot run Metal kernels"
+      }
+    ]
+  },
+  "compileall": "passed",
+  "git_diff_check": "passed",
+  "tested": [
+    "Paired versus dense positive-kernel outputs and Q/K/V vector-Jacobian products, including dimension 256 and grouped heads",
+    "Identical separate means with different key/value pairing produce different summaries and responses",
+    "Empty history, current-only history, ring eviction, preserved prefixes and oversized-prefill trimming",
+    "Fixed tensor sizes and exact integer rotary positions beyond float32 precision",
+    "Actual Qwen native forward identity with capture enabled versus disabled",
+    "Boundary schema 1 and 2, legacy mean-cell reverse, malformed metadata/tensors",
+    "Encrypted field-only snapshot excludes unreadable ordinary cache shards",
+    "Zero-write footer refresh retains weighted moments and movement unchanged",
+    "Complete-checkpoint tracker hydration and 150-step bitwise continuation after restore",
+    "Reset plus unobserved replacement cache at colliding offset cannot hydrate stale history",
+    "Actual Engine.state, encrypted Vault and Engine.restore freshness-marker integration"
+  ],
+  "review": "Independent read-only review: no remaining actionable findings in reviewed scope after fixes",
+  "not_run": [
+    "Apple Silicon/Metal execution",
+    "Pretrained 9B inference or timing",
+    "Corpus or semantic reconstruction trial",
+    "Training",
+    "Deployment"
+  ],
+  "limitations": [
+    "Positive ELU attention is a surrogate kernel, not softmax-equivalent or an exact inverse",
+    "Historical moments summarize surviving native attention window, not evicted history",
+    "Local VJP is evaluated at weighted aggregate input and final cache context, not original per-token activations",
+    "Rebuild after unobserved intervals may differ by float32 reduction roundoff",
+    "Old checkpoints cannot retroactively acquire paired state or rotary position"
+  ],
+  "active_experiment_modified": false,
+  "live_service_modified": false,
+  "source_checkpoint_modified": false
+}

@@ -1,5 +1,7 @@
 import mlx.core as mx
 import mlx.nn as nn
+from mlx_lm.models.cache import KVCache, RotatingKVCache
+from ..attention_summary import CROSS, MASS, prepare_context, finish_context
 
 
 class Tap(nn.Module):
@@ -43,3 +45,68 @@ def install(model,collector):
     for path,obj,parent,name,_,_ in entries:
         setattr(parent,name,Tap(obj,path,collector))
     return entries
+
+
+
+def boundary_dimensions(model):
+    result={}
+    for i,layer in enumerate(model.layers):
+        dim=layer.input_layernorm.weight.size
+        if layer.is_linear:
+            a=layer.linear_attn
+            contexts=dict(conv_mean=(1,1,a.conv_dim),
+                          recurrent=(1,a.num_v_heads,a.head_v_dim,a.head_k_dim))
+        else:
+            a=layer.self_attn
+            contexts={CROSS:(1,a.num_key_value_heads,a.head_dim,a.head_dim),
+                      MASS:(1,a.num_key_value_heads,a.head_dim)}
+        result['layer.'+str(i)]=(dim,dim,contexts)
+    dim=model.model.norm.weight.size
+    result['final_norm']=(dim,dim,{})
+    return result
+
+
+def install_boundaries(model,collector):
+    """Observe existing module calls without changing their parameter paths."""
+    from mlx_lm.models.qwen3_5 import DecoderLayer
+
+    class ObservedLayer(DecoderLayer):
+        def __call__(self,x,mask=None,cache=None):
+            capture=self._boundary_capture()
+            context_metadata=None
+            if capture and not self.is_linear:
+                if type(cache) not in (KVCache,RotatingKVCache) or mask is not None:
+                    raise ValueError('Unsupported full-attention boundary cache or mask')
+                if x.shape[:-1] != (1,1):
+                    raise ValueError('Online boundaries require exactly one token')
+                a=self.self_attn
+                context,context_metadata=prepare_context(cache,a.num_key_value_heads,a.head_dim,xp=mx)
+                mx.eval(*context.values())
+            y=super().__call__(x,mask=mask,cache=cache)
+            if capture:
+                if self.is_linear:
+                    a=self.linear_attn
+                    context=dict(conv_mean=mx.mean(cache[0],axis=1,keepdims=True),recurrent=cache[1])
+                else:
+                    finish_context(cache,context,context_metadata,xp=mx)
+                self._boundary_collector(self._boundary_name,x,y,context,context_metadata)
+            return y
+
+    class ObservedNorm(nn.RMSNorm):
+        def __call__(self,x):
+            y=super().__call__(x)
+            if self._boundary_capture():self._boundary_collector('final_norm',x,y,{})
+            return y
+
+    capture=lambda:(collector.__self__.capture and collector.__self__.config.enabled and not collector.__self__.config.read_only)
+    for i,layer in enumerate(model.layers):
+        if type(layer) is not DecoderLayer:raise ValueError('Unsupported Qwen layer boundary implementation')
+        object.__setattr__(layer,'__class__',ObservedLayer)
+        object.__setattr__(layer,'_boundary_collector',collector)
+        object.__setattr__(layer,'_boundary_capture',capture)
+        object.__setattr__(layer,'_boundary_name','layer.'+str(i))
+    norm=model.model.norm
+    if type(norm) is not nn.RMSNorm:raise ValueError('Unsupported final normalization')
+    object.__setattr__(norm,'__class__',ObservedNorm)
+    object.__setattr__(norm,'_boundary_collector',collector)
+    object.__setattr__(norm,'_boundary_capture',capture)

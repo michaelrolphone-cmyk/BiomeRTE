@@ -4,8 +4,10 @@ import mlx.core as mx
 from mlx_lm import load
 from mlx.utils import tree_flatten
 from mlx_lm.models.cache import ArraysCache,RotatingKVCache
-from .adapters.qwen35 import projections,install
+from .adapters.qwen35 import projections,install,install_boundaries,boundary_dimensions
 from .field import Field
+from . import directions,boundaries
+from .attention_summary import restore_context_tracker,context_tracker_is_current
 from .trajectory import Trajectory
 from .config import FieldConfig
 from .manifest import hardware
@@ -21,12 +23,18 @@ class Engine:
         total=sum(a.nbytes for _,a in tree_flatten(self.model.parameters()))
         mutable=sum(m.weight.nbytes for _,m,*_ in entries)
         cache_estimate=self.config.context_length*32768+64*1024**2
-        self.memory_estimate=dict(model_bytes=total,writable_bytes=mutable,transaction_peak_bytes=total+2*mutable+cache_estimate+512*1024**2,native_cache_estimate=cache_estimate,host_bytes=self.hardware['memory_bytes'])
+        projection_state_bytes=4*sum(3*m.weight.shape[1]*8+4*m.weight.shape[0] for _,m,*_ in entries)
+        operation_state_bytes=0
+        for inputs,outputs,contexts in boundary_dimensions(self.model).values():
+            operation_state_bytes+=4*(inputs+2*outputs+outputs*max(1,int(outputs**.5))+sum(int(np.prod(shape)) for shape in contexts.values()))
+        direction_bytes=projection_state_bytes+operation_state_bytes
+        self.memory_estimate=dict(direction_bytes=direction_bytes,model_bytes=total,writable_bytes=mutable,transaction_peak_bytes=total+2*mutable+cache_estimate+2*direction_bytes+512*1024**2,native_cache_estimate=cache_estimate,host_bytes=self.hardware['memory_bytes'])
         if self.memory_estimate['transaction_peak_bytes']>self.hardware['memory_bytes']-3*1024**3:
             raise MemoryError("Insufficient capacity: "+json.dumps(self.memory_estimate))
         mx.set_cache_limit(256*1024**2)
         self.field=Field(entries,self.config)
         install(self.model,self.field.tap)
+        install_boundaries(self.model,self.field.boundary_tap)
         self.trajectory=Trajectory(self.config.window_tokens,self.config.stride_tokens,self.config.persistent_homology)
         self.cache=self.make_cache();self.native_tokens=0;self.consumed_tokens=0;self.native_resets=0
         self.sample_counter=0;self.last_logits=None;self.prefix_hashes=[]
@@ -152,6 +160,8 @@ class Engine:
             if len(indices):
                 tensors.extend([(p+'.indices',indices),(p+'.codes',groups[mx.array(indices)])])
             tensors.append((p+'.frequency',self.field.frequency[p]))
+        tensors.extend(directions.tensors(self.field.directions))
+        tensors.extend(boundaries.tensors(self.field.boundaries))
         def encode(value,path):
             if isinstance(value,mx.array):
                 dtype=str(value.dtype).split('.')[-1]
@@ -162,6 +172,12 @@ class Engine:
             if value is None or isinstance(value,(int,float,str,bool)):return value
             raise ValueError("Unsupported cache state")
         metadata=dict(baseline_hash=self.manifest['baseline_hash'],tensor_map_version=1,kind='field_only' if field_only else 'complete',config=self.config.to_dict(),field_version=self.field.version,field_tokens=self.field.token_count,consumed_tokens=self.consumed_tokens,sample_counter=self.sample_counter,native_tokens=0 if field_only else self.native_tokens,config_revision=self.field.config_revision,changed_words=self.field.changed_words,receipts=self.field.receipts,trajectory=self.trajectory.state(),prefix_hashes=[] if field_only else self.prefix_hashes,cache=None if field_only else [encode(c.state,'cache.'+str(i)) for i,c in enumerate(self.cache)],last_logits=None if field_only or self.last_logits is None else encode(self.last_logits,'last_logits'),versions=self.manifest['versions'],source_revision=self.manifest.get('source_revision','uncommitted'))
+        metadata['attention_tracker_current']=[] if field_only else [
+            i for i,(layer,cache) in enumerate(zip(self.model.layers,self.cache))
+            if not layer.is_linear and 'layer.'+str(i) in self.field.boundaries and
+            context_tracker_is_current(cache,self.field.boundaries['layer.'+str(i)].context_metadata)]
+        metadata['boundaries']=boundaries.metadata(self.field.boundaries,self.field.version)
+        metadata['directions']=directions.metadata(self.field.directions,self.field.version)
         metadata['requires_reset']=getattr(self,'requires_reset',False)
         metadata['input_stream_digest']=self.input_stream_digest
         metadata['input_digest_origin']=self.input_digest_origin
@@ -222,14 +238,36 @@ class Engine:
         newcache=[ArraysCache(size=2) if l.is_linear else RotatingKVCache(max_size=restored_config.context_length,keep=0) for l in self.model.layers]
         if not reset_native_state and meta['cache'] is not None:
             for c,v in zip(newcache,meta['cache'],strict=True):c.state=decode(v)
+        direction_state=directions.restore(meta.get('directions'),
+            {k:v for k,v in other.items() if k.startswith(directions.PREFIX)},
+            {p:(m.weight.shape[1]*8,m.weight.shape[0]) for p,m in entries.items()},
+            meta['field_version'],xp=mx)
+        boundary_state=boundaries.restore(meta.get('boundaries'),
+            {k:v for k,v in other.items() if k.startswith(boundaries.PREFIX)},
+            meta['field_version'],boundary_dimensions(self.model),xp=mx)
+        tracker_current=meta.get('attention_tracker_current',[])
+        if (not isinstance(tracker_current,list) or
+                any(type(i) is not int or not 0 <= i < len(newcache) for i in tracker_current) or
+                len(tracker_current) != len(set(tracker_current))):
+            raise ValueError('Invalid attention tracker freshness metadata')
+        if not reset_native_state and meta['cache'] is not None:
+            for i in tracker_current:
+                record=boundary_state.get('layer.'+str(i))
+                if (self.model.layers[i].is_linear or record is None or
+                        not restore_context_tracker(newcache[i],record.arrays,record.context_metadata,
+                                                    xp=mx,confirmed_current=True)):
+                    raise ValueError('Attention tracker freshness disagrees with saved boundary')
         # Publish only after every encrypted shard and state tree validates.
         newtrajectory=Trajectory(restored_config.window_tokens,restored_config.stride_tokens,restored_config.persistent_homology)
         newtrajectory.restore(trajectory)
         for p,m in entries.items():m.weight=proposed.get(p,self.field.anchor[p]);self.field.frequency[p]=frequencies[p]
         self.config=restored_config;self.field.config=restored_config
-        self.field.pending.clear();self.field.captured.clear()
+        self.field.pending.clear();self.field.pending_boundaries=None;self.field.captured.clear()
         self.field.version=meta['field_version'];self.field.token_count=meta['field_tokens'];self.field.config_revision=meta['config_revision'];self.field.changed_words=meta['changed_words'];self.field.receipts=meta['receipts']
         self.field.norm_cache.clear()
+        self.field.directions=direction_state
+        self.field.boundaries=boundary_state
+        self.field.boundary_captured.clear()
         self.cache=newcache;self.native_tokens=0 if reset_native_state else meta['native_tokens'];self.consumed_tokens=meta['consumed_tokens'];self.sample_counter=meta['sample_counter'];self.prefix_hashes=[] if reset_native_state else meta['prefix_hashes']
         self.last_logits=restored_logits
         self.input_stream_digest=stream_digest
@@ -241,7 +279,8 @@ class Engine:
         return dict(**self.field.diagnostics(),native_tokens=self.native_tokens,consumed_token_count=self.consumed_tokens,ordinary_resets=self.native_resets,spectral=self.trajectory.diagnostics(),memory=self.memory_estimate,mlx_peak_memory=mx.get_peak_memory(),mlx_active_memory=mx.get_active_memory(),load_seconds=self.load_seconds,forward_seconds=self.forward_seconds,write_seconds=self.write_seconds,baseline_hash=self.manifest['baseline_hash'])
 
     def close(self):
-        self.trajectory.close();self.field.pending.clear();self.field.captured.clear()
+        self.trajectory.close();self.field.pending.clear();self.field.pending_boundaries=None;self.field.captured.clear();self.field.boundary_captured.clear()
         self.model=None;self.cache=None;self.last_logits=None;self.field=None
         gc.collect();mx.clear_cache()
+
 
