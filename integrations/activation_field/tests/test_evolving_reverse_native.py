@@ -14,8 +14,13 @@ from activation_field.reverse_debug import ReverseDebug
 from activation_field.attention_summary import CROSS,MASS
 
 
-def captured(layers=4):
+def captured(layers=4,stable_recurrence=False):
     model,field=tiny(layers)
+    if stable_recurrence:
+        # Saturated random decay can legitimately give a zero predecessor
+        # correction. This coverage fixture needs observable state movement.
+        for layer in model.layers:
+            if layer.is_linear:layer.linear_attn.A_log=mx.zeros_like(layer.linear_attn.A_log)
     cache=[ArraysCache(size=2) if layer.is_linear else RotatingKVCache(4) for layer in model.layers]
     for token in (1,2,3,4):
         mx.eval(model(mx.array([[token]]),cache=cache));field.observe('user')
@@ -26,7 +31,7 @@ def captured(layers=4):
 
 
 def test_all_248_projection_boundaries_writes_and_contexts_evolve():
-    model,field,records=captured(32)
+    model,field,records=captured(32,stable_recurrence=True)
     before=deepcopy(records)
     weights=[(module,module.weight,module.scales,module.biases) for _,module,*_ in field.entries]
     debug=ReverseDebug()

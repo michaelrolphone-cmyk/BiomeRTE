@@ -62,30 +62,45 @@ def load_present_state(engine,vault,checkpoint,metadata,check=lambda:None):
     return operations
 
 
-def token_readout(engine,cache_root,check=lambda:None,progress=lambda event:None):
-    """Build the frozen embedding index once, then reuse branch-only readout."""
+def token_readout(engine,cache_root,check=lambda:None,progress=lambda event:None,table='input'):
+    """Build the frozen input/output partition once; emission never sweeps rows."""
     import mlx.core as mx
     from .token_readout import PartitionTokenReadout
-    fingerprint=engine.manifest['baseline_hash']
+    if table not in ('input','output'):raise ValueError('Unknown readout table')
+    baseline=engine.manifest['baseline_hash']
+    fingerprint=baseline if table=='input' else baseline+':output-head-partition-v1'
     root=Path(cache_root);root.mkdir(parents=True,exist_ok=True)
-    target=root/(fingerprint+'.npz')
+    target=root/(baseline+('' if table=='input' else '.output-v1')+'.npz')
     if target.exists():return PartitionTokenReadout.load(target,fingerprint)
     embedding=engine.model.model.embed_tokens
-    count=embedding.weight.shape[0]
+    language_model=getattr(engine.model,'language_model',engine.model)
+    head=None
+    if table=='output' and not language_model.args.tie_word_embeddings:
+        head=getattr(language_model,'lm_head',None)
+        if head is None:raise ValueError('Untied language model is missing its output head')
+    if head is not None and getattr(head,'bias',None) is not None:
+        raise ValueError('Output partition requires the pinned bias-free Qwen head')
+    count=embedding.weight.shape[0] if head is None else head.weight.shape[0]
     special=set(engine.tokenizer.all_special_ids)
     ids=np.array([i for i in range(count) if i not in special],dtype=np.int64)
-    if not len(ids):raise ValueError('Model has no non-special embedding tokens')
-    dimension=int(embedding(mx.array([int(ids[0])])).shape[-1])
-    # This is a one-time codebook construction, never a per-emission token scan.
-    # The temporary holds only public/frozen baseline embeddings, not field state.
-    with tempfile.TemporaryDirectory(prefix='embedding-index-',dir=root) as folder:
-        matrix=np.memmap(Path(folder)/'embeddings.f32',dtype=np.float32,mode='w+',shape=(len(ids),dimension))
+    if not len(ids):raise ValueError('Model has no non-special readout tokens')
+    dimension=int(engine.model.model.norm.weight.size)
+    with tempfile.TemporaryDirectory(prefix='readout-index-',dir=root) as folder:
+        matrix=np.memmap(Path(folder)/'rows.f32',dtype=np.float32,mode='w+',shape=(len(ids),dimension))
         for start in range(0,len(ids),1024):
             check()
-            batch=np.array(embedding(mx.array(ids[start:start+1024])).astype(mx.float32))
+            indices=mx.array(ids[start:start+1024])
+            if head is None:
+                rows=embedding(indices)
+            elif hasattr(head,'scales'):
+                rows=mx.dequantize(head.weight[indices],head.scales[indices],head.biases[indices],
+                                  group_size=head.group_size,bits=head.bits,mode=head.mode)
+            else:rows=head.weight[indices]
+            batch=np.array(rows.astype(mx.float32))
             batch/=np.maximum(np.linalg.norm(batch,axis=1,keepdims=True),1e-12)
             matrix[start:start+len(batch)]=batch
-            progress(dict(phase='embedding_index',completed=min(start+len(batch),len(ids)),total=len(ids)))
+            progress(dict(phase='embedding_index' if table=='input' else 'output_readout_index',
+                          completed=min(start+len(batch),len(ids)),total=len(ids)))
         matrix.flush()
         readout=PartitionTokenReadout.from_embeddings(matrix,token_ids=ids,normalize=False,check=check)
         del matrix
@@ -115,13 +130,18 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
         engine=Engine(manifest,config)
         try:
             records=load_present_state(engine,vault,checkpoint,metadata,check)
-            readout=token_readout(engine,readout_cache or (vault.root.parent/'token-readout'),check,progress)
+            readout=token_readout(engine,readout_cache or (vault.root.parent/'token-readout'),check,progress,
+                                  table='output' if options.readout_mode=='sequence' else 'input')
+            if options.readout_mode=='sequence':
+                from .adapters.sequence_readout import CausalSequenceReadout
+                scale=float(np.linalg.norm(records['layer.0'].arrays['input_mean']))
+                readout=CausalSequenceReadout(engine,readout,scale,debug,check)
             adapter=Qwen35ReverseAdapter(engine,records,readout,debug=debug,weight_mode=options.weight_mode)
             tokens=[]
             for token in emit_tokens(adapter,records,records,engine.field.entries,check,debug):
                 tokens.append(token)
                 progress(dict(phase='reverse_propagation',emitted_tokens=len(tokens)))
-            # No replay, activation comparison, quality gate or subsequent model stage.
+            # No source replay, candidate evaluation, quality gate or output polishing.
             result=dict(status='complete',method='approximate_reverse_propagation',
                 weight_mode=options.weight_mode,
                 projection_operator=('Wcurrent-W0' if options.weight_mode=='delta' else 'Wcurrent'),
@@ -135,12 +155,16 @@ def reconstruct(manifest,vault,checkpoint,options=None,progress=lambda event:Non
                 attention_context={name:('paired_elu_kernel' if record.context_metadata else 'legacy_mean_cell')
                                    for name,record in records.items()
                                    if any(key.startswith('context.attention_') or key=='context.key_mean' for key in record.arrays)},
-                readout='frozen_embedding_partition',termination='all_boundary_motion_and_projection_flow_exhausted',
+                readout=('causal_output_head_partition' if options.readout_mode=='sequence' else 'frozen_embedding_partition'),
+                readout_mode=options.readout_mode,
+                uses_emitted_output_context=(options.readout_mode=='sequence'),
+                sequence_context_weight_mode=('current' if options.readout_mode=='sequence' else None),
+                termination='all_boundary_motion_and_projection_flow_exhausted',
                 reverse_state='evolving_layer_and_projection_aggregates',
                 projection_direction_count=len(engine.field.directions),
                 context_reverse='inferred_paired_removal_and_ridge_predecessor_step',
                 write_conditioning='recorded_signed_magnitude',
-                approximation='boundary-conditioned surrogate projection pullbacks and evolving aggregate contexts; not an inverse; semantic quality unmeasured')
+                approximation='boundary-conditioned surrogate projection pullbacks and evolving aggregate contexts; not an inverse; sequence conditioning and partition readout are untrained; semantic quality unmeasured')
             if debug is not None:result['debug']=debug.report()
             return result
         finally:

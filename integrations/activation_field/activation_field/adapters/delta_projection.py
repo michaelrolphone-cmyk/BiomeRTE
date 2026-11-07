@@ -34,6 +34,7 @@ def install_delta_projection(module, baseline):
         return (current - original).astype(x.dtype)
 
     private = type('Delta'+type(module).__name__, (type(module),), {'__call__': call})
+    object.__setattr__(module, '_delta_base_type', type(module))
     object.__setattr__(module, '__class__', private)
     object.__setattr__(module, '_delta_installed', True)
 

@@ -206,7 +206,7 @@ def test_debug_distinguishes_existing_small_step_stop_from_exhausted_motion():
 
 def test_debug_options_are_explicit_booleans():
     assert InverseOptions.parse().debug is False
-    assert InverseOptions.parse({'debug': True}).to_dict() == {'mode': 'reverse', 'debug': True, 'weight_mode': 'current'}
+    assert InverseOptions.parse({'debug': True}).to_dict() == {'mode': 'reverse', 'debug': True, 'weight_mode': 'current', 'readout_mode': 'independent'}
     for value in (None, 0, 1, 'true', []):
         with pytest.raises(ValueError, match='boolean'):InverseOptions.parse({'debug': value})
 

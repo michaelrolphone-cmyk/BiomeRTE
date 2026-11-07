@@ -13,11 +13,12 @@ class InverseOptions:
     mode: str = 'reverse'
     debug: bool = False
     weight_mode: str = 'current'
+    readout_mode: str = 'independent'
 
     @classmethod
     def parse(cls, value=None):
         value = {} if value is None else value
-        if not isinstance(value, dict) or set(value)-{'mode','debug','weight_mode'}:
+        if not isinstance(value, dict) or set(value)-{'mode','debug','weight_mode','readout_mode'}:
             raise ValueError('Reverse propagation accepts no token-search or fixed-length options')
         out = cls(**value)
         if out.mode != 'reverse':
@@ -26,6 +27,8 @@ class InverseOptions:
             raise ValueError('Reverse debug must be a boolean')
         if out.weight_mode not in ('current', 'delta'):
             raise ValueError('Reverse weight_mode must be current or delta')
+        if out.readout_mode not in ('sequence','independent'):
+            raise ValueError('Reverse readout_mode must be sequence or independent')
         return out
 
     def to_dict(self):

@@ -90,3 +90,9 @@ The reverse engine now uses direction records at all 248 projection counterparts
 and evolves layer, projection, attention, recurrent, convolution and gate state
 between emissions. These are private approximate predecessor states, not recovered
 history. See the equations and limitations in CONTEXT_RECONSTRUCTION.md.
+
+Optional `readout_mode="sequence"` lets evolving reverse vectors and previously
+emitted output condition a separate causal Qwen readout state. It uses a cached
+branch-only output-head partition, never vocabulary-wide logits. The existing
+`readout_mode="independent"` remains the default. This is untrained conditioning
+and approximate token selection, not a demonstrated coherent language decoder.

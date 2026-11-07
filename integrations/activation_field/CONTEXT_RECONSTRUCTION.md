@@ -115,8 +115,8 @@ end-of-language decision.
 
 All evolving states are private, fixed-size copies initialized from the final
 snapshot. Source records, packed weights, scales and biases are not changed.
-There is no per-input activation, token, gate or KV sequence. A previous output
-token is not fed back into the model.
+There is no per-input activation, token, gate or KV sequence. Independent readout does not feed output back. The explicit sequence mode below
+maintains a separate causal context for emitted output only.
 
 ### Approximate context predecessors
 
@@ -156,26 +156,70 @@ token is not fed back into the model.
 The positive-kernel summary remains **not softmax-equivalent**. None of these
 updates identifies the original sequence or establishes semantic quality.
 
-## Direct token readout
+## Direct token readout and optional sequence feedback
 
-A reusable coordinate-partition tree is built once from the frozen embedding
-table and bound to the model baseline. Building this index reads and partitions
-the vocabulary embeddings. Each emission then follows coordinate comparisons to
-one token ID. It does not scan vocabulary rows, simulate token candidates, rank
-candidate sequences or replay tokens through the forward model.
+A reusable coordinate-partition tree is built once from frozen baseline rows.
+Each emission follows coordinate comparisons to one token ID. It does not scan
+vocabulary rows, simulate candidate tokens, compute a vocabulary-sized logits
+vector, rank candidate sequences or replay the original inputs. One-time index
+construction reads all baseline rows; this is not per-emission token scoring.
 
-The tree is an approximate vector quantizer, not a trained language decoder.
-The emitted sequence follows the reverse trajectory. Its linguistic quality,
-subject retention and resemblance to any original wording are unmeasured.
+`readout_mode="independent"` remains the default and preserves the existing
+input-embedding partition. Select `readout_mode="sequence"` for causal feedback:
+
+1. Initialize empty, private output-only attention/convolution/recurrent caches.
+   No source native caches or input tokens are loaded into these caches.
+2. For the first emission, scale the current reverse embedding direction by the
+   saved first-layer aggregate input magnitude (unit fallback for a zero mean).
+   For later emissions, fetch the last emitted token's frozen input embedding
+   and average it with the current reverse direction at that embedding's norm.
+   This equal blend is an explicit, **untrained** soft-conditioning choice.
+3. Pass that one continuous embedding through Qwen's existing causal backbone,
+   sharing its current adjusted weights. Stop before `lm_head` or tied
+   `as_linear`; no vocabulary logits are produced. These native calls bypass
+   all reverse projection/attention/recurrence wrappers, so they cannot replace
+   the pending reverse transition data needed for the next reverse step.
+4. Normalize the resulting causal hidden vector and traverse the same partition
+   algorithm, indexed over the frozen **output-head rows** instead of input
+   embeddings. Untied actual Qwen model wrappers resolve their language-model
+   output head explicitly; tied models use their shared embedding rows.
+5. Retain the emitted token as the next input and keep output-only causal caches.
+   Earlier emitted output influences subsequent hidden states through those
+   caches, even when two prefixes have the same last token. The reverse vector
+   continues to contribute at every step. Reset these caches at each new run.
+
+The two indices have distinct cache names and baseline identities, so an old
+input-embedding tree cannot masquerade as an output-head tree. Source snapshot
+format, field weights, direction records and boundary records do not change.
+Generated-output caches are transient and use the existing native context-window
+setting; that window bounds attention memory, not the number of emissions.
+
+For `weight_mode="delta"`, reverse projections still use `Wcurrent-W0`.
+The optional causal sequence backbone deliberately uses **current** ordinary
+weights to retain the pretrained sequence transition. Results state this
+separately as `sequence_context_weight_mode="current"`; choose independent
+readout for a delta-only reverse/readout experiment.
+
+Neither partition is a trained language head, a probability model, a nearest
+neighbor guarantee, or a learned mapping from field state to meaning. Using
+trained causal layers adds genuine sequence dependence but does **not** establish
+linguistic coherence, grounding, subject retention or original wording. The
+raw sequence is delivered unchanged, with no reinforcement or polishing pass.
 
 ## Interface and limits
 
-Existing Biome start/status/cancel/export routes remain. Start accepts a target
-checkpoint and `options: {"mode": "reverse"}`; this is also the default. The former
-`first_pass`, `replay`, candidate-pool, beam and fixed-token-count options are
-rejected. Their offline numerical helpers remain only for historical artifacts.
-No generated token is reinjected, reinforced, summarized or polished by this path.
-Protected export packages the raw emitted text and IDs without changing them.
+Existing Biome start/status/cancel/export routes remain. Example:
+
+```json
+{"mode":"reverse","weight_mode":"current","readout_mode":"sequence","debug":true}
+```
+
+Omitting `readout_mode` preserves independent readout. The former `first_pass`,
+`replay`, candidate-pool, beam and fixed-token-count options remain rejected.
+Their offline numerical helpers remain only for historical artifacts.
+Both readout modes retain the existing boundary/projection movement termination;
+no configured token count, learned end condition or semantic quality threshold
+is introduced. The protected export packages all raw emitted text and IDs.
 
 ## Observational reverse diagnostics
 
@@ -190,7 +234,9 @@ The trace records each emission's signal norm, change from the preceding
 emission, cosine, and normalized chord change. Layer measurements bracket the
 layer conditioning and the VJP. Every projection also reports its own incoming,
 conditioned and pulled-back signals and its evolving input/output directions.
-Per-layer context measurements reveal whether aggregate buffers move. Separate measurements report
+Per-layer context measurements reveal whether aggregate buffers move. Sequence
+mode additionally traces reverse input, previous emitted embedding, mixed input
+and causal hidden-state movement; no signal vectors are serialized. Separate measurements report
 the raw write-mean norms, combined write magnitude, and how much
 conditioning changes the incoming direction. Trajectory measurements report
 the raw movement, its radial and tangential components, actual normalized-state

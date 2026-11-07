@@ -250,6 +250,7 @@ class Qwen35ReverseAdapter:
         return {'state.'+str(len(self.engine.model.layers)):normalized(scaled)}
 
     def begin(self,present_state,directions,weights):
+        if hasattr(self.token_readout,'reset'):self.token_readout.reset()
         self.trajectory=ModelTrajectory(self.records,self.engine.field.directions,debug=self.debug)
         return self.trajectory
 
