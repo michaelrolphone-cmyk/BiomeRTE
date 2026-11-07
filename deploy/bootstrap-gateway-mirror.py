@@ -453,7 +453,8 @@ class Bootstrap:
                     with open(self.key_file) as stream:
                         token = stream.read().strip()
                     request = Request(self.origin + '/bridge/ha/' + path, store.encode(payload).encode('utf-8'),
-                                      {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
+                                      {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
+                                       'User-Agent': 'BiomeRTE-Controller-Link/1.0'})
                     opener = build_opener(ProxyHandler({}), NoRedirect,
                                           HTTPSHandler(context=ssl.create_default_context()))
                     with opener.open(request, timeout=self.timeout) as response:

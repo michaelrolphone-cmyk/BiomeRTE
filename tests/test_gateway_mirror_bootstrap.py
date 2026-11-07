@@ -262,7 +262,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotIn('stop', self.job.calls)
         self.original_restored()
 
-    def test_remote_validation_only_reads_and_checks_anchor(self):
+    def test_remote_validation_uses_official_header_and_only_reads_anchor(self):
         from biomerte import store
         entry = {'seq': 20, 'prev': 'c' * 64, 'changes': []}
         self.manifest['hash'] = store.digest(entry)
@@ -274,6 +274,7 @@ class BootstrapTests(unittest.TestCase):
         requests = []
 
         def opened(request, timeout):
+            self.assertEqual(request.get_header('User-agent'), 'BiomeRTE-Controller-Link/1.0')
             body = json.loads(request.data.decode('utf-8'))
             requests.append((request.full_url, body))
             if request.full_url.endswith('/status'):
