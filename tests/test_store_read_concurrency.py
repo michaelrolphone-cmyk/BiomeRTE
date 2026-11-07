@@ -109,7 +109,7 @@ class StoreReadConcurrency(unittest.TestCase):
         with self.store.connect() as db:
             self.assertEqual(db.execute('SELECT seq,hash FROM position').fetchone(), (0, ''))
 
-    def test_read_only_mutation_during_catchup_rolls_back(self):
+    def test_read_only_mutation_after_catchup_is_rejected(self):
         journal = Journal()
         self.store.remote = journal
         journal.append('0', {'seq': 1, 'prev': '',
@@ -118,7 +118,7 @@ class StoreReadConcurrency(unittest.TestCase):
             self.store.execute(lambda tx: tx.put('items', 'one', {'value': 'bad'}), read_only=True)
         self.assertEqual(len(journal.entries), 1)
         self.assertEqual(self.store.execute(lambda tx: tx.need('items', 'one'), cached=True),
-                         {'value': 'old'})
+                         {'value': 'remote'})
 
     def test_fresh_read_retries_if_mirror_advances_after_head_fetch(self):
         journal = Journal()
@@ -143,7 +143,7 @@ class StoreReadConcurrency(unittest.TestCase):
             self.assertEqual(self.store.execute(lambda tx: tx.need('items', 'one'), cached=True),
                              {'value': 'old'})
 
-    def test_raw_sql_write_during_catchup_is_rejected_and_rolled_back(self):
+    def test_raw_sql_write_after_catchup_is_rejected(self):
         journal = Journal()
         self.store.remote = journal
         journal.append('0', {'seq': 1, 'prev': '',
@@ -152,11 +152,26 @@ class StoreReadConcurrency(unittest.TestCase):
             self.store.execute(lambda tx: tx.db.execute('DELETE FROM records'), read_only=True)
         self.assertEqual(len(journal.entries), 1)
         self.assertEqual(self.store.execute(lambda tx: tx.need('items', 'one'), cached=True),
-                         {'value': 'old'})
+                         {'value': 'remote'})
         db = self.store.connect()
         try:
-            self.assertEqual(db.execute('SELECT seq,hash FROM position').fetchone(), (0, ''))
+            self.assertEqual(db.execute('SELECT seq FROM position').fetchone()[0], 1)
         finally:
             db.close()
         self.assertEqual(self.store.execute(lambda tx: tx.need('items', 'one'), read_only=True),
                          {'value': 'remote'})
+
+    def test_catchup_releases_writer_before_read_callback(self):
+        journal = Journal()
+        self.store.remote = journal
+        journal.append('0', {'seq': 1, 'prev': '',
+                            'changes': [['items', 'one', {'value': 'remote'}]]})
+        def read(tx):
+            first = tx.need('items', 'one')
+            # Simulate other work while a status callback waits on its network.
+            self.store.execute(lambda other: other.put('items', 'one', {'value': 'new'}))
+            self.assertEqual(tx.need('items', 'one'), first)
+            return first
+        self.assertEqual(self.store.execute(read, read_only=True), {'value': 'remote'})
+        self.assertEqual(self.store.execute(lambda tx: tx.need('items', 'one'), cached=True),
+                         {'value': 'new'})

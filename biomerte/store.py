@@ -254,19 +254,42 @@ class Store:
                     db.execute('UPDATE position SET seq=?,hash=? WHERE id=1', (seq, previous))
                     tx.changes.clear()
                 if read_only:
-                    # Catch-up is the only permitted write for a fresh reader.
-                    # Guard both Records helpers and direct callback SQL.
+                    # Catch-up is already authoritative. Release its writer lock
+                    # before callbacks (which may perform remote status reads).
+                    db.commit()
+                    db.execute('BEGIN')
+                    db.execute('SELECT seq FROM position WHERE id=1').fetchone()
                     db.execute('PRAGMA query_only=ON')
                     tx = Records(db, 'Read-only operation changed records')
+                if self.remote and not cached and not read_only:
+                    db.execute('SAVEPOINT proposal')
                 result = fn(tx)
                 if (cached or read_only) and tx.changes:
                     raise Fault('Read-only operation changed records', 409)
                 if self.remote and tx.changes:
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
+                    expected_head = {'seq': entry['seq'], 'hash': digest(entry)}
+                    # Only validated catch-up may commit locally before CAS.
+                    # The proposal and its receipt are not yet authoritative.
+                    db.execute('ROLLBACK TO proposal')
+                    db.execute('RELEASE proposal')
+                    db.commit()
+                    # A slow or lost response must never pin the mirror writer.
                     head = self.remote.append(version, entry)
-                    db.execute('UPDATE position SET seq=?,hash=? WHERE id=1',
-                               (head['seq'], head['hash']))
+                    if (not isinstance(head, dict) or type(head.get('seq')) is not int or
+                            not isinstance(head.get('hash'), str) or
+                            head['seq'] != expected_head['seq'] or head['hash'] != expected_head['hash']):
+                        raise Fault('Shared journal append acknowledgement mismatch', 503)
+
+                    def confirmed(tx):
+                        applied, anchor = tx.db.execute(
+                            'SELECT seq,hash FROM position WHERE id=1').fetchone()
+                        if applied < entry['seq'] or (applied == entry['seq'] and anchor != expected_head['hash']):
+                            raise Fault('Shared journal append not visible', 503)
+                    # Reuse normal chain validation rather than committing the
+                    # staged proposal. Another caller may have applied it already.
+                    self.execute(confirmed, read_only=True)
                 db.commit()
                 return result
             except BaseException:
