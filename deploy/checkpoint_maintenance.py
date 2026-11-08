@@ -3,6 +3,7 @@ import time
 
 MAX_PAGES = 32
 BURST_SECONDS = 30.0
+REQUEST_TIMEOUT = 120.0
 PAGE_INTERVAL = 0.1
 BURST_PAUSE = 1.0
 IDLE_PAUSE = 2.0
@@ -20,7 +21,10 @@ def run_burst(settings, status, call, clock=time.monotonic, sleep=time.sleep):
         if status.get('primary') != settings.get('controller_id') or not status.get('ready'):
             return {'pages': pages, 'outcome': 'standby'}
         try:
-            response = call(route, {}, timeout=min(15.0, max(0.1, deadline - clock())))
+            # The burst deadline limits admission, not an in-flight page.
+            # Cutting its timeout to the remaining window cancels gateway work
+            # before cursor persistence and strands its recovery lease.
+            response = call(route, {}, timeout=REQUEST_TIMEOUT)
         except Exception:
             return {'pages': pages, 'outcome': 'error'}
         pages += 1
