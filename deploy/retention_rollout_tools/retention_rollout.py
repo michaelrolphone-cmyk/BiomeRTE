@@ -39,6 +39,10 @@ def confined(root,rel):
     out=root/p; path_ok(out.absolute()); return out
 
 def validate_config_edits(spec):
+    for phase in spec.get("phases", {}).values():
+        timeout=phase.get("health_timeout",120)
+        require(isinstance(timeout,(int,float)) and not isinstance(timeout,bool) and 0<=timeout<=600,
+                "invalid health timeout before application")
     for item in spec.get('config_edits', []):
         require(item['phase']=='gatewaylink' and item['path']==['gateway_journal','checkpoint_mode']
                 and item['new'] in ('bootstrap','maintain'), 'only gatewaylink checkpoint mode edit allowed')

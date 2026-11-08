@@ -7,6 +7,10 @@ else:
  import imp
  r=imp.load_source('r',str(pathlib.Path(__file__).with_name('retention_rollout.py')))
 class RolloutTests(unittest.TestCase):
+ def test_invalid_health_timeout_rejected(self):
+  for value in (None,True,-1,601,'180',float('nan'),float('inf')):
+   with self.assertRaises(RuntimeError):r.validate_config_edits({'phases':{'gatewaylink':{'health_timeout':value}}})
+  for value in (0,120,180):r.validate_config_edits({'phases':{'gatewaylink':{'health_timeout':value}}})
  def test_atomic_and_manifest(self):
   with tempfile.TemporaryDirectory() as d:
    p=pathlib.Path(d)/'f';r.write(p,b'abc');self.assertEqual(p.read_bytes(),b'abc');self.assertEqual(p.stat().st_mode&0o777,0o600)
