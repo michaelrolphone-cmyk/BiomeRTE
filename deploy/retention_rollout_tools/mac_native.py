@@ -137,6 +137,11 @@ def closed_probe(b):
  if mode:out.update(restart_safety_mode=mode,local_restart_safe=safe,unresolved_history_count=len(local.get('unresolved_history',[])),evidence_fingerprint=local.get('evidence_fingerprint'))
  return out
 
+def gateway_heartbeat_ready(status,controller_id,after,now):
+ own=next((n for n in status.get('nodes',[]) if n.get('id')==controller_id),{})
+ return bool(own.get('enabled') and own.get('ready') and own.get('seen',0)>after
+             and 0<=now-own.get('seen',0)<status.get('heartbeat_seconds',12))
+
 def health(b,phase):
  before=r.read_json(b/('before-'+phase+'.json'));v=inspect(service_for(phase))
  if not v or not v['pid'] or v['pid']==before['pid']:return {'ready':False}
@@ -145,10 +150,12 @@ def health(b,phase):
   local_ready=h.get('realms')=={'site':'ready','local':'ready'} and not h.get('background_errors')
   if phase=='gatewaylink':
    if not local_ready:return {'ready':False,'pid':v['pid']}
-   rr,_=remote();info=rr.call('system.info',{})
    node=r.read_json(HOME/'.local/share/biomerte-controller/node.json')
-   # Remote traverses the real gateway link; matching node excludes failover-only success.
-   return {'ready':info.get('node')==node['node'] and info.get('site')==node['site'],'pid':v['pid'],'forwarding_verified':info.get('node')==node['node']}
+   sys.path.insert(0,str(HOME/'.local/share/biomerte-releases/assistant-20261104-r6'))
+   from biomerte.gateway_journal import GatewayJournal
+   settings=node['gateway_journal'];status=GatewayJournal(settings,node['site']).status()
+   fresh=gateway_heartbeat_ready(status,settings['controller_id'],before['time'],time.time())
+   return {'ready':fresh,'pid':v['pid'],'fresh_gateway_heartbeat':fresh}
   return {'ready':local_ready,'pid':v['pid']}
  preserved=b/'independent-services-before.json'
  if preserved.is_file() and not independent_services.verify(r.read_json(preserved),set(verified_worker_tree(v['pid'])['roots'])):return {'ready':False,'independent_services_preserved':False}

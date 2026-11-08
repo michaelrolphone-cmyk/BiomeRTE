@@ -156,6 +156,14 @@ def ready(s):
     try: return probe(s['health_probe']).get('ready') is True
     except Exception: return False
 
+def await_ready(cfg):
+    deadline=time.monotonic()+cfg.get('health_timeout',120)
+    while True:
+        first=ready(cfg); second=ready(cfg)
+        if first and second:return True
+        if time.monotonic()>=deadline:return False
+        time.sleep(1)
+
 def path_ok(p):
     require(p.is_absolute(),'absolute path required')
     for parent in [p]+list(p.parents): require(not parent.is_symlink(),'symlink path denied: '+str(parent))
@@ -268,9 +276,7 @@ def apply(a,preflight_only=False):
             if owner is not None and (p.stat().st_uid,p.stat().st_gid)!=owner: os.chown(str(p),*owner)
             require(digest(p.read_bytes())==digest(data),'replacement hash failed')
         cmd(cfg['restart_argv'])
-        deadline=time.monotonic()+cfg.get('health_timeout',120)
-        while not ready(cfg) and time.monotonic()<deadline: time.sleep(1)
-        require(ready(cfg),'health failed')
+        require(await_ready(cfg),'health failed')
         after=state(s);require(preserved_equal(before,after,phase),'protected services changed')
         for p,h in protected_after.items(): require(digest(P(p).read_bytes())==h,'protected config changed')
         receipt.update(state='applied',health_verified=True,protected_state_unchanged=True,protected_hashes_after=protected_after,preserve_after=after,files={str(p):digest(p.read_bytes()) for _,p,*_ in entries})
@@ -301,9 +307,7 @@ def apply(a,preflight_only=False):
             except Exception as er: errors.append(str(er))
         if rollback_safe and (changed or stopped):
             try:
-                cmd(cfg['restart_argv']); deadline=time.monotonic()+cfg.get('health_timeout',120)
-                while not ready(cfg) and time.monotonic()<deadline: time.sleep(1)
-                require(ready(cfg),'rollback health failed')
+                cmd(cfg['restart_argv']); require(await_ready(cfg),'rollback health failed')
             except Exception as er: errors.append(str(er))
         if before is not None:
             try:

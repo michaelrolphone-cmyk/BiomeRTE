@@ -7,6 +7,9 @@ else:
  import imp
  r=imp.load_source('r',str(pathlib.Path(__file__).with_name('retention_rollout.py')))
 class RolloutTests(unittest.TestCase):
+ def test_transient_second_health_failure_retries_within_deadline(self):
+  with patch.object(r,'ready',side_effect=[True,False,True,True]) as checks,patch.object(r.time,'sleep'):
+   self.assertTrue(r.await_ready({'health_timeout':120}));self.assertEqual(checks.call_count,4)
  def test_invalid_health_timeout_rejected(self):
   for value in (None,True,-1,601,'180',float('nan'),float('inf')):
    with self.assertRaises(RuntimeError):r.validate_config_edits({'phases':{'gatewaylink':{'health_timeout':value}}})
@@ -82,23 +85,14 @@ class ConfigRolloutTests(unittest.TestCase):
   self.assertFalse(r.preserved_equal({'gateway':'1'},{'gateway':'2'},'controller'))
 
 class MacGatewayHealthTests(unittest.TestCase):
- def test_forwarding_requires_local_node_not_failover(self):
+ def test_exact_link_fresh_heartbeat_not_default_primary(self):
   import mac_native as m
-  import io
-  class Remote:
-   def __init__(self,node):self.node=node
-   def call(self,name,args):
-    assert name=='system.info' and args=={}
-    return {'node':self.node,'site':'site'}
-  for remote_node,expected in [('mac',True),('pi',False)]:
-   with tempfile.TemporaryDirectory() as d:
-    b=pathlib.Path(d);r.dump(b/'before-gatewaylink.json',{'pid':1,'time':1})
-    original_read=m.r.read_json
-    def read(p):
-     if str(p).endswith('/biomerte-controller/node.json'):return {'node':'mac','site':'site'}
-     return original_read(p)
-    with patch.object(m,'inspect',return_value={'pid':2}),patch.object(m.r,'read_json',side_effect=read),patch.object(m,'remote',return_value=(Remote(remote_node),{})),patch.object(m.urllib.request,'urlopen',return_value=io.BytesIO(b'{"realms":{"site":"ready","local":"ready"}}')):
-     self.assertEqual(m.health(b,'gatewaylink')['ready'],expected)
+  status={'primary':'pi','heartbeat_seconds':12,'nodes':[{'id':'mac','enabled':1,'ready':1,'seen':100},{'id':'pi','enabled':1,'ready':1,'seen':105}]}
+  self.assertTrue(m.gateway_heartbeat_ready(status,'mac',99,105))
+  self.assertFalse(m.gateway_heartbeat_ready(status,'other',99,105))
+  self.assertFalse(m.gateway_heartbeat_ready(status,'mac',100,105))
+  self.assertFalse(m.gateway_heartbeat_ready(status,'mac',99,113))
+  status['nodes'][0]['ready']=0;self.assertFalse(m.gateway_heartbeat_ready(status,'mac',99,105))
  def test_snapshot_checks_actual_executed_link_path(self):
   import mac_native as m
   import plistlib
