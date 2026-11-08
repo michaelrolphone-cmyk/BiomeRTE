@@ -171,3 +171,33 @@ class CheckpointTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+class DescriptorBatchTests(unittest.TestCase):
+    def test_roots_batch_with_duplicate_digests_and_paginated_prefixes(self):
+        remote = GatewayJournal({'origin': 'https://example.test', 'key_file': 'unused'}, 's')
+        empty = '[]'
+        hashed = hashlib.sha256(empty.encode()).hexdigest()
+        calls = []
+        def request(path, payload):
+            self.assertEqual(path, 'checkpoint/objects')
+            self.assertEqual(payload['lease'], 'pin')
+            calls.append(payload['digests'])
+            count = min(3, len(payload['digests']))
+            return {'objects': [{'digest': d, 'encoded': empty}
+                                for d in payload['digests'][:count]],
+                    'next': count if count < len(payload['digests']) else None}
+        remote.request = request
+        roots = [(hashed, '%02x' % i) for i in range(256)]
+        result = list(remote._checkpoint_leaf_batches(roots, 'pin', 128))
+        self.assertEqual(sorted(prefix for prefix, _ in result),
+                         sorted(prefix for _, prefix in roots))
+        self.assertEqual(len(calls), 86)
+        self.assertTrue(all(len(c) <= 128 for c in calls))
+
+    def test_batched_descriptor_corruption_still_fails_hash_validation(self):
+        remote = GatewayJournal({'origin': 'https://example.test', 'key_file': 'unused'}, 's')
+        digest = hashlib.sha256(b'[]').hexdigest()
+        remote.request = lambda path, payload: {
+            'objects': [{'digest': digest, 'encoded': '[1]'}], 'next': None}
+        with self.assertRaises(Fault):
+            list(remote._checkpoint_leaf_batches([(digest, '00')], None, 128))

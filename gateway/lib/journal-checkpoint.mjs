@@ -353,7 +353,21 @@ export async function readCheckpointObjects(env,site,digests,lease=null,owner=nu
  if(owner){const valid=await env.DB.prepare('UPDATE checkpoint_readers SET expires=unixepoch()+600 WHERE site=? AND token=? AND owner=? AND expires>unixepoch() RETURNING token').bind(site,lease,owner).first();if(!valid)throw Error('Checkpoint read lease expired');}
  if(!Array.isArray(digests)||digests.length<1||digests.length>128)throw Error('Invalid checkpoint object page');
  const objects=[];let bytes=0;
- for(const digest of digests){const object=await readCheckpointObject(env,site,digest),size=cpBytes(object.encoded);if(objects.length&&bytes+size>2097152)break;objects.push(object);bytes+=size;}
+ // Fixed waves bound speculative reads and decoded objects to four. Settle
+ // every read before returning or throwing; never leave background R2 work.
+ // Consume in request order, including errors, so a corrupt look-ahead object
+ // beyond this page's byte boundary does not invalidate an otherwise valid page.
+ for(let start=0;start<digests.length;start+=4){
+  const wave=await Promise.all(digests.slice(start,start+4).map(async digest=>{
+   try{return {object:await readCheckpointObject(env,site,digest)}}catch(error){return {error}}
+  }));
+  for(const result of wave){
+   if(result.error)throw result.error;
+   const object=result.object,size=cpBytes(object.encoded);
+   if(objects.length&&bytes+size>2097152)return {objects,next:objects.length};
+   objects.push(object);bytes+=size;
+  }
+ }
  return {objects,next:objects.length<digests.length?objects.length:null};
 }
 
