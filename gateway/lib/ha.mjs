@@ -1,3 +1,5 @@
+import {readCheckpoint,buildCheckpoint,checkpointSchema,checkpointMaintenance,readCheckpointObjects,releaseCheckpoint,renewCheckpoint,checkpointStatus,recordJournalRejection} from './journal-checkpoint.mjs';
+import {storedJournal,journalText,archiveJournalBatch,journalEntryLimit,journalAdmission} from './journal-storage.mjs';
 import {reply,limitedJSON,hexHash} from './bridge.mjs';
 import {sealGrokJob,openGrokJob} from './grok.mjs';
 
@@ -8,14 +10,17 @@ export async function controllerStatus(db) {
  const now=Date.now()/1000;
  const live=nodes.filter(n=>n.enabled&&n.ready&&n.seen>now-config.heartbeat_seconds);
  const head=await journalHead(db,config.site);
- return {...config,enabled:!!config.enabled,primary:live[0]?.id??null,nodes,head};
+ return {...config,enabled:!!config.enabled,primary:live[0]?.id??null,nodes,head,checkpoint:await checkpointStatus(db,config.site)};
 }
 async function journalHead(db,site) {
  return await db.prepare('SELECT seq,hash FROM controller_journal WHERE site=? ORDER BY seq DESC LIMIT 1').bind(site).first()??{seq:0,hash:''};
 }
 export async function controllerDevice(req,env,path,node,legacy) {
  const db=env.DB,now=Date.now()/1000;
- const d=path==='/bridge/ha/append'?await req.json():await limitedJSON(req,1500000);
+ let d;
+ if(path==='/bridge/ha/append'){
+  try{d=await limitedJSON(req,journalEntryLimit(env)*2+65536);}catch{return reply({error:'Journal request exceeds bounded transaction admission or is invalid'},413);}
+ }else d=await limitedJSON(req,1500000);
  if(path==='/bridge/ha/configure'){
   if(!legacy)return reply({error:'Commissioning credential required'},403);
   if(typeof d.site!=='string'||!Array.isArray(d.nodes)||!d.nodes.length)return reply({error:'Invalid configuration'},400);
@@ -37,19 +42,34 @@ export async function controllerDevice(req,env,path,node,legacy) {
   await db.prepare('UPDATE controller_nodes SET seen=?,ready=?,position=?,load=?,host=? WHERE id=?').bind(now,Number(d.ready),d.position,d.load,d.host.slice(0,160),node.id).run();
   return reply(await controllerStatus(db));
  }
+ if(path==='/bridge/ha/checkpoint'){
+  if(!Number.isSafeInteger(d.max_seq)||d.max_seq<0)return reply({error:'Invalid checkpoint bound'},400);
+  return reply(await readCheckpoint(env,config.site,d.max_seq,node.id));
+ }
+ if(path==='/bridge/ha/checkpoint/renew')return reply(await renewCheckpoint(env,config.site,d.lease,node.id));
+ if(path==='/bridge/ha/checkpoint/release')return reply(await releaseCheckpoint(env,config.site,d.lease,node.id));
+ if(path==='/bridge/ha/checkpoint/objects')return reply(await readCheckpointObjects(env,config.site,d.digests,d.lease,node.id));
+ if(path==='/bridge/ha/checkpoint/maintain')return reply(await checkpointMaintenance(env,config.site));
+ if(path==='/bridge/ha/checkpoint/build')return reply(await buildCheckpoint(env,config.site));
  if(path==='/bridge/ha/status')return reply(await controllerStatus(db));
  if(path==='/bridge/ha/read'){
-  if(d.key==='head'){const head=await journalHead(db,config.site);return reply({value:head.seq?head:null,version:String(head.seq)});}
+  if(d.key==='head'){
+   const head=await journalHead(db,config.site);await checkpointSchema(db);
+   const checkpoints=await db.prepare('SELECT current,previous FROM controller_checkpoints WHERE site=?').bind(config.site).first();
+   return reply({value:head.seq?head:null,version:String(head.seq),checkpoint:checkpoints?.current?{...JSON.parse(checkpoints.current),recovery_seq:checkpoints.previous?JSON.parse(checkpoints.previous).seq:JSON.parse(checkpoints.current).seq}:null});
+  }
   if(!/^log\/\d{20}$/.test(d.key))return reply({error:'Invalid journal key'},400);
-  const row=await db.prepare('SELECT entry FROM controller_journal WHERE site=? AND seq=?').bind(config.site,Number(d.key.slice(4))).first();
-  return reply({encoded:row?.entry??null});
+  const row=await db.prepare('SELECT entry,hash FROM controller_journal WHERE site=? AND seq=?').bind(config.site,Number(d.key.slice(4))).first();
+  return reply({encoded:await journalText(env,config.site,row)});
  }
  if(path==='/bridge/ha/append'){
   if(typeof d.entry!=='string'||!Number.isInteger(d.expected)||d.expected<0)return reply({error:'Invalid journal entry'},400);
+  try{journalAdmission(env,d.entry);}catch(error){if(error.status===413)await recordJournalRejection(env,config.site,new TextEncoder().encode(d.entry).length);return reply({error:error.message},error.status??500);}
   const entry=JSON.parse(d.entry),hash=await hexHash(d.entry);
   if(entry.seq!==d.expected+1||typeof entry.prev!=='string'||!Array.isArray(entry.changes))return reply({error:'Invalid journal position'},400);
+  const stored=await storedJournal(env,config.site,d.entry,hash);
   await db.prepare("INSERT OR IGNORE INTO controller_journal(site,seq,hash,entry) SELECT ?,?,?,? WHERE COALESCE((SELECT MAX(seq) FROM controller_journal WHERE site=?),0)=? AND COALESCE((SELECT hash FROM controller_journal WHERE site=? ORDER BY seq DESC LIMIT 1),'')=?")
-   .bind(config.site,entry.seq,hash,d.entry,config.site,d.expected,config.site,entry.prev).run();
+   .bind(config.site,entry.seq,hash,stored,config.site,d.expected,config.site,entry.prev).run();
   const row=await db.prepare('SELECT seq,hash FROM controller_journal WHERE site=? AND seq=?').bind(config.site,entry.seq).first();
   return row?.hash===hash?reply(row):reply({error:'Shared head advanced. Retry the same request ID.'},409);
  }
