@@ -47,11 +47,11 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     from result_delivery import complete
     persistent = ControllerLink(origin, token, site_access)
 
-    def call(path, body):
+    def call(path, body, delivery_socket=None):
         def send(target, payload):
             return fetch(origin + '/bridge/' + target, payload, token, timeout=45, site_access=site_access)
         if path == 'complete':
-            return complete(body, send, persistent)
+            return complete(body, send, persistent, delivery_socket)
         return send(path, body)
 
     def heartbeat():
@@ -144,7 +144,8 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
                     value = json.loads(result['content'][0]['text'])
                     value['cluster'] = call('ha/status', {})
                     result['content'][0]['text'] = json.dumps(value)
-            call('complete', {'id': job['id'], 'lease': job['lease'], 'result': result})
+            call('complete', {'id': job['id'], 'lease': job['lease'], 'result': result},
+                 job.get('_delivery_socket'))
         except Exception as exc:
             # Keep uncertain requests reclaimable with their original identity.
             print('HA command retry: ' + type(exc).__name__, flush=True)

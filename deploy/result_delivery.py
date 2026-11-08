@@ -6,11 +6,11 @@ import json
 CHUNK_SIZE = 65536
 
 
-def complete(body, send, persistent=None):
+def complete(body, send, persistent=None, delivery_socket=None):
     encoded = json.dumps(body['result'], ensure_ascii=True, separators=(',', ':'))
     if len(encoded) <= CHUNK_SIZE:
         if persistent is not None:
-            acknowledged = persistent.complete(body)
+            acknowledged = persistent.complete(body, delivery_socket)
             if acknowledged is not None:
                 return acknowledged
         return send('complete', body)
