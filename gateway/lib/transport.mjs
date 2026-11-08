@@ -78,7 +78,8 @@ export function controllerSocket(req,env,node){
    const now=Date.now()/1000;
    const row=await env.DB.prepare("UPDATE bridge_jobs SET state='done',request=CASE WHEN id LIKE 'event-%' THEN '{}' ELSE request END,result=?,updated=? WHERE id=? AND lease=? AND state='claimed' AND controller=? AND EXISTS(SELECT 1 FROM controller_nodes WHERE id=? AND enabled=1) RETURNING id")
     .bind(JSON.stringify(d.result),now,d.id,d.lease,node.id,node.id).first();
-   inflight.delete(d.id);socket.send(JSON.stringify({type:'accepted',id:d.id,accepted:!!row}));
+   if(inflight.get(d.id)===d.lease)inflight.delete(d.id);
+   socket.send(JSON.stringify({type:'accepted',id:d.id,lease:d.lease,accepted:!!row}));
   })().catch(()=>{try{socket.close(1011,'Transport interrupted')}catch{};open=false});
  });
  (async()=>{
