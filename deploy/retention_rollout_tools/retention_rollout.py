@@ -38,6 +38,30 @@ def confined(root,rel):
     p=P(rel); require(not p.is_absolute() and '..' not in p.parts,'unsafe relative path')
     out=root/p; path_ok(out.absolute()); return out
 
+def validate_config_edits(spec):
+    for item in spec.get('config_edits', []):
+        require(item['phase']=='gatewaylink' and item['path']==['gateway_journal','checkpoint_mode']
+                and item['new'] in ('bootstrap','maintain'), 'only gatewaylink checkpoint mode edit allowed')
+        require(item['target'] in spec['unchanged_files'] and item['old_sha256']==spec['unchanged_files'][item['target']],
+                'config edit must match protected node preimage')
+        if item['new']=='maintain':
+            require(item.get('old_present') is True and item.get('old')=='bootstrap',
+                    'maintain requires explicit bootstrap preimage')
+            require(not spec.get('files') and not spec.get('manifest_edits')
+                    and len(spec.get('config_edits', []))==1
+                    and set(spec['phases'])=={'gatewaylink'}, 'maintain transition must be config-only gatewaylink')
+            gate=spec.get('gateway_retention_activation', {})
+            boundary=gate.get('from_sequence'); head=gate.get('observed_head')
+            require(gate.get('enabled') is True and gate.get('deployment_status')=='success'
+                    and isinstance(gate.get('deployment_id'),str) and bool(gate['deployment_id'])
+                    and isinstance(gate.get('environment_revision'),int) and not isinstance(gate['environment_revision'],bool)
+                    and gate['environment_revision']>0
+                    and isinstance(boundary,int) and not isinstance(boundary,bool)
+                    and isinstance(head,int) and not isinstance(head,bool)
+                    and head>=0 and boundary>head,
+                    'confirmed future-only gateway activation receipt required')
+
+
 def prepare(a):
     spec=read_json(a.spec); source=P(a.source).resolve(); bundle=P(a.bundle).resolve()
     require(not spec.get('pending_requirements'),'deployment plan has unresolved requirements')
@@ -51,11 +75,7 @@ def prepare(a):
         require(P(item['target']).is_absolute(),'target must be absolute')
         item['payload']='payload/'+str(i); item['new_sha256']=digest(data)
         write(bundle/item['payload'],data); spec['files'].append(item)
-    for item in spec.get('config_edits',[]):
-        require(item['phase']=='gatewaylink' and item['path']==['gateway_journal','checkpoint_mode'] and item['new']=='bootstrap',
-                'only gatewaylink checkpoint_mode=bootstrap config edit allowed')
-        require(item['target'] in spec['unchanged_files'] and item['old_sha256']==spec['unchanged_files'][item['target']],
-                'config edit must match protected node preimage')
+    validate_config_edits(spec)
     for item in spec.get('manifest_edits',[]):
         require(item['path'][-1]=='acknowledge_argv','only acknowledge_argv manifest fields allowed')
         require(isinstance(item['new'],list),'acknowledge_argv must be list')
@@ -174,6 +194,7 @@ def apply(a,preflight_only=False):
     require(q['passed'] and q['plan_sha256']==a.plan_sha256,'missing native qualification')
     require(q['hostname']==socket.gethostname() and q['platform']==platform.system(),'wrong qualification host')
     require(digest((b/'qualification.log').read_bytes())==q['log_sha256'],'qualification log differs')
+    validate_config_edits(s)
     phase=a.phase; cfg=s['phases'][phase]
     require(not preflight_only or phase=='terminal','preflight-only is terminal scoped')
     tag=phase+'-qualification' if preflight_only else phase

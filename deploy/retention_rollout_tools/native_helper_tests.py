@@ -156,3 +156,59 @@ class ProcessBoundaryRollbackTests(unittest.TestCase):
    result=r.read_json(b/'receipt-terminal.json');self.assertEqual(result['rollback_verified'],safe);self.assertEqual(live.read_bytes(),b'old' if safe else b'new')
  def test_fresh_restart_safe_proof_allows_rollback_without_reclassifying_history(self):self.exercise(True)
  def test_active_or_ambiguous_execution_still_blocks_rollback(self):self.exercise(False)
+
+class MaintainTransitionTests(unittest.TestCase):
+ def plan(self,node,original):
+  return {'phases':{'gatewaylink':{'restart_argv':['restart-link-only'],'health_probe':['health'],'health_timeout':0}},
+   'files':[], 'manifest_edits':[],
+   'config_edits':[{'phase':'gatewaylink','target':str(node),'old_sha256':r.digest(original),
+    'path':['gateway_journal','checkpoint_mode'],'old_present':True,'old':'bootstrap','new':'maintain'}],
+   'unchanged_files':{str(node):r.digest(original)},'preserve_probes':{},'preserve_expected':{},
+   'gateway_retention_activation':{'enabled':True,'deployment_status':'success','deployment_id':'verified-deployment',
+    'environment_revision':7,'observed_head':80000,'from_sequence':80001}}
+ def test_receipt_and_exact_scope_required(self):
+  import copy
+  s=self.plan('/node',b'old');r.validate_config_edits(s)
+  mutations=[lambda x:x.pop('gateway_retention_activation'),
+   lambda x:x['gateway_retention_activation'].update(enabled=False),
+   lambda x:x['gateway_retention_activation'].update(from_sequence=80000),
+   lambda x:x['gateway_retention_activation'].update(deployment_status='pending'),
+   lambda x:x['config_edits'][0].update(old='off'),
+   lambda x:x['phases'].update(terminal={}),
+   lambda x:x['files'].append({'phase':'gatewaylink'}),
+   lambda x:x['config_edits'][0].update(path=['other']),
+   lambda x:x['config_edits'][0].update(old_sha256='stale')]
+  for mutate in mutations:
+   candidate=copy.deepcopy(s);mutate(candidate)
+   with self.assertRaises(RuntimeError):r.validate_config_edits(candidate)
+ def exercise(self,health,stale=False):
+  with tempfile.TemporaryDirectory() as d:
+   b=pathlib.Path(d);node=b/'node.json'
+   original=b'{"gateway_journal":{"checkpoint_mode":"bootstrap","controller_id":"mac"},"other":[1,2,3]}'
+   r.write(node,original,0o640);owner=(node.stat().st_uid,node.stat().st_gid)
+   r.write(b/'qualification.log',b'OK')
+   r.dump(b/'qualification.json',{'passed':True,'plan_sha256':'p','hostname':r.socket.gethostname(),'platform':r.platform.system(),'log_sha256':r.digest(b'OK')})
+   s=self.plan(node,original)
+   if stale:r.write(node,original+b' ',0o640)
+   with patch.object(r,'verified',return_value=(b,s)),patch.object(r,'cmd',return_value='') as command,patch.object(r,'ready',side_effect=health):
+    try:r.apply(SimpleNamespace(bundle=d,plan_sha256='p',phase='gatewaylink'))
+    except RuntimeError:pass
+   out=json.loads(node.read_text())
+   self.assertEqual(out['other'],[1,2,3]);self.assertEqual(out['gateway_journal']['controller_id'],'mac')
+   self.assertEqual(node.stat().st_mode&0o777,0o640);self.assertEqual((node.stat().st_uid,node.stat().st_gid),owner)
+   for call in command.call_args_list:self.assertEqual(call[0][0],['restart-link-only'])
+   receipt=r.read_json(b/'receipt-gatewaylink.json')
+   if not stale:
+    backup=b/'backups'/'gatewaylink'/'0'
+    self.assertEqual(backup.read_bytes(),original);self.assertEqual(backup.stat().st_mode&0o777,0o600)
+   else:self.assertEqual(command.call_count,0)
+   return out,receipt
+ def test_success_keeps_owner_mode_private_backup_and_link_only_restart(self):
+  out,receipt=self.exercise([True,True])
+  self.assertEqual(out['gateway_journal']['checkpoint_mode'],'maintain');self.assertEqual(receipt['state'],'applied')
+ def test_health_failure_rolls_back_bootstrap(self):
+  out,receipt=self.exercise([False,False,True,True])
+  self.assertEqual(out['gateway_journal']['checkpoint_mode'],'bootstrap');self.assertTrue(receipt['rollback_verified'])
+ def test_fresh_preimage_race_rejected_without_restart(self):
+  out,receipt=self.exercise([],True)
+  self.assertEqual(out['gateway_journal']['checkpoint_mode'],'bootstrap');self.assertEqual(receipt['state'],'failed')
