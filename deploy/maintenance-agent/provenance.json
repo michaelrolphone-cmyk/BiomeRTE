@@ -1,0 +1,9 @@
+{
+  "native_path": "~/.local/share/biomerte-maintenance/agent.py",
+  "original_audited_sha256": "7fe3a8af039923586e3e0ca81b5d693a32e1a18bc44b55740766e0898b627db9",
+  "gate_removed_live_sha256": "04c5053a6e47994f6b73df041faccb2eaa9980ea893b73d207d05100268f16dc",
+  "gateway_integration_base": "90bfda69bdca0c6e81bc075a34d0cb077d340e93",
+  "preserves_gate_removal": true,
+  "live_deployment_performed": false,
+  "helper": "output_retention.py"
+}

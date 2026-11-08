@@ -7,11 +7,11 @@ import {journalRecord,storedJournal} from '../lib/journal-storage.mjs';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 function fixture(){
  const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE controller_journal(site TEXT,seq INTEGER,hash TEXT,entry TEXT,PRIMARY KEY(site,seq))');
- const objects=new Map();let largestRead=0;
- const env={DB:{prepare(q){const stmt=sql.prepare(q);let args=[];return {bind(...v){args=v;return this},async first(){return stmt.get(...args)},async all(){return {results:stmt.all(...args)}},async run(){return stmt.run(...args)}}}},JOURNAL_ARCHIVE:{async put(k,v){objects.set(k,v)},async get(k){return objects.has(k)?{size:Buffer.byteLength(objects.get(k)),async text(){largestRead=Math.max(largestRead,Buffer.byteLength(objects.get(k)));return objects.get(k)}}:null},async delete(k){for(const key of Array.isArray(k)?k:[k])objects.delete(key)}}};
+ const objects=new Map();let largestRead=0,calls=0;
+ const env={DB:{prepare(q){const stmt=sql.prepare(q);let args=[];return {bind(...v){args=v;return this},async first(){calls++;return stmt.get(...args)},async all(){calls++;return {results:stmt.all(...args)}},async run(){calls++;return stmt.run(...args)}}}},JOURNAL_ARCHIVE:{async put(k,v){calls++;objects.set(k,v)},async get(k){calls++;return objects.has(k)?{size:Buffer.byteLength(objects.get(k)),async text(){largestRead=Math.max(largestRead,Buffer.byteLength(objects.get(k)));return objects.get(k)}}:null},async delete(k){calls++;for(const key of Array.isArray(k)?k:[k])objects.delete(key)}}};
  let seq=0,prev='';
  async function append(changes,existing=false){const text=`{"changes":${changes},"prev":"${prev}","seq":${++seq}}`;prev=hash(text);sql.prepare('INSERT INTO controller_journal VALUES(?,?,?,?)').run('s',seq,prev,await storedJournal(env,'s',text,prev,existing));}
- return {env,sql,objects,append,largestRead:()=>largestRead};
+ return {env,sql,objects,append,largestRead:()=>largestRead,calls:()=>calls};
 }
 async function advance(env){for(let n=0;n<100;n++){const r=await buildCheckpoint(env,'s');if(r.advanced)return r;if(!r.pending)return r;}throw Error('No bounded progress');}
 test('sharded checkpoint preserves exact numeric bytes, records, receipts and deletion',async()=>{
@@ -132,4 +132,26 @@ test('progress schema upgrades preserve earlier checkpoint telemetry',async()=>{
  const {checkpointStatus}=await import('../lib/journal-checkpoint.mjs');const {env,sql}=fixture();
  sql.exec("CREATE TABLE checkpoint_progress(site TEXT PRIMARY KEY,max_entry_bytes INTEGER NOT NULL DEFAULT 0,max_entry_seq INTEGER NOT NULL DEFAULT 0,blocked_seq INTEGER,blocked_bytes INTEGER,last_error TEXT);INSERT INTO checkpoint_progress(site,max_entry_bytes,max_entry_seq) VALUES('s',1234,7)");
  const status=await checkpointStatus(env.DB,'s');assert.equal(status.max_entry_bytes,1234);assert.equal(status.max_entry_seq,7);assert.equal(status.rejected_entries,0);assert.equal(status.max_depth,2);
+});
+test('unchanged values skip writes while preserving exact serialization and pending reversions',async()=>{
+ const {env,append,objects}=fixture();
+ await append('[["k","x",{"n":1.0}],["k","gone",true]]');await advance(env);
+ let puts=0;const put=env.JOURNAL_ARCHIVE.put;env.JOURNAL_ARCHIVE.put=async(...args)=>{puts++;return put(...args)};
+ await append('[["k","x",{"n":2}],["k","x",{"n":1.0}],["missing","x",null]]');
+ puts=0;const result=await advance(env);assert.equal(result.unchanged,2);assert.equal(result.coalesced,0);assert.equal(puts,1); // root only
+ assert.equal((await journalRecord(env,'s','k','x')).value.n,1);
+ await append('[["k","gone",null],["k","gone",true],["k","x",{"n":1}]]');const numeric=await advance(env);
+ assert.equal(numeric.coalesced,1); // 1 and 1.0 bytes must not collapse
+ assert.equal((await journalRecord(env,'s','k','gone')).value,true);
+ const root=JSON.parse((await readCheckpoint(env,'s')).encoded),bucket=parseInt(hash(JSON.stringify(['k','x'])).slice(0,2),16);
+ const leaf=JSON.parse((await readCheckpointObjects(env,'s',[root.shards[bucket]])).objects[0].encoded),record=leaf.find(r=>r[0]==='k'&&r[1]==='x');
+ assert.equal((await readCheckpointObjects(env,'s',record[2])).objects.map(x=>x.encoded).join(''),'{"n":1}');
+});
+test('lookup read and cache budgets fall back safely on repeated and unique records',async()=>{
+ const {env,append,calls}=fixture(),records=Array.from({length:600},(_,i)=>['many','id'+i,{i,text:'x'.repeat(950)}]);
+ await append(JSON.stringify(records));await advance(env);
+ records[599][2].changed=true;await append(JSON.stringify(records));let pages=0,skipped=0;
+ for(;;){const before=calls(),r=await buildCheckpoint(env,'s');assert.ok(calls()-before<1000);pages++;skipped+=r.unchanged??0;assert.ok(r.lookup.reads<=96);assert.ok(r.lookup.bytes<=1048576);assert.ok(r.lookup.nodes<=256);if(r.advanced)break;assert.ok(pages<20);}
+ assert.ok(skipped>400);assert.ok(pages<13);assert.equal((await journalRecord(env,'s','many','id599')).value.changed,true);
+ await append(JSON.stringify(Array.from({length:150},(_,i)=>['new','id'+i,{i}])));await advance(env);assert.equal((await journalRecord(env,'s','new','id149')).value.i,149);
 });

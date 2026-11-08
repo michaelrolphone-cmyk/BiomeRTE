@@ -183,6 +183,44 @@ async function cpUpdateTree(env,site,digest,updates,depth=2,metrics={depth:2}){
  for(const [slot,group] of groups)node.children[slot]=await cpUpdateTree(env,site,node.children[slot],group,depth+1,metrics);
  return cpPut(env,site,JSON.stringify(node),node.children.filter(Boolean));
 }
+// Lookup is only a no-op optimization. Exhaustion falls back to the ordinary
+// changed-key budget, never skips unverified state or interrupts progress.
+function cpUnchangedLookup(env,site,shards){
+ const cache=new Map();let bytes=0,reads=0,hits=0,compared=0,matched=0;
+ const UNKNOWN=Symbol('lookup budget exhausted');
+ async function node(digest){
+  if(!digest)return [];
+  if(cache.has(digest)){const hit=cache.get(digest);cache.delete(digest);cache.set(digest,hit);hits++;return hit.value;}
+  if(reads>=96)return UNKNOWN;
+  reads++;
+  const encoded=await cpGet(env,site,digest,CP_SHARD_MAX),size=cpBytes(encoded),value=JSON.parse(encoded);
+  if(!Array.isArray(value)&&!(value?.format==='branches'&&Array.isArray(value.children)&&value.children.length===16&&value.children.every(h=>h===null||/^[0-9a-f]{64}$/.test(h))))throw Error('Invalid checkpoint shard');
+  while(cache.size&&(cache.size>=256||bytes+size>1048576)){const oldest=cache.keys().next().value;bytes-=cache.get(oldest).size;cache.delete(oldest);}
+  cache.set(digest,{value,size});bytes+=size;return value;
+ }
+ async function same(kind,id,value){
+  const identity=await hexHash(JSON.stringify([kind,id]));let digest=shards[parseInt(identity.slice(0,2),16)],depth=2;
+  for(;;){
+   const found=await node(digest);if(found===UNKNOWN)return false;
+   if(Array.isArray(found)){
+    const record=found.find(r=>r[0]===kind&&r[1]===id);
+    if(value==='null')return !record;
+    if(!record)return false;
+    let index=0;
+    for(let start=0;start<value.length;){let end=Math.min(start+CP_CHUNK,value.length);if(end<value.length&&/[\uD800-\uDBFF]/.test(value[end-1]))end--;
+     if(index>=record[2].length||await hexHash(value.slice(start,end))!==record[2][index++])return false;start=end;
+    }
+    return index===record[2].length;
+   }
+   if(depth>=64)throw Error('Checkpoint trie depth exceeded');digest=found.children[parseInt(identity[depth++],16)];
+  }
+ }
+ return {stats:()=>({reads,hits,bytes,nodes:cache.size,compared,matched}),async same(kind,id,value){
+  // Avoid a read-before-write penalty on ordinary mostly-unique histories.
+  if(compared>=8&&matched*4<compared)return false;
+  const result=await same(kind,id,value);compared++;if(result)matched++;return result;
+ }};
+}
 export async function buildCheckpoint(env,site,limit=2048){
  if(!env.JOURNAL_ARCHIVE)throw Error('Checkpoint archive binding required');
  if(!Number.isInteger(limit)||limit<1||limit>2048)throw Error('Invalid checkpoint batch limit');
@@ -208,7 +246,7 @@ export async function buildCheckpoint(env,site,limit=2048){
   const progress=await env.DB.prepare('SELECT max_depth FROM checkpoint_progress WHERE site=?').bind(site).first();
   const metrics={depth:Math.max(prior?.state.max_depth??2,progress?.max_depth??2)};
   const keyBudget=Math.max(1,Math.min(48,Math.floor(500/(5*(metrics.depth-1)+4))));
-  const updates=new Map();
+  const updates=new Map(),unchanged=cpUnchangedLookup(env,site,shards);let skipped=0;
   if(!complete){
    while(entriesRead<96&&changesRead<limit){
     const row=await env.DB.prepare('SELECT seq,hash,entry FROM controller_journal WHERE site=? AND seq=?').bind(site,seq+1).first();
@@ -217,10 +255,14 @@ export async function buildCheckpoint(env,site,limit=2048){
     if(text===null){complete=offset===0;break;}
     entriesRead++;
     const entry=cpEntry(text);if(entry.seq!==seq+1||entry.prev!==hash)throw Error('Checkpoint journal discontinuity');
-    const entryOffset=offset,beforeUpdates=new Map(updates),beforeBytes=valueBytes,beforeChanges=changesRead;
+    const entryOffset=offset,beforeUpdates=new Map(updates),beforeBytes=valueBytes,beforeChanges=changesRead,beforeSkipped=skipped;
     while(offset<entry.changes.length&&changesRead<limit){
      const [kind,id,value]=entry.changes[offset];if(typeof kind!=='string'||typeof id!=='string')throw Error('Invalid checkpoint key');
      const key=JSON.stringify([kind,id]),bytes=cpBytes(value),prior=updates.get(key);
+     if(await unchanged.same(kind,id,value)){
+      if(prior){updates.delete(key);valueBytes-=prior.bytes;}
+      offset++;changesRead++;skipped++;continue;
+     }
      if(!prior&&updates.size>=keyBudget)break;
      if(updates.size&&valueBytes-(prior?.bytes??0)+bytes>2097152)break;
      updates.set(key,{key,kind,id,value,bytes});valueBytes+=bytes-(prior?.bytes??0);offset++;changesRead++;
@@ -228,7 +270,7 @@ export async function buildCheckpoint(env,site,limit=2048){
     if(offset<entry.changes.length){
      // Publish at a completed-entry boundary when possible, rather than keep
      // chasing a new partial entry forever while appends continue.
-     if(entryOffset===0&&seq>build.seq){updates.clear();for(const [key,value] of beforeUpdates)updates.set(key,value);valueBytes=beforeBytes;changesRead=beforeChanges;offset=0;complete=true;}
+     if(entryOffset===0&&seq>build.seq){updates.clear();for(const [key,value] of beforeUpdates)updates.set(key,value);valueBytes=beforeBytes;changesRead=beforeChanges;skipped=beforeSkipped;offset=0;complete=true;}
      else complete=false;
      break;
     }
@@ -258,13 +300,13 @@ export async function buildCheckpoint(env,site,limit=2048){
   if(!saved)throw Error('Checkpoint build lease expired');
   // Persistent stage root replaces temporary pins only after progress is safe.
   await env.DB.prepare('INSERT OR IGNORE INTO checkpoint_edges SELECT ?,?,value FROM json_each(?)').bind(site,'stage',JSON.stringify([...new Set(shards.filter(Boolean))])).run();
-  if(!complete)return {advanced:false,pending:true,seq,offset,entries:entriesRead,changes:changesRead,coalesced:updates.size,input_bytes:inputBytes,key_budget:keyBudget,max_depth:metrics.depth};
+  if(!complete)return {advanced:false,pending:true,seq,offset,entries:entriesRead,changes:changesRead,coalesced:updates.size,input_bytes:inputBytes,key_budget:keyBudget,max_depth:metrics.depth,unchanged:skipped,lookup:unchanged.stats()};
   const encoded=JSON.stringify({format:2,site,seq,hash,shards,max_depth:metrics.depth,parent:build.base?JSON.parse(build.base):null}),digest=await cpPut(env,site,encoded,shards.filter(Boolean)),manifest={seq,hash,digest,format:2};
   const changed=await env.DB.prepare('UPDATE controller_checkpoints SET previous=current,current=? WHERE site=? AND current IS ? AND EXISTS (SELECT 1 FROM checkpoint_builds WHERE site=? AND token=? AND until>unixepoch()) RETURNING site').bind(JSON.stringify(manifest),site,build.base,site,token).first();
   if(!changed)throw Error('Checkpoint publication conflict');
   await env.DB.prepare('DELETE FROM checkpoint_builds WHERE site=? AND token=?').bind(site,token).run();
   await env.DB.prepare("DELETE FROM checkpoint_edges WHERE site=? AND parent='stage'").bind(site).run();
-  return {advanced:true,seq,manifest,entries:entriesRead,changes:changesRead,coalesced:updates.size,input_bytes:inputBytes,key_budget:keyBudget,max_depth:metrics.depth};
+  return {advanced:true,seq,manifest,entries:entriesRead,changes:changesRead,coalesced:updates.size,input_bytes:inputBytes,key_budget:keyBudget,max_depth:metrics.depth,unchanged:skipped,lookup:unchanged.stats()};
  }finally{
   await env.DB.prepare('UPDATE checkpoint_builds SET until=0 WHERE site=? AND token=?').bind(site,token).run();
   await env.DB.prepare('DELETE FROM checkpoint_edges WHERE site=? AND parent=?').bind(site,'build:'+token).run();

@@ -1,3 +1,4 @@
+import {maintenanceCall} from './maintenance.mjs';
 import {controllerDevice,claimControllerJob,controllerStatus} from './ha.mjs';
 import {openGrokJob} from './grok.mjs';
 import {canDeliver} from './events.mjs';
@@ -152,6 +153,9 @@ export async function runTool(env, name, args={}) {
       Object.keys(args).some(k=>!['operation','arguments','request_id','realm'].includes(k)) ||
       !['site','local'].includes(args.realm??'site')) return toolError('Expected operation, arguments, request_id and optional realm');
  } else if (Object.keys(args).length) return toolError('This tool takes no arguments');
+ if(name==='biome_invoke' && args.operation.startsWith('maintenance.')) {
+  try{return {content:[{type:'text',text:JSON.stringify(await maintenanceCall(env,args.operation,args.arguments,args.request_id))}]}}catch(e){return toolError(e.message)}
+ }
  // Discovery request_id identifies a resumable snapshot, including if upload
  // outlasts the HTTP waiter. A new request_id requests fresh discovery.
  // A status read must see later transitions even when a client repeats the

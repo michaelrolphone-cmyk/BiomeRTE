@@ -1,3 +1,4 @@
+import {maintenanceDevice} from '../lib/maintenance.mjs';
 import {nativeCall} from '../lib/native-call.mjs';
 import {agentInbox} from '../lib/agent-inbox.mjs';
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
@@ -13,6 +14,7 @@ const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if(path==='/maintenance/device')return maintenanceDevice(req,env);
  if(path==='/v1/call')return nativeCall(req,env);
  if(path==='/api/decisions')return mobileDecision(req,env);
  if(path==='/api/exchange')return exchangeStream(req,env,conf);
