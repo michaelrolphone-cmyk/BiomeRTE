@@ -1,0 +1,110 @@
+{
+  "build_seconds": 176.70602247900024,
+  "canonical_pages": 61546,
+  "objects": [
+    {
+      "bytes": 246362112,
+      "name": "records",
+      "pages": 60147
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_candidate_cursor",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_markers",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_markers_order",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_cursor",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_dirty",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_progress",
+      "pages": 1
+    },
+    {
+      "bytes": 5337088,
+      "name": "retention_ref_sources",
+      "pages": 1303
+    },
+    {
+      "bytes": 3014656,
+      "name": "retention_ref_tokens",
+      "pages": 736
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_version",
+      "pages": 1
+    },
+    {
+      "bytes": 31531008,
+      "name": "retention_refs",
+      "pages": 7698
+    },
+    {
+      "bytes": 30687232,
+      "name": "retention_refs_target",
+      "pages": 7492
+    },
+    {
+      "bytes": 5726208,
+      "name": "sqlite_autoindex_records_1",
+      "pages": 1398
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_markers_1",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_ref_dirty_1",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_ref_progress_1",
+      "pages": 1
+    },
+    {
+      "bytes": 5791744,
+      "name": "sqlite_autoindex_retention_ref_sources_1",
+      "pages": 1414
+    },
+    {
+      "bytes": 3280896,
+      "name": "sqlite_autoindex_retention_ref_tokens_1",
+      "pages": 801
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_schema",
+      "pages": 1
+    }
+  ],
+  "page_size": 4096,
+  "projection_allocated_bytes": 79683584,
+  "raw_json_bytes": 209700000,
+  "reference_entries": 2820000,
+  "rows": 60000,
+  "tick_seconds_max": 3.25527506599974,
+  "tick_seconds_p95": 0.1906338679982582,
+  "ticks": 1600,
+  "total_pages": 81000
+}

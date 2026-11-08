@@ -58,19 +58,32 @@ def search(tx, ctx, query=''):
             any(q in str(tx.need('revisions', h)['body']).lower() for h in d['heads'])]
 
 
-@op('artifact.put', 'data:str')
-def artifact(tx, ctx, data):
+@op('artifact.put', 'data:str transient?:bool')
+def artifact(tx, ctx, data, transient=False):
     """Put an immutable base64 chunk (up to 256 KiB); larger artifacts use a manifest of chunks."""
     raw = un64(data)
     if len(raw) > 262144:
         raise Fault('Split artifact into 256 KiB chunks', 413)
     key = hashlib.sha256(raw).hexdigest()
     tx.put('artifacts', key, {'id': key, 'data': b64(raw)})
+    marker = tx.get('_retention', 'artifacts:' + key)
+    if marker is not None:
+        # A durable upload always wins, including shared content-addressed bytes.
+        if not transient:
+            # Removing enrollment is permanent: later overwrites cannot enroll
+            # an existing artifact, exactly like pre-upgrade durable content.
+            tx.drop('_retention', marker['id'])
+        elif not marker.get('durable'):
+            marker['operational'] = True
+            tx.put('_retention', marker['id'], marker)
     return {'sha256': key, 'size': len(raw)}
 
 
 @op('artifact.get', 'sha256:str', False)
 def artifact_get(tx, ctx, sha256):
+    value = tx.get('artifacts', sha256)
+    if value is None and tx.get('_meta', 'operational_retention'):
+        raise Fault('Artifact unavailable or expired; recover from its owning durable source', 410)
     return tx.need('artifacts', sha256)
 
 

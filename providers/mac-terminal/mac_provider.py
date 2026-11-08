@@ -181,6 +181,8 @@ def configure():
     profile = dict(executable=executable, executable_sha256=hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
                    limits={})
     manifest = terminal_pool(resource, profile, [sys.executable, str(ROOT / 'terminal_adapter.py')])
+    for offer in manifest['offers']:
+        offer['acknowledge_argv'] = [sys.executable, str(ROOT / 'terminal_adapter.py'), '--acknowledge']
     manifest.update(site=info['site'], realm='site', poll_seconds=2, retry_seconds=5,
                     timeout=None, terminal_profile=profile)
     save_json(manifest_path, manifest)

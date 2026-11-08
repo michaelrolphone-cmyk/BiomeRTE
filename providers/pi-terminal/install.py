@@ -97,10 +97,12 @@ def main():
 
     manifest = os.path.join(home, 'manifest.json')
     adapter = os.path.join(home, 'terminal.py')
-    for name in ('terminal.py', 'terminal_limits.py', 'terminal_supervisor.py'):
+    for name in ('terminal.py', 'terminal_limits.py', 'terminal_supervisor.py', 'terminal_retention.py'):
         with open(os.path.join(here, name), 'rb') as src:
             replace(os.path.join(home, name), src.read())
     cfg = terminal_pool(resource, scoped_profile, [sys.executable, adapter, manifest], args.slots)
+    for offer in cfg['offers']:
+        offer['acknowledge_argv'] = [sys.executable, adapter, '--acknowledge', manifest]
     cfg.update(url=url, site=node['site'], supervisor_dir=runtime,
                timeout=None, terminal_profile=scoped_profile)
     replace(manifest, json.dumps(cfg, indent=2).encode())

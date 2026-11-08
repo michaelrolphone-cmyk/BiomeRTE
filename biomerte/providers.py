@@ -20,6 +20,9 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
     record = {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
               'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
     prior = tx.get('contracts', key) or tx.get('_retired_contracts', key)
+    if prior:
+        from .retention import require_payload
+        require_payload(prior)
     if prior and prior != record:
         raise Fault('Contract version is immutable', 409)
     if usage is not None:
@@ -279,9 +282,9 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     return tx.put('leases', key, req)
 
 
-@op('cap.lease', 'lease:str')
+@op('cap.lease', 'lease:str', receipt='refresh')
 def lease_status(tx, ctx, lease):
-    """Read the current lease, including queued requests, independently of its original receipt."""
+    """Read current lease and refresh its reservation heartbeat; new request IDs retain no receipt."""
     value = tx.need('leases', lease)
     touch_reservation(tx, value)
     return value
@@ -351,6 +354,8 @@ def dispatch(tx, ctx, lease, inputs, operation):
     key = ident(operation)
     prev = tx.get('actions', key)
     if prev:
+        from .retention import require_payload
+        require_payload(prev)
         if prev['lease'] != lease or prev['inputs'] != inputs:
             raise Fault('Operation identity conflict', 409)
         return prev
@@ -400,6 +405,8 @@ def pending(tx, ctx, provider):
 def claim(tx, ctx, provider, operation, generation):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
+    from .retention import require_payload
+    require_payload(a)
     l = tx.need('leases', a['lease'])
     g = tx.need('guards', l['guard'])
     if (a['provider'], l['state'], a['generation'], g['holder'], g['generation']) != (
@@ -431,6 +438,10 @@ def result(tx, ctx, provider, operation, generation, state, result):
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
         raise Fault('Unknown outcome')
+    if a.get('result_expired'):
+        if a['state'] == state and a.get('result_digest') == digest(result):
+            return a  # exact lost-ACK redelivery, no effects or payload restoration
+        raise Fault('Conflicting expired outcome', 409)
     if a['state'] in ('succeeded', 'failed'):
         if a['state'] == state and a['result'] == result:
             return a
@@ -451,11 +462,14 @@ def result(tx, ctx, provider, operation, generation, state, result):
     return a
 
 
-@op('cap.status', 'operation:str', False)
-def status(tx, ctx, operation):
+@op('cap.status', 'operation:str recovery?:bool', False)
+def status(tx, ctx, operation, recovery=False):
     """Read action state and the provider result, including after the lease is released."""
     a = tx.need('actions', operation)
+    from .retention import require_payload
     owner(ctx, a['provider'])
+    if not recovery:
+        require_payload(a)
     return a
 
 
@@ -493,10 +507,15 @@ def submit(tx, ctx, contract, resource, inputs, operation):
     record = dict(id=operation, lease=lease_id, contract=contract, resource=resource,
                   inputs=inputs, owner=ctx.actor)
     prior = tx.get('_submissions', operation)
+    if prior:
+        from .retention import require_payload
+        require_payload(prior)
     if prior and prior != record:
         raise Fault('Submission identity conflict', 409)
     action = tx.get('actions', operation)
     if action:
+        from .retention import require_payload
+        require_payload(action)
         if (action['lease'], action['contract'], action['inputs']) != (lease_id, contract, inputs):
             raise Fault('Operation identity conflict', 409)
         # Adopt an existing Android operation without replaying it or re-leasing.
@@ -517,9 +536,11 @@ def submission_status(tx, ctx, operation):
     submission = tx.need('_submissions', operation)
     if ctx.permissions is not None and submission['owner'] != ctx.actor:
         raise Fault('Other submission', 403)
+    from .retention import require_payload
+    require_payload(submission)
     action = tx.get('actions', operation)
     if action:
-        return action
+        return require_payload(action)
     lease = tx.need('leases', submission['lease'])
     return dict(id=operation, lease=lease['id'], state=lease['state'])
 

@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import uuid
 
 CONTRACT = 'host.terminal.run:1'
 DEFAULT_SLOTS = 16
@@ -70,8 +71,8 @@ def store_stream(path, remote, chunk_bytes=256 * 1024):
             if not chunks:
                 preview = block[:4096]
             sha = hashlib.sha256(block).hexdigest()
-            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii')},
-                                  'terminal-chunk-' + sha)
+            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'transient': True},
+                                  'terminal-transient-chunk-' + str(uuid.uuid4()))
             if receipt != {'sha256': sha, 'size': len(block)}:
                 raise IOError('Artifact receipt mismatch')
             chunks.append(receipt)
@@ -87,6 +88,7 @@ def execute(cfg, home, request):
     from sdk import Journal, monotonic
     from terminal_supervisor import execute as supervise
     from terminal_limits import read_limits
+    from terminal_retention import lookup, cache, trim, encoded, initialize
     from biomerte.worker import Remote
     from agent import inventory
     profile = cfg['terminal_profile']
@@ -110,13 +112,26 @@ def execute(cfg, home, request):
         body = {'argv': argv, 'limits': limits, 'workspace': work}
         duration = limits.get('duration_seconds')
         lease = None if duration is None else monotonic() + duration
+        initialize(journal.db)
         with journal.db:
-            journal.db.execute('INSERT OR IGNORE INTO jobs VALUES(?,?,?,?,?,NULL)',
-                               (op, json.dumps(body), 'queued', None, lease))
+            inserted = journal.db.execute('INSERT OR IGNORE INTO jobs VALUES(?,?,?,?,?,NULL)',
+                               (op, json.dumps(body), 'queued', None, lease)).rowcount
+            if inserted:
+                journal.db.execute('INSERT INTO terminal_retention_eligible VALUES(?)', (op,))
+        eligible = journal.db.execute('SELECT 1 FROM terminal_retention_eligible WHERE id=?', (op,)).fetchone() is not None
         existing = journal.db.execute('SELECT body FROM jobs WHERE id=?', (op,)).fetchone()
         recorded = json.loads(existing[0])
-        if recorded['argv'] != argv or recorded['workspace'] != work:
+        if recorded.get('retired'):
+            identity = hashlib.sha256(encoded([argv, work]).encode()).hexdigest()
+            if recorded['request_digest'] != identity:
+                raise RuntimeError('Terminal operation identity conflict')
+        elif recorded['argv'] != argv or recorded['workspace'] != work:
             raise RuntimeError('Terminal operation identity conflict')
+        found, uploaded = lookup(journal.db, op)
+        if found:
+            return uploaded
+        if recorded.get('retired'):
+            raise RuntimeError('Terminal result expired; operation cannot execute again')
         supervise(path, op)
         row = journal.db.execute('SELECT body,state,result FROM jobs WHERE id=?', (op,)).fetchone()
         if row[1] != 'finished':
@@ -134,9 +149,41 @@ def execute(cfg, home, request):
     out['evidence'] = {k: result[k] for k in ('exit_code', 'duration_seconds', 'reason',
                                               'process_identity', 'quiescent')}
     out['evidence'].update(executed=True, host=socket.gethostname(), executor_identity=inventory())
+    journal = Journal(path)
+    try:
+        if eligible:
+            cache(journal.db, op, out, {name: result[name] for name in ('stdout', 'stderr')})
+        try:
+            trim(journal.db, home)
+        except (OSError, ValueError, RuntimeError):
+            # Diagnostic cleanup must not turn a completed effect into an
+            # uncertain execution. Durable ACK cleanup will retry later.
+            pass
+    finally:
+        journal.db.close()
     return out
 
 
+def acknowledge_result(manifest, request):
+    import sqlite3
+    from terminal_retention import acknowledge, trim
+    home = os.path.dirname(os.path.abspath(manifest))
+    db = sqlite3.connect(os.path.join(home, 'terminal.sqlite'), timeout=30)
+    try:
+        from terminal_retention import initialize
+        initialize(db)
+        if not db.execute('SELECT 1 FROM terminal_retention_eligible WHERE id=?', (request['operation'],)).fetchone():
+            return {'acknowledged': True, 'legacy_preserved': True}
+        acknowledge(db, request['operation'], request['result_digest'])
+        trim(db, home)
+    finally:
+        db.close()
+    return {'acknowledged': True}
+
+
 if __name__ == '__main__':
-    manifest = os.path.abspath(sys.argv[1])
-    json.dump(execute(read_json(manifest), os.path.dirname(manifest), json.load(sys.stdin)), sys.stdout)
+    if sys.argv[1] == '--acknowledge':
+        json.dump(acknowledge_result(sys.argv[2], json.load(sys.stdin)), sys.stdout)
+    else:
+        manifest = os.path.abspath(sys.argv[1])
+        json.dump(execute(read_json(manifest), os.path.dirname(manifest), json.load(sys.stdin)), sys.stdout)

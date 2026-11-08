@@ -9,6 +9,7 @@ from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
 from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support, discovery
+from . import retention
 assistant_support.install_hooks()
 
 
@@ -67,6 +68,7 @@ class Application:
         self.stores = {'local': Store(directory, 'local'),
                        'site': Store(directory, realm_file, remote)}
         self.timer_anchors = {}
+        self.retention_next = {}
         self.health = {}
         for scope, store in self.stores.items():
             try:
@@ -94,6 +96,9 @@ class Application:
                 ctx = Context(self, peer['id'], realm, peer['scopes'])
                 if name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot':
                     raise Fault('Operator action', 403)
+            if operation is not None and operation[2] and self.config.get('operational_retention', {}).get('enabled', True):
+                with retention.tracking(tx):
+                    return command(tx, ctx, name, args, request_id)
             return command(tx, ctx, name, args, request_id)
         operation = OPERATIONS.get(name)
         read_only = operation is not None and not operation[2]
@@ -101,16 +106,37 @@ class Application:
 
     def tick(self, realm):
         budget = 64
-        def run(tx):
+        policy = self.config.get('operational_retention', {})
+        enabled = policy.get('enabled', True)
+        now = time.time()
+        due = enabled and now >= self.retention_next.get(realm, 0)
+        def work_tick(tx):
             seed(tx)
             ctx = Context(self, scope=realm)
             moved = process.tick(tx, ctx, budget=budget)
             providers.settle_submissions(tx, ctx)
             assistant_support.pump(tx, ctx)
+            # Disposable local projection catches up every tick, including while
+            # payload retention is disabled for a staged rollout. No journal
+            # changes are emitted by advance itself.
+            from .retention_index import advance
+            index_ready = advance(tx.db, max_rows=policy.get('index_rows', 64),
+                                  max_chars=policy.get('index_chars', 131072))
+            if due and index_ready:
+                retention.sweep(tx, now=now, seconds=policy.get('seconds', 86400),
+                                keep=policy.get('keep', 1024), batch=policy.get('batch', 128), index_ready=True)
             return moved
+        def run(tx):
+            if enabled:
+                with retention.tracking(tx, now):
+                    return work_tick(tx)
+            return work_tick(tx)
         while True:
             try:
-                return self.stores[realm].execute(run)
+                result = self.stores[realm].execute(run)
+                if due:
+                    self.retention_next[realm] = now + policy.get('interval', 60)
+                return result
             except Fault as exc:
                 # A rolled-back batch has dispatched no durable effects.
                 # Reduce the batch, preserving each activity's atomic commit.

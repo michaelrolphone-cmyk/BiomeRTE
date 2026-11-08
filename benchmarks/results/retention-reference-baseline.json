@@ -1,0 +1,105 @@
+{
+  "build_seconds": 226.14437482000358,
+  "canonical_pages": 61546,
+  "objects": [
+    {
+      "bytes": 246362112,
+      "name": "records",
+      "pages": 60147
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_candidate_cursor",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_markers",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_markers_order",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_cursor",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_dirty",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_progress",
+      "pages": 1
+    },
+    {
+      "bytes": 5222400,
+      "name": "retention_ref_sources",
+      "pages": 1275
+    },
+    {
+      "bytes": 4096,
+      "name": "retention_ref_version",
+      "pages": 1
+    },
+    {
+      "bytes": 301031424,
+      "name": "retention_refs",
+      "pages": 73494
+    },
+    {
+      "bytes": 333606912,
+      "name": "retention_refs_target",
+      "pages": 81447
+    },
+    {
+      "bytes": 5726208,
+      "name": "sqlite_autoindex_records_1",
+      "pages": 1398
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_markers_1",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_ref_dirty_1",
+      "pages": 1
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_autoindex_retention_ref_progress_1",
+      "pages": 1
+    },
+    {
+      "bytes": 5791744,
+      "name": "sqlite_autoindex_retention_ref_sources_1",
+      "pages": 1414
+    },
+    {
+      "bytes": 337625088,
+      "name": "sqlite_autoindex_retention_refs_1",
+      "pages": 82428
+    },
+    {
+      "bytes": 4096,
+      "name": "sqlite_schema",
+      "pages": 1
+    }
+  ],
+  "page_size": 4096,
+  "projection_allocated_bytes": 983322624,
+  "raw_json_bytes": 209700000,
+  "reference_entries": 2820000,
+  "rows": 60000,
+  "tick_seconds_max": 3.3769607640024333,
+  "tick_seconds_p95": 0.2113021299992397,
+  "ticks": 1600,
+  "total_pages": 301615
+}

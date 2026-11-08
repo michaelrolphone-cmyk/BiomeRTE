@@ -227,6 +227,9 @@ class Store:
                              'id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER,hash TEXT);'
                              "INSERT OR IGNORE INTO position VALUES(1,0,'');")
             self._initialize_lookup(db)
+            from .retention_index import initialize
+            initialize(db)
+            db.commit()
 
     def _initialize_lookup(self, db):
         # One transactional backfill per mirror, then only dirty records on
@@ -316,17 +319,27 @@ class Store:
                 time.sleep(0.01)
 
     def _execute(self, fn, cached=False, read_only=False):
-        from .gateway_journal import JournalConflict
+        from .gateway_journal import JournalConflict, JournalReplay
         with contextlib.closing(self.connect()) as db:
             entries = {}
+            checkpoint = None
             if self.remote and not cached:
                 observed = db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0]
                 head, version = self.remote.read('head')
                 last = head['seq'] if head else 0
                 if last < observed:
                     raise Fault('Shared journal rolled back. Inspect membership and backup.', 409)
-                for number in range(observed + 1, last + 1):
+                if hasattr(self.remote, 'checkpoint'):
+                    checkpoint = self.remote.checkpoint(observed, last, directory=os.path.dirname(self.path))
+                start = checkpoint['seq'] if checkpoint else observed
+                if start < last:
+                    entries = JournalReplay(os.path.dirname(self.path))
+                for number in range(start + 1, last + 1):
+                    if checkpoint and (number - start) % 32 == 1:
+                        checkpoint.renew()
                     entries[number], unused = self.remote.read('log/%020d' % number)
+                if checkpoint:
+                    checkpoint.release()
             if cached or read_only:
                 # A WAL reader must not reserve the writer lock just to inspect
                 # committed state while another caller waits for journal append.
@@ -367,6 +380,18 @@ class Store:
                 if self.remote and not cached:
                     if last < seq:
                         raise JournalConflict('Local mirror advanced during catch-up', 409)
+                    if checkpoint and seq < checkpoint['seq']:
+                        # Rebuild canonical state and disposable indexes in the
+                        # same transaction as the verified position and tail.
+                        db.execute('DELETE FROM records')
+                        db.execute('DELETE FROM record_lookup')
+                        db.execute('DELETE FROM record_lookup_dirty')
+                        for kind, key, value in checkpoint.records():
+                            tx.put(kind, key, value)
+                            tx.changes.clear()  # authoritative restore, not a proposed write
+                        seq, previous = checkpoint['seq'], checkpoint['hash']
+                    elif checkpoint and seq == checkpoint['seq'] and previous != checkpoint['hash']:
+                        raise Fault('Shared checkpoint history mismatch', 409)
                     while seq < last:
                         entry = entries[seq + 1]
                         if not entry or entry['prev'] != previous or entry['seq'] != seq + 1:
@@ -376,6 +401,7 @@ class Store:
                                 tx.drop(kind, key)
                             else:
                                 tx.put(kind, key, value)
+                        tx.changes.clear()  # do not accumulate the fetched canonical suffix
                         seq += 1
                         previous = digest(entry)
                     if previous != (head['hash'] if head else ''):

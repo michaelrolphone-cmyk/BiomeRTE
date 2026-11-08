@@ -11,6 +11,10 @@ from .store import Fault, encode, uid, mkdir, digest
 from .identity import sign
 
 
+RESULT_DEBUG_COUNT = 100
+RESULT_DEBUG_BYTES = 1024 * 1024
+
+
 def post(url, path, body, ca=None, token=None, timeout=30):
     parsed = urlparse(url)
     if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')):
@@ -46,6 +50,14 @@ class Worker:
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('CREATE TABLE IF NOT EXISTS fences(resource TEXT PRIMARY KEY,gen INTEGER,holder TEXT);'
                               'CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY,signature TEXT,state TEXT,result TEXT,resource TEXT);')
+        self.db.executescript('CREATE TABLE IF NOT EXISTS result_retention_eligible(id TEXT PRIMARY KEY,signature TEXT);'
+                              'CREATE TABLE IF NOT EXISTS result_acknowledged(id TEXT PRIMARY KEY);'
+                              'CREATE TABLE IF NOT EXISTS result_debug(seq INTEGER PRIMARY KEY AUTOINCREMENT,'
+                              'id TEXT UNIQUE,state TEXT,result TEXT,bytes INTEGER);'
+                              'CREATE TABLE IF NOT EXISTS result_cleanup(id TEXT PRIMARY KEY,argv TEXT,payload TEXT);'
+                              'CREATE TABLE IF NOT EXISTS reconciliations '
+                              '(id TEXT PRIMARY KEY,previous_result TEXT,state TEXT,result TEXT,observed REAL);')
+        self._initialize_result_recovery()
         self.remote, self.offers, self.timeout = remote, offers, timeout
         self.physical = {x['resource'] for x in offers}
         # Pair this durable enforcement store with one authority namespace.
@@ -55,6 +67,49 @@ class Worker:
         if row and row[0] != authority:
             raise Fault('Worker ledger belongs to another authority')
         self.db.execute('INSERT OR IGNORE INTO authority VALUES(1,?)', (authority,))
+
+    def _initialize_result_recovery(self):
+        # Disposable pending projection: never scan acknowledged history on a poll.
+        # DDL stays inside executescript BEGIN for Python 3.4 compatibility.
+        self.db.executescript("""BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS result_recovery_pending(id TEXT PRIMARY KEY,signature TEXT);
+            CREATE TABLE IF NOT EXISTS result_recovery_schema(version INTEGER PRIMARY KEY);
+            CREATE TRIGGER IF NOT EXISTS result_recovery_action_update AFTER UPDATE ON actions BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+                INSERT OR REPLACE INTO result_recovery_pending
+                    SELECT NEW.id,NEW.signature FROM result_retention_eligible e
+                    WHERE e.id=NEW.id AND e.signature=NEW.signature
+                      AND NEW.state IN ('succeeded','failed')
+                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=NEW.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_action_delete AFTER DELETE ON actions BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_insert AFTER INSERT ON result_retention_eligible BEGIN
+                INSERT OR REPLACE INTO result_recovery_pending
+                    SELECT a.id,a.signature FROM actions a WHERE a.id=NEW.id AND a.signature=NEW.signature
+                      AND a.state IN ('succeeded','failed')
+                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_delete AFTER DELETE ON result_retention_eligible BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_ack_insert AFTER INSERT ON result_acknowledged BEGIN
+                DELETE FROM result_recovery_pending WHERE id=NEW.id;
+            END;
+        """)
+        try:
+            if not self.db.execute('SELECT 1 FROM result_recovery_schema WHERE version=1').fetchone():
+                self.db.execute("INSERT OR IGNORE INTO result_recovery_pending "
+                                "SELECT a.id,a.signature FROM result_retention_eligible e "
+                                "CROSS JOIN actions a ON a.id=e.id AND a.signature=e.signature "
+                                "WHERE a.state IN ('succeeded','failed') AND NOT EXISTS "
+                                "(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id)")
+                self.db.execute('INSERT INTO result_recovery_schema VALUES(1)')
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def advertise(self):
         for o in self.offers:
@@ -73,23 +128,36 @@ class Worker:
         for operation, signature, old_result in rows:
             if operation == exclude:
                 continue
-            a = self.remote.call('cap.status', {'operation': operation})
+            a = self.remote.call('cap.status', {'operation': operation, 'recovery': True})
             if a.get('provider') != self.remote.node or a.get('guard', a.get('resource')) != guard:
                 raise Fault('Reconciliation binding mismatch', 409)
-            if signature != digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']]):
+            identity = (a.get('identity_digest') if a.get('result_expired') is True else
+                        digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']]))
+            if signature != identity:
                 raise Fault('Reconciliation identity mismatch', 409)
-            result = a.get('result', {})
+            result = a.get('recovery_result', {}) if a.get('result_expired') is True else a.get('result', {})
+            if a.get('result_expired') is True and (not isinstance(result, dict) or
+                    result.get('result_expired') is not True or
+                    not isinstance(a.get('result_digest'), str) or
+                    result.get('result_digest') != a['result_digest']):
+                raise Fault('Invalid expired reconciliation summary', 409)
             if a.get('state') not in ('succeeded', 'failed') or not (
                     result.get('reconciliation', {}).get('quiescent') is True or
                     result.get('evidence', {}).get('quiescent') is True):
                 continue
-            with self.db:
-                self.db.execute('CREATE TABLE IF NOT EXISTS reconciliations '
-                                '(id TEXT PRIMARY KEY,previous_result TEXT,state TEXT,result TEXT,observed REAL)')
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
                 self.db.execute('INSERT OR IGNORE INTO reconciliations VALUES(?,?,?,?,?)',
                                 (operation, old_result, a['state'], encode(result), time.time()))
-                self.db.execute("UPDATE actions SET state=?,result=? WHERE id=? AND signature=? AND state='uncertain'",
-                                (a['state'], encode(result), operation, signature))
+                changed = self.db.execute("UPDATE actions SET state=?,result=? WHERE id=? AND signature=? AND state='uncertain'",
+                                          (a['state'], encode(result), operation, signature))
+                if changed.rowcount and a.get('result_expired') is True:
+                    # This is recovery evidence, not the original provider result.
+                    self.db.execute('INSERT OR IGNORE INTO result_acknowledged VALUES(?)', (operation,))
+                self.db.commit()
+            except BaseException:
+                self.db.rollback()
+                raise
         return not self.db.execute(
             "SELECT 1 FROM actions WHERE state='uncertain' AND resource=? AND id!=? LIMIT 1",
             (guard, exclude or '')).fetchone()
@@ -160,6 +228,9 @@ class Worker:
         if row:
             if row[0] != sig:
                 raise Fault('Operation identity conflict', 409)
+            if self.db.execute('SELECT 1 FROM result_acknowledged WHERE id=?', (a['id'],)).fetchone():
+                # The retained identity fence outlives its disposable response.
+                return
             state, out = row[1], json.loads(row[2])
         else:
             adapter = next(
@@ -170,8 +241,17 @@ class Worker:
             if not isinstance(argv, list) or not argv or not os.path.isabs(argv[0]):
                 raise Fault('Expected absolute executable argv')
             out = {'reason': 'effect may have occurred; inspect resource before retry'}
-            self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
-                            (a['id'], sig, 'uncertain', encode(out), guard))
+            # Only actions born under this retention contract may lose payloads.
+            # Both records must be durable before the adapter can cause effects.
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
+                                (a['id'], sig, 'uncertain', encode(out), guard))
+                self.db.execute('INSERT INTO result_retention_eligible VALUES(?,?)', (a['id'], sig))
+                self.db.commit()
+            except BaseException:
+                self.db.rollback()
+                raise
             state = 'uncertain'
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.PIPE,
@@ -196,10 +276,123 @@ class Worker:
             self.db.execute('UPDATE actions SET state=?,result=? WHERE id=?',
                             (state, encode(out), a['id']))
         args.update(state=state, result=out)
-        self.remote.call('provider.result', args)
+        acknowledged = self.remote.call('provider.result', args)
+        if (state in ('succeeded', 'failed') and isinstance(acknowledged, dict) and
+                all(acknowledged.get(k) == v for k, v in (
+                    ('id', a['id']), ('provider', self.remote.node),
+                    ('generation', a['generation']), ('state', state))) and
+                (acknowledged.get('result') == out or
+                 (acknowledged.get('result_expired') is True and
+                  acknowledged.get('identity_digest') == sig and
+                  acknowledged.get('result_digest') == digest(out)))):
+            adapter = next((o for o in self.offers if o['contract'] == a['contract']
+                            and o['resource'] == a['resource']), {})
+            if self.retire_result(a['id'], sig, state, out, adapter.get('acknowledge_argv')):
+                self.cleanup_results(a['id'])
+
+    def retire_result(self, operation, signature, state, result, acknowledge_argv=None):
+        """Roll off only terminal results acknowledged by their authority."""
+        body = encode(result)
+        size = len(body.encode('utf-8'))
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if not self.db.execute('SELECT 1 FROM result_retention_eligible WHERE id=? AND signature=?',
+                                   (operation, signature)).fetchone():
+                # A successful re-delivery does not authorize purging old data.
+                self.db.commit()
+                return False
+            row = self.db.execute('SELECT signature,state,result FROM actions WHERE id=?',
+                                  (operation,)).fetchone()
+            if row != (signature, state, body) or state not in ('succeeded', 'failed'):
+                raise Fault('Local result changed before acknowledgement', 409)
+            if size <= RESULT_DEBUG_BYTES:
+                self.db.execute('INSERT OR REPLACE INTO result_debug(id,state,result,bytes) VALUES(?,?,?,?)',
+                                (operation, state, body, size))
+            if acknowledge_argv is not None:
+                if (not isinstance(acknowledge_argv, list) or not acknowledge_argv or
+                        not all(isinstance(arg, str) for arg in acknowledge_argv) or
+                        not os.path.isabs(acknowledge_argv[0])):
+                    raise Fault('Expected absolute acknowledgement executable argv')
+                self.db.execute('INSERT OR IGNORE INTO result_cleanup VALUES(?,?,?)',
+                                (operation, encode(acknowledge_argv),
+                                 encode({'operation': operation, 'result_digest': digest(result)})))
+            self.db.execute('INSERT OR IGNORE INTO result_acknowledged VALUES(?)', (operation,))
+            self.db.execute("UPDATE actions SET result='{}' WHERE id=?", (operation,))
+            count, used = 0, 0
+            for seq, amount in self.db.execute('SELECT seq,bytes FROM result_debug ORDER BY seq DESC').fetchall():
+                count += 1
+                used += amount
+                if count > RESULT_DEBUG_COUNT or used > RESULT_DEBUG_BYTES:
+                    self.db.execute('DELETE FROM result_debug WHERE seq=?', (seq,))
+            self.db.commit()
+            return True
+        except BaseException:
+            self.db.rollback()
+            raise
+
+    def cleanup_results(self, operation=None):
+        """Retry acknowledged, idempotent adapter cleanup without replaying effects."""
+        query = ('SELECT c.id,c.argv,c.payload FROM result_cleanup c '
+                 'CROSS JOIN result_retention_eligible e ON e.id=c.id '
+                 'CROSS JOIN actions a ON a.id=e.id AND a.signature=e.signature')
+        rows = self.db.execute(query + (' WHERE c.id=?' if operation else ' ORDER BY c.id LIMIT 8'),
+                               (operation,) if operation else ()).fetchall()
+        for identifier, argv, payload in rows:
+            proc = subprocess.Popen(json.loads(argv), stdin=subprocess.PIPE,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                proc.communicate(payload.encode('utf-8'),
+                                 timeout=30 if self.timeout is None else min(self.timeout, 30))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise Fault('Acknowledged result cleanup timed out; cleanup remains pending', 503)
+            if proc.returncode:
+                raise Fault('Acknowledged result cleanup failed; cleanup remains pending', 503)
+            self.db.execute('DELETE FROM result_cleanup WHERE id=? AND argv=? AND payload=?',
+                            (identifier, argv, payload))
+
+    def recover_result_acknowledgements(self, limit=8):
+        """Confirm bounded new terminal receipts whose delivery ACK was lost."""
+        import logging
+        after = getattr(self, '_result_recovery_after', '')
+        query = ("SELECT a.id,a.signature,a.state,a.result FROM result_recovery_pending p "
+                 "CROSS JOIN actions a ON a.id=p.id AND a.signature=p.signature "
+                 "WHERE p.id>? ORDER BY p.id LIMIT ?")
+        limit = max(0, min(8, limit))
+        rows = self.db.execute(query, (after, limit)).fetchall()
+        if not rows and after:
+            rows = self.db.execute(query, ('', limit)).fetchall()
+        for operation, signature, state, body in rows:
+            self._result_recovery_after = operation
+            try:
+                action = self.remote.call('cap.status', {'operation': operation, 'recovery': True})
+                if (action.get('id') != operation or action.get('provider') != self.remote.node or
+                        action.get('state') != state):
+                    continue
+                expired = action.get('result_expired') is True
+                identity = (action.get('identity_digest') if expired else
+                            digest([action[k] for k in ('contract', 'inputs', 'resource', 'generation', 'lease')]))
+                result = json.loads(body)
+                confirmed = action.get('result_digest') if expired else digest(action.get('result'))
+                if identity != signature or confirmed != digest(result):
+                    continue
+                adapter = next((o for o in self.offers if o['contract'] == action.get('contract')
+                                and o['resource'] == action.get('resource')), {})
+                if self.retire_result(operation, signature, state, result, adapter.get('acknowledge_argv')):
+                    self.cleanup_results(operation)
+            except Exception as error:
+                # A failing receipt must not starve other receipts or execution.
+                logging.warning('Result acknowledgement recovery pending: %s', type(error).__name__)
 
     def once(self, pool=None):
         import logging
+        try:
+            self.cleanup_results()
+        except Exception as error:
+            # A filesystem cleanup failure cannot requeue the physical effect.
+            logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
+        self.recover_result_acknowledgements()
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
         errors, blocked = [], set()
         def failure(kind, item, error):
@@ -334,19 +527,31 @@ def reconcile_receipt(directory, remote, operation, state, outcome):
     """Operator reconciliation after inspecting a physical effect, preserving the original identity."""
     if state not in ('succeeded', 'failed') or not isinstance(outcome, dict):
         raise Fault('Invalid outcome')
-    a = remote.call('cap.status', {'operation': operation})
+    a = remote.call('cap.status', {'operation': operation, 'recovery': True})
     if a['provider'] != remote.node:
         raise Fault('Foreign operation', 403)
     db = sqlite3.connect(os.path.join(directory, 'worker.sqlite'))
     try:
+        # Python 3.4 DDL may commit implicitly. Initialize before any DML.
+        db.execute('CREATE TABLE IF NOT EXISTS result_acknowledged(id TEXT PRIMARY KEY)')
         row = db.execute('SELECT signature,state,result FROM actions WHERE id=?',
                          (operation,)).fetchone()
-        if not row or row[0] != digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']]):
+        identity = (a.get('identity_digest') if a.get('result_expired') is True else
+                    digest([a['contract'], a['inputs'], a['resource'], a['generation'], a['lease']]))
+        if not row or row[0] != identity:
             raise Fault('No matching local operation')
         if row[1] != 'uncertain' and (row[1] != state or json.loads(row[2]) != outcome):
             raise Fault('Conflicting result', 409)
-        result = remote.call('provider.result', {'provider': remote.node, 'operation': operation,
-                                                 'generation': a['generation'], 'state': state, 'result': outcome})
+        if a.get('result_expired') is True:
+            if a.get('state') != state or a.get('result_digest') != digest(outcome):
+                raise Fault('Conflicting expired result', 409)
+            # The authority already confirms this exact full outcome. Never
+            # send recovery_result as if it were the original provider output.
+            result = a
+            db.execute('INSERT OR IGNORE INTO result_acknowledged VALUES(?)', (operation,))
+        else:
+            result = remote.call('provider.result', {'provider': remote.node, 'operation': operation,
+                                                     'generation': a['generation'], 'state': state, 'result': outcome})
         db.execute('UPDATE actions SET state=?,result=? WHERE id=?',
                    (state, encode(outcome), operation))
         db.commit()
