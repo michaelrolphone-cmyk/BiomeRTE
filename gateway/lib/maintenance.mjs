@@ -15,7 +15,8 @@ export async function maintenancePhone(env,envelope){
  const jobs=(await env.DB.prepare("SELECT j.* FROM maintenance_jobs j JOIN maintenance_hosts h ON h.id=j.host WHERE h.phone_device=? AND h.site=? AND h.enabled=1"+(envelope.command==='inbox'?" AND j.state='awaiting_confirmation'":"")+" ORDER BY j.created").bind(envelope.device,envelope.site).all()).results;
  const cards=[];
  for(const job of jobs){
-  const request=JSON.parse(job.request).approval,id=await hexHash(maintenanceCanonical([request.id,1])),digest=await hexHash(maintenanceCanonical(request));
+  // Retired commands keep the exact proposal digest for late signed replies.
+  const request=job.request_retired===1?{id:'maintenance:'+job.id}:JSON.parse(job.request).approval,id=await hexHash(maintenanceCanonical([request.id,1])),digest=job.request_retired===1?job.approval_digest:await hexHash(maintenanceCanonical(request));
   cards.push({job,id,request,digest,state:'pending',responses:[],created_at:job.created});
  }
  if(envelope.command==='inbox')return cards.length?{decisions:cards.filter(c=>c.id>(args.cursor??'')).map(({job,...card})=>card),next_cursor:'',site:envelope.site,observed_at:Date.now()/1000}:null;
@@ -54,16 +55,23 @@ export async function maintenancePhone(env,envelope){
 }
 async function maintenanceSchema(db){
  await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_hosts(id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,seen REAL,retention_checked REAL,phone_key TEXT NOT NULL,phone_device TEXT NOT NULL,site TEXT NOT NULL)').run();
- await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_jobs(id TEXT PRIMARY KEY,host TEXT NOT NULL,request TEXT NOT NULL,state TEXT NOT NULL,result TEXT,confirmation TEXT,created REAL NOT NULL,updated REAL NOT NULL,retention_version INTEGER,result_digest TEXT,result_bytes INTEGER,completed REAL,result_retired INTEGER NOT NULL DEFAULT 0)').run();
+ await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_jobs(id TEXT PRIMARY KEY,host TEXT NOT NULL,request TEXT NOT NULL,state TEXT NOT NULL,result TEXT,confirmation TEXT,created REAL NOT NULL,updated REAL NOT NULL,retention_version INTEGER,result_digest TEXT,result_bytes INTEGER,completed REAL,result_retired INTEGER NOT NULL DEFAULT 0,request_digest TEXT,request_bytes INTEGER,approval_digest TEXT,request_retired INTEGER NOT NULL DEFAULT 0)').run();
  const hostColumns=(await db.prepare('PRAGMA table_info(maintenance_hosts)').all()).results;
  if(!hostColumns.some(c=>c.name==='retention_checked')){try{await db.prepare('ALTER TABLE maintenance_hosts ADD COLUMN retention_checked REAL').run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
  const columns=(await db.prepare('PRAGMA table_info(maintenance_jobs)').all()).results;
- for(const [name,type] of [['retention_version','INTEGER'],['result_digest','TEXT'],['result_bytes','INTEGER'],['completed','REAL'],['result_retired','INTEGER NOT NULL DEFAULT 0']]){
+ for(const [name,type] of [['retention_version','INTEGER'],['result_digest','TEXT'],['result_bytes','INTEGER'],['completed','REAL'],['result_retired','INTEGER NOT NULL DEFAULT 0'],['request_digest','TEXT'],['request_bytes','INTEGER'],['approval_digest','TEXT'],['request_retired','INTEGER NOT NULL DEFAULT 0']]){
   if(!columns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE maintenance_jobs ADD COLUMN '+name+' '+type).run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
  }
  await db.prepare("CREATE INDEX IF NOT EXISTS maintenance_future_results ON maintenance_jobs(host,completed DESC,id DESC) WHERE retention_version=1 AND result_retired=0 AND state IN ('succeeded','failed') AND result_digest IS NOT NULL AND completed IS NOT NULL").run();
  if(!columns.some(c=>c.name==='confirmation')){try{await db.prepare('ALTER TABLE maintenance_jobs ADD COLUMN confirmation TEXT').run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
- await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_audit(id TEXT PRIMARY KEY,action TEXT NOT NULL,host TEXT,body TEXT,created REAL NOT NULL)').run();
+ await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_audit(id TEXT PRIMARY KEY,action TEXT NOT NULL,host TEXT,body TEXT,created REAL NOT NULL,retention_version INTEGER,body_digest TEXT,body_bytes INTEGER,body_retired INTEGER NOT NULL DEFAULT 0)').run();
+ const auditColumns=(await db.prepare('PRAGMA table_info(maintenance_audit)').all()).results;
+ for(const [name,type] of [['retention_version','INTEGER'],['body_digest','TEXT'],['body_bytes','INTEGER'],['body_retired','INTEGER NOT NULL DEFAULT 0']]){
+  if(!auditColumns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE maintenance_audit ADD COLUMN '+name+' '+type).run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
+ }
+ // The additional non-null digests are insert-only cutover fences. Upgrading or
+ // retrying an older result-retention job never enrolls its request or audit.
+ await db.prepare("CREATE INDEX IF NOT EXISTS maintenance_future_requests ON maintenance_jobs(host,completed DESC,id DESC) WHERE retention_version=1 AND request_retired=0 AND state IN ('succeeded','failed') AND request_digest IS NOT NULL AND approval_digest IS NOT NULL AND request_bytes IS NOT NULL AND result_digest IS NOT NULL AND completed IS NOT NULL AND confirmation IS NULL").run();
 }
 export async function maintenanceCall(env,op,a,id){
  const db=env.DB,now=Date.now()/1000;await maintenanceSchema(db);
@@ -110,12 +118,17 @@ export async function maintenanceCall(env,op,a,id){
   if(!host?.enabled)throw Error('Maintenance host is not enabled');
   if(!Array.isArray(a.argv)||!a.argv.length||a.argv.some(v=>typeof v!=='string'||v.includes('\0'))||!a.argv[0].startsWith('/'))throw Error('Expected absolute executable and string argv');
   const approval={id:'maintenance:'+id,workflow_instance_id:'maintenance:'+id,proposal_revision:1,question:'Allow this one maintenance command on '+a.host+'?\nExecutable and arguments: '+JSON.stringify(a.argv)+'\nWorking directory: '+(a.cwd??'service default'),choices:[{id:'approve',label:'Allow this command once',meaning:'approved'},{id:'reject',label:'Reject',meaning:'rejected'}]};
-  const body=JSON.stringify({argv:a.argv,cwd:a.cwd??null,approval});
-  await db.prepare("INSERT OR IGNORE INTO maintenance_jobs(id,host,request,state,created,updated,retention_version) VALUES(?,?,?,'queued',?,?,1)").bind(id,a.host,body,now,now).run();
-  const prior=await db.prepare('SELECT host,request FROM maintenance_jobs WHERE id=?').bind(id).first();
-  if(prior.host!==a.host||prior.request!==body)throw Error('Request ID already belongs to a different command');
+  const body=JSON.stringify({argv:a.argv,cwd:a.cwd??null,approval}),digest=await hexHash(body),approvalDigest=await hexHash(maintenanceCanonical(approval)),audit=JSON.stringify(a),auditDigest=await hexHash(audit);
+  // Admission and its audit copy commit together. The second statement can only
+  // insert against the exact winning command; an altered duplicate has no effect.
+  await db.batch([
+   db.prepare("INSERT OR IGNORE INTO maintenance_jobs(id,host,request,state,created,updated,retention_version,request_digest,request_bytes,approval_digest) VALUES(?,?,?,'queued',?,?,1,?,?,?)").bind(id,a.host,body,now,now,digest,new TextEncoder().encode(body).length,approvalDigest),
+   db.prepare("INSERT OR IGNORE INTO maintenance_audit(id,action,host,body,created,retention_version,body_digest,body_bytes,body_retired) SELECT id,'maintenance.submit',host,CASE WHEN request_retired=1 THEN ? ELSE ? END,?,CASE WHEN retention_version=1 AND request_digest IS NOT NULL THEN 1 ELSE NULL END,?,CASE WHEN request_retired=1 THEN 0 ELSE ? END,request_retired FROM maintenance_jobs WHERE id=? AND host=? AND ((request_digest=? AND retention_version=1) OR (request_digest IS NULL AND request=?))").bind(JSON.stringify({body_retired:true,body_sha256:auditDigest,request_sha256:digest}),audit,now,auditDigest,new TextEncoder().encode(audit).length,id,a.host,digest,body),
+  ]);
+  const prior=await db.prepare('SELECT host,request,retention_version,request_digest,request_retired FROM maintenance_jobs WHERE id=?').bind(id).first();
+  if(prior.host!==a.host||(prior.retention_version===1&&prior.request_digest?prior.request_digest!==digest:prior.request!==body))throw Error('Request ID already belongs to a different command');
  }else throw Error('Unknown maintenance operation');
- await db.prepare('INSERT OR IGNORE INTO maintenance_audit(id,action,host,body,created) VALUES(?,?,?,?,?)').bind(id,op,a.host,JSON.stringify(a),now).run();
+ if(op!=='maintenance.submit')await db.prepare('INSERT OR IGNORE INTO maintenance_audit(id,action,host,body,created) VALUES(?,?,?,?,?)').bind(id,op,a.host,JSON.stringify(a),now).run();
  if(op==='maintenance.submit'){
   const current=await db.prepare('SELECT state FROM maintenance_jobs WHERE id=?').bind(id).first();
   return {id,accepted:true,state:current.state,...(current.state==='awaiting_confirmation'?{approval:'Signed Android confirmation required for this exact command'}:{})};
@@ -164,7 +177,8 @@ export async function maintenanceDevice(req,env){
 export async function maintenanceResultRetention(env,host,now=Date.now()/1000,force=false){
  const read=(name,fallback)=>{const raw=env[name];if(raw!==undefined&&typeof raw!=='number'&&!(typeof raw==='string'&&/^(0|[1-9][0-9]*)$/.test(raw)))throw Error('Invalid maintenance retention limit');const value=raw===undefined?fallback:Number(raw);if(!Number.isSafeInteger(value)||value<0)throw Error('Invalid maintenance retention limit');return value};
  const count=read('MAINTENANCE_RESULT_MAX_COUNT',1000),bytes=read('MAINTENANCE_RESULT_MAX_BYTES',4*1024*1024),age=read('MAINTENANCE_RESULT_MAX_AGE_SECONDS',7*86400);
- if(count>10000)throw Error('Maintenance count limit exceeds bounded scan budget');
+ const requestCount=read('MAINTENANCE_REQUEST_MAX_COUNT',1000),requestBytes=read('MAINTENANCE_REQUEST_MAX_BYTES',4*1024*1024),requestAge=read('MAINTENANCE_REQUEST_MAX_AGE_SECONDS',7*86400);
+ if(count>10000||requestCount>10000)throw Error('Maintenance count limit exceeds bounded scan budget');
  if(!Number.isFinite(now))throw Error('Invalid maintenance retention clock');
  const due=await env.DB.prepare('UPDATE maintenance_hosts SET retention_checked=? WHERE id=? AND (?=1 OR retention_checked IS NULL OR retention_checked<=?) RETURNING id').bind(now,host,force?1:0,now-60).first();
  if(!due)return {checked:false};
@@ -175,6 +189,18 @@ export async function maintenanceResultRetention(env,host,now=Date.now()/1000,fo
   const tombstone=JSON.stringify({state:row.state,result_retired:true,result_sha256:row.result_digest});
   await env.DB.prepare("UPDATE maintenance_jobs SET result=?,result_bytes=0,result_retired=1 WHERE id=? AND host=? AND retention_version=1 AND result_retired=0 AND result_digest=? AND state IN ('succeeded','failed')").bind(tombstone,row.id,host,row.result_digest).run();
  }
- if(rows.length===200)await env.DB.prepare('UPDATE maintenance_hosts SET retention_checked=? WHERE id=?').bind(now-60,host).run();
- return {checked:true,retired:rows.length,pending:rows.length===200};
+ // Each candidate joins at most one submit audit by its primary key. The byte
+ // budget covers both the command (including approval question) and audit copy.
+ const requests=(await env.DB.prepare("WITH candidates AS (SELECT id,host,request_digest,request_bytes,approval_digest,result_digest,completed FROM maintenance_jobs INDEXED BY maintenance_future_requests WHERE host=? AND retention_version=1 AND request_retired=0 AND state IN ('succeeded','failed') AND request_digest IS NOT NULL AND approval_digest IS NOT NULL AND request_bytes IS NOT NULL AND result_digest IS NOT NULL AND completed IS NOT NULL AND confirmation IS NULL ORDER BY completed DESC,id DESC LIMIT ?), payloads AS (SELECT j.*,j.request_bytes+COALESCE(a.body_bytes,0) AS payload_bytes FROM candidates j LEFT JOIN maintenance_audit a ON a.id=j.id AND a.host=j.host AND a.action='maintenance.submit' AND a.retention_version=1 AND a.body_retired=0), ranked AS (SELECT *,ROW_NUMBER() OVER(ORDER BY completed DESC,id DESC) AS ordinal,SUM(CASE WHEN payload_bytes<=? THEN payload_bytes ELSE 0 END) OVER(ORDER BY completed DESC,id DESC ROWS UNBOUNDED PRECEDING) AS total FROM payloads) SELECT id,request_digest,result_digest FROM ranked WHERE ordinal>? OR payload_bytes>? OR total>? OR completed<? ORDER BY completed,id LIMIT 200").bind(host,requestCount+200,requestBytes,requestCount,requestBytes,requestBytes,now-requestAge).all()).results;
+ for(const row of requests){
+  // D1 batches are atomic: interrupted cleanup retains both full copies or both
+  // tombstones, never a lost digest or a half-retired unindexed audit payload.
+  await env.DB.batch([
+   env.DB.prepare("UPDATE maintenance_jobs SET request=?,request_bytes=0,request_retired=1 WHERE id=? AND host=? AND retention_version=1 AND request_retired=0 AND request_digest=? AND result_digest=? AND approval_digest IS NOT NULL AND completed IS NOT NULL AND confirmation IS NULL AND state IN ('succeeded','failed')").bind(JSON.stringify({request_retired:true,request_sha256:row.request_digest}),row.id,host,row.request_digest,row.result_digest),
+   env.DB.prepare("UPDATE maintenance_audit SET body=json_object('body_retired',json('true'),'body_sha256',body_digest,'request_sha256',?),body_bytes=0,body_retired=1 WHERE id=? AND host=? AND action='maintenance.submit' AND retention_version=1 AND body_retired=0 AND body_digest IS NOT NULL AND EXISTS(SELECT 1 FROM maintenance_jobs WHERE id=? AND host=? AND retention_version=1 AND request_retired=1 AND request_digest=? AND result_digest=? AND confirmation IS NULL AND state IN ('succeeded','failed'))").bind(row.request_digest,row.id,host,row.id,host,row.request_digest,row.result_digest),
+  ]);
+ }
+ const pending=rows.length===200||requests.length===200;
+ if(pending)await env.DB.prepare('UPDATE maintenance_hosts SET retention_checked=? WHERE id=?').bind(now-60,host).run();
+ return {checked:true,retired:rows.length,requests_retired:requests.length,pending};
 }

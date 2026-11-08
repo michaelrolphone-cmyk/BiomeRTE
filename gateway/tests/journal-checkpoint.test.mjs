@@ -151,7 +151,7 @@ test('lookup read and cache budgets fall back safely on repeated and unique reco
  const {env,append,calls}=fixture(),records=Array.from({length:600},(_,i)=>['many','id'+i,{i,text:'x'.repeat(950)}]);
  await append(JSON.stringify(records));await advance(env);
  records[599][2].changed=true;await append(JSON.stringify(records));let pages=0,skipped=0;
- for(;;){const before=calls(),r=await buildCheckpoint(env,'s');assert.ok(calls()-before<1000);pages++;skipped+=r.unchanged??0;assert.ok(r.lookup.reads<=96);assert.ok(r.lookup.bytes<=1048576);assert.ok(r.lookup.nodes<=256);if(r.advanced)break;assert.ok(pages<20);}
+ for(;;){const before=calls(),r=await buildCheckpoint(env,'s');assert.ok(calls()-before<1000);if(r.gc_only)continue;pages++;skipped+=r.unchanged??0;assert.ok(r.lookup.reads<=96);assert.ok(r.lookup.bytes<=1048576);assert.ok(r.lookup.nodes<=256);if(r.advanced)break;assert.ok(pages<20);}
  assert.ok(skipped>400);assert.ok(pages<13);assert.equal((await journalRecord(env,'s','many','id599')).value.changed,true);
  await append(JSON.stringify(Array.from({length:150},(_,i)=>['new','id'+i,{i}])));await advance(env);assert.equal((await journalRecord(env,'s','new','id149')).value.i,149);
 });

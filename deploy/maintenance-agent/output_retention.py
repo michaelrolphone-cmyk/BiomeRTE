@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import selectors
 import stat
 import subprocess
 import sys
@@ -12,6 +13,8 @@ import time
 DEFAULTS = {'output_count': 100, 'output_bytes': 64 * 1024 * 1024,
             'result_count': 1000, 'result_bytes': 4 * 1024 * 1024,
             'max_age_seconds': 7 * 24 * 60 * 60}
+LSOF_OUTPUT_LIMIT = 64 * 1024
+LSOF_TIMEOUT_SECONDS = 15
 
 
 def canonical(value):
@@ -155,30 +158,95 @@ def output_dir(home, identifier):
         raise
 
 
+def lsof_pins_output(out):
+    """Only complete, numeric, read-only FDs of this process are exempt."""
+    if not out or len(out) > LSOF_OUTPUT_LIMIT or not out.endswith(b'\n'):
+        return True
+    own = ('p%d' % os.getpid()).encode('ascii')
+    seen_process = False
+    seen_files = set()
+    awaiting_access = False
+    for line in out[:-1].split(b'\n'):
+        if line.startswith(b'p'):
+            # Any other PID (or malformed/repeated process record) pins output.
+            if line != own or seen_process:
+                return True
+            seen_process = True
+        elif line.startswith(b'f'):
+            descriptor = line[1:]
+            if not seen_process or awaiting_access or not descriptor.isdigit() or len(descriptor) > 10:
+                return True
+            fd = int(descriptor)
+            if fd > 2147483647 or str(fd).encode('ascii') != descriptor or fd in seen_files:
+                return True
+            seen_files.add(fd)
+            awaiting_access = True
+        elif line == b'ar' and awaiting_access:
+            awaiting_access = False
+        else:
+            return True
+    return not seen_files or awaiting_access
+
+
+def read_lsof_output(process):
+    """Bound both inspection time and memory; any stderr makes it incomplete."""
+    deadline = time.monotonic() + LSOF_TIMEOUT_SECONDS
+    out = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stderr, selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, LSOF_TIMEOUT_SECONDS)
+            for key, _ in selector.select(remaining):
+                block = os.read(key.fd, min(4096, LSOF_OUTPUT_LIMIT - len(out) + 1))
+                if not block:
+                    selector.unregister(key.fileobj)
+                elif key.fileobj is process.stderr:
+                    raise ValueError('Incomplete native open-file inspection')
+                elif len(out) + len(block) > LSOF_OUTPUT_LIMIT:
+                    raise ValueError('Native open-file inspection exceeds limit')
+                else:
+                    out.extend(block)
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+    return bytes(out)
+
+
 def writers_present(path):
-    """Any writer/reader or incomplete native inspection pins the output."""
+    """Any external opener, own writer or incomplete inspection pins output."""
     if sys.platform != 'darwin':
         return True
-    process = subprocess.Popen(['/usr/sbin/lsof', '-nP', '-Fp', '--', path],
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        out, err = process.communicate(timeout=15)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate()
+        # Native macOS emits f fields even with -Fp. Request and validate the
+        # descriptor and access fields explicitly, rather than ignoring them.
+        process = subprocess.Popen(['/usr/sbin/lsof', '-nP', '-Fpfa', '--', path],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError:
         return True
-    if err:
+    try:
+        out = read_lsof_output(process)
+        if process.returncode == 1 and not out:
+            return False
+        if process.returncode != 0:
+            return True
+        # No duplicate execution for this command is admitted. Only this
+        # agent's read-only verification descriptors may be ignored.
+        return lsof_pins_output(out)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return True
-    if process.returncode == 1 and not out:
-        return False
-    if process.returncode != 0:
-        return True
-    lines = out.decode('ascii', 'replace').splitlines()
-    if not lines or any(not (line.startswith('p') and line[1:].isdigit()) for line in lines):
-        return True
-    # This agent's read-only verification FDs are visible too. No duplicate
-    # execution for the same command is admitted, so its own reads are safe.
-    return any(int(line[1:]) != os.getpid() for line in lines)
+    finally:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        process.stdout.close()
+        process.stderr.close()
 
 
 def inspect_outputs(home, identifier, active):

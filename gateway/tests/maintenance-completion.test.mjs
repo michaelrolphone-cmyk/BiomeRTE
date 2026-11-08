@@ -1,3 +1,4 @@
+import {sqliteD1} from './sqlite-d1.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -7,7 +8,7 @@ const sha=value=>createHash('sha256').update(value).digest('hex');
 function canonical(value){return JSON.stringify((function sorted(v){return Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v})(value)).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'))}
 async function fixture(settings={}){
  const sql=new DatabaseSync(':memory:'),token='b'.repeat(64),host='mac-maintenance';
- const DB={prepare(query){const stmt=sql.prepare(query);let args=[];return {bind(...v){args=v;return this},async first(){return stmt.get(...args)},async run(){return stmt.run(...args)},async all(){return {results:stmt.all(...args)}}}}};
+ const DB=sqliteD1(sql);
  const env={DB,...settings};
  const send=(body,key=token)=>maintenanceDevice(new Request('https://test.invalid/maintenance/device',{method:'POST',headers:{Authorization:'Bearer '+key},body:JSON.stringify(body)}),env);
  await send({operation:'poll'}); // Creates schema; host is not enrolled yet.
@@ -155,7 +156,7 @@ test('existing deployed schema migrates without enrolling or changing historical
  sql.prepare('INSERT INTO maintenance_hosts(id,key_hash,phone_key,phone_device,site) VALUES(?,?,?,?,?)').run(host,sha(token),'key','device','site');
  const history=JSON.stringify({state:'succeeded',stdout:'untouched historical output'});
  sql.prepare("INSERT INTO maintenance_jobs VALUES(?,?,?,'succeeded',?,NULL,1,1)").run('old',host,'{}',history);
- const DB={prepare(query){const stmt=sql.prepare(query);let args=[];return {bind(...v){args=v;return this},async first(){return stmt.get(...args)},async run(){return stmt.run(...args)},async all(){return {results:stmt.all(...args)}}}}};
+ const DB=sqliteD1(sql);
  try{
   const response=await maintenanceDevice(new Request('https://test.invalid/maintenance/device',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({operation:'poll'})}),{DB,MAINTENANCE_RESULT_MAX_COUNT:0});
   assert.equal(response.status,200);const row=sql.prepare('SELECT result,retention_version,result_retired FROM maintenance_jobs WHERE id=?').get('old');

@@ -18,11 +18,11 @@ function append(legacy){
  sql.prepare('INSERT INTO controller_journal VALUES(?,?,?,?)').run('s',seq,previous,JSON.stringify({$biome_archive:1,changes:changes.map(c=>c.slice(0,2))}));
 }
 try{
- const backlog=77000;sql.exec('BEGIN');for(let i=0;i<backlog;i++)append(true);sql.exec('COMMIT');
+ const backlog=Number(process.env.BACKLOG??77000);sql.exec('BEGIN');for(let i=0;i<backlog;i++)append(true);sql.exec('COMMIT');
  const started=performance.now();let rounds=0,position=0,peakLag=head,advancedEntries=0,maximumAdvance=0;
  while(position<head&&rounds<3000){
   for(let i=0;i<16;i++)append(false);calls=0;
-  const result=await buildCheckpoint(env,'s');await compactJournal(env,'s',{approvedFromSequence:77001});rounds++;maxCalls=Math.max(maxCalls,calls);
+  const result=await buildCheckpoint(env,'s');await compactJournal(env,'s',{approvedFromSequence:backlog+1});rounds++;maxCalls=Math.max(maxCalls,calls);
   assert.ok(calls<1000,'bounded service-call budget exceeded: '+calls);
   if(result.advanced){maximumAdvance=Math.max(maximumAdvance,result.seq-position);advancedEntries+=result.seq-position;position=result.seq;}
   peakLag=Math.max(peakLag,head-position);
@@ -30,12 +30,12 @@ try{
  }
  assert.equal(position,head,'backlog did not drain while appends continued');
  for(let i=0;i<20;i++){
-  for(let j=0;j<16;j++)append(false);calls=0;const result=await buildCheckpoint(env,'s');await compactJournal(env,'s',{approvedFromSequence:77001});maxCalls=Math.max(maxCalls,calls);assert.equal(result.seq,head);position=result.seq;
+  for(let j=0;j<16;j++)append(false);calls=0;const result=await buildCheckpoint(env,'s');await compactJournal(env,'s',{approvedFromSequence:backlog+1});maxCalls=Math.max(maxCalls,calls);assert.equal(result.seq,head);position=result.seq;
  }
- assert.equal((await readCheckpointRecord(env,'s','_receipt','legacy-77000')).value.result.seq,77000);
+ assert.equal((await readCheckpointRecord(env,'s','_receipt','legacy-'+backlog)).value.result.seq,backlog);
  assert.equal((await readCheckpointRecord(env,'s','status','controller')).value.seq,head);
  // Future-only compaction can remove multiple-entry ranges without replaying
  // the interval again; its manifest ancestry binds verified input history.
- await compactJournal(env,'s',{approvedFromSequence:77001});const futureRows=sql.prepare('SELECT count(*) n FROM controller_journal WHERE seq>=77001').get().n;assert.ok(futureRows<=64);assert.equal(sql.prepare('SELECT count(*) n FROM controller_journal WHERE seq<=77000').get().n,77000);
+ await compactJournal(env,'s',{approvedFromSequence:backlog+1});const futureRows=sql.prepare('SELECT count(*) n FROM controller_journal WHERE seq>=?').get(backlog+1).n;assert.ok(futureRows<=64);assert.equal(sql.prepare('SELECT count(*) n FROM controller_journal WHERE seq<=?').get(backlog).n,backlog);
  console.log(JSON.stringify({initial_backlog:backlog,new_entries_per_build:16,build_invocations:rounds,final_head:head,final_checkpoint:position,elapsed_seconds:(performance.now()-started)/1000,maximum_entries_advanced_per_build:maximumAdvance,max_service_calls_per_build:maxCalls,archive_puts:puts,archive_deletes:deletes,steady_state_rounds:20,legacy_receipt_preserved:true,retained_future_journal_rows:futureRows}));
 }finally{sql.close();rmSync(directory,{recursive:true,force:true});}

@@ -1,12 +1,14 @@
+import {managedJournalKey,storeManagedJournal} from './journal-upload.mjs';
 import {readCheckpointRecord,recordJournalRejection} from './journal-checkpoint.mjs';
 import {hexHash} from './bridge.mjs';
 const archiveKey=(site,hash)=>'controller-journal/'+encodeURIComponent(site)+'/'+hash;
+export function journalObjectKey(site,row){const pointer=JSON.parse(row.entry);return pointer.$biome_upload?managedJournalKey(site,row.hash,pointer.$biome_upload,pointer.$biome_upload_namespace):archiveKey(site,row.hash);}
 export function journalPointer(text){try{return JSON.parse(text).$biome_archive===1}catch{return false}}
 export async function journalText(env,site,row){
  if(!row)return null;
  if(!journalPointer(row.entry))return row.entry;
  if(!env.JOURNAL_ARCHIVE)throw Error('Journal archive binding unavailable');
- const object=await env.JOURNAL_ARCHIVE.get(archiveKey(site,row.hash));
+ const object=await env.JOURNAL_ARCHIVE.get(journalObjectKey(site,row));
  if(!object)throw Error('Journal archive object unavailable');
  const text=await object.text();
  if(await hexHash(text)!==row.hash)throw Error('Journal archive integrity failure');
@@ -26,6 +28,7 @@ export async function storedJournal(env,site,text,hash,existing=false){
  if(!existing)try{journalAdmission(env,text);}catch(error){if(error.status===413)await recordJournalRejection(env,site,new TextEncoder().encode(text).length);throw error;}
  if(!env.JOURNAL_ARCHIVE)return text;
  if(await hexHash(text)!==hash)throw Error('Journal source integrity failure');
+ if(!existing&&env.JOURNAL_MANAGED_UPLOADS==='1')return storeManagedJournal(env,site,text,hash);
  const key=archiveKey(site,hash);
  await env.JOURNAL_ARCHIVE.put(key,text,{httpMetadata:{contentType:'application/json'}});
  // Verify durable bytes before replacing the only SQL copy or publishing a head.

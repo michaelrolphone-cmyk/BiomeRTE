@@ -1,14 +1,15 @@
+import {collectJournalUploads} from './journal-upload.mjs';
 // Format 2 checkpoints: bounded manifest, bounded descriptor shards, and 64KiB
 // value chunks. No operation materializes the full canonical state.
 import {hexHash} from './bridge.mjs';
-import {journalText,journalEntryLimit,archiveJournalBatch} from './journal-storage.mjs';
+import {journalText,journalEntryLimit,archiveJournalBatch,journalObjectKey} from './journal-storage.mjs';
 const cpInitialized=new WeakSet();
 const CP_SHARDS=256,CP_CHUNK=65536,CP_SHARD_MAX=524288,CP_SHARD_TARGET=16384,CP_ENTRY_MAX=4194304;
 const cpKey=(site,digest)=>'controller-checkpoint-v2/'+encodeURIComponent(site)+'/'+digest;
 export async function checkpointSchema(db){
  if(cpInitialized.has(db))return;
  for(const sql of [
-  'CREATE TABLE IF NOT EXISTS checkpoint_progress(site TEXT PRIMARY KEY,max_entry_bytes INTEGER NOT NULL DEFAULT 0,max_entry_seq INTEGER NOT NULL DEFAULT 0,blocked_seq INTEGER,blocked_bytes INTEGER,last_error TEXT,rejected_entries INTEGER NOT NULL DEFAULT 0,last_rejected_bytes INTEGER,last_rejected_at REAL,max_depth INTEGER NOT NULL DEFAULT 2)',
+  'CREATE TABLE IF NOT EXISTS checkpoint_progress(site TEXT PRIMARY KEY,max_entry_bytes INTEGER NOT NULL DEFAULT 0,max_entry_seq INTEGER NOT NULL DEFAULT 0,blocked_seq INTEGER,blocked_bytes INTEGER,last_error TEXT,rejected_entries INTEGER NOT NULL DEFAULT 0,last_rejected_bytes INTEGER,last_rejected_at REAL,max_depth INTEGER NOT NULL DEFAULT 2,gc_removed_total INTEGER NOT NULL DEFAULT 0,gc_only_rounds INTEGER NOT NULL DEFAULT 0)',
   'CREATE TABLE IF NOT EXISTS controller_checkpoints(site TEXT PRIMARY KEY,current TEXT,previous TEXT)',
   'CREATE TABLE IF NOT EXISTS checkpoint_objects(site TEXT,digest TEXT,refs INTEGER NOT NULL DEFAULT 0,expires INTEGER NOT NULL,deleting INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(site,digest))',
   'CREATE TABLE IF NOT EXISTS checkpoint_readers(site TEXT,token TEXT,owner TEXT,digest TEXT,seq INTEGER,expires INTEGER,PRIMARY KEY(site,token))',
@@ -22,7 +23,7 @@ export async function checkpointSchema(db){
   "CREATE TRIGGER IF NOT EXISTS checkpoint_roots_update AFTER UPDATE OF current ON controller_checkpoints BEGIN DELETE FROM checkpoint_edges WHERE site=NEW.site AND parent IN ('root:current','root:previous'); INSERT OR IGNORE INTO checkpoint_edges SELECT NEW.site,'root:current',json_extract(NEW.current,'$.digest') WHERE NEW.current IS NOT NULL; INSERT OR IGNORE INTO checkpoint_edges SELECT NEW.site,'root:previous',json_extract(NEW.previous,'$.digest') WHERE NEW.previous IS NOT NULL; END"
  ])await db.prepare(sql).run();
  const columns=(await db.prepare('PRAGMA table_info(checkpoint_progress)').all()).results;
- for(const [name,type] of [['rejected_entries','INTEGER NOT NULL DEFAULT 0'],['last_rejected_bytes','INTEGER'],['last_rejected_at','REAL'],['max_depth','INTEGER NOT NULL DEFAULT 2']])if(!columns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE checkpoint_progress ADD COLUMN '+name+' '+type).run()}catch(error){if(!String(error.message).includes('duplicate column'))throw error}}
+ for(const [name,type] of [['rejected_entries','INTEGER NOT NULL DEFAULT 0'],['last_rejected_bytes','INTEGER'],['last_rejected_at','REAL'],['max_depth','INTEGER NOT NULL DEFAULT 2'],['gc_removed_total','INTEGER NOT NULL DEFAULT 0'],['gc_only_rounds','INTEGER NOT NULL DEFAULT 0']])if(!columns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE checkpoint_progress ADD COLUMN '+name+' '+type).run()}catch(error){if(!String(error.message).includes('duplicate column'))throw error}}
  cpInitialized.add(db);
 }
 function cpBytes(text){return new TextEncoder().encode(text).length}
@@ -89,7 +90,7 @@ async function cpObserve(env,site,seq,bytes){
 }
 async function cpJournal(env,site,row,observe=null,remaining=Infinity){
  if(row.entry.includes('"$biome_archive"')&&JSON.parse(row.entry).$biome_archive===1){
-  const obj=await env.JOURNAL_ARCHIVE.get('controller-journal/'+encodeURIComponent(site)+'/'+row.hash);
+  const obj=await env.JOURNAL_ARCHIVE.get(journalObjectKey(site,row));
   if(!obj||!Number.isSafeInteger(obj.size))throw Error('Journal archive object missing or size unavailable');
   if(obj.size>journalEntryLimit(env))await cpObserve(env,site,row.seq,obj.size);
   if(obj.size>remaining)return null;
@@ -104,7 +105,7 @@ async function cpJournal(env,site,row,observe=null,remaining=Infinity){
 }
 export async function checkpointStatus(db,site){
  await checkpointSchema(db);
- const progress=await db.prepare('SELECT max_entry_bytes,max_entry_seq,blocked_seq,blocked_bytes,last_error,rejected_entries,last_rejected_bytes,last_rejected_at,max_depth FROM checkpoint_progress WHERE site=?').bind(site).first();
+ const progress=await db.prepare('SELECT max_entry_bytes,max_entry_seq,blocked_seq,blocked_bytes,last_error,rejected_entries,last_rejected_bytes,last_rejected_at,max_depth,gc_removed_total,gc_only_rounds FROM checkpoint_progress WHERE site=?').bind(site).first();
  const build=await db.prepare('SELECT seq,offset FROM checkpoint_builds WHERE site=?').bind(site).first();
  const root=await db.prepare('SELECT current,previous FROM controller_checkpoints WHERE site=?').bind(site).first();
  return {...(progress??{max_entry_bytes:0,max_entry_seq:0,blocked_seq:null,blocked_bytes:null,last_error:null}),building:build??null,current:root?.current?JSON.parse(root.current):null,previous:root?.previous?JSON.parse(root.previous):null};
@@ -235,7 +236,11 @@ export async function buildCheckpoint(env,site,limit=2048){
  try{
   await env.DB.prepare('INSERT OR IGNORE INTO checkpoint_edges SELECT ?,?,value FROM json_each(?) WHERE value IS NOT NULL').bind(site,'stage',build.shards).run();
   await env.DB.prepare("DELETE FROM checkpoint_edges WHERE site=? AND parent LIKE 'build:%' AND parent!=?").bind(site,'build:'+token).run();
-  await checkpointGC(env,site);
+  const uploads=await collectJournalUploads(env,site,8);
+  if(uploads.removed)return {advanced:false,pending:true,gc_only:true,upload_gc_removed:uploads.removed};
+  const collected=await checkpointGC(env,site);
+  if(collected){await env.DB.prepare('INSERT OR IGNORE INTO checkpoint_progress(site) VALUES(?)').bind(site).run();await env.DB.prepare('UPDATE checkpoint_progress SET gc_removed_total=gc_removed_total+?,gc_only_rounds=gc_only_rounds+? WHERE site=?').bind(collected,collected===128?1:0,site).run();}
+  if(collected===128)return {advanced:false,pending:true,gc_only:true,gc_removed:collected};
   if(build.base!==root.current){
    await env.DB.prepare('DELETE FROM checkpoint_builds WHERE site=? AND token=?').bind(site,token).run();
    await env.DB.prepare("DELETE FROM checkpoint_edges WHERE site=? AND parent='stage'").bind(site).run();
@@ -333,8 +338,8 @@ export async function compactJournal(env,site,{approvedFromSequence,limit=128}={
  // unchanged immutable objects inherit that verification from the prior root.
  const readers=await env.DB.prepare('SELECT min(seq) floor FROM checkpoint_readers WHERE site=? AND expires>unixepoch()').bind(site).first();
  const cutoff=Math.min(previous.state.seq,readers.floor??previous.state.seq);
- const rows=(await env.DB.prepare('SELECT seq,hash FROM controller_journal WHERE site=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?').bind(site,approvedFromSequence,cutoff,limit).all()).results;
- if(rows.length){await env.JOURNAL_ARCHIVE.delete(rows.map(row=>'controller-journal/'+encodeURIComponent(site)+'/'+row.hash));await env.DB.prepare('DELETE FROM controller_journal WHERE site=? AND seq IN (SELECT value FROM json_each(?)) AND seq<?').bind(site,JSON.stringify(rows.map(row=>row.seq)),cutoff).run();}
+ const rows=(await env.DB.prepare('SELECT seq,hash,entry FROM controller_journal WHERE site=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?').bind(site,approvedFromSequence,cutoff,limit).all()).results;
+ if(rows.length){await env.JOURNAL_ARCHIVE.delete(rows.map(row=>journalObjectKey(site,row)));await env.DB.prepare('DELETE FROM controller_journal WHERE site=? AND seq IN (SELECT value FROM json_each(?)) AND seq<?').bind(site,JSON.stringify(rows.map(row=>row.seq)),cutoff).run();}
  return {removed:rows.length,recovery:previous.state.seq};
 }
 export async function checkpointMaintenance(env,site){

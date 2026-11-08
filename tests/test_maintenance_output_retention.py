@@ -5,7 +5,10 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -262,14 +265,110 @@ class MaintenanceOutputRetentionTests(unittest.TestCase):
             with mock.patch.object(r.os, 'killpg', side_effect=error):
                 self.assertEqual(r.process_group_finished(123), expected)
 
-    def test_native_open_file_guard_ignores_only_own_read_verification_fds(self):
-        for code, output, error, expected in [
-            (1, b'', b'', False), (0, ('p%d\n' % os.getpid()).encode(), b'', False),
-            (0, ('p%d\np999999\n' % os.getpid()).encode(), b'', True),
-            (0, b'unknown', b'', True), (1, b'', b'warning', True), (2, b'', b'', True)]:
-            process = mock.Mock(returncode=code);process.communicate.return_value = (output, error)
-            with mock.patch.object(r.sys, 'platform', 'darwin'), mock.patch.object(r.subprocess, 'Popen', return_value=process):
+    def test_exact_native_open_file_records_ignore_own_read_and_pin_external_reader(self):
+        # Captured from isolated macOS Python 3.11.5 fixtures: -Fp includes f
+        # fields; -Fpa adds ar. Closing the other reader restores the first row.
+        cases = [
+            (b'p39918\nf3\n', True),  # No access field: never assume a read.
+            (b'p39918\nf3\nar\n', False),
+            (b'p39918\nf3\nar\np39928\nf3\nar\n', True),
+            (b'p39918\nf3\nar\n', False),
+        ]
+        with mock.patch.object(r.os, 'getpid', return_value=39918):
+            for output, expected in cases:
+                with self.subTest(output=output):
+                    self.assertEqual(r.lsof_pins_output(output), expected)
+
+    def test_open_file_parser_requires_complete_own_read_only_descriptors(self):
+        own = ('p%d\n' % os.getpid()).encode()
+        self.assertFalse(r.lsof_pins_output(own + b'f0\nar\nf15\nar\n'))
+        cases = [b'', own, own + b'f3\n', own + b'f3\nar',
+                 own + b'f3\nar\n\n', own + b'f3\nar\nunknown\n',
+                 b'f3\nar\n', own + b'ar\n', own + b'f3\nar\nar\n',
+                 own + b'f3\nf4\nar\n', own + b'f3\nar\nf3\nar\n',
+                 own + b'f3\nar\n' + own + b'f4\nar\n',
+                 own + b'f\nar\n', own + b'f-3\nar\n', own + b'fmem\nar\n',
+                 own + b'f3r\nar\n', own + b'f99999999999\nar\n',
+                 own + b'f2147483648\nar\n', own + b'f03\nar\n',
+                 own + b'f3\nar\x00\n', own + b'f\xff\nar\n',
+                 b'p0\nf3\nar\n', b'p-1\nf3\nar\n', b'punknown\nf3\nar\n',
+                 own + b'f3\nar\n' + b'x' * r.LSOF_OUTPUT_LIMIT + b'\n']
+        for access in (b'aw', b'au', b'a ', b'a', b'aunknown'):
+            cases.append(own + b'f3\n' + access + b'\n')
+        for access in (b'ar', b'aw', b'au'):
+            cases.append(('p%d\n' % (os.getpid() + 1)).encode() + b'f3\n' + access + b'\n')
+        for output in cases:
+            with self.subTest(output=output[:100]):
+                self.assertTrue(r.lsof_pins_output(output))
+
+    def test_native_guard_exit_status_and_requested_fields_are_fail_closed(self):
+        own = ('p%d\nf3\nar\n' % os.getpid()).encode()
+        for code, output, expected in [(1, b'', False), (0, own, False),
+                                       (1, own, True), (0, b'', True),
+                                       (0, b'unknown', True), (2, b'', True)]:
+            process = mock.Mock(returncode=code)
+            process.poll.return_value = code
+            with mock.patch.object(r.sys, 'platform', 'darwin'), \
+                 mock.patch.object(r.subprocess, 'Popen', return_value=process) as launch, \
+                 mock.patch.object(r, 'read_lsof_output', return_value=output):
                 self.assertEqual(r.writers_present('/known/diagnostic'), expected)
+                launch.assert_called_once_with(['/usr/sbin/lsof', '-nP', '-Fpfa', '--', '/known/diagnostic'],
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process.stdout.close.assert_called_once_with()
+            process.stderr.close.assert_called_once_with()
+
+    def test_native_guard_spawn_read_timeout_and_warning_errors_pin_output(self):
+        with mock.patch.object(r.sys, 'platform', 'darwin'), \
+             mock.patch.object(r.subprocess, 'Popen', side_effect=OSError('No lsof')):
+            self.assertTrue(r.writers_present('/known/diagnostic'))
+        for error in (OSError('Read failed'), ValueError('Warning or oversize'),
+                      subprocess.TimeoutExpired('lsof', 15)):
+            process = mock.Mock(returncode=None)
+            process.poll.return_value = None
+            with mock.patch.object(r.sys, 'platform', 'darwin'), \
+                 mock.patch.object(r.subprocess, 'Popen', return_value=process), \
+                 mock.patch.object(r, 'read_lsof_output', side_effect=error):
+                self.assertTrue(r.writers_present('/known/diagnostic'))
+            process.kill.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=1)
+            process.stdout.close.assert_called_once_with()
+            process.stderr.close.assert_called_once_with()
+
+    def synthetic_guard(self, source, timeout=5):
+        # Run real local pipes with synthetic output, never a production path.
+        launch = subprocess.Popen
+        children = []
+        def spawn(argv, **kwargs):
+            self.assertEqual(argv, ['/usr/sbin/lsof', '-nP', '-Fpfa', '--', '/synthetic/diagnostic'])
+            child = launch([sys.executable, '-I', '-B', '-S', '-c', source], **kwargs)
+            children.append(child)
+            return child
+        with mock.patch.object(r.sys, 'platform', 'darwin'), \
+             mock.patch.object(r.subprocess, 'Popen', side_effect=spawn), \
+             mock.patch.object(r, 'LSOF_TIMEOUT_SECONDS', timeout):
+            result = r.writers_present('/synthetic/diagnostic')
+        self.assertIsNotNone(children[0].poll())
+        self.assertTrue(children[0].stdout.closed)
+        self.assertTrue(children[0].stderr.closed)
+        return result
+
+    def test_native_pipe_collector_reads_complete_output_and_nonzero_exit(self):
+        own = ('p%d\nf3\nar\n' % os.getpid()).encode()
+        self.assertFalse(self.synthetic_guard('import os; os.write(1, %r)' % own))
+        self.assertFalse(self.synthetic_guard('raise SystemExit(1)'))
+        self.assertTrue(self.synthetic_guard('raise SystemExit(2)'))
+        self.assertTrue(self.synthetic_guard('pass'))
+
+    def test_native_pipe_collector_stops_on_oversize_stderr_and_deadline(self):
+        for source, timeout in [
+                ('import os,time; os.write(1,b"x"*%d); time.sleep(60)' % (r.LSOF_OUTPUT_LIMIT + 1), 5),
+                ('import os,time; os.write(2,b"warning"); time.sleep(60)', 5),
+                ('import time; time.sleep(60)', 0.1),
+                ('import os,time; os.close(1); os.close(2); time.sleep(60)', 0.1)]:
+            with self.subTest(source=source):
+                start = time.monotonic()
+                self.assertTrue(self.synthetic_guard(source, timeout))
+                self.assertLess(time.monotonic() - start, 3)
 
     def test_retained_recent_outputs_do_not_spawn_native_inspections(self):
         self.finish('one')
