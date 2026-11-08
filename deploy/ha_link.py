@@ -47,9 +47,9 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     from result_delivery import complete
     persistent = ControllerLink(origin, token, site_access)
 
-    def call(path, body, delivery_socket=None):
+    def call(path, body, delivery_socket=None, timeout=45):
         def send(target, payload):
-            return fetch(origin + '/bridge/' + target, payload, token, timeout=45, site_access=site_access)
+            return fetch(origin + '/bridge/' + target, payload, token, timeout=timeout, site_access=site_access)
         if path == 'complete':
             return complete(body, send, persistent, delivery_socket)
         return send(path, body)
@@ -123,7 +123,12 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
                     print('HA event delivery retry: ' + type(exc).__name__, flush=True)
             time.sleep(2)
 
-    for target in (heartbeat, deliver):
+    targets = [heartbeat, deliver]
+    if settings.get('checkpoint_mode', 'off') in ('bootstrap', 'maintain'):
+        from checkpoint_maintenance import run as maintain_checkpoints
+        checkpoint_stopped = threading.Event()
+        targets.append(lambda: maintain_checkpoints(settings, status, call, checkpoint_stopped))
+    for target in targets:
         thread = threading.Thread(target=target)
         thread.daemon = True
         thread.start()

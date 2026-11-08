@@ -73,36 +73,49 @@ class GatewayJournal:
             raise Fault('Shared checkpoint identity mismatch', 503)
         if state['seq'] == hint['seq'] and (state['hash'] != hint['hash'] or result['digest'] != hint['digest']):
             raise Fault('Shared checkpoint manifest mismatch', 503)
+        page_limit = result.get('object_page_limit', 8)
+        if not isinstance(page_limit, int) or not 1 <= page_limit <= 128:
+            raise Fault('Invalid shared checkpoint page capability', 503)
         lease = result.get('lease')
         staged = CheckpointStage(state['seq'], state['hash'], directory)
         try:
+            singles, single_count = {}, 0
             for bucket, digest in enumerate(state['shards']):
                 if digest is None:
                     continue
-                for prefix, record in self._checkpoint_records(digest, '%02x' % bucket, lease):
-                    if (not isinstance(record, list) or len(record) != 3 or
-                            not isinstance(record[0], str) or not isinstance(record[1], str) or
-                            not isinstance(record[2], list) or not record[2]):
-                        raise Fault('Invalid shared checkpoint record', 503)
-                    kind, key, chunks = record
-                    # Gateway uses JSON.stringify for key hashing, not the
-                    # native canonical encoder (which escapes Unicode).
-                    identity = json.dumps([kind, key], ensure_ascii=False, separators=(',', ':'))
-                    if not hashlib.sha256(identity.encode('utf-8')).hexdigest().startswith(prefix):
-                        raise Fault('Shared checkpoint shard placement mismatch', 503)
-                    parts, size = [], 0
-                    for start in range(0, len(chunks), 8):
-                        for part in self._checkpoint_objects(chunks[start:start + 8], lease):
-                            text = self._checkpoint_bytes(part, 262144)
-                            size += len(text.encode('utf-8'))
-                            if size > 4194304:
-                                raise Fault('Shared checkpoint record exceeds bound', 503)
-                            parts.append(text)
-                    raw = ''.join(parts)
-                    value = json.loads(raw)
-                    if value is None:
-                        raise Fault('Invalid shared checkpoint tombstone', 503)
-                    staged.add(kind, key, raw)
+                for prefix, records in self._checkpoint_leaves(digest, '%02x' % bucket, lease, page_limit):
+                    for record in records:
+                        if (not isinstance(record, list) or len(record) != 3 or
+                                not isinstance(record[0], str) or not isinstance(record[1], str) or
+                                not isinstance(record[2], list) or not record[2]):
+                            raise Fault('Invalid shared checkpoint record', 503)
+                        kind, key, chunks = record
+                        identity = json.dumps([kind, key], ensure_ascii=False, separators=(',', ':'))
+                        if not hashlib.sha256(identity.encode('utf-8')).hexdigest().startswith(prefix):
+                            raise Fault('Shared checkpoint shard placement mismatch', 503)
+                        if len(chunks) == 1:
+                            if not isinstance(chunks[0], str):
+                                raise Fault('Invalid shared checkpoint object digest', 503)
+                            singles.setdefault(chunks[0], []).append((kind, key))
+                            single_count += 1
+                            if single_count >= 128:
+                                self._stage_checkpoint_singles(staged, singles, lease, page_limit)
+                                singles, single_count = {}, 0
+                            continue
+                        parts, size = [], 0
+                        for start in range(0, len(chunks), 8):
+                            for part in self._checkpoint_objects(chunks[start:start + 8], lease):
+                                text = self._checkpoint_bytes(part, 262144)
+                                size += len(text.encode('utf-8'))
+                                if size > 4194304:
+                                    raise Fault('Shared checkpoint record exceeds bound', 503)
+                                parts.append(text)
+                        raw = ''.join(parts)
+                        if json.loads(raw) is None:
+                            raise Fault('Invalid shared checkpoint tombstone', 503)
+                        staged.add(kind, key, raw)
+            if singles:
+                self._stage_checkpoint_singles(staged, singles, lease, page_limit)
             staged.finish()
             if lease:
                 staged.release_callback = lambda: self.request('checkpoint/release', {'lease': lease})
@@ -117,22 +130,34 @@ class GatewayJournal:
                     pass
             raise
 
-    def _checkpoint_records(self, digest, prefix, lease):
+    def _stage_checkpoint_singles(self, staged, records, lease, page_limit):
+        for page in self._checkpoint_object_pages(list(records), lease, page_limit):
+            for part in page:
+                raw = self._checkpoint_bytes(part, 262144)
+                if json.loads(raw) is None:
+                    raise Fault('Invalid shared checkpoint tombstone', 503)
+                for kind, key in records[part['digest']]:
+                    staged.add(kind, key, raw)
+
+    def _checkpoint_leaves(self, digest, prefix, lease, page_limit):
         pending = [(digest, prefix)]
         while pending:
-            digest, prefix = pending.pop()
-            shard = self._checkpoint_objects([digest], lease)[0]
-            node = json.loads(self._checkpoint_bytes(shard, 524288))
-            if isinstance(node, list):
-                for record in node:
-                    yield prefix, record
-            elif (isinstance(node, dict) and node.get('format') == 'branches' and
-                  isinstance(node.get('children'), list) and len(node['children']) == 16 and len(prefix) < 64):
-                for index, child in enumerate(node['children']):
-                    if child is not None:
-                        pending.append((child, prefix + '%x' % index))
-            else:
-                raise Fault('Invalid shared checkpoint shard', 503)
+            batch = pending[-page_limit:]
+            del pending[-page_limit:]
+            prefixes = dict(batch)
+            for page in self._checkpoint_object_pages([item[0] for item in batch], lease, page_limit):
+                for shard in page:
+                    prefix = prefixes[shard['digest']]
+                    node = json.loads(self._checkpoint_bytes(shard, 524288))
+                    if isinstance(node, list):
+                        yield prefix, node
+                    elif (isinstance(node, dict) and node.get('format') == 'branches' and
+                          isinstance(node.get('children'), list) and len(node['children']) == 16 and len(prefix) < 64):
+                        for index, child in enumerate(node['children']):
+                            if child is not None:
+                                pending.append((child, prefix + '%x' % index))
+                    else:
+                        raise Fault('Invalid shared checkpoint shard', 503)
 
     def _checkpoint_bytes(self, result, maximum):
         encoded = result.get('encoded')
@@ -141,14 +166,28 @@ class GatewayJournal:
             raise Fault('Shared checkpoint integrity or size failure', 503)
         return encoded
 
-    def _checkpoint_objects(self, digests, lease=None):
+    def _checkpoint_object_pages(self, digests, lease=None, page_limit=8):
         if any(not isinstance(d, str) or len(d) != 64 or any(c not in '0123456789abcdef' for c in d) for d in digests):
             raise Fault('Invalid shared checkpoint object digest', 503)
-        result = self.request('checkpoint/objects', {'digests': digests, 'lease': lease})
-        objects = result.get('objects')
-        if not isinstance(objects, list) or [r.get('digest') for r in objects] != digests:
-            raise Fault('Shared checkpoint object page mismatch', 503)
-        return objects
+        remaining = digests
+        while remaining:
+            requested = remaining[:page_limit]
+            result = self.request('checkpoint/objects', {'digests': requested, 'lease': lease})
+            objects = result.get('objects')
+            if (not isinstance(objects, list) or not objects or len(objects) > len(requested) or
+                    any(not isinstance(r, dict) or not isinstance(r.get('encoded'), str) for r in objects) or
+                    [r.get('digest') for r in objects] != requested[:len(objects)] or
+                    result.get('next') != (len(objects) if len(objects) < len(requested) else None)):
+                raise Fault('Shared checkpoint object page mismatch', 503)
+            if sum(len(r.get('encoded', '').encode('utf-8')) for r in objects) > 2097152:
+                raise Fault('Shared checkpoint object page exceeds bound', 503)
+            yield objects
+            remaining = remaining[len(objects):]
+
+    def _checkpoint_objects(self, digests, lease=None):
+        # Individual large values request at most eight chunks. Bulk small
+        # records use the page iterator directly, never accumulating all pages.
+        return [part for page in self._checkpoint_object_pages(digests, lease) for part in page]
 
     def append(self, expected, entry):
         return self.request('append', {'expected': int(expected), 'entry': encode(entry)})

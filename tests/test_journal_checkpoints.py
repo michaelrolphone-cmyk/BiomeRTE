@@ -143,6 +143,26 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(caught.exception.status, 413)
             self.assertTrue(store.execute(lambda tx: tx.get('safe', 'x'), cached=True))
 
+    def test_object_pages_follow_bounded_cursor_and_validate_each_prefix(self):
+        remote, _ = self.remote()
+        values = ['"one"', '"two"', '"three"']
+        objects = {hashlib.sha256(v.encode()).hexdigest(): v for v in values}
+        requested = list(objects)
+        calls = []
+        def request(path, payload):
+            self.assertEqual(path, 'checkpoint/objects')
+            calls.append(payload['digests'])
+            digest = payload['digests'][0]
+            return {'objects': [{'digest': digest, 'encoded': objects[digest]}],
+                    'next': 1 if len(payload['digests']) > 1 else None}
+        remote.request = request
+        result = list(remote._checkpoint_object_pages(requested))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([part['digest'] for page in result for part in page], requested)
+        remote.request = lambda path, payload: {'objects': [{'digest': requested[0], 'encoded': objects[requested[0]]}], 'next': None}
+        with self.assertRaises(Fault):
+            list(remote._checkpoint_object_pages(requested))
+
     def test_no_new_checkpoint_uses_legacy_replay(self):
         remote, _ = self.remote()
         self.assertIsNone(remote.checkpoint(0, 8))

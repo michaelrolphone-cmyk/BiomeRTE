@@ -4,7 +4,7 @@ import terminal_retention as r
 
 class TerminalRetentionTests(unittest.TestCase):
  def setUp(self):
-  self.tmp=tempfile.TemporaryDirectory();self.home=self.tmp.name;self.db=sqlite3.connect(':memory:');self.db.execute('CREATE TABLE jobs(id TEXT PRIMARY KEY,body TEXT,result TEXT)');r.initialize(self.db)
+  self.tmp=tempfile.TemporaryDirectory();self.home=os.path.realpath(self.tmp.name);self.db=sqlite3.connect(':memory:');self.db.execute('CREATE TABLE jobs(id TEXT PRIMARY KEY,body TEXT,result TEXT)');r.initialize(self.db)
  def tearDown(self):self.db.close();self.tmp.cleanup()
  def add(self,op,size=50):
   work=os.path.join(self.home,'jobs',hashlib.sha256(op.encode()).hexdigest());os.makedirs(work)
