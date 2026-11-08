@@ -110,7 +110,7 @@ export async function device(req, env, path) {
  if (path === '/bridge/next') {
   const selected=await claimControllerJob(db,node);
   const lease = selected.lease||crypto.randomUUID();
-  const job = selected.legacy? await db.prepare("UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=? WHERE id=(SELECT id FROM bridge_jobs WHERE (deadline>=? OR id LIKE 'native-%') AND (state='queued' OR (state='claimed' AND lease_until<?)) ORDER BY updated,id LIMIT 1) RETURNING id,request")
+  const job = selected.legacy? await db.prepare("UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=? WHERE id=(SELECT id FROM bridge_jobs WHERE deadline>=? AND (state='queued' OR (state='claimed' AND lease_until<?)) ORDER BY updated,id LIMIT 1) RETURNING id,request")
    .bind(lease,time+35,time,time,time).first():selected;
   if (!job||job.idle) return reply({idle:true,primary:job?.primary});
   let request=JSON.parse(job.request);
@@ -163,7 +163,7 @@ export async function runTool(env, name, args={}) {
 export async function enqueue(env,name,args,key){
  const payload=JSON.stringify(canonical({name,arguments:args})), time=epoch(), db=env.DB;
  if(payload.length>96000) return toolError('Request too large');
- await db.prepare("DELETE FROM bridge_jobs WHERE updated<? AND id NOT LIKE 'native-%'").bind(time-3600).run();
+ await db.prepare('DELETE FROM bridge_jobs WHERE updated<?').bind(time-3600).run();
  await db.prepare("INSERT OR IGNORE INTO bridge_jobs(id,request,state,deadline,updated) SELECT ?,?,'queued',?,? WHERE (SELECT count(*) FROM bridge_jobs WHERE state!='done' AND deadline>=?)<40")
   .bind(key,payload,time+22,time,time).run();
  let row=await db.prepare('SELECT request,state,result,deadline FROM bridge_jobs WHERE id=?').bind(key).first();

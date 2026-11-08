@@ -1,4 +1,4 @@
-import {nativeProvider,nativeProviderAck} from '../lib/native-provider.mjs';
+import {nativeCall} from '../lib/native-call.mjs';
 import {agentInbox} from '../lib/agent-inbox.mjs';
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
 import {eventGrant,changeSubscription,delegationEvent,leaseEvent} from '../lib/events.mjs';
@@ -13,10 +13,9 @@ const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if(path==='/v1/call')return nativeCall(req,env);
  if(path==='/api/decisions')return mobileDecision(req,env);
  if(path==='/api/exchange')return exchangeStream(req,env,conf);
- if(path==='/api/provider/ack')return nativeProviderAck(req,env);
- if(path==='/api/provider/call')return nativeProvider(req,env);
  if(path==='/api/provider/connect')return providerSocket(req,env,conf);
  if (path.startsWith('/agent-events/')) return agentInbox(req,conf,path);
  if (path.startsWith('/bridge/')) return device(req,env,path);

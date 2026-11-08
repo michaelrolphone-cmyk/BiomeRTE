@@ -93,7 +93,7 @@ export async function claimControllerJob(db,node) {
  const lease=crypto.randomUUID();
  const job=await db.prepare(`UPDATE bridge_jobs SET state='claimed',lease=?,lease_until=?,updated=?,controller=?
   WHERE id=(SELECT j.id FROM bridge_jobs j LEFT JOIN controller_nodes n ON n.id=j.controller
-  WHERE (j.deadline>=? OR j.id LIKE 'native-%') AND (j.state='queued' OR (j.state='claimed' AND (j.lease_until<? OR n.seen<? OR n.ready=0)))
+  WHERE j.deadline>=? AND (j.state='queued' OR (j.state='claimed' AND (j.lease_until<? OR n.seen<? OR n.ready=0)))
   AND j.updated<=? AND (COALESCE(json_extract(j.request,'$.arguments.realm'),'site')!='local' OR ?=?)
   AND (json_extract(j.request,'$.name') NOT IN ('sealed_grok_receiver','mcp_event_change') OR ?=?)
   ORDER BY j.updated,j.id LIMIT 1) RETURNING id,request`)
