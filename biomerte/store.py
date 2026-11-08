@@ -402,7 +402,9 @@ class Store:
                     owner[1] = 'encode-proposal'
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
                     entry = {'seq': seq + 1, 'prev': previous, 'changes': changes}
-                    expected_head = {'seq': entry['seq'], 'hash': digest(entry)}
+                    encoded_entry = encode(entry)
+                    expected_head = {'seq': entry['seq'], 'hash': hashlib.sha256(
+                        encoded_entry.encode('utf-8')).hexdigest()}
                     # Only validated catch-up may commit locally before CAS.
                     # The proposal and its receipt are not yet authoritative.
                     owner[1] = 'commit-catchup'
@@ -417,14 +419,36 @@ class Store:
                             head['seq'] != expected_head['seq'] or head['hash'] != expected_head['hash']):
                         raise Fault('Shared journal append acknowledgement mismatch', 503)
 
-                    def confirmed(tx):
-                        applied, anchor = tx.db.execute(
-                            'SELECT seq,hash FROM position WHERE id=1').fetchone()
-                        if applied < entry['seq'] or (applied == entry['seq'] and anchor != expected_head['hash']):
-                            raise Fault('Shared journal append not visible', 503)
-                    # Reuse normal chain validation rather than committing the
-                    # staged proposal. Another caller may have applied it already.
-                    self.execute(confirmed, read_only=True)
+                    # The verified CAS acknowledgement makes this exact entry
+                    # authoritative. Apply it without fetching head and our own
+                    # log entry again. Never hold the writer lock across append.
+                    entry = json.loads(encoded_entry)
+                    try:
+                        db.execute('BEGIN IMMEDIATE')
+                    except sqlite3.OperationalError as exc:
+                        if str(exc) == 'database is locked':
+                            self._report_writer_timeout()
+                        raise
+                    owner = [threading.get_ident(), 'replay-acknowledged', time.monotonic()]
+                    with self._writer_diagnostic_lock:
+                        self._writer_diagnostic = owner
+                    applied, anchor = db.execute(
+                        'SELECT seq,hash FROM position WHERE id=1').fetchone()
+                    if applied < entry['seq']:
+                        if applied != entry['seq'] - 1 or anchor != entry['prev']:
+                            raise Fault('Shared journal discontinuity', 503)
+                        tx = Records(db)
+                        for kind, key, value in entry['changes']:
+                            if value is None:
+                                tx.drop(kind, key)
+                            else:
+                                tx.put(kind, key, value)
+                        db.execute('UPDATE position SET seq=?,hash=? WHERE id=1',
+                                   (entry['seq'], expected_head['hash']))
+                    elif applied == entry['seq'] and anchor != expected_head['hash']:
+                        raise Fault('Shared journal history mismatch', 409)
+                    # A caller already at or beyond this entry has replayed a
+                    # validated journal chain. Do not overwrite its newer state.
                 owner[1] = 'commit'
                 db.commit()
                 return result

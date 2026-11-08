@@ -173,7 +173,7 @@ class StoreAppendConcurrency(unittest.TestCase):
         self.assertEqual(self.app.call('work.list', cached=True), [])
 
 
-    def test_post_append_refresh_failure_recovers_receipt_on_retry(self):
+    def test_verified_append_needs_no_post_append_refresh(self):
         original_append = self.journal.append
         original_read = self.journal.read
         def unavailable(name):
@@ -183,12 +183,18 @@ class StoreAppendConcurrency(unittest.TestCase):
             self.journal.read = unavailable
             return head
         self.journal.append = append
+        result = self.create()
+        self.assertEqual(result['id'], 'task')
+        self.assertEqual([row['id'] for row in self.app.call('work.list', cached=True)], ['task'])
+        # Confirmation of this commit is local, but fresh reads and retries
+        # must still contact the journal and fail when it is unavailable.
+        with self.assertRaises(Fault):
+            self.app.call('work.list')
         with self.assertRaises(Fault):
             self.create()
-        self.assertEqual(self.app.call('work.list', cached=True), [])
         self.journal.read = original_read
         self.journal.append = original_append
-        self.assertEqual(self.create()['id'], 'task')
+        self.assertEqual(self.create(), result)
         self.assertEqual(len(self.journal.entries), 1)
 
 
