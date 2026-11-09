@@ -12,7 +12,7 @@ function fixture(){
  const DB={prepare(q){let args=[];const statement=sql.prepare(q);return {
   bind(...v){args=v;return this},async first(){return statement.get(...args)},
   async run(){return statement.run(...args)},async all(){return {results:statement.all(...args)}}
- }};
+ }}};
  const token='f'.repeat(64),env={DB,BIOME_BRIDGE_PIN:sha(sha(token)+'\n')};
  const send=(path,body,headers={})=>gateway.fetch(new Request(base+path,{
   method:'POST',headers:{'Content-Type':'application/json',...headers},
