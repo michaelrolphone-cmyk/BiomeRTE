@@ -1,0 +1,35 @@
+{
+  "patches": [
+    {
+      "original_sha256": "7ea9e2e679dafa1c0575c98b78c6b9f303c830d43e140a2840c70e230eeae230",
+      "patched_sha256": "53716a8736c554ce4020dc376f5e1ca3337e597f98662446cc65c3a32488fa3c",
+      "path": "pyslam/slam/optimizer_gtsam.py",
+      "reason": "Import optional GTSAM native factors only inside functions that use them."
+    },
+    {
+      "original_sha256": "8e54548b8259d4d03fdbbd0b36b5e353e98edb6e99c710813520faee8a5da5e9",
+      "patched_sha256": "ec6833169a0ec86f02b6d32e48070279138bb3192d95114df01055b51fa8b256",
+      "path": "thirdparty/g2opy/python/CMakeLists.txt",
+      "reason": "Link the optional g2o OpenGL helper only when its target exists."
+    },
+    {
+      "original_sha256": "83cc383a495b45180bcaf896de17560ffe75e3fd4de67de43165056a5e627b74",
+      "patched_sha256": "3007e9d94b10c78ee9c55a791be4cac90368a975e146b364a36cbe97d9258001",
+      "path": "pyslam/slam/slam.py",
+      "reason": "Keep optional dense/GUI imports lazy and preserve headless mode on restore."
+    },
+    {
+      "original_sha256": "3adcc320d563418f4e1d14ec8733b64799129a9afba36f311d0c14360f19afd8",
+      "patched_sha256": "6489a331c6a7c20234506a6bc6b4929bb11db727bb21b6ff78b7a433a0208183",
+      "path": "pyslam/loop_closing/loop_detector_configs.py",
+      "reason": "Import optional dense, GUI, and nonselected loop engines only on use."
+    },
+    {
+      "original_sha256": "ddbaa9d6f3f4f6f2d35d8e37e2c86f1616eb3189b1a6552ec1e21de62c7b9d50",
+      "patched_sha256": "e0a43efd74cd6919f9f528052099df438dcd29c3ccf60faf3aa08d1567403b0a",
+      "path": "pyslam/loop_closing/loop_closing.py",
+      "reason": "Import optional dense, GUI, and nonselected loop engines only on use."
+    }
+  ],
+  "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
+}
