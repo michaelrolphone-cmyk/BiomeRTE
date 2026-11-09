@@ -690,6 +690,149 @@ class VisionServiceTests(unittest.TestCase):
         self.assertIsNotNone(row["ended_at"])
         self.assertEqual(row["end_reason"], "service_shutdown")
 
+    def test_metric_capabilities_apply_measured_scale_and_publish_coherent_metric_snapshot(self):
+        service = self.make_service()
+        started = service.query("robot.map.scale.start", {"method": "measured_distance"})
+        sid = started["session"]["session_id"]
+        snapshots = []
+        for index, (label, x) in enumerate([
+            ("start", 0.0), ("end", 1.5), ("validation_start", 2.0), ("validation_end", 3.0)
+        ]):
+            captured = self.frame(service, "metric-" + str(index))
+            frame_id = captured.metadata["frame_id"]
+            transform = identity_pose()
+            transform[0][3] = x
+            keyframe_id = "metric-kf-" + str(index)
+            service.backend.scripted.append({
+                "localization": {"status": "tracking", "valid": True,
+                                 "T_map_camera": transform, "units": "arbitrary"},
+                "geometry": {"available": True, "complete_snapshot": False},
+                "map_changes": [{"op": "upsert", "kind": "keyframe", "entity_id": keyframe_id,
+                                 "data": {"T_map_camera": transform, "position": [x, 0, 0],
+                                          "source_frame_id": frame_id, "units": "arbitrary"}}],
+                "observation_anchor": {"keyframe_id": keyframe_id, "source_frame_id": frame_id,
+                                       "T_keyframe_camera": identity_pose()},
+            })
+            snapshot = self.process(service, captured)
+            snapshots.append(snapshot)
+            service.query("robot.map.scale.capture", {
+                "session_id": sid, "snapshot_id": snapshot["snapshot_id"], "label": label})
+            service.metric.process_pending()
+        result = service.query("robot.map.scale.fit", {
+            "session_id": sid, "distance_m": 3.0, "validation_distance_m": 2.0})
+        self.assertTrue(result["session"]["candidate"]["qualified"], result)
+        applied = service.query("robot.map.scale.apply", {"session_id": sid})
+        self.assertEqual(applied["availability"], "available")
+        output = service.query("robot.vision.snapshot", {"include_frame": True})
+        snapshot = output["snapshot"]
+        self.assertEqual(snapshot["snapshot_id"], snapshots[-1]["snapshot_id"])
+        self.assertEqual(snapshot["localization"]["units"], "arbitrary")
+        self.assertEqual(snapshot["metric_localization"]["units"], "m")
+        self.assertAlmostEqual(snapshot["metric_localization"]["T_map_camera"][0][3], 6.0)
+        self.assertEqual(output["frame"]["frame_id"], snapshot["metric_localization"]["frame_id"])
+        geometry = service.query("robot.vision.geometry")
+        self.assertEqual(geometry["metric_localization"]["solution_id"],
+                         snapshot["metric_localization"]["solution_id"])
+        status = service.query("robot.vision.status")
+        self.assertEqual(len(status["capabilities"]), 21)
+        self.assertFalse(status["control"]["motion_commands"])
+        self.assertEqual(status["metric_scale"]["availability"], "available")
+        native = service.query("robot.map.read", {"kinds": ["keyframe"]})
+        metric = service.query("robot.map.metric.read", {"kinds": ["keyframe"]})
+        self.assertEqual(native["entities"][-1]["data"]["position"], [3.0, 0, 0])
+        self.assertEqual(metric["entities"][-1]["data"]["position"], [6.0, 0.0, 0.0])
+        service.close()
+        restored = self.make_service()
+        self.assertEqual(restored.query("robot.vision.status")["metric_scale"]["availability"], "available")
+        self.assertEqual(restored.query("robot.vision.snapshot")["availability"], "unavailable")
+        self.assertEqual(restored.backend.state, "relocalizing")
+
+    def test_scale_session_follows_calibration_and_does_not_cross_new_map(self):
+        service = self.make_service()
+        started = service.query("robot.map.scale.start", {"method": "measured_distance"})
+        sid, original_map = started["session"]["session_id"], service.map_id
+        replacement = calibration("new-synthetic-intrinsics")
+        service.query("robot.vision.calibration", {"action": "set", "calibration": replacement})
+        self.assertNotEqual(service.map_id, original_map)
+        status = service.query("robot.map.scale.status")
+        self.assertEqual(status["reason"], "metric_session_not_started")
+        previous = service.query("robot.map.scale.status", {"session_id": sid})
+        self.assertEqual(previous["session"]["map_id"], original_map)
+        self.assertEqual(previous["session"]["calibration_id"], "synthetic-calibration-v1")
+
+    def test_metric_capture_failure_preserves_current_vision_observation(self):
+        service = self.make_service()
+        captured = self.frame(service, "metric-queue-failure")
+        with patch.object(service.metric, "offer", side_effect=RuntimeError("synthetic_enqueue_failure")):
+            snapshot = self.process(service, captured)
+        output = service.query("robot.vision.snapshot")
+        self.assertEqual(output["snapshot"]["snapshot_id"],snapshot["snapshot_id"])
+        self.assertEqual(output["snapshot"]["frame_id"],captured.metadata["frame_id"])
+        self.assertIn("synthetic_enqueue_failure",service.metric._error)
+        self.assertEqual(output["snapshot"]["metric_localization"]["availability"],"unavailable")
+
+    def test_shutdown_drains_inflight_metric_mutation_before_final_checkpoint(self):
+        import threading
+        from biome_provider import UnixHTTPConnection
+        from vision_service import LocalServer, handler_for
+        service = self.make_service()
+        socket_directory = tempfile.TemporaryDirectory(prefix="rv-", dir="/tmp")
+        self.addCleanup(socket_directory.cleanup)
+        path = Path(socket_directory.name) / "s.sock"
+        server = LocalServer(str(path), handler_for(service))
+        serving = threading.Thread(target=server.serve_forever)
+        serving.start()
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        outcomes = {}
+        original = service.query
+        def blocked(operation, inputs=None):
+            if operation == "robot.map.scale.start":
+                entered.set()
+                release.wait()
+            return original(operation, inputs)
+        def request():
+            try:
+                client = UnixHTTPConnection(path, 5)
+                client.request("POST", "/v1/query", json.dumps({
+                    "operation":"robot.map.scale.start",
+                    "inputs":{"method":"measured_distance"}}),
+                    {"Content-Type":"application/json"})
+                response = client.getresponse()
+                outcomes["status"] = response.status
+                outcomes["body"] = json.loads(response.read())
+                client.close()
+            except Exception as exc:
+                outcomes["error"] = repr(exc)
+        def shutdown():
+            server.shutdown()
+            server.server_close()
+            service.close()
+            finished.set()
+        caller, closer = threading.Thread(target=request), threading.Thread(target=shutdown)
+        with patch.object(service, "query", side_effect=blocked):
+            try:
+                caller.start()
+                self.assertTrue(entered.wait(5), outcomes)
+                closer.start()
+                self.assertFalse(finished.wait(0.7), "closed storage before the accepted request finished")
+            finally:
+                release.set()
+                caller.join(5)
+                if closer.ident is not None:
+                    closer.join(5)
+                else:
+                    shutdown()
+                serving.join(5)
+        self.assertFalse(caller.is_alive())
+        self.assertFalse(closer.is_alive())
+        self.assertTrue(finished.is_set())
+        self.assertEqual(outcomes.get("status"), 200, outcomes)
+        with sqlite3.connect(service.store.db_path) as database:
+            payload = json.loads(database.execute(
+                "SELECT payload FROM checkpoints ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        with sqlite3.connect(payload["database_path"]) as backup:
+            self.assertEqual(backup.execute("SELECT COUNT(*) FROM metric_sessions").fetchone()[0],1)
+
 
 if __name__ == "__main__":
     unittest.main()

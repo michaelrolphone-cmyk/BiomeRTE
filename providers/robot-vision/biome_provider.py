@@ -64,6 +64,33 @@ def contract_definitions():
                                         "confirmed_floor_contact": field("bool", True),
                                         "snapshot_id": field("str")},
          "Intersect an individually confirmed floor pixel with the calibrated ground plane."),
+
+        ("robot.map.scale.start", {"method": field("str", True),
+                                   "reference": field("obj"), "policy": field("obj"),
+                                   "auto_capture": field("bool"), "auto_apply": field("bool")},
+         "Start a persistent checkerboard or measured_distance scale session; never drives the vehicle."),
+        ("robot.map.scale.status", {"session_id": field("str"), "map_id": field("str"),
+                                    "include_observations": field("bool")},
+         "Read scale-session evidence, fit state and exact-keyframe capture eligibility."),
+        ("robot.map.scale.capture", {"session_id": field("str", True),
+                                     "snapshot_id": field("str", True),
+                                     "role": field("str"), "label": field("str")},
+         "Retain one exact native-keyframe snapshot as scale evidence; no interpolated poses."),
+        ("robot.map.scale.fit", {"session_id": field("str", True),
+                                 "distance_m": field("num"),
+                                 "validation_distance_m": field("num")},
+         "Fit scale with independent validation; unverified reference dimensions remain provisional."),
+        ("robot.map.scale.apply", {"session_id": field("str", True)},
+         "Attach a qualified metric scale without changing the map origin or axes."),
+        ("robot.map.scale.cancel", {"session_id": field("str", True)},
+         "Cancel a scale session and return its persisted state."),
+        ("robot.map.scale.reference", {"session_id": field("str", True),
+                                       "reference": field("obj", True)},
+         "Update an unapplied board reference, recompute preserved board poses and invalidate its prior candidate."),
+        ("robot.map.metric.read", {"map_id": field("str"), "revision": field("int"),
+                                   "attachment_id": field("str"), "bounds": field("obj"),
+                                   "kinds": field("list"), "cursor": field("obj"), "limit": field("int")},
+         "Read a revision-pinned metric map view with explicit qualification and stale-state reporting."),
     ]
     return [dict(name=name, version=1, description=description, inputs=inputs,
                  outputs={"result": "obj"}) for name, inputs, description in specs]
@@ -71,6 +98,70 @@ def contract_definitions():
 
 CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
 
+
+MUTATING_CONTRACTS = frozenset({
+    "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
+    "robot.vision.calibration:1",
+    "robot.map.scale.start:1", "robot.map.scale.capture:1", "robot.map.scale.fit:1",
+    "robot.map.scale.apply:1", "robot.map.scale.cancel:1", "robot.map.scale.reference:1",
+})
+
+SCALE_GUIDANCE = {
+    "robot.map.scale.start:1": {
+        "before": "method is checkerboard or measured_distance. A checkerboard reference requires "
+                  "positive square_size_m, size_verified, measurement_source and stationary=true; "
+                  "inner_corners defaults to [9,6]. Unmeasured physical size must remain unverified. "
+                  "auto_capture defaults true for checkerboards; auto_apply defaults false. "
+                  "Vehicle motion is supplied independently.",
+        "read_result": "Keep the returned session identity. States are collecting, ready, provisional, "
+                       "applied or canceled. Provisional evidence is not an applied metric scale.",
+    },
+    "robot.map.scale.status:1": {
+        "before": "Select session_id or map_id when inspecting a preserved session. Set "
+                  "include_observations=true to inspect the retained measurement evidence.",
+        "read_result": "Check fit qualification and the last eligible exact-keyframe snapshot. "
+                       "Current checkerboard visibility does not imply capture eligibility.",
+    },
+    "robot.map.scale.capture:1": {
+        "before": "snapshot_id must identify an exact native keyframe from this map/session, with the "
+                  "same source_frame_id. role is training or validation. For measured_distance, label "
+                  "is start, end, validation_start or validation_end. Measure displacement between "
+                  "the actual camera optical-center endpoints represented by those snapshots.",
+        "read_result": "Keep the retained evidence identity and role. A rejected or ineligible frame "
+                       "must not be treated as an interpolated endpoint.",
+    },
+    "robot.map.scale.fit:1": {
+        "before": "Use separate held-out validation evidence. For measured_distance provide positive "
+                  "distance_m and validation_distance_m measured between each pair of camera optical "
+                  "centers; neither value is integrated path length or a drive command.",
+        "read_result": "A failed fit remains collecting. Unverified board dimensions remain provisional. "
+                       "Only a qualified fit may become ready or be auto-applied.",
+    },
+    "robot.map.scale.apply:1": {
+        "before": "Inspect this session's qualified fit first. Application preserves map origin and "
+                  "axes and never commands vehicle motion.",
+        "read_result": "Retain the metric attachment identity and source revision. Check metric_scale "
+                       "availability before interpreting metric_localization or metric map coordinates.",
+    },
+    "robot.map.scale.cancel:1": {
+        "before": "Use the exact session_id whose scale collection should end.",
+        "read_result": "Read the returned persisted session state before starting replacement work.",
+    },
+    "robot.map.scale.reference:1": {
+        "before": "Supply the complete corrected checkerboard reference before application. Verified "
+                  "square_size_m must come from a physical measurement with measurement_source. "
+                  "An already-applied reference requires a new session.",
+        "read_result": "Preserved raw corners are reprocessed under the new reference and the prior "
+                       "candidate is invalidated. Fit again before applying.",
+    },
+    "robot.map.metric.read:1": {
+        "before": "Bounds are in metres. Pin map_id, revision and attachment_id when comparing pages; "
+                  "carry the returned cursor unchanged as a JSON object. The raw map.read contract keeps arbitrary units.",
+        "read_result": "Require an available, qualified metric attachment. Stale or unresolved anchor "
+                       "corrections are explicit. Scaling preserves origin and axes; sparse geometry "
+                       "does not establish floor alignment, gravity, occupancy or free space.",
+    },
+}
 
 class ServiceError(RuntimeError):
     def __init__(self, code, message):
@@ -231,17 +322,18 @@ class Remote:
 
 
 def offer(cfg, contract, state):
+    usage = {
+        "before": "Acquire this contract/resource or use cap.submit. Read snapshot IDs, "
+                  "map revisions, freshness and quality before interpreting telemetry.",
+        "read_result": "Read cap.status.result.result for the telemetry object; its error "
+                       "field reports a completed query failure. Requested frames use "
+                       "artifact.get for each SHA256 chunk in frame.artifact; verify the "
+                       "complete SHA256 after concatenation."
+    }
+    for name, guidance in SCALE_GUIDANCE.get(contract, {}).items():
+        usage[name] += " " + guidance
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
-                service="robot-vision", capacity=cfg["slots"], state=state,
-                usage={
-                    "before": "Acquire this contract/resource or use cap.submit. Read snapshot IDs, "
-                              "map revisions, freshness and quality before interpreting telemetry.",
-                    "read_result": "Read cap.status.result.result for the telemetry object; its error "
-                                   "field reports a completed query failure. Requested frames use "
-                                   "artifact.get for each SHA256 chunk in frame.artifact; verify the "
-                                   "complete SHA256 after concatenation."
-                })
-
+                service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)
 
 def supported_contracts(status):
     capabilities = status.get("capabilities", [])
@@ -378,9 +470,7 @@ def main(argv=None):
         output = execute(action, cfg, Remote(cfg))
     except ServiceError as exc:
         error = {"code": exc.code, "message": exc.message}
-        if exc.code == "service_unavailable" and args.contract in {
-                "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
-                "robot.vision.calibration:1"}:
+        if exc.code == "service_unavailable" and args.contract in MUTATING_CONTRACTS:
             error.update(effect="unknown", next_action="Inspect current state before a new mutation request.")
         # A handled query error is a completed transport operation. The shared Worker
         # reserves nonzero exits for genuinely uncertain adapter execution.
