@@ -597,3 +597,9 @@ Checkpoint manifests distinguish the active profile from profiles that have
 contributed keyframe descriptors. Legacy maps retain their raw-profile history;
 a configured profile transition must freshly relocalize and cannot relabel old
 descriptors. A map may contain point colors from grayscale SLAM inputs.
+
+A featureless camera frame is retained as zero-length feature and association
+arrays. The native persistence qualifier includes a real blank input before
+saving, checks that its identity and empty arrays survive restore, and then
+requires a real non-keyframe image to relocalize. An empty image never supplies
+a current pose or deletes the initialized map.

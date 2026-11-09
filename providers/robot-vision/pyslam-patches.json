@@ -1,6 +1,12 @@
 {
   "patches": [
     {
+      "original_sha256": "a974f97c06344856eb1c7bbd3f523b3a014af6d4dc4ab385cdebc11238af8f9b",
+      "patched_sha256": "c5de00b3c349e8c83d0b6d85d3baf481de01e24806737dc6003c215b6cb25fbc",
+      "path": "pyslam/slam/frame.py",
+      "reason": "Keep real empty feature arrays serializable and restore their XY dimensions."
+    },
+    {
       "original_sha256": "7ea9e2e679dafa1c0575c98b78c6b9f303c830d43e140a2840c70e230eeae230",
       "patched_sha256": "53716a8736c554ce4020dc376f5e1ca3337e597f98662446cc65c3a32488fa3c",
       "path": "pyslam/slam/optimizer_gtsam.py",

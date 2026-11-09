@@ -139,6 +139,25 @@ def run(state_dir, output):
             "geometry": result["geometry"],
         }
         phase_started = time.perf_counter()
+        # Reproduce the live low-light checkpoint failure with a genuine
+        # featureless camera input, while retaining the initialized native map.
+        backend.invalidate_tracking("qualification_zero_feature_frame")
+        zero_index = backend._next_frame_index
+        zero_timestamp = timestamps[index] + 1.0/config["fps"]
+        zero_result = backend.track(np.zeros_like(revisit_image),
+                                    "kitti06-zero-feature", zero_timestamp)
+        zero_frame = backend._slam.tracking.f_cur
+        if (zero_result["localization"]["valid"] or len(zero_frame.kps) != 0 or
+                zero_frame.kps.shape != (0, 2) or len(zero_frame.points) != 0):
+            raise AssertionError("Zero-feature input fabricated evidence or retained inconsistent arrays")
+        if zero_frame.des is not None and not isinstance(zero_frame.des, np.ndarray):
+            raise AssertionError("Zero-feature descriptors have an unsupported representation")
+        report["zero_feature_frame"] = {
+            "id": int(zero_frame.id), "img_id": int(zero_frame.img_id),
+            "timestamp": float(zero_frame.timestamp), "keypoint_count": len(zero_frame.kps),
+            "point_count": len(zero_frame.points), "localized": False,
+            "descriptor_representation": "none" if zero_frame.des is None else "ndarray",
+        }
         checkpoint = backend.checkpoint(output / "system_state")
         report["elapsed_seconds"]["checkpoint"] = time.perf_counter() - phase_started
         loop = backend._slam.loop_closing
@@ -150,6 +169,12 @@ def run(state_dir, output):
         if any(report["headless_debug_cache"].values()):
             raise AssertionError("Headless loop visualization cache was retained")
         saved_document = json.loads((Path(checkpoint["path"]) / "map.json").read_text())
+        saved_zero = next((frame for frame in saved_document["map"]["frames"]
+                           if int(frame["img_id"]) == zero_index), None)
+        if (saved_zero is None or saved_zero["kps"] != [] or saved_zero["points"] != [] or
+                int(saved_zero["id"]) != report["zero_feature_frame"]["id"]):
+            raise AssertionError("Checkpoint lost or changed the real zero-feature frame")
+        report["zero_feature_frame"]["serialized"] = True
         saved_keyframes = saved_document["map"]["keyframes"]
         saved_ids = {str(frame["id"]) for frame in saved_keyframes}
         saved_image_ids = {int(frame["img_id"]) for frame in saved_keyframes}
@@ -187,6 +212,15 @@ def run(state_dir, output):
         phase_started = time.perf_counter()
         start = backend.start(map_id, checkpoint={"availability": "available", "path": checkpoint["path"]})
         report["elapsed_seconds"]["restore"] = time.perf_counter() - phase_started
+        restored_zero = next((frame for frame in backend._slam.map.frames
+                              if int(frame.img_id) == zero_index), None)
+        if (restored_zero is None or restored_zero.kps.shape != (0, 2) or
+                restored_zero.kpsu.shape != (0, 2) or restored_zero.kpsn.shape != (0, 2) or
+                len(restored_zero.points) != 0 or len(restored_zero.outliers) != 0 or
+                int(restored_zero.id) != report["zero_feature_frame"]["id"] or
+                float(restored_zero.timestamp) != zero_timestamp):
+            raise AssertionError("Restore changed zero-feature frame identity or array invariants")
+        report["zero_feature_frame"]["restored"] = True
         report["restored_start"] = start
         if start["localization"]["valid"] or start["localization"]["T_map_camera"] is not None:
             raise AssertionError("Restore exposed an old pose as a current observation")
@@ -210,7 +244,7 @@ def run(state_dir, output):
             raise AssertionError("Relocalized pose is nonfinite")
         report["status"] = "passed"
         report["scope"] = (
-            "One real monocular KITTI prefix and one freshly submitted non-keyframe revisit. "
+            "One real monocular KITTI prefix, a zero-feature input persisted across restart, and one freshly submitted non-keyframe revisit. "
             "This verifies this native engine profile's state roundtrip and relocalization; "
             "it does not qualify live ESP32 intrinsics, metric scale, latency, or all environments.")
     except BaseException as exc:

@@ -173,7 +173,13 @@ def patch_gtsam_factor_imports(source):
     return "".join(lines)
 
 
+
+def patch_empty_frame_arrays(source):
+    source = replace_once(source, '                self.points = np.full(num_kps, None, dtype=object)  # init map points\n                self.outliers = np.full(num_kps, False, dtype=bool)\n\n            if self.kps_r is not None:\n', '                self.points = np.full(num_kps, None, dtype=object)  # init map points\n                self.outliers = np.full(num_kps, False, dtype=bool)\n            elif self.kps is not None:\n                # A real zero-feature observation remains serializable and reloadable.\n                self.kps = np.empty((0, 2), dtype=np.float32)\n                self.kpsu = np.empty((0, 2), dtype=np.float32)\n                self.kpsn = np.empty((0, 2), dtype=np.float32)\n                self.octaves = np.empty(0, dtype=np.uint8)\n                self.sizes = np.empty(0, dtype=np.float32)\n                self.angles = np.empty(0, dtype=np.float32)\n                self.points = np.empty(0, dtype=object)\n                self.outliers = np.empty(0, dtype=bool)\n\n            if self.kps_r is not None:\n')
+    return replace_once(source, '        frame_data_dict["kpsn"] = deserialize_array_flexible(json_str["kpsn"], dtype=np.float32)\n        frame_data_dict["kps_sem"] = deserialize_array_flexible(\n', '        frame_data_dict["kpsn"] = deserialize_array_flexible(json_str["kpsn"], dtype=np.float32)\n        # JSON [] loses the second dimension of an empty XY array.\n        for name in ("kps", "kps_r", "kpsu", "kpsn"):\n            value = frame_data_dict[name]\n            if value is not None and value.size == 0:\n                frame_data_dict[name] = value.reshape(0, 2)\n        frame_data_dict["kps_sem"] = deserialize_array_flexible(\n')
+
 PATCHES = {
+    "pyslam/slam/frame.py": patch_empty_frame_arrays,
     "pyslam/slam/optimizer_gtsam.py": patch_gtsam_factor_imports,
     "thirdparty/g2opy/python/CMakeLists.txt": patch_g2o_link,
     "pyslam/slam/slam.py": patch_slam,
@@ -285,6 +291,8 @@ class Installer:
                                         if name.endswith("CMakeLists.txt") else
                                         "Import optional GTSAM native factors only inside functions that use them."
                                         if name.endswith("optimizer_gtsam.py") else
+                                        "Keep real empty feature arrays serializable and restore their XY dimensions."
+                                        if name.endswith("/frame.py") else
                                         "Keep optional dense/GUI imports lazy and preserve headless mode on restore."
                                         if name.endswith("/slam.py") else
                                         "Keep headless loop visualization images out of memory and checkpoints; import GUI lazily."

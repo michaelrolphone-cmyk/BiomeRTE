@@ -1,0 +1,367 @@
+{
+  "calibration": {
+    "calibration_id": "pyslam-kitti04-12-83454549c4df0db0",
+    "cx": 601.8873,
+    "cy": 183.1104,
+    "distortion": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "fx": 707.0912,
+    "fy": 707.0912,
+    "height": 370,
+    "provenance": "pySLAM a4e6a31f211ac6b2f9ecf4ab628734f6194caa15 settings/KITTI04-12.yaml",
+    "validated": true,
+    "width": 1226
+  },
+  "checkpoint": {
+    "availability": "available",
+    "exact_saved_geometry": true,
+    "files": [
+      {
+        "path": "config_info.json",
+        "sha256": "4b62696e3d0764fe86a678352c0f8cbc74f806148d89ff52a86fab5c5c46f92b",
+        "size": 1127
+      },
+      {
+        "path": "loop_closing.db",
+        "sha256": "c2e3c14e5db42acb7f3b5a3fedd469f8e370bcfe0b242f8be9b0229ebe2fa9ed",
+        "size": 11849270
+      },
+      {
+        "path": "loop_closing_db_maps.json",
+        "sha256": "2557ad0c31069fbe32e1201db44c927ca49b05bce823ae8ab5b8616fc33d3a5f",
+        "size": 135
+      },
+      {
+        "path": "map.json",
+        "sha256": "dd4470e1ae61bf65e16d7d7f4a334a530ea287487543ec32fb0b65ee32438c7a",
+        "size": 25895701
+      }
+    ],
+    "format": "pyslam-system-state",
+    "format_version": 1,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": true,
+      "keyframe_count": 6,
+      "point_count": 441,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "keyframe_descriptor_records": 6,
+    "keypoint_count": 16000,
+    "loop_database_bytes": 11849270,
+    "path": "/Users/micahelbyrns/.local/share/biome-robot-vision/qualification/checkpoint-zero-feature-20261109-01/system_state",
+    "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15",
+    "serialized_point_count": 441
+  },
+  "dataset": {
+    "settings": "/Users/micahelbyrns/.local/share/biome-robot-vision/vendor/pyslam/settings/KITTI04-12.yaml",
+    "settings_sha256": "83454549c4df0db0c098cb07bc4d9596d3a4f2baa19aef8a43e5a782be27cdf3",
+    "source": "https://github.com/luigifreda/pyslam/tree/a4e6a31f211ac6b2f9ecf4ab628734f6194caa15/data/videos/kitti06",
+    "timestamps_sha256": "61c8f09665fb7e89e59515990425f41ec42049bbb2fc94493e69133ca14100cd",
+    "video": "/Users/micahelbyrns/.local/share/biome-robot-vision/vendor/pyslam/data/videos/kitti06/video_color.mp4",
+    "video_frame_count": 1101,
+    "video_height": 370,
+    "video_sha256": "05d1b1fbd12d9f3378008ac4bd377baad0ac3cab87d3dbb7afbe929ce292aeb6",
+    "video_width": 1226
+  },
+  "elapsed_seconds": {
+    "checkpoint": 1.909935540985316,
+    "new_start": 42.294223957986105,
+    "relocalization": 0.19919812498847023,
+    "restore": 73.513271874981,
+    "total": 124.17534337501274,
+    "training": 1.1726050830329768
+  },
+  "finished_at_unix_s": 1794262616.936754,
+  "headless_debug_cache": {
+    "checkpoint_contains_cache": false,
+    "enabled": false,
+    "image_count": 0
+  },
+  "live_camera_qualification": false,
+  "map_id": "qualification-kitti06-checkpoint-zero-feature-20261109-01",
+  "new_start": {
+    "backend": "pyslam",
+    "calibration": {
+      "calibration_id": "pyslam-kitti04-12-83454549c4df0db0",
+      "cx": 601.8873,
+      "cy": 183.1104,
+      "distortion": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fx": 707.0912,
+      "fy": 707.0912,
+      "height": 370,
+      "provenance": "pySLAM a4e6a31f211ac6b2f9ecf4ab628734f6194caa15 settings/KITTI04-12.yaml",
+      "validated": true,
+      "width": 1226
+    },
+    "geometry": {
+      "available": false,
+      "complete_snapshot": false,
+      "keyframe_count": 0,
+      "point_count": 0,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "localization": {
+      "T_map_camera": null,
+      "camera_axes": "x_right_y_down_z_forward",
+      "frame_id": null,
+      "pose_origin": "camera_optical",
+      "reason": "Waiting for sufficient camera motion and static visual features.",
+      "reference_keyframe_id": null,
+      "scale_status": "unobserved",
+      "status": "initializing",
+      "timestamp_s": null,
+      "units": "arbitrary",
+      "valid": false
+    },
+    "map_id": "qualification-kitti06-checkpoint-zero-feature-20261109-01",
+    "mounting": null,
+    "preprocessing": {
+      "active": {
+        "mode": "none",
+        "version": 1
+      },
+      "descriptor_history": [],
+      "history_scope": "profiles_that_have_contributed_keyframe_descriptors",
+      "last_frame": {
+        "state": "not_observed"
+      },
+      "loaded": null,
+      "point_colors": "from_keyframe_inputs_may_include_grayscale"
+    },
+    "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15",
+    "reason": "Waiting for sufficient camera motion and static visual features.",
+    "robot_extrinsics_available": false,
+    "runtime_loaded": true,
+    "status": "initializing"
+  },
+  "original_engine_closed_before_restore": true,
+  "profile": "native Apple Silicon Python-core ORB2 + g2o + DBoW3",
+  "purpose": "Real feature-map serialization, restore, and image-based relocalization",
+  "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15",
+  "qualifier_sha256": "fc2ac287e0d1043e87192a7731c1058fc8a830259bea9bda149e61f7dc99a41d",
+  "relocalization_input": {
+    "dataset_frame_index": 9,
+    "path": "/Users/micahelbyrns/.local/share/biome-robot-vision/qualification/checkpoint-zero-feature-20261109-01/relocalization_input.png",
+    "prior_reference_keyframe_id": "8",
+    "sha256": "c22c7a4d65c06f4067de53a9a6e6af20d2d1e3f291e04ceab95c6079f9c38337",
+    "was_saved_keyframe": false
+  },
+  "relocalized": {
+    "full_snapshot_upserts": 447,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": true,
+      "keyframe_count": 6,
+      "point_count": 441,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "is_keyframe": false,
+    "localization": {
+      "T_map_camera": [
+        [
+          0.9999825104076292,
+          -0.0017377784086267474,
+          0.005653229613133507,
+          0.0019692980911081874
+        ],
+        [
+          0.0017306641150764595,
+          0.9999977046920911,
+          0.0012630963028776759,
+          -0.00809093623542281
+        ],
+        [
+          -0.005655411618714023,
+          -0.0012532903702124755,
+          0.9999832226505957,
+          0.4737773682163039
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_axes": "x_right_y_down_z_forward",
+      "frame_id": "kitti06-relocalize-9",
+      "pose_origin": "camera_optical",
+      "reason": null,
+      "reference_keyframe_id": "10",
+      "scale_status": "unobserved",
+      "status": "tracking",
+      "timestamp_s": 451298.170908083,
+      "units": "arbitrary",
+      "valid": true
+    },
+    "observation_anchor": null
+  },
+  "restored_start": {
+    "backend": "pyslam",
+    "calibration": {
+      "calibration_id": "pyslam-kitti04-12-83454549c4df0db0",
+      "cx": 601.8873,
+      "cy": 183.1104,
+      "distortion": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "fx": 707.0912,
+      "fy": 707.0912,
+      "height": 370,
+      "provenance": "pySLAM a4e6a31f211ac6b2f9ecf4ab628734f6194caa15 settings/KITTI04-12.yaml",
+      "validated": true,
+      "width": 1226
+    },
+    "geometry": {
+      "available": false,
+      "complete_snapshot": false,
+      "keyframe_count": 0,
+      "point_count": 0,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "localization": {
+      "T_map_camera": null,
+      "camera_axes": "x_right_y_down_z_forward",
+      "frame_id": null,
+      "pose_origin": "camera_optical",
+      "reason": "Restored map; a fresh frame must relocalize before a current pose is valid.",
+      "reference_keyframe_id": null,
+      "scale_status": "unobserved",
+      "status": "relocalizing",
+      "timestamp_s": null,
+      "units": "arbitrary",
+      "valid": false
+    },
+    "map_id": "qualification-kitti06-checkpoint-zero-feature-20261109-01",
+    "mounting": null,
+    "preprocessing": {
+      "active": {
+        "mode": "none",
+        "version": 1
+      },
+      "descriptor_history": [
+        {
+          "mode": "none",
+          "version": 1
+        }
+      ],
+      "history_scope": "profiles_that_have_contributed_keyframe_descriptors",
+      "last_frame": {
+        "state": "not_observed"
+      },
+      "loaded": {
+        "mode": "none",
+        "version": 1
+      },
+      "point_colors": "from_keyframe_inputs_may_include_grayscale"
+    },
+    "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15",
+    "reason": "Restored map; a fresh frame must relocalize before a current pose is valid.",
+    "robot_extrinsics_available": false,
+    "runtime_loaded": true,
+    "status": "relocalizing"
+  },
+  "runtime_versions": {
+    "kornia": "0.8.2",
+    "numba": "0.61.2",
+    "numpy": "1.26.4",
+    "torch": "2.15.0",
+    "torchvision": "0.29.2"
+  },
+  "scale_status": "unobserved",
+  "scope": "One real monocular KITTI prefix, a zero-feature input persisted across restart, and one freshly submitted non-keyframe revisit. This verifies this native engine profile's state roundtrip and relocalization; it does not qualify live ESP32 intrinsics, metric scale, latency, or all environments.",
+  "source_sha256": {
+    "setup_slam.py": "aa5e2aaf6b385f6ce59fd783d8395f26b8d6f46a62f9ce43a202a399d29e6106",
+    "slam_backend.py": "0473d801be3f71f4db17b674dad8b9a6fc99a3af5ce9e5621d7979b168780247",
+    "tests/test_slam_backend.py": "1537008fa2a80496fcb59901ebf93f2f8d610bd170511cbad47148e490e0f90a"
+  },
+  "started_at_unix_s": 1794262492.792788,
+  "status": "passed",
+  "training": {
+    "frames_processed": 11,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": false,
+      "keyframe_count": 6,
+      "point_count": 347,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "last_pose": {
+      "T_map_camera": [
+        [
+          0.9999912085364728,
+          -0.0023204803154709915,
+          0.0034925951483096196,
+          0.001976035985634396
+        ],
+        [
+          0.002318877526263643,
+          0.9999972042659295,
+          0.0004628902062834628,
+          -0.008424746679122717
+        ],
+        [
+          -0.003493659511554273,
+          -0.00045478723640334445,
+          0.9999937937366349,
+          0.5273763852620337
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "frame_index": 10,
+      "reference_keyframe_id": "10"
+    },
+    "nonzero_translation": true,
+    "tracked_frame_count": 9
+  },
+  "training_progress": {
+    "frame_index": 10,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": false,
+      "keyframe_count": 6,
+      "point_count": 347,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "tracked_frame_count": 9
+  },
+  "units": "arbitrary",
+  "zero_feature_frame": {
+    "descriptor_representation": "ndarray",
+    "id": 11,
+    "img_id": 11,
+    "keypoint_count": 0,
+    "localized": false,
+    "point_count": 0,
+    "restored": true,
+    "serialized": true,
+    "timestamp": 1.1388770000000001
+  }
+}
