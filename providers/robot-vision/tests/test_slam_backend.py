@@ -293,5 +293,63 @@ class BackendContractTests(unittest.TestCase):
 
 
 
+
+    def test_normalized_restore_preserves_legacy_descriptor_history_until_new_keyframe(self):
+        path = self.make_package()
+        policy = {"mode":"percentile_gray","version":1,"low_percentile":1.0,"high_percentile":99.0}
+        backend = SlamBackend({"calibration":copy.deepcopy(CALIBRATION),"preprocessing":policy},self.root)
+        backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
+        native_map = SimpleNamespace(update_lock=threading.RLock(),
+            get_keyframes=lambda:[SimpleNamespace(id=10),SimpleNamespace(id=11)],
+            num_keyframes=lambda:3,num_points=lambda:1)
+        received=[]
+        def save(target):
+            doc=document()
+            extra=copy.deepcopy(doc["map"]["keyframes"][-1])
+            extra.update(id=12,kid=2,img_id=2)
+            doc["map"]["keyframes"].append(extra)
+            (Path(target)/"map.json").write_text(json.dumps(doc))
+            (Path(target)/"config_info.json").write_text("{}")
+            (Path(target)/"loop_closing.db").write_bytes(b"fixture")
+        runtime=SimpleNamespace(map=native_map,load_system_state=lambda p:None,
+            set_tracking_state=lambda s:None,loop_closing=SimpleNamespace(last_loop_kf_id=0),
+            tracking=SimpleNamespace(state=SimpleNamespace(name="OK")),
+            track=lambda image,*args:received.append(image),save_system_state=save)
+        with patch.object(backend,"_new_runtime",return_value=runtime):
+            status=backend.start("map-one",path)
+        raw_policy={"mode":"none","version":1}
+        self.assertEqual(status["preprocessing"]["loaded"],raw_policy)
+        self.assertEqual(status["preprocessing"]["descriptor_history"],[raw_policy])
+        self.assertEqual(status["preprocessing"]["active"],policy)
+        entities=_saved_entities(document(),{"0":"a","1":"b"})
+        added=copy.deepcopy(entities[("keyframe","11")])
+        added["backend_frame_index"]=2
+        entities[("keyframe","12")]=added
+        image=np.full((480,640,3),24,np.uint8)
+        with patch.object(backend,"_read_entities",return_value=entities), \
+             patch.object(backend,"_current_pose",return_value=(pose(),"12")):
+            result=backend.track(image,"fresh",1.0)
+        self.assertTrue(result["is_keyframe"])
+        self.assertFalse(np.shares_memory(received[0],image))
+        saved=backend.checkpoint(self.root/"normalized-save")
+        self.assertEqual(saved["active_preprocessing"],policy)
+        self.assertEqual(saved["descriptor_preprocessing_history"],[raw_policy,policy])
+        backend._validate_checkpoint(Path(saved["path"]))
+
+    def test_unsupported_checkpoint_preprocessing_is_rejected_before_native_load(self):
+        path=self.make_package()
+        target=path/"backend_manifest.json"
+        original=json.loads(target.read_text())
+        for change in [{"active_preprocessing":{"mode":"invented"}},
+                       {"active_preprocessing":None},
+                       {"descriptor_preprocessing_history":[None]},
+                       {"descriptor_preprocessing_history":[]}]:
+            with self.subTest(change=change):
+                target.write_text(json.dumps({**original,**change}))
+                with patch.object(self.backend,"_new_runtime",side_effect=AssertionError):
+                    with self.assertRaisesRegex(CheckpointError,"preprocessing"):
+                        self.backend.start("map-one",path)
+
+
 if __name__ == "__main__":
     unittest.main()

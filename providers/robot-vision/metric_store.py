@@ -7,6 +7,7 @@ frame evidence and applied references. It never changes native map coordinates.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from vision_store import _copy, _dump, _now
 
@@ -181,6 +182,77 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
                 sample["anchor_revision"] = row["revision"]
                 resolved.append(sample)
             return info, resolved, missing
+
+    def resolve_keyframes_for_fit(self, map_id, samples, revision=None, *, exclude_deleted=False):
+        """Exclude only proven deleted anchor incarnations from checkerboard fits."""
+        with self.store._lock:
+            info, resolved, missing = self.resolve_keyframes(map_id, samples, revision)
+            if not exclude_deleted or not missing:
+                return info, resolved, missing, []
+            unresolved, excluded, excluded_ids = set(missing), [], set()
+            counts = {}
+            for sample in samples:
+                oid = sample.get("observation_id")
+                counts[oid] = counts.get(oid, 0) + 1
+            latest_sql = (
+                "SELECT * FROM entity_versions WHERE map_id=? AND kind='keyframe' "
+                "AND entity_id=? AND revision<=? ORDER BY revision DESC LIMIT 1")
+
+            def same_image(row, frame_id):
+                if row is None or row["deleted"]:
+                    return False
+                try:
+                    payload = json.loads(row["payload"])
+                except (TypeError, json.JSONDecodeError):
+                    return False
+                if not isinstance(payload, dict) or payload.get("source_frame_id") != frame_id:
+                    return False
+                transform = payload.get("T_map_camera")
+                return (isinstance(transform, list) and len(transform) == 4 and
+                        all(isinstance(axis, list) and len(axis) == 4 and
+                            all(not isinstance(v, bool) and isinstance(v, (int, float)) and
+                                math.isfinite(v) for v in axis) for axis in transform))
+
+            for sample in samples:
+                oid = sample.get("observation_id")
+                if oid not in unresolved or counts[oid] != 1:
+                    continue
+                source_revision, frame_id = sample.get("source_map_revision"), sample.get("frame_id")
+                calibration_id = sample.get("calibration_id")
+                if (sample.get("map_id") != map_id or not frame_id or not calibration_id or
+                        calibration_id != info["metadata"].get("calibration_id") or
+                        type(source_revision) is not int or source_revision < 0 or
+                        source_revision > info["revision"]):
+                    continue
+                keyframe_id = sample["keyframe_id"]
+                deletion = self.store._db.execute(
+                    latest_sql, (map_id, keyframe_id, info["revision"])).fetchone()
+                if (deletion is None or not deletion["deleted"] or
+                        deletion["revision"] <= source_revision):
+                    continue
+                try:
+                    source_map = self.store._map_locked(map_id, source_revision)
+                except (KeyError, ValueError):
+                    continue
+                if source_map["metadata"].get("calibration_id") != calibration_id:
+                    continue
+                original = self.store._db.execute(
+                    latest_sql, (map_id, keyframe_id, source_revision)).fetchone()
+                if not same_image(original, frame_id):
+                    continue
+                history = self.store._db.execute(
+                    "SELECT deleted,payload FROM entity_versions WHERE map_id=? AND kind='keyframe' "
+                    "AND entity_id=? AND revision>? AND revision<? ORDER BY revision",
+                    (map_id, keyframe_id, source_revision, deletion["revision"])).fetchall()
+                if any(not same_image(row, frame_id) for row in history):
+                    continue
+                excluded_ids.add(oid)
+                excluded.append({
+                    "observation_id": oid, "keyframe_id": keyframe_id,
+                    "source_map_revision": source_revision, "deletion_revision": deletion["revision"],
+                    "reason": "anchor_deleted", "role": sample.get("role"),
+                })
+            return info, resolved, [oid for oid in missing if oid not in excluded_ids], excluded
 
     def save_attachment(self, session, observations, candidate):
         existing = self.attachment(session["map_id"], session_id=session["session_id"])
