@@ -135,6 +135,195 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())["result"]["error"]["effect"], "unknown")
 
 
+
+class ScaleContractTests(unittest.TestCase):
+    """Public contract compatibility and mutation/telemetry boundary regressions."""
+    NEW_CONTRACTS = {
+        "robot.map.scale.start:1", "robot.map.scale.status:1",
+        "robot.map.scale.capture:1", "robot.map.scale.fit:1",
+        "robot.map.scale.apply:1", "robot.map.scale.cancel:1",
+        "robot.map.scale.reference:1", "robot.map.metric.read:1",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        repo = str(Path(__file__).resolve().parents[3])
+        with mock.patch.object(sys, "path", [repo] + sys.path):
+            from biomerte.api import schema, validate
+            from biomerte.store import Fault
+        cls.schema = staticmethod(schema)
+        cls.validate = staticmethod(validate)
+        cls.fault = Fault
+
+    def test_original_thirteen_v1_contracts_are_immutable(self):
+        legacy = {name: spec for name, spec in adapter.CONTRACTS.items()
+                  if name not in self.NEW_CONTRACTS}
+        self.assertEqual(len(legacy), 13)
+        encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(), "c8f552dc9a2ca49d35f641e4f5dc0c729a84bcbe13195da5aeac64207c540189")
+        self.assertEqual(set(adapter.CONTRACTS) - set(legacy), self.NEW_CONTRACTS)
+
+    def valid_inputs(self):
+        return {
+            "robot.map.scale.start:1": {
+                "method": "checkerboard",
+                "reference": {"inner_corners": [9, 6], "square_size_m": 0.020,
+                              "size_verified": False, "stationary": True,
+                              "measurement_source": "nominal design"},
+                "policy": {}, "auto_capture": True, "auto_apply": False},
+            "robot.map.scale.status:1": {"session_id": "s", "map_id": "m",
+                                       "include_observations": True},
+            "robot.map.scale.capture:1": {"session_id": "s", "snapshot_id": "snap",
+                                        "role": "validation", "label": "validation_start"},
+            "robot.map.scale.fit:1": {"session_id": "s", "distance_m": 3,
+                                    "validation_distance_m": 1.25},
+            "robot.map.scale.apply:1": {"session_id": "s"},
+            "robot.map.scale.cancel:1": {"session_id": "s"},
+            "robot.map.scale.reference:1": {"session_id": "s", "reference": {
+                "inner_corners": [9, 6], "square_size_m": 0.0198,
+                "size_verified": True, "measurement_source": "measured test fixture",
+                "stationary": True}},
+            "robot.map.metric.read:1": {"map_id": "m", "revision": 12, "attachment_id": "a",
+                                      "bounds": {"min_x": -1, "min_y": -1,
+                                                 "max_x": 2, "max_y": 2},
+                                      "kinds": ["sparse_point"], "cursor": {
+                                          "query": {"map_id": "m", "revision": 12,
+                                                    "attachment_id": "a", "bounds": None,
+                                                    "kinds": ["sparse_point"], "solution_id": "s1"},
+                                          "native_cursor": {"query": {"map_id": "m", "revision": 12,
+                                                                       "bounds": None, "kinds": ["sparse_point"]},
+                                                            "offset": 1}}, "limit": 50},
+        }
+    def test_scale_inputs_validate_through_the_actual_controller(self):
+        valid = self.valid_inputs()
+        required = {
+            "robot.map.scale.start:1": {"method"},
+            "robot.map.scale.capture:1": {"session_id", "snapshot_id"},
+            "robot.map.scale.fit:1": {"session_id"},
+            "robot.map.scale.apply:1": {"session_id"},
+            "robot.map.scale.cancel:1": {"session_id"},
+            "robot.map.scale.reference:1": {"session_id", "reference"},
+        }
+        for name, inputs in valid.items():
+            with self.subTest(contract=name):
+                parsed = self.schema(adapter.CONTRACTS[name]["inputs"])
+                self.validate(parsed, inputs)
+                self.assertEqual({key for key, spec in parsed.items() if spec["required"]},
+                                 required.get(name, set()))
+                self.assertEqual(adapter.CONTRACTS[name]["outputs"], {"result": "obj"})
+                for missing in required.get(name, set()):
+                    with self.assertRaises(self.fault):
+                        self.validate(parsed, {k: v for k, v in inputs.items() if k != missing})
+        fit = self.schema(adapter.CONTRACTS["robot.map.scale.fit:1"]["inputs"])
+        self.validate(fit, {"session_id": "s", "distance_m": 3.125})
+        for field in ("distance_m", "validation_distance_m"):
+            for wrong in (True, "3.0", None, {}):
+                with self.subTest(field=field, wrong=wrong), self.assertRaises(self.fault):
+                    self.validate(fit, {"session_id": "s", field: wrong})
+
+    def test_new_contracts_are_advertised_only_when_service_supports_them(self):
+        legacy = set(adapter.CONTRACTS) - self.NEW_CONTRACTS
+        self.assertEqual(adapter.supported_contracts({"capabilities": list(legacy)}), legacy)
+        all_names = [spec["name"] for spec in adapter.CONTRACTS.values()]
+        self.assertEqual(adapter.supported_contracts({"capabilities": all_names}),
+                         set(adapter.CONTRACTS))
+        self.assertEqual(adapter.supported_contracts({"capabilities": [
+            "robot.map.scale.fit:2", "robot.drive:1"]}), set())
+
+    def test_scale_evidence_inputs_and_result_wrapper_are_preserved(self):
+        for contract in sorted(self.NEW_CONTRACTS):
+            with self.subTest(contract=contract):
+                inputs = self.valid_inputs()[contract]
+                response = {"session_id": "scale-session", "state": "provisional",
+                            "metric_scale": {"availability": "unavailable",
+                                             "reason": "reference_size_unverified"},
+                            "evidence": {"source_frame_id": "f9", "keyframe_id": "kf7",
+                                         "data_base64": "must-not-leave-local-service"}}
+                client, remote = FakeClient(response), FakeRemote()
+                result = adapter.execute({"contract": contract, "inputs": inputs}, {}, remote, client)
+                self.assertEqual(set(result), {"result"})
+                self.assertEqual(client.calls, [(contract.rsplit(":", 1)[0], inputs)])
+                self.assertEqual(result["result"]["state"], "provisional")
+                self.assertEqual(result["result"]["metric_scale"], response["metric_scale"])
+                self.assertEqual(result["result"]["evidence"]["source_frame_id"], "f9")
+                self.assertNotIn("data_base64", json.dumps(result))
+                self.assertEqual(remote.calls, [])
+                self.assertIn("data_base64", response["evidence"])
+
+
+    def test_returned_metric_cursor_validates_and_reaches_service_unchanged(self):
+        returned_cursor = {
+            "query": {"map_id": "m", "revision": 12, "attachment_id": "a",
+                      "bounds": None, "kinds": ["sparse_point"], "solution_id": "solution-one"},
+            "native_cursor": {
+                "query": {"map_id": "m", "revision": 12, "bounds": None,
+                          "kinds": ["sparse_point"]},
+                "offset": 1},
+        }
+        first_page = {
+            "map_id": "m", "revision": 12, "attachment_id": "a",
+            "entities": [{"kind": "sparse_point", "entity_id": "p1",
+                          "data": {"xyz": [0.5, 0, 1]}}],
+            "next_cursor": returned_cursor,
+        }
+        first_result = adapter.execute(
+            {"contract": "robot.map.metric.read:1",
+             "inputs": {"map_id": "m", "revision": 12, "attachment_id": "a",
+                        "kinds": ["sparse_point"], "limit": 1}},
+            {}, FakeRemote(), FakeClient(first_page))["result"]
+        inputs = {"cursor": first_result["next_cursor"], "limit": 1}
+        parsed = self.schema(adapter.CONTRACTS["robot.map.metric.read:1"]["inputs"])
+        self.validate(parsed, inputs)
+        with self.assertRaises(self.fault):
+            self.validate(parsed, {"cursor": json.dumps(returned_cursor)})
+        second_page = {"map_id": "m", "revision": 12, "attachment_id": "a",
+                       "entities": [], "next_cursor": None}
+        client, remote = FakeClient(second_page), FakeRemote()
+        result = adapter.execute({"contract": "robot.map.metric.read:1", "inputs": inputs},
+                                 {}, remote, client)
+        self.assertEqual(client.calls, [("robot.map.metric.read", {
+            "cursor": returned_cursor, "limit": 1})])
+        self.assertEqual(result, {"result": second_page})
+        self.assertEqual(remote.calls, [])
+
+    def test_metric_view_does_not_overwrite_raw_pose_or_revision(self):
+        payload = {
+            "map_id": "map-one", "map_revision": 18,
+            "localization": {"units": "arbitrary", "position": [2, 0, 4]},
+            "metric_localization": {"units": "m", "position": [0.5, 0, 1],
+                                    "attachment_id": "scale-one", "map_revision": 18},
+            "metric_scale": {"availability": "available", "attachment_id": "scale-one"},
+        }
+        for name in ("robot.vision.snapshot:1", "robot.vision.geometry:1",
+                     "robot.vision.status:1", "robot.map.metric.read:1"):
+            with self.subTest(contract=name):
+                remote = FakeRemote()
+                result = adapter.execute({"contract": name, "inputs": {}},
+                                         {}, remote, FakeClient(payload))
+                self.assertEqual(result, {"result": payload})
+                self.assertEqual(remote.calls, [])
+
+    def test_scale_transport_failures_retain_mutation_uncertainty(self):
+        read_only = {"robot.map.scale.status:1", "robot.map.metric.read:1"}
+        for contract in sorted(self.NEW_CONTRACTS):
+            with self.subTest(contract=contract):
+                output = io.StringIO()
+                with mock.patch.object(adapter, "load_config", return_value={}), \
+                        mock.patch.object(adapter, "Remote"), \
+                        mock.patch.object(adapter, "execute", side_effect=adapter.ServiceError(
+                            "service_unavailable", "Local response was lost.")), \
+                        mock.patch.object(sys, "stdin", io.StringIO('{"inputs":{}}')), \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(adapter.main(["execute", "--contract", contract]), 0)
+                error = json.loads(output.getvalue())["result"]["error"]
+                self.assertEqual(error["code"], "service_unavailable")
+                if contract in read_only:
+                    self.assertNotIn("effect", error)
+                else:
+                    self.assertEqual(error["effect"], "unknown")
+                    self.assertIn("Inspect current state", error["next_action"])
+
+
 class TemporaryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="rv-adapter-")
@@ -260,7 +449,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 13)
+        self.assertEqual(len(offers), 21)
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])

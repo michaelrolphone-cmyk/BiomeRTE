@@ -22,6 +22,7 @@ from detector import ObjectDetector
 from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
 from vision_store import VisionStore
+from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
@@ -29,7 +30,7 @@ CAPABILITIES = [
     "robot.map.read", "robot.map.changes", "robot.map.checkpoint",
     "robot.map.create", "robot.map.open", "robot.vision.calibration",
     "robot.vision.project_ground",
-]
+] + METRIC_CAPABILITIES
 LOG = logging.getLogger("robot-vision")
 
 
@@ -97,6 +98,7 @@ class VisionService:
         self.revision = info["revision"]
         self.session_id = None
         self._start_backend_and_session()
+        self.metric = MetricCalibration(self.store)
 
     def _map_metadata(self, extra=None):
         return {
@@ -203,6 +205,7 @@ class VisionService:
         return result
 
     def start(self):
+        self.metric.start_worker()
         self.camera.start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
@@ -358,6 +361,11 @@ class VisionService:
             self.store.pin_frame(frame_id, f"keyframe:{self.map_id}:{anchor['keyframe_id']}")
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
             self._commit_changes([semantic_change], "semantic_observation")
+        try:
+            self.metric.offer(snapshot)
+        except Exception as exc:
+            self.metric.record_error("capture_offer:" + type(exc).__name__ + ":" + str(exc))
+            LOG.exception("Metric capture enqueue failed; coherent observation remains available")
         return snapshot
 
     def _freshness(self, snapshot):
@@ -395,7 +403,8 @@ class VisionService:
                     else self.store.latest_snapshot(session_id=self.session_id))
         if snapshot.get("availability") == "unavailable":
             return snapshot
-        return {**snapshot, "availability": "available", "freshness": self._freshness(snapshot)}
+        return {**snapshot, "availability": "available", "freshness": self._freshness(snapshot),
+                "metric_localization": self.metric.metric_localization(snapshot)}
 
     def _binding(self, snapshot):
         return {key: snapshot.get(key) for key in
@@ -430,6 +439,9 @@ class VisionService:
         inputs = inputs or {}
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
+        if operation in METRIC_CAPABILITIES:
+            return self.metric.query(operation, inputs, map_id=self.map_id,
+                                     calibration_id=self.calibration["calibration_id"])
         if operation == "robot.vision.status":
             return {
                 "availability": "available", "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
@@ -444,6 +456,8 @@ class VisionService:
                 "latest_backend_checkpoint": self.store.latest_backend_checkpoint(self.map_id),
                 "calibration": {"calibration_id": self.calibration["calibration_id"],
                                 "errors": calibration_errors(self.calibration)},
+                "metric_scale": self.metric.attachment_status(self.map_id),
+                "metric_calibration": self.metric.status(map_id=self.map_id),
                 "control": {"motion_commands": False, "brain": "external"},
             }
         if operation == "robot.vision.metadata":
@@ -455,7 +469,8 @@ class VisionService:
                     "image_pixels": "u right, v down, full decoded image resolution",
                     "camera_optical": "x right, y down, z forward; pose at optical center",
                     "camera_ground": "x forward, y left, z up; origin directly below optical center",
-                    "map": "backend visual frame in arbitrary units until separately scale-qualified",
+                    "map": "backend visual frame in arbitrary units",
+                    "map_metric": "same native map origin and axes, translated coordinates in meters; separately qualified scale, floor alignment unmeasured",
                     "robot": "unavailable until rigid camera-to-robot extrinsics are supplied"},
                 "time": {"capture": "unknown", "source_media": "relative clock",
                          "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations"},
@@ -463,6 +478,8 @@ class VisionService:
                 "unknown_space_rule": "No detection or sparse point is not proof of free space.",
                 "identity_rule": "Tracker IDs are local to one tracker epoch, not durable object identities.",
                 "restart_rule": "New session; reuse map checkpoint; current pose requires fresh relocalization.",
+                "metric_scale_rule": "Exact checkerboard keyframes or independently measured displacements; immutable applied reference, resolve and revalidate against requested map revision.",
+                "metric_calibration_control": "Passive observations and guidance; vehicle motion belongs to the independent brain.",
                 "retention": {"rolling_observations": self.config.get("max_observations", 300),
                               "map_keyframe_evidence": "durable_and_pinned",
                               "controller_frames": "uploaded_only_when_requested"},
@@ -489,6 +506,7 @@ class VisionService:
                         "tracks": snapshot["tracks"],
                         "detection_metadata": snapshot["frame"].get("detection_metadata", {})}
             return {**self._binding(snapshot), "localization": snapshot["localization"],
+                    "metric_localization": snapshot["metric_localization"],
                     "spatial_evidence": snapshot["spatial_evidence"]}
         if operation == "robot.map.read":
             return self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),
@@ -569,6 +587,7 @@ class VisionService:
         self.camera.close()
         if self._thread:
             self._thread.join()
+        self.metric.close()
         with self._pipeline_lock:
             try:
                 # The final SQLite backup must include the completed session.
@@ -584,7 +603,10 @@ class VisionService:
 
 
 class LocalServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    daemon_threads = True
+    # main() closes the server before checkpointing/closing the service. Drain
+    # accepted mutations so their persistence precedes that final checkpoint.
+    daemon_threads = False
+    block_on_close = True
 
 
 def handler_for(service):
