@@ -106,6 +106,25 @@ def patch_loop_configs(source):
     return source
 
 
+def patch_headless_image_cache(source):
+    source = replace_once(
+        source,
+        "        self.store_kf_imgs = (\n",
+        "        self.store_kf_imgs = not self.headless and (\n",
+    )
+    source = replace_once(source,
+        "            if Parameters.kLoopClosingDebugWithLoopConsistencyCheckImages\n",
+        "            if not self.headless and Parameters.kLoopClosingDebugWithLoopConsistencyCheckImages\n")
+    for method in ("save_image_map_", "load_image_map_"):
+        header = f"    def {method}(self, path):\n"
+        source = replace_once(
+            source, header, header + "        if self.headless:\n            return\n",
+        )
+    return replace_once(source,
+        "        if (\n            self.loop_consistent_candidate_imgs.candidates is not None\n            or self.draw_similarity_matrix_init\n        ):",
+        "        if not self.headless and (\n            (self.loop_consistent_candidate_imgs is not None\n             and self.loop_consistent_candidate_imgs.candidates is not None)\n            or self.draw_similarity_matrix_init\n        ):")
+
+
 def patch_loop_viewer(source):
     source = replace_once(source, "from pyslam.viz.qimage_thread import QimageViewer\n", "")
     source = replace_once(source,
@@ -114,11 +133,12 @@ def patch_loop_viewer(source):
         "            from pyslam.viz.qimage_thread import QimageViewer\n"
         "            if QimageViewer.is_running():\n"
         "                QimageViewer.get_instance().quit()")
-    return replace_once(source,
+    source = replace_once(source,
         "        if self.headless:\n            return\n        draw = False",
         "        if self.headless:\n            return\n"
         "        from pyslam.viz.qimage_thread import QimageViewer\n"
         "        draw = False")
+    return patch_headless_image_cache(source)
 
 
 
@@ -267,6 +287,8 @@ class Installer:
                                         if name.endswith("optimizer_gtsam.py") else
                                         "Keep optional dense/GUI imports lazy and preserve headless mode on restore."
                                         if name.endswith("/slam.py") else
+                                        "Keep headless loop visualization images out of memory and checkpoints; import GUI lazily."
+                                        if name.endswith("/loop_closing.py") else
                                         "Import optional dense, GUI, and nonselected loop engines only on use.")})
         artifact = {"pyslam_commit": PYSLAM_COMMIT, "patches": manifest}
         (self.source / "biome-patches.json").write_text(json.dumps(artifact, sort_keys=True, indent=2))

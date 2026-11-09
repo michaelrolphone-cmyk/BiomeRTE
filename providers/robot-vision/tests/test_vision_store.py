@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from vision_store import VisionStore, RevisionConflict
@@ -326,6 +327,122 @@ class VisionStoreTests(unittest.TestCase):
             self.publish("after-stop")
         self.assertEqual(self.store.get_snapshot(snapshot["snapshot_id"])["availability"], "available")
         self.assertEqual(self.store.read_map(self.map_id)["map"]["map_id"], self.map_id)
+
+
+    def checkpoint_fixture(self, origin="automatic", map_id=None):
+        source = self.root / "retention-fixture.bin"
+        source.write_bytes(b"independent-backend-state")
+        return self.store.checkpoint(map_id or self.map_id, source,
+                                     {"checkpoint_origin": origin})
+
+    def test_failed_backup_never_publishes_and_keeps_prior_recovery(self):
+        prior = self.checkpoint_fixture()
+        before = {p.name for p in self.store.checkpoint_dir.iterdir()}
+        with patch.object(self.store, "_backup_database", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.checkpoint_fixture()
+        self.assertEqual({p.name for p in self.store.checkpoint_dir.iterdir()}, before)
+        self.assertEqual(self.store.latest_backend_checkpoint(self.map_id)["checkpoint_id"],
+                         prior["checkpoint_id"])
+        self.assertEqual((self.root / "retention-fixture.bin").read_bytes(),
+                         b"independent-backend-state")
+
+    def test_complete_publication_precedes_inventory_and_orphan_can_recover(self):
+        captured = []
+        def inventory_failure(result):
+            captured.append(result)
+            folder = Path(result["database_path"]).parent
+            self.assertTrue((folder / "manifest.json").is_file())
+            self.assertTrue((folder / "vision.sqlite3").is_file())
+            self.assertEqual(self.store.get_checkpoint(result["checkpoint_id"])["availability"],
+                             "unavailable")
+            raise OSError("injected inventory failure")
+        with patch.object(self.store, "_record_checkpoint", side_effect=inventory_failure):
+            with self.assertRaises(OSError):
+                self.checkpoint_fixture()
+        saved = captured[0]
+        self.assertTrue(Path(saved["database_path"]).is_file())
+        self.assertEqual(self.store.reconcile_checkpoint_inventory()["recovered"],
+                         [saved["checkpoint_id"]])
+        self.assertEqual(self.store.get_checkpoint(saved["checkpoint_id"])["availability"], "available")
+        with sqlite3.connect(saved["database_path"]) as backup:
+            self.assertEqual(backup.execute("SELECT COUNT(*) FROM checkpoints WHERE id=?",
+                                             (saved["checkpoint_id"],)).fetchone()[0], 0)
+
+    def test_retention_preserves_each_map_explicit_save_and_rollback(self):
+        explicit = self.checkpoint_fixture("explicit")
+        automatic = [self.checkpoint_fixture() for _ in range(4)]
+        second_map = self.store.create_map({"purpose": "preserved map"})["map_id"]
+        other = self.checkpoint_fixture(map_id=second_map)
+        metadata = self.store.checkpoint(self.map_id,
+                                        metadata={"checkpoint_origin": "automatic"})
+        result = self.store.retire_superseded_checkpoints()
+        self.assertEqual(set(result["retired"]),
+                         {item["checkpoint_id"] for item in automatic[:2]})
+        for item in [explicit, other, metadata] + automatic[-2:]:
+            self.assertEqual(self.store.get_checkpoint(item["checkpoint_id"])["availability"],
+                             "available")
+            self.assertTrue(Path(item["database_path"]).is_file())
+        self.assertEqual(self.store._checkpoint_storage_status()["retained_packages"], 5)
+
+    def test_retired_record_stays_unavailable_when_unlink_fails_and_retry_cleans(self):
+        snapshots = [self.checkpoint_fixture() for _ in range(3)]
+        with patch("vision_store.shutil.rmtree", side_effect=OSError("injected unlink failure")):
+            result = self.store.retire_superseded_checkpoints()
+        old = snapshots[0]
+        self.assertTrue(result["cleanup_errors"])
+        self.assertEqual(self.store.get_checkpoint(old["checkpoint_id"])["reason"], "checkpoint_retired")
+        self.assertTrue(Path(old["database_path"]).exists())
+        self.assertEqual(self.store.latest_backend_checkpoint(self.map_id)["checkpoint_id"],
+                         snapshots[-1]["checkpoint_id"])
+        self.store.retire_superseded_checkpoints()
+        self.assertFalse(Path(old["database_path"]).parent.exists())
+        self.assertEqual(self.store.reconcile_checkpoint_inventory()["recovered"], [])
+
+    def test_changed_files_invalidate_integrity_cache_and_preserve_good_recovery(self):
+        good = self.checkpoint_fixture()
+        corrupt = self.checkpoint_fixture()
+        self.assertEqual(self.store.latest_backend_checkpoint(self.map_id)["checkpoint_id"],
+                         corrupt["checkpoint_id"])
+        Path(corrupt["backend_artifact"]["path"]).write_bytes(b"corrupted")
+        self.assertEqual(self.store.latest_backend_checkpoint(self.map_id)["checkpoint_id"],
+                         good["checkpoint_id"])
+        self.store.retire_superseded_checkpoints()
+        self.assertTrue(Path(good["database_path"]).is_file())
+        self.assertEqual(self.store.get_checkpoint(good["checkpoint_id"])["availability"], "available")
+
+    def test_legacy_generations_require_audit_and_missing_files_are_unavailable(self):
+        source = self.root / "legacy.bin"
+        source.write_bytes(b"legacy fixture")
+        legacy = self.store.checkpoint(self.map_id, source)
+        self.checkpoint_fixture()
+        latest = self.checkpoint_fixture()
+        self.store.retire_superseded_checkpoints()
+        self.assertEqual(self.store.get_checkpoint(legacy["checkpoint_id"])["availability"], "available")
+        self.store.retire_superseded_checkpoints(include_legacy=True)
+        self.assertEqual(self.store.get_checkpoint(legacy["checkpoint_id"])["reason"], "checkpoint_retired")
+        Path(latest["database_path"]).unlink()
+        missing = self.store.get_checkpoint(latest["checkpoint_id"])
+        self.assertEqual(missing["availability"], "unavailable")
+        self.assertNotIn("database_path", missing)
+
+
+
+    def test_orphan_from_future_revision_is_not_adopted_into_older_database(self):
+        prior = self.checkpoint_fixture()
+        self.store.apply_map_update(self.map_id, 0, [self.point("future-point", [1, 2, 3])])
+        future = self.checkpoint_fixture()
+        database_path = self.store.db_path
+        self.store.close()
+        with sqlite3.connect(prior["database_path"]) as old_database:
+            with sqlite3.connect(database_path) as live_database:
+                old_database.backup(live_database)
+        self.store = VisionStore(self.root / "state", max_observations=3)
+        self.assertEqual(self.store.read_map(self.map_id)["map"]["revision"], 0)
+        self.assertEqual(self.store.get_checkpoint(future["checkpoint_id"])["availability"], "unavailable")
+        self.assertEqual(self.store.latest_backend_checkpoint(self.map_id)["checkpoint_id"],
+                         prior["checkpoint_id"])
+        self.assertTrue(Path(future["database_path"]).is_file())
 
 
 if __name__ == "__main__":

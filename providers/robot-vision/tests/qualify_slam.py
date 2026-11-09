@@ -141,6 +141,14 @@ def run(state_dir, output):
         phase_started = time.perf_counter()
         checkpoint = backend.checkpoint(output / "system_state")
         report["elapsed_seconds"]["checkpoint"] = time.perf_counter() - phase_started
+        loop = backend._slam.loop_closing
+        report["headless_debug_cache"] = {
+            "enabled": bool(loop.store_kf_imgs),
+            "image_count": len(loop.map_frame_id_to_img),
+            "checkpoint_contains_cache": (Path(checkpoint["path"]) / "kf_image_map.pkl").exists(),
+        }
+        if any(report["headless_debug_cache"].values()):
+            raise AssertionError("Headless loop visualization cache was retained")
         saved_document = json.loads((Path(checkpoint["path"]) / "map.json").read_text())
         saved_keyframes = saved_document["map"]["keyframes"]
         saved_ids = {str(frame["id"]) for frame in saved_keyframes}

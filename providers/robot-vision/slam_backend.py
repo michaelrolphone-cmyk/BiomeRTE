@@ -195,6 +195,9 @@ class SlamBackend:
         Parameters.kDoSparseSemanticMappingAndSegmentation = False
         Parameters.kUseDepthEstimatorInFrontEnd = False
         Parameters.kUseLoopClosing = True
+        # Full loop-keyframe images are optional headless visualization data.
+        Parameters.kLoopClosingDebugWithLoopConsistencyCheckImages = False
+        Parameters.kLoopClosingDebugShowLoopMatchedPoints = False
         Parameters.kOptimizationFrontEndUseGtsam = False
         Parameters.kOptimizationBundleAdjustUseGtsam = False
         Parameters.kOptimizationLoopClosingUseGtsam = False
