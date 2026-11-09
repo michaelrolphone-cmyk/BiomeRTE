@@ -1,3 +1,4 @@
+import {nativeProviderCall,nativeProviderPair} from '../lib/provider.mjs';
 import {agentInbox} from '../lib/agent-inbox.mjs';
 import {grokCall,grokTools,sealGrokJob} from '../lib/grok.mjs';
 import {eventGrant,changeSubscription,delegationEvent,leaseEvent} from '../lib/events.mjs';
@@ -12,6 +13,9 @@ const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if(path==='/api/provider/call')return nativeProviderCall(req,env);
+ if(path==='/api/provider/pair/begin')return nativeProviderPair(req,env,'begin');
+ if(path==='/api/provider/pair/finish')return nativeProviderPair(req,env,'finish');
  if(path==='/api/decisions')return mobileDecision(req,env);
  if(path==='/api/exchange')return exchangeStream(req,env,conf);
  if(path==='/api/provider/connect')return providerSocket(req,env,conf);

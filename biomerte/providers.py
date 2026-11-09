@@ -382,10 +382,12 @@ def dispatch(tx, ctx, lease, inputs, operation):
     return a
 
 
-@op('provider.poll', 'provider:str', False)
-def pending(tx, ctx, provider):
-    """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
+@op('provider.poll', 'provider:str limit?:int', False)
+def pending(tx, ctx, provider, limit=64):
+    """Outstanding work inbox; optional response page size does not discard queued work."""
     owner(ctx, provider)
+    if limit < 1:
+        raise Fault('Provider inbox page size must be positive')
     leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
     actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
                ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
@@ -396,7 +398,7 @@ def pending(tx, ctx, provider):
         guard = a.get('guard', a['resource'])
         (rest if guard in seen else first).append(a)
         seen.add(guard)
-    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations}
+    return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')
