@@ -124,6 +124,22 @@ def _world_position_present(record):
                for key, value in record.items())
 
 
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sync_directory(path):
+    descriptor = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class VisionStore:
     def __init__(self, data_dir, *, max_observations=300):
         self.data_dir = Path(data_dir).expanduser().resolve()
@@ -136,6 +152,7 @@ class VisionStore:
         self.db_path = self.data_dir / "vision.sqlite3"
         self._lock = threading.RLock()
         self._closed = False
+        self._checkpoint_integrity = {}
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False,
                                    isolation_level=None)
         self._db.row_factory = sqlite3.Row
@@ -199,6 +216,7 @@ PRAGMA user_version=1;
                 self._remove_orphan_blobs()
                 expired = self._prune_locked()
             self._delete_blobs(expired)
+        self.reconcile_checkpoint_inventory()
 
     def _open(self):
         if self._closed:
@@ -758,6 +776,7 @@ PRAGMA user_version=1;
             return {"map_id": map_id, "observations": result,
                     "next_cursor": rows[limit - 1]["rowid"] if len(rows) > limit else None}
 
+
     def checkpoint(self, map_id, backend_artifact=None, metadata=None):
         extra = _copy(metadata or {})
         if not isinstance(extra, dict):
@@ -769,7 +788,9 @@ PRAGMA user_version=1;
                 raise RevisionConflict("backend checkpoint revision differs from current map")
             checkpoint_id = str(uuid.uuid4())
             folder = self.checkpoint_dir / checkpoint_id
-            folder.mkdir()
+            staging = self.checkpoint_dir / (checkpoint_id + ".partial")
+            staging.mkdir()
+            published = False
             try:
                 artifact = {"availability": "unavailable", "reason": "backend_artifact_not_supplied"}
                 if backend_artifact is not None:
@@ -782,11 +803,11 @@ PRAGMA user_version=1;
                     if source.is_dir():
                         if any(path.is_symlink() for path in source.rglob("*")):
                             raise ValueError("backend artifact must not contain symlinks")
-                        destination = folder / "backend"
+                        destination = staging / "backend"
                         shutil.copytree(source, destination)
                         files = sorted(path for path in destination.rglob("*") if path.is_file())
                     else:
-                        destination = folder / "backend" / source.name
+                        destination = staging / "backend" / source.name
                         destination.parent.mkdir()
                         shutil.copyfile(source, destination)
                         files = [destination]
@@ -794,12 +815,17 @@ PRAGMA user_version=1;
                         raise ValueError("backend artifact directory is empty")
                     manifest = []
                     for path in files:
-                        data = path.read_bytes()
-                        manifest.append({"path": str(path.relative_to(folder)),
-                                         "size_bytes": len(data), "sha256": _digest(data)})
+                        manifest.append({"path": str(path.relative_to(staging)),
+                                         "size_bytes": path.stat().st_size,
+                                         "sha256": _file_digest(path)})
                         with path.open("rb") as stream:
                             os.fsync(stream.fileno())
-                    artifact = {"availability": "available", "path": str(destination),
+                    for directory in sorted((p for p in (staging / "backend").rglob("*")
+                                             if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                        _sync_directory(directory)
+                    _sync_directory(staging / "backend")
+                    artifact = {"availability": "available",
+                                "path": str(folder / destination.relative_to(staging)),
                                 "files": manifest, "qualified_for_relocalization": False,
                                 "qualification_reason": "saving_does_not_verify_relocalization"}
                 result = {
@@ -807,34 +833,228 @@ PRAGMA user_version=1;
                     "map_revision": info["revision"], "created_at": _now(),
                     "database_path": str(folder / "vision.sqlite3"),
                     "backend_artifact": artifact, "metadata": extra,
+                    "publication": "complete_v2",
                     "image_retention": "rolling_and_explicitly_pinned",
                     "relocalization_qualification": "not_tested_by_store"}
-                with self._transaction():
-                    self._db.execute("INSERT INTO checkpoints VALUES(?,?,?,?,?)",
-                                     (checkpoint_id, map_id, info["revision"],
-                                      result["created_at"], _dump(result)))
-                backup = sqlite3.connect(result["database_path"])
-                try:
-                    self._db.backup(backup)
-                finally:
-                    backup.close()
-                with Path(result["database_path"]).open("rb") as stream:
-                    os.fsync(stream.fileno())
-                result["database_sha256"] = _digest(Path(result["database_path"]).read_bytes())
-                manifest_path = folder / "manifest.json"
-                with manifest_path.open("w", encoding="utf8") as stream:
+                # The finalized record contains this backup's hash. It belongs
+                # in the external manifest, never self-referentially in the backup.
+                self._backup_database(staging / "vision.sqlite3")
+                result["database_sha256"] = _file_digest(staging / "vision.sqlite3")
+                with (staging / "manifest.json").open("w", encoding="utf8") as stream:
                     stream.write(_dump(result))
                     stream.flush()
                     os.fsync(stream.fileno())
-                with self._transaction():
-                    self._db.execute("UPDATE checkpoints SET payload=? WHERE id=?",
-                                     (_dump(result), checkpoint_id))
+                _sync_directory(staging)
+                staging.replace(folder)
+                published = True
+                _sync_directory(self.checkpoint_dir)
+                self._record_checkpoint(result)
                 return result
             except BaseException:
-                with self._transaction():
-                    self._db.execute("DELETE FROM checkpoints WHERE id=?", (checkpoint_id,))
-                shutil.rmtree(folder, ignore_errors=True)
+                # Once published, retain the complete package even if SQLite
+                # inventory insertion fails. Startup can adopt that orphan.
+                if not published:
+                    shutil.rmtree(staging, ignore_errors=True)
                 raise
+
+    def _backup_database(self, destination):
+        backup = sqlite3.connect(str(destination))
+        try:
+            self._db.backup(backup)
+        finally:
+            backup.close()
+        with destination.open("rb") as stream:
+            os.fsync(stream.fileno())
+
+    def _record_checkpoint(self, result):
+        with self._transaction():
+            self._db.execute("INSERT INTO checkpoints VALUES(?,?,?,?,?)",
+                             (result["checkpoint_id"], result["map_id"],
+                              result["map_revision"], result["created_at"], _dump(result)))
+
+    def _checkpoint_folder(self, checkpoint_id):
+        if (not isinstance(checkpoint_id, str) or not checkpoint_id
+                or Path(checkpoint_id).name != checkpoint_id
+                or checkpoint_id in (".", "..") or checkpoint_id.endswith(".partial")):
+            raise ValueError("invalid_checkpoint_identity")
+        folder = self.checkpoint_dir / checkpoint_id
+        if folder.is_symlink() or folder.resolve().parent != self.checkpoint_dir:
+            raise ValueError("checkpoint_path_escapes_store")
+        return folder
+
+    @staticmethod
+    def _checkpoint_unavailable(result, reason):
+        return {key: result[key] for key in
+                ("checkpoint_id", "map_id", "map_revision", "created_at") if key in result} | {
+                    "availability": "unavailable", "reason": reason}
+
+    def _verified_checkpoint(self, result):
+        if result.get("availability") == "unavailable":
+            return self._checkpoint_unavailable(result, result.get("reason", "checkpoint_unavailable"))
+        try:
+            folder = self._checkpoint_folder(result["checkpoint_id"])
+            manifest_path = folder / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            for key in ("checkpoint_id", "map_id", "map_revision", "database_path",
+                        "database_sha256", "backend_artifact"):
+                if manifest.get(key) != result.get(key):
+                    raise ValueError("checkpoint_manifest_mismatch")
+            database = folder / "vision.sqlite3"
+            if Path(result["database_path"]).resolve() != database:
+                raise ValueError("checkpoint_database_path_mismatch")
+            expected = [(database, None, result["database_sha256"])]
+            artifact = result.get("backend_artifact", {})
+            if artifact.get("availability") == "available":
+                backend = folder / "backend"
+                destination = Path(artifact["path"]).resolve()
+                if not destination.is_relative_to(backend) or not destination.exists():
+                    raise ValueError("checkpoint_backend_path_mismatch")
+                names = set()
+                for entry in artifact["files"]:
+                    name = Path(entry["path"])
+                    path = folder / name
+                    if name.is_absolute() or not path.resolve().is_relative_to(backend):
+                        raise ValueError("checkpoint_file_escapes_package")
+                    if str(name) in names:
+                        raise ValueError("checkpoint_duplicate_file")
+                    names.add(str(name))
+                    expected.append((path, entry["size_bytes"], entry["sha256"]))
+                actual = {str(path.relative_to(folder)) for path in backend.rglob("*") if path.is_file()}
+                if not names or names != actual:
+                    raise ValueError("checkpoint_backend_inventory_mismatch")
+            if any(path.is_symlink() for path in folder.rglob("*")):
+                raise ValueError("checkpoint_contains_symlink")
+            fingerprint = []
+            for path in [manifest_path] + [item[0] for item in expected]:
+                stat = path.stat()
+                if not path.is_file():
+                    raise ValueError("checkpoint_missing_file")
+                fingerprint.append((str(path), stat.st_dev, stat.st_ino, stat.st_size,
+                                    stat.st_mtime_ns, stat.st_ctime_ns))
+            fingerprint = tuple(fingerprint)
+            if self._checkpoint_integrity.get(result["checkpoint_id"]) != fingerprint:
+                for path, size, digest in expected:
+                    if (size is not None and path.stat().st_size != size) or _file_digest(path) != digest:
+                        raise ValueError("checkpoint_integrity_error")
+                with sqlite3.connect("file:" + str(database) + "?mode=ro&immutable=1", uri=True) as backup:
+                    row = backup.execute("SELECT revision FROM maps WHERE id=?", (result["map_id"],)).fetchone()
+                    if row is None or row[0] != result["map_revision"]:
+                        raise ValueError("checkpoint_database_map_revision_mismatch")
+                    calibration_id = result.get("metadata", {}).get("calibration_id")
+                    if calibration_id and not backup.execute(
+                            "SELECT 1 FROM calibrations WHERE id=?", (calibration_id,)).fetchone():
+                        raise ValueError("checkpoint_database_calibration_missing")
+                backend_manifest = folder / "backend" / "backend_manifest.json"
+                if artifact.get("availability") == "available" and backend_manifest.is_file():
+                    native = json.loads(backend_manifest.read_text())
+                    if native.get("map_id") != result["map_id"]:
+                        raise ValueError("checkpoint_backend_map_mismatch")
+                    if calibration_id and native.get("calibration", {}).get("calibration_id") != calibration_id:
+                        raise ValueError("checkpoint_backend_calibration_mismatch")
+                self._checkpoint_integrity[result["checkpoint_id"]] = fingerprint
+            return {**result, "availability": "available"}
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            self._checkpoint_integrity.pop(result.get("checkpoint_id"), None)
+            return self._checkpoint_unavailable(result, "checkpoint_integrity_or_availability_error")
+
+    def reconcile_checkpoint_inventory(self):
+        """Adopt complete orphan publications; never promote partial/retired state."""
+        with self._lock:
+            self._open()
+            recovered = []
+            for manifest in self.checkpoint_dir.glob("*/manifest.json"):
+                if manifest.parent.name.endswith(".partial"):
+                    continue
+                try:
+                    candidate = json.loads(manifest.read_text())
+                    identifier = candidate["checkpoint_id"]
+                    if self._checkpoint_folder(identifier) != manifest.parent:
+                        continue
+                    if self._db.execute("SELECT 1 FROM checkpoints WHERE id=?", (identifier,)).fetchone():
+                        continue
+                    if not self._db.execute("SELECT 1 FROM maps WHERE id=?", (candidate["map_id"],)).fetchone():
+                        continue
+                    if not self._db.execute("SELECT 1 FROM map_revisions WHERE map_id=? AND revision=?",
+                                            (candidate["map_id"], candidate["map_revision"])).fetchone():
+                        continue
+                    if self._verified_checkpoint(candidate)["availability"] != "available":
+                        continue
+                    self._record_checkpoint(candidate)
+                    recovered.append(identifier)
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+            return {"recovered": recovered}
+
+    def retire_superseded_checkpoints(self, *, include_legacy=False, protected_ids=()):
+        """Keep a current and rollback backend per map, plus explicit references.
+
+        Legacy records are retained unless a caller explicitly requests a
+        one-time recovery audit. Retirement commits before files are removed.
+        """
+        with self._lock:
+            self._open()
+            records = [json.loads(row[0]) for row in self._db.execute(
+                "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")]
+            protected = set(protected_ids)
+            newest = {}
+            backends = {}
+            for record in records:
+                if record.get("availability") == "unavailable":
+                    continue
+                map_id = record["map_id"]
+                need_database = map_id not in newest
+                need_backend = (len(backends.get(map_id, [])) < 2
+                                and record.get("backend_artifact", {}).get("availability") == "available")
+                if need_database or need_backend:
+                    verified = self._verified_checkpoint(record)
+                    if verified["availability"] != "available":
+                        continue
+                    if need_database:
+                        newest[map_id] = record
+                        protected.add(record["checkpoint_id"])
+                    if need_backend:
+                        backends.setdefault(map_id, []).append(record)
+                        protected.add(record["checkpoint_id"])
+            retired, removed, errors = [], [], []
+            for record in records:
+                identifier = record["checkpoint_id"]
+                already_retired = record.get("reason") == "checkpoint_retired"
+                if not already_retired:
+                    origin = record.get("metadata", {}).get("checkpoint_origin")
+                    if (identifier in protected or origin == "explicit"
+                            or (origin not in ("automatic", "recovery") and not include_legacy)):
+                        continue
+                    replacements = (backends.get(record["map_id"], [])
+                                    if record.get("backend_artifact", {}).get("availability") == "available"
+                                    else [newest.get(record["map_id"])])
+                    replacement = next((item for item in replacements if item
+                                        and item["map_revision"] >= record["map_revision"]
+                                        and item["checkpoint_id"] != identifier), None)
+                    if replacement is None or self._verified_checkpoint(replacement)["availability"] != "available":
+                        continue
+                    record = {**record, "availability": "unavailable",
+                              "reason": "checkpoint_retired",
+                              "retirement": {"retired_at": _now(),
+                                             "replacement_checkpoint_id": replacement["checkpoint_id"],
+                                             "policy": "current_and_rollback_per_map_plus_explicit",
+                                             "legacy_audit": origin is None}}
+                    with self._transaction():
+                        self._db.execute("UPDATE checkpoints SET payload=? WHERE id=?",
+                                         (_dump(record), identifier))
+                    retired.append(identifier)
+                try:
+                    folder = self._checkpoint_folder(identifier)
+                    if folder.exists():
+                        shutil.rmtree(folder)
+                        _sync_directory(self.checkpoint_dir)
+                        removed.append(identifier)
+                    self._checkpoint_integrity.pop(identifier, None)
+                except (OSError, ValueError) as exc:
+                    errors.append({"checkpoint_id": identifier, "error": type(exc).__name__})
+            return {"policy": "current_and_rollback_per_map_plus_explicit",
+                    "retired": retired, "removed": removed,
+                    "protected": sorted(protected), "cleanup_errors": errors}
+
 
     def get_checkpoint(self, checkpoint_id):
         with self._lock:
@@ -844,39 +1064,45 @@ PRAGMA user_version=1;
             if row is None:
                 return {"availability": "unavailable", "checkpoint_id": checkpoint_id,
                         "reason": "checkpoint_not_found"}
-            result = json.loads(row["payload"])
-            result["availability"] = "available"
-            return result
+            return self._verified_checkpoint(json.loads(row["payload"]))
+
 
     def latest_checkpoint(self, map_id):
         with self._lock:
             self._open()
             self._map_locked(map_id)
-            row = self._db.execute(
-                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                (map_id,)).fetchone()
-            if row is None:
-                return {"availability": "unavailable", "map_id": map_id,
-                        "reason": "checkpoint_not_found"}
-            result = json.loads(row["payload"])
-            result["availability"] = "available"
-            return result
+            rows = self._db.execute(
+                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC", (map_id,))
+            for row in rows:
+                result = self._verified_checkpoint(json.loads(row["payload"]))
+                if result["availability"] == "available":
+                    return result
+            return {"availability": "unavailable", "map_id": map_id, "reason": "checkpoint_not_found"}
+
 
     def latest_backend_checkpoint(self, map_id):
-        """Return the newest recorded backend artifact, skipping metadata-only checkpoints."""
         with self._lock:
             self._open()
             self._map_locked(map_id)
             rows = self._db.execute(
-                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC",
-                (map_id,))
+                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC", (map_id,))
             for row in rows:
-                result = json.loads(row["payload"])
-                if result.get("backend_artifact", {}).get("availability") == "available":
-                    result["availability"] = "available"
-                    return result
-            return {"availability": "unavailable", "map_id": map_id,
-                    "reason": "backend_checkpoint_not_found"}
+                record = json.loads(row["payload"])
+                if record.get("backend_artifact", {}).get("availability") == "available":
+                    result = self._verified_checkpoint(record)
+                    if result["availability"] == "available":
+                        return result
+            return {"availability": "unavailable", "map_id": map_id, "reason": "backend_checkpoint_not_found"}
+
+
+    def _checkpoint_storage_status(self):
+        folders = [path for path in self.checkpoint_dir.iterdir() if path.is_dir() and not path.is_symlink()]
+        return {"policy": "current_and_rollback_per_map_plus_explicit",
+                "retained_packages": sum(not path.name.endswith(".partial") for path in folders),
+                "partial_packages": sum(path.name.endswith(".partial") for path in folders),
+                "logical_bytes": sum(path.stat().st_size for folder in folders
+                                     for path in folder.rglob("*") if path.is_file() and not path.is_symlink()),
+                "legacy_retention": "preserved_until_explicit_recovery_audit"}
 
     def status(self):
         with self._lock:
@@ -891,6 +1117,7 @@ PRAGMA user_version=1;
                 "availability": "available", "schema_version": 1,
                 "database_path": str(self.db_path), "max_observations": self.max_observations,
                 "counts": counts, "maps": maps,
+                "checkpoint_storage": self._checkpoint_storage_status(),
                 "image_blob_count": len(blobs),
                 "image_bytes": sum(path.stat().st_size for path in blobs if path.exists()),
                 "runtime_liveness": "not_observed_by_store",

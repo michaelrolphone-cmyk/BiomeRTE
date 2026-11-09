@@ -275,5 +275,23 @@ class BackendContractTests(unittest.TestCase):
         self.assertEqual(result["observation_anchor"]["source_frame_id"], "exact-input")
 
 
+    def test_legacy_debug_cache_is_integrity_checked_before_restore(self):
+        path = self.make_package()
+        cache = path / "kf_image_map.pkl"
+        cache.write_bytes(b"legacy-debug-cache-boundary-fixture")
+        manifest_path = path / "backend_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"].append({"path": cache.name, "size": cache.stat().st_size,
+                                  "sha256": hashlib.sha256(cache.read_bytes()).hexdigest()})
+        manifest_path.write_text(json.dumps(manifest))
+        self.backend._validate_checkpoint(path)
+        cache.write_bytes(b"corrupted")
+        with patch.object(self.backend, "_new_runtime",
+                          side_effect=AssertionError("must not start an engine")):
+            with self.assertRaisesRegex(CheckpointError, "integrity"):
+                self.backend.start("map-one", path)
+
+
+
 if __name__ == "__main__":
     unittest.main()

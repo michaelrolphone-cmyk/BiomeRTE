@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import signal
+import shutil
 import socketserver
 import threading
 import time
@@ -67,6 +68,8 @@ class VisionService:
         self._last_process_ms = None
         self._last_checkpoint_tick = time.monotonic()
         self._last_checkpoint_revision = None
+        self._checkpoint_error = None
+        self._checkpoint_cleanup_error = None
         self._last_geometry = {}
         self._pending_changes = []
         self._reconcile_geometry = False
@@ -237,11 +240,7 @@ class VisionService:
                     self._frames += 1
                     self._last_process_ms = (time.monotonic()-started)*1000
                     self._error = None
-                    interval = float(self.config.get("checkpoint_interval_s", 60))
-                    if time.monotonic()-self._last_checkpoint_tick >= interval:
-                        if self.revision != self._last_checkpoint_revision:
-                            self._checkpoint()
-                        self._last_checkpoint_tick = time.monotonic()
+                    self._maybe_checkpoint()
             except Exception as exc:
                 self._error = f"processing_failed:{type(exc).__name__}"
                 LOG.exception("Frame processing failed")
@@ -411,29 +410,90 @@ class VisionService:
                 ("availability", "reason", "snapshot_id", "frame_id", "session_id",
                  "map_id", "map_revision", "published_at", "freshness")}
 
-    def _checkpoint(self):
+    def _maybe_checkpoint(self):
+        interval = float(self.config.get("checkpoint_interval_s", 60))
+        if time.monotonic() - self._last_checkpoint_tick < interval:
+            return None
+        try:
+            if self.revision != self._last_checkpoint_revision:
+                return self._checkpoint(origin="automatic")
+        finally:
+            # A failed save must not be retried on each arriving camera frame.
+            self._last_checkpoint_tick = time.monotonic()
+
+    def _checkpoint(self, *, origin="automatic"):
         target = self.state_dir / "maps" / self.map_id / ("backend-"+uuid.uuid4().hex)
         from slam_backend import BackendNotReady
+        self._checkpoint_cleanup_error = None
         try:
-            artifact = self.backend.checkpoint(target)
-        except BackendNotReady as exc:
-            artifact = {"availability": "unavailable", "reason": str(exc), "path": None}
-        if not isinstance(artifact, dict):
-            raise TypeError("backend_checkpoint_must_return_metadata")
-        if artifact.get("map_changes") is not None:
-            geometry = artifact.get("geometry", {})
-            changes = self._reconcile_changes(artifact["map_changes"], geometry)
-            self._commit_changes(changes, "checkpoint_reconciliation")
-        saved = self.store.checkpoint(
-            self.map_id, backend_artifact=artifact.get("path") if artifact.get("availability") == "available" else None,
-            metadata={"session_id": self.session_id, "calibration_id": self.calibration["calibration_id"],
-                      "backend_status": self._backend_status(),
-                      "map_revision": self.revision,
-                      "geometry_matches_backend_state": artifact.get("exact_saved_geometry", False),
-                      "backend_checkpoint": {k: v for k, v in artifact.items()
-                                             if k not in ("map_changes", "geometry", "files")}})
-        self._last_checkpoint_revision = self.revision
-        return saved
+            try:
+                artifact = self.backend.checkpoint(target)
+            except BackendNotReady as exc:
+                artifact = {"availability": "unavailable", "reason": str(exc), "path": None}
+            if not isinstance(artifact, dict):
+                raise TypeError("backend_checkpoint_must_return_metadata")
+            if artifact.get("map_changes") is not None:
+                geometry = artifact.get("geometry", {})
+                changes = self._reconcile_changes(artifact["map_changes"], geometry)
+                self._commit_changes(changes, "checkpoint_reconciliation")
+            saved = self.store.checkpoint(
+                self.map_id, backend_artifact=artifact.get("path") if artifact.get("availability") == "available" else None,
+                metadata={"session_id": self.session_id, "calibration_id": self.calibration["calibration_id"],
+                          "checkpoint_origin": origin,
+                          "backend_status": self._backend_status(),
+                          "map_revision": self.revision,
+                          "geometry_matches_backend_state": artifact.get("exact_saved_geometry", False),
+                          "backend_checkpoint": {k: v for k, v in artifact.items()
+                                                 if k not in ("map_changes", "geometry", "files", "path")}})
+            self._last_checkpoint_revision = self.revision
+            self._checkpoint_error = None
+            try:
+                saved["retention"] = self.store.retire_superseded_checkpoints()
+                if saved["retention"]["cleanup_errors"]:
+                    self._checkpoint_cleanup_error = "checkpoint_retirement_cleanup_failed"
+            except Exception as exc:
+                self._checkpoint_cleanup_error = "checkpoint_retirement_failed:" + type(exc).__name__
+                LOG.exception("Checkpoint published but retirement failed")
+            return saved
+        except Exception as exc:
+            self._checkpoint_error = "checkpoint_failed:" + type(exc).__name__
+            raise
+        finally:
+            self._last_checkpoint_tick = time.monotonic()
+            try:
+                if target.exists():
+                    # Only the service-owned staging directory is ephemeral;
+                    # VisionStore keeps caller-owned input artifacts untouched.
+                    shutil.rmtree(target)
+            except OSError as exc:
+                self._checkpoint_cleanup_error = "checkpoint_staging_cleanup_failed:" + type(exc).__name__
+                LOG.exception("Checkpoint staging cleanup failed")
+
+
+    def _robot_model(self, *, summary=False):
+        try:
+            definition = json.loads((self.state_dir / "robot-model.json").read_text())
+            if (not isinstance(definition, dict) or definition.get("schema_version") != 1
+                    or not isinstance(definition.get("model_id"), str)
+                    or not definition["model_id"]
+                    or isinstance(definition.get("revision"), bool)
+                    or not isinstance(definition.get("revision"), int)
+                    or definition["revision"] < 1):
+                raise ValueError("invalid_robot_model_identity")
+            # Configuration is reported evidence, not an estimator or odometry source.
+            json.dumps(definition, allow_nan=False)
+        except FileNotFoundError:
+            return {"availability": "unavailable", "reason": "robot_model_not_configured"}
+        except (OSError, ValueError, TypeError):
+            return {"availability": "unavailable", "reason": "robot_model_configuration_invalid"}
+        result = {"availability": "available", "model_id": definition["model_id"],
+                  "revision": definition["revision"],
+                  "qualification_status": definition.get("qualification_status", "unqualified"),
+                  "source": "versioned_robot_configuration"}
+        if not summary:
+            result["definition"] = definition
+        return result
+
 
     def query(self, operation, inputs=None):
         inputs = inputs or {}
@@ -452,6 +512,9 @@ class VisionService:
                 "processing_fps_since_start": self._frames/max(time.monotonic()-self._started, 1e-6),
                 "error": self._error, "camera": self.camera.status(), "detector": self.detector.status(),
                 "localization": self._backend_status(), "persistence": self.store.status(),
+                "checkpoint_error": self._checkpoint_error,
+                "checkpoint_cleanup_error": self._checkpoint_cleanup_error,
+                "robot_model": self._robot_model(summary=True),
                 "latest_checkpoint": self.store.latest_checkpoint(self.map_id),
                 "latest_backend_checkpoint": self.store.latest_backend_checkpoint(self.map_id),
                 "calibration": {"calibration_id": self.calibration["calibration_id"],
@@ -464,6 +527,7 @@ class VisionService:
             return {
                 "schema_version": 1, "capabilities": CAPABILITIES,
                 "camera": self.config["camera"], "calibration": self.calibration,
+                "robot_model": self._robot_model(),
                 "detector": self.detector.status(),
                 "coordinate_frames": {
                     "image_pixels": "u right, v down, full decoded image resolution",
@@ -532,7 +596,7 @@ class VisionService:
             if operation == "robot.map.checkpoint":
                 if inputs.get("map_id", self.map_id) != self.map_id:
                     raise ValueError("only_active_map_can_be_checkpointed")
-                return self._checkpoint()
+                return self._checkpoint(origin="explicit")
             if operation == "robot.map.create":
                 return self.store.create_map(self._map_metadata(inputs.get("metadata")))
             if operation == "robot.map.open":
@@ -549,7 +613,7 @@ class VisionService:
                     raise ValueError("invalid_calibration:" + ",".join(errors))
                 record = self.store.save_calibration(calibration, calibration.get("calibration_id"))
                 old_map = self.map_id
-                self._checkpoint()
+                self._checkpoint(origin="recovery")
                 candidate = copy.deepcopy(record["calibration"])
                 candidate["calibration_id"] = record["calibration_id"]
                 metadata = {**self._map_metadata(), "calibration_id": candidate["calibration_id"],
@@ -574,7 +638,7 @@ class VisionService:
         checkpoint = self.store.latest_backend_checkpoint(map_id)
         if geometry and checkpoint.get("backend_artifact", {}).get("availability") != "available":
             raise ValueError("map_backend_checkpoint_unavailable")
-        self._checkpoint()
+        self._checkpoint(origin="recovery")
         candidate = copy.deepcopy(calibration["calibration"])
         candidate["calibration_id"] = calibration_id
         self._activate_map(map_id, info["revision"], candidate)
@@ -593,7 +657,7 @@ class VisionService:
                 # The final SQLite backup must include the completed session.
                 if self.session_id is not None:
                     self.store.stop_session(self.session_id, reason="service_shutdown")
-                self._checkpoint()
+                self._checkpoint(origin="recovery")
             finally:
                 try:
                     if self.backend is not None:

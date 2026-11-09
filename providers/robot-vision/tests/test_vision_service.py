@@ -532,7 +532,8 @@ class VisionServiceTests(unittest.TestCase):
         self.assertEqual(second.map_id, map_id)
         self.assertNotEqual(second.session_id, old_session)
         self.assertEqual(second.calibration, expected_calibration)
-        self.assertTrue(any(item.start_calls and item.closed for item in attempts))
+        # Corrupt package bytes are rejected before an engine can load them.
+        self.assertFalse(any(item.start_calls for item in attempts))
         snapshot = self.process(second, self.frame(second, "during-map-recovery-error"))
         self.assertFalse(snapshot["localization"]["valid"])
         self.assertIsNone(snapshot["localization"]["T_map_camera"])
@@ -832,6 +833,74 @@ class VisionServiceTests(unittest.TestCase):
                 "SELECT payload FROM checkpoints ORDER BY rowid DESC LIMIT 1").fetchone()[0])
         with sqlite3.connect(payload["database_path"]) as backup:
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM metric_sessions").fetchone()[0],1)
+
+
+    def test_checkpoint_cleans_owned_staging_on_success_and_partial_failure(self):
+        service = self.make_service()
+        self.process(service, self.frame(service, "ready-for-save"))
+        saved = service.query("robot.map.checkpoint")
+        self.assertEqual(saved["metadata"]["checkpoint_origin"], "explicit")
+        self.assertNotIn("path", saved["metadata"]["backend_checkpoint"])
+        self.assertTrue(Path(saved["backend_artifact"]["path"]).is_dir())
+        self.assertEqual(list((service.state_dir / "maps").glob("*/backend-*")), [])
+        revision = service._last_checkpoint_revision
+        def partial_failure(target):
+            target.mkdir(parents=True)
+            (target / "partial-map").write_bytes(b"incomplete")
+            raise OSError("injected disk full")
+        with patch.object(service.backend, "checkpoint", side_effect=partial_failure):
+            with self.assertRaises(OSError):
+                service._checkpoint()
+        self.assertEqual(list((service.state_dir / "maps").glob("*/backend-*")), [])
+        self.assertEqual(service._last_checkpoint_revision, revision)
+        self.process(service, self.frame(service, "perception-continues"))
+        self.assertEqual(service.query("robot.vision.status")["checkpoint_error"],
+                         "checkpoint_failed:OSError")
+        self.assertEqual(service.store.get_checkpoint(saved["checkpoint_id"])["availability"], "available")
+
+    def test_failed_automatic_save_obeys_interval_without_claiming_saved_revision(self):
+        service = self.make_service()
+        self.process(service, self.frame(service, "ready-for-failed-save"))
+        service._last_checkpoint_tick = 0
+        service._last_checkpoint_revision = None
+        service.config["checkpoint_interval_s"] = 60
+        with patch.object(service.backend, "checkpoint", side_effect=OSError("disk full")) as save:
+            with patch("vision_service.time.monotonic", return_value=60):
+                with self.assertRaises(OSError):
+                    service._maybe_checkpoint()
+            with patch("vision_service.time.monotonic", return_value=61):
+                self.assertIsNone(service._maybe_checkpoint())
+            self.assertEqual(save.call_count, 1)
+            self.assertIsNone(service._last_checkpoint_revision)
+            with patch("vision_service.time.monotonic", return_value=120):
+                with self.assertRaises(OSError):
+                    service._maybe_checkpoint()
+            self.assertEqual(save.call_count, 2)
+        self.assertIsNone(service._last_checkpoint_revision)
+
+
+
+    def test_robot_model_metadata_updates_without_restarting_or_changing_map(self):
+        from vision_config import atomic_json
+        service = self.make_service()
+        identity = (service.map_id, service.calibration["calibration_id"], service.session_id)
+        self.assertEqual(service.query("robot.vision.metadata")["robot_model"]["availability"], "unavailable")
+        definition = {"schema_version": 1, "model_id": "rear-steering-fixture", "revision": 1,
+                      "qualification_status": "partial_unqualified", "wheelbase_m": None}
+        atomic_json(service.state_dir / "robot-model.json", definition)
+        first = service.query("robot.vision.metadata")["robot_model"]
+        self.assertEqual(first["definition"], definition)
+        definition["revision"] = 2
+        atomic_json(service.state_dir / "robot-model.json", definition)
+        self.assertEqual(service.query("robot.vision.status")["robot_model"]["revision"], 2)
+        self.assertEqual(identity, (service.map_id, service.calibration["calibration_id"], service.session_id))
+        self.assertIsNone(service.calibration["camera_to_robot"])
+
+    def test_invalid_robot_model_is_explicitly_unavailable(self):
+        service = self.make_service()
+        (service.state_dir / "robot-model.json").write_text('{"schema_version":1,"revision":true}')
+        self.assertEqual(service.query("robot.vision.metadata")["robot_model"]["reason"],
+                         "robot_model_configuration_invalid")
 
 
 if __name__ == "__main__":

@@ -231,6 +231,46 @@ relocalization. It never assumes that the camera is still at the last saved
 pose. Reconciliation removes geometry newer than the recovered checkpoint from
 the current view while retaining historical revisions.
 
+### Checkpoint retention
+
+Automatic and recovery saves retain the newest verified database backup and
+two complete backend generations per preserved map: current and rollback.
+Explicit `robot.map.checkpoint` saves remain retained. Older unclassified
+checkpoints are preserved unless a deliberate legacy audit retires them using
+the same integrity and replacement checks.
+
+Backend staging is temporary. A checkpoint becomes available only after its
+files, database backup and manifest are complete. Superseded automatic copies
+are marked retired before their files are removed; a retired checkpoint reports
+unavailable with reason `checkpoint_retired`. Retention does not delete maps,
+calibration records or historical map revisions. Complete orphan publications
+are adopted only when their map revision also exists in the live database.
+
+`robot.vision.status` exposes `checkpoint_error`,
+`checkpoint_cleanup_error`, and `persistence.checkpoint_storage` independently
+of frame-processing health. Automatic retry follows `checkpoint_interval_s`,
+measured after every attempt, including failures. A failed save does not retry
+on every camera frame.
+
+Headless checkpoints omit the optional `kf_image_map.pkl` visualization cache.
+They retain the real map, descriptors and place-recognition database. Existing
+packages remain integrity checked, and restore still requires fresh visual
+relocalization before publishing a valid current pose.
+
+### Robot configuration metadata
+
+An optional `robot-model.json` in the state directory holds the robot's
+versioned configuration and its measurement provenance. It is independent of
+lens calibration and does not switch maps. `robot.vision.metadata.robot_model`
+returns the full definition; `robot.vision.status.robot_model` returns its
+identity, revision and qualification status. Replace the file atomically to
+publish a configuration update without restarting perception.
+
+Reported mechanics and candidate relay directions remain distinct from
+measured dimensions and validated motion predictions. This metadata does not
+drive relays, create odometry, qualify metric scale, or supply a camera-to-body
+transform. Those measurements retain their existing explicit availability.
+
 Rolling observations are limited by max_observations (default 300). Keyframe
 metadata and pinned keyframe images are durable. Full video is not journaled to
 BiomeRTE: requested images are uploaded on demand in checksum-verified chunks.

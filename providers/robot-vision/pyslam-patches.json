@@ -26,9 +26,9 @@
     },
     {
       "original_sha256": "ddbaa9d6f3f4f6f2d35d8e37e2c86f1616eb3189b1a6552ec1e21de62c7b9d50",
-      "patched_sha256": "e0a43efd74cd6919f9f528052099df438dcd29c3ccf60faf3aa08d1567403b0a",
+      "patched_sha256": "e7893cba6048c97e8447a65acfd30893274cc4d22bf7670bc97e14db57ce813a",
       "path": "pyslam/loop_closing/loop_closing.py",
-      "reason": "Import optional dense, GUI, and nonselected loop engines only on use."
+      "reason": "Keep headless loop visualization images out of memory and checkpoints; import GUI lazily."
     }
   ],
   "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
