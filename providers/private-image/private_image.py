@@ -87,8 +87,9 @@ def serve():
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         offer = dict(contract=CONTRACT,resource=cfg["resource"],capacity=1,service="private-image",
                      configuration={"engine":"ComfyUI","model":backend.model,"encrypted":True,
-                                    "protocol":2,"result_transport":"inline_or_encrypted_artifact_chunks"})
-        worker = ImageWorker(str(STATE/"worker.sqlite"),remote,[offer,dict(offer,contract="image.generate:1",service="image-generation",configuration={"engine":"ComfyUI","model":backend.model,"encrypted":False,"result_transport":"png_artifact_chunks"})],None,handler=handle)
+                                    "protocol":2,"result_transport":"inline_or_encrypted_artifact_chunks",
+                                    "reservation_policy":cfg.get("reservation_policy", {"idle_seconds":120,"release_after_result":True})})
+        worker = ImageWorker(str(STATE/"worker.sqlite"),remote,[offer,dict(offer,contract="image.generate:1",service="image-generation",configuration={"engine":"ComfyUI","model":backend.model,"encrypted":False,"result_transport":"png_artifact_chunks","reservation_policy":cfg.get("reservation_policy", {"idle_seconds":120,"release_after_result":True})})],None,handler=handle)
         while True:
             try:
                 nodes = backend.api("/object_info")

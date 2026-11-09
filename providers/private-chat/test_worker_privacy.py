@@ -23,6 +23,16 @@ class Remote:
             return args
         raise AssertionError(operation)
 class PrivateLedgerTests(unittest.TestCase):
+    def test_advertisement_keeps_policy_and_omits_local_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, remote = self.worker(directory)
+            worker.offers[0]['configuration'] = {'reservation_policy': {'idle_seconds':120,'release_after_result':True}}
+            calls=[]
+            remote.call=lambda operation,args,rid=None: calls.append((operation,args))
+            worker.advertise()
+            self.assertEqual(calls[0][1]['configuration'],worker.offers[0]['configuration'])
+            self.assertNotIn('argv',calls[0][1])
+            worker.db.close()
     def action(self):
         return dict(id='00000000-0000-4000-8000-000000000001',
                     contract='chat.private.exchange:1', resource='privatechat.test',
@@ -79,3 +89,4 @@ class PrivateLedgerTests(unittest.TestCase):
             worker.db.close()
 if __name__ == '__main__':
     unittest.main()
+

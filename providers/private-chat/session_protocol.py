@@ -85,8 +85,11 @@ class SessionServer:
         self.sessions.pop(sid)
         try:
             answer = self.request_handler(data) if self.request_handler else infer(messages)
-        except Exception:
-            answer = {'error':'private_inference_unavailable'}
+        except Exception as exc:
+            code = getattr(exc, 'public_code', '')
+            if code not in ('selected_model_required', 'selected_model_unavailable', 'model_load_failed', 'model_response_mismatch'):
+                code = 'private_inference_unavailable'
+            answer = {'error': code}
         return seal(session['keys']['response'],'response',sid,operation,session['hash'],answer)
     def hello(self, h):
         if set(h) != {'v','kind','id','sid','client_identity','client_ephemeral','client_nonce','signature'}:
@@ -112,3 +115,4 @@ class SessionServer:
         self.sessions[sid] = dict(keys=traffic,hash=thash,phone=phone,client=body,reply=reply)
         # Neither ephemeral private key nor conversation content is retained.
         return reply
+

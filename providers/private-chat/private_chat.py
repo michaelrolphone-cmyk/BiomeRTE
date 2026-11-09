@@ -48,7 +48,7 @@ def privacy_ready():
     server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
     if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
         raise RuntimeError('LM Studio sensitive logging must be disabled')
-from model_service import model_catalog, selected_model
+from model_service import ModelError, model_catalog, selected_model
 
 def handle_request(data):
     privacy_ready()
@@ -74,6 +74,8 @@ def inference(messages, model=None):
     req = Request('http://127.0.0.1:1234/v1/chat/completions', json.dumps(body).encode(), headers)
     with LOCAL.open(req) as response:
         result = json.load(response)
+    if result.get('model') != model:
+        raise ModelError('model_response_mismatch')
     if 'response_id' in result:
         raise RuntimeError('Unexpected retained response')
     choice = result['choices'][0]
@@ -91,6 +93,14 @@ class Remote:
         return gateway.invoke(name, args, rid, self.realm)
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
+    def advertise(self):
+        # The generic legacy worker forwards only capacity/usage. Preserve the
+        # private service's explicitly configured reservation lifecycle too.
+        for offer in self.offers:
+            args = {key: offer[key] for key in ('contract', 'resource', 'capacity', 'service', 'configuration', 'usage') if key in offer}
+            args.update(provider=self.remote.node, state=offer.get('state', 'ready'))
+            self.remote.call('cap.offer', args)
+
     def __init__(self, *args, handler=None):
         super().__init__(*args)
         self.pending = {}
@@ -152,7 +162,9 @@ def serve():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     cfg = json.loads((STATE / 'manifest.json').read_text())
     remote = Remote(cfg)
-    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat')
+    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat',
+        configuration={'reservation_policy': cfg.get('reservation_policy',
+            {'idle_seconds': 120, 'release_after_result': True})})
     def enrolled(phone):
         cfg['phone_identity'] = b64(phone)
         cfg.pop('enrollment_hash', None)
