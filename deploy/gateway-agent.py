@@ -38,6 +38,12 @@ def fetch(url, payload=None, token=None, timeout=18, site_access=None):
 def dispatch(job, local, conf):
     call = job['request']
     name, args = call['name'], call.get('arguments', {})
+    if name == 'signed_provider_pair':
+        from provider_ingress import dispatch_provider_pair
+        return dispatch_provider_pair(args, local, conf['site'], opener)
+    if name == 'signed_provider_call':
+        from provider_ingress import dispatch_signed_provider
+        return dispatch_signed_provider(args, local, conf['site'], opener)
     if name == 'biome_status':
         status = fetch(local + '/health')
         rpc = {'jsonrpc': '2.0', 'id': str(job['id']) + '-progress', 'method': 'tools/call',
