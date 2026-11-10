@@ -13,7 +13,7 @@ def size(value):
 
 
 def bounded_metadata(metadata, maximum=15872):
-    if size(metadata) <= maximum:
+    if size(metadata) <= maximum or not any(key in metadata for key in ("ahrs", "radio")):
         return metadata
     value = copy.deepcopy(metadata)
     ahrs = value.get("ahrs")
@@ -33,13 +33,13 @@ def bounded_metadata(metadata, maximum=15872):
                 # The RF endpoint repeats the AHRS envelope already carried above.
                 firmware.pop("ahrs", None)
             if size(value) > maximum:
-                # Per-observation rows here are index/age references, not the
-                # actual RF readings. Prefer the complete firmware scan arrays.
+                # Retain RF age/index bindings but omit repeated long source IDs.
                 refs = cache.get("observations")
                 if isinstance(refs, list):
                     cache["source_observation_count"] = len(refs)
-                    cache["stream_reference_rows_omitted"] = len(refs)
-                    cache.pop("observations", None)
+                    cache["observations"] = [{k: row[k] for k in
+                        ("radio", "index", "effective_age_ms") if k in row}
+                        for row in refs if isinstance(row, dict)]
             if size(value) > maximum and isinstance(firmware, dict):
                 firmware.pop("config", None)
     # Health diagnostics duplicate fields available through status capabilities.
@@ -61,7 +61,8 @@ def bounded_metadata(metadata, maximum=15872):
                         yield from scans(item)
                 elif isinstance(node, list) and node and isinstance(node[0], dict):
                     yield node
-            arrays = list(scans(firmware.get("wifi"))) + list(scans(firmware.get("ble")))
+            groups = {kind: list(scans(firmware.get(kind))) for kind in ("wifi", "ble")}
+            arrays = groups["wifi"] + groups["ble"]
             omitted = 0
             while size(value) > maximum and any(arrays):
                 candidates = [rows for rows in arrays if rows]
@@ -74,9 +75,14 @@ def bounded_metadata(metadata, maximum=15872):
                 cache["stream_scan_rows_omitted"] = omitted
             if omitted:
                 # Never leave an index pointing beyond a trimmed scan array.
-                refs = cache.pop("observations", [])
-                cache["stream_reference_rows_omitted"] = max(
-                    cache.get("stream_reference_rows_omitted", 0), len(refs))
+                refs = cache.get("observations", [])
+                limits = {kind: max((len(rows) for rows in groups[kind]), default=0)
+                          for kind in groups}
+                kept = [row for row in refs if row.get("radio") in limits
+                        and isinstance(row.get("index"), int)
+                        and row["index"] < limits[row["radio"]]]
+                cache["observations"] = kept
+                cache["stream_reference_rows_omitted"] = len(refs)-len(kept)
     if size(value) > maximum:
         raise ValueError("Live metadata exceeds stream header budget")
     return value
