@@ -186,7 +186,7 @@ class NavigationServiceTests(unittest.TestCase):
             self.service.map_id, self.service.revision, changes)
         self.service.revision = update["revision"]
         return self.fixture.process(
-            self.service, self.fixture.frame(self.service, "after-map-update"))
+            self.service, self.fixture.frame(self.service, "after-map-update-" + str(self.service.revision)))
 
     def test_unrelated_semantic_revision_preserves_alignment_with_native_anchor_proof(self):
         reference = self.anchored_floor()
