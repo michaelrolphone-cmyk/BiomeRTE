@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from biomerte.rover import Rover
+from biomerte.stream_router import frame as wire_frame
 
 
 class RoverOwnership(unittest.IsolatedAsyncioTestCase):
@@ -10,9 +11,10 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
         rover=Rover(Remote(),{})
         async with rover.subscribe() as first:
             async with rover.subscribe() as second:
-                rover.broadcast('vision',b'fresh')
-                self.assertEqual(b'fresh',await first['vision'].get())
-                self.assertEqual(b'fresh',await second['vision'].get())
+                frame=wire_frame({'type':'frame'},b'fresh')
+                rover.broadcast('vision',frame)
+                self.assertEqual(frame,await first['vision'].get())
+                self.assertEqual(frame,await second['vision'].get())
         self.assertFalse(rover.browsers)
         self.assertTrue(rover.intent.empty())
 
@@ -33,15 +35,15 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
     async def test_slow_browser_video_does_not_backpressure_control(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(10000):rover.broadcast('vision',i)
+            for i in range(10000):rover.broadcast('vision',wire_frame({'sequence':i},b''))
             rover.broadcast('control',{'stage':'applied'})
-            self.assertEqual(9999,await queues['vision'].get())
+            self.assertEqual(wire_frame({'sequence':9999},b''),await queues['vision'].get())
             self.assertEqual('applied',(await queues['control'].get())['stage'])
 
     async def test_map_revision_overflow_requests_snapshot(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(9):rover.broadcast('map',str(i))
+            for i in range(9):rover.broadcast('map',wire_frame({'sequence':i},b''))
             self.assertEqual('{"type": "snapshot_required"}',await queues['map'].get())
 
     async def test_fencing_polls_same_lease_and_disconnect_releases_before_retry(self):
