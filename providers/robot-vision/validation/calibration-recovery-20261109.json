@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-09",
+  "parent_commit": "92c9c8d2b0b12abe8148048ed5900a747b46f50c",
+  "scope": "native Mac calibration recovery, no vehicle actuation",
+  "tests": {
+    "preprocessing": 5,
+    "metric_sessions": 22,
+    "slam_backend": 24,
+    "vision_service": 31,
+    "total": 82,
+    "passed": true
+  },
+  "actual_session_audit": {
+    "map_revision": 1790,
+    "historical_observations": 783,
+    "proven_deleted_anchor_exclusions": 778,
+    "unresolved_anchors": 0,
+    "usable_training": 3,
+    "usable_validation": 2,
+    "qualified": false,
+    "failed_checks": [
+      "insufficient_training_observations"
+    ]
+  },
+  "contrast_probe": {
+    "raw_orb_features": 0,
+    "percentile_gray_orb_features": 1918,
+    "clahe_orb_features": 12
+  },
+  "native_shadow": {
+    "operation": "vision-calibration-guarded-fit-shadow-20261109-01",
+    "checkpoint": "8ef332f4-9ae0-4c5d-a71e-fc1753d0b696",
+    "fresh_frames": 20,
+    "valid_localizations": 0,
+    "runtime_error": null,
+    "vehicle_motion": false
+  },
+  "deployment_policy": {
+    "normalization_enabled": false,
+    "reason": "Fresh-image geometric relocalization was not demonstrated in the current dark scene."
+  },
+  "qualification_limits": [
+    "physical print size unverified",
+    "metric scale not applied",
+    "camera-to-body transform and robot kinematics unqualified"
+  ]
+}

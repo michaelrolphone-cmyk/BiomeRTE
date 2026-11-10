@@ -410,7 +410,8 @@ class MetricCalibration:
             policy=session["policy"])
 
     def _resolved_candidate(self, session, samples, revision=None):
-        info, observations, missing = self.repo.resolve_keyframes(session["map_id"], samples, revision)
+        info, observations, missing, excluded = self.repo.resolve_keyframes_for_fit(
+            session["map_id"], samples, revision, exclude_deleted=session["method"] == "checkerboard")
         if info["metadata"].get("calibration_id") != session["calibration_id"]:
             missing.append("map_calibration_mismatch")
         if missing:
@@ -419,6 +420,12 @@ class MetricCalibration:
                          "unresolved_observation_ids": missing, "quality": {}}
         else:
             candidate = self._estimate(session, observations)
+        candidate["anchor_resolution"] = {
+            "resolved_map_revision": info["revision"], "usable_observations": len(observations),
+            "usable_training": sum(o["role"] == "training" for o in observations),
+            "usable_validation": sum(o["role"] == "validation" for o in observations),
+            "excluded_observations": excluded, "unresolved_observation_ids": list(missing),
+        }
         candidate.update(map_id=session["map_id"], calibration_id=session["calibration_id"],
                          resolved_map_revision=info["revision"])
         candidate["anchor_fingerprint"] = _fingerprint(

@@ -406,5 +406,109 @@ class MetricSessionTests(unittest.TestCase):
         self.assertEqual(count,0)
 
 
+
+    def _surplus_board_data(self, verified=True):
+        sid = self.board_data(verified=verified)
+        with patch.object(self.manager, "_detect", side_effect=self.detection):
+            extra = self.frame(0.18)
+            self.manager.capture(sid, extra["snapshot_id"], role="training")
+            while self.manager.process_pending():
+                pass
+        return sid
+
+    def _delete_anchor(self, identifier):
+        revision = self.store.read_map(self.map_id, kinds=[])["map"]["revision"]
+        return self.store.apply_map_update(self.map_id, revision, [
+            {"op":"delete", "kind":"keyframe", "entity_id":identifier}])["revision"]
+
+    def test_deleted_checkerboard_anchor_refits_survivors_and_preserves_history(self):
+        sid = self._surplus_board_data()
+        before = self.manager.apply(sid)
+        self.assertEqual(before["availability"], "available", before)
+        deletion = self._delete_anchor("kf-0")
+        after = self.manager.attachment_status(self.map_id)
+        self.assertEqual(after["availability"], "available", after)
+        self.assertAlmostEqual(after["scale_m_per_map_unit"], 2.0)
+        resolution = after["candidate"]["anchor_resolution"]
+        self.assertEqual((resolution["usable_training"],resolution["usable_validation"]),(4,2))
+        self.assertEqual(len(resolution["excluded_observations"]),1)
+        self.assertEqual(resolution["excluded_observations"][0]["deletion_revision"],deletion)
+        self.assertEqual(resolution["excluded_observations"][0]["reason"],"anchor_deleted")
+        self.assertEqual(len(self.manager.repo.samples(sid)),7)
+        old = self.manager.attachment_status(self.map_id,revision=before["map_revision"])
+        self.assertEqual(old["solution_id"],before["solution_id"])
+        self.assertEqual(old["candidate"]["anchor_resolution"]["usable_observations"],7)
+
+    def test_deleted_anchor_does_not_verify_nominal_print_size(self):
+        sid = self._surplus_board_data(verified=False)
+        self._delete_anchor("kf-0")
+        result = self.manager.fit(sid,{})
+        self.assertFalse(result["session"]["candidate"]["qualified"])
+        self.assertIn("reference_size_unverified",result["session"]["candidate"]["failed_checks"])
+        self.assertEqual(self.manager.apply(sid)["availability"],"unavailable")
+
+    def test_tombstone_for_unknown_or_conflicting_history_stays_unresolved(self):
+        sid = self._surplus_board_data()
+        sample = copy.deepcopy(self.manager.repo.samples(sid)[0])
+        original = copy.deepcopy(sample)
+        self._delete_anchor(original["keyframe_id"])
+        self._delete_anchor("never-existed")
+        for change in [
+            {"keyframe_id":"never-existed"},
+            {"frame_id":"wrong-image"},
+            {"source_map_revision":999999},
+            {"map_id":"foreign-map"},
+            {"calibration_id":"foreign-calibration"},
+        ]:
+            with self.subTest(change=change):
+                altered = {**original, **change}
+                _, _, missing, excluded = self.manager.repo.resolve_keyframes_for_fit(
+                    self.map_id,[altered],exclude_deleted=True)
+                self.assertEqual(missing,[original["observation_id"]])
+                self.assertEqual(excluded,[])
+
+    def test_reused_keyframe_identity_before_deletion_is_not_excludable(self):
+        sid = self._surplus_board_data()
+        sample = self.manager.repo.samples(sid)[0]
+        revision = self.store.read_map(self.map_id,kinds=[])["map"]["revision"]
+        self.store.apply_map_update(self.map_id,revision,[{
+            "op":"upsert","kind":"keyframe","entity_id":sample["keyframe_id"],
+            "data":{"source_frame_id":"replacement-image","T_map_camera":pose(),
+                    "position":[0,0,0],"units":"arbitrary"},
+        }])
+        self._delete_anchor(sample["keyframe_id"])
+        _, _, missing, excluded = self.manager.repo.resolve_keyframes_for_fit(
+            self.map_id,[sample],exclude_deleted=True)
+        self.assertEqual(missing,[sample["observation_id"]])
+        self.assertEqual(excluded,[])
+
+    def test_delete_reinsert_delete_does_not_hide_incarnation_ambiguity(self):
+        sid = self._surplus_board_data()
+        sample = self.manager.repo.samples(sid)[0]
+        self._delete_anchor(sample["keyframe_id"])
+        revision = self.store.read_map(self.map_id,kinds=[])["map"]["revision"]
+        self.store.apply_map_update(self.map_id,revision,[{
+            "op":"upsert","kind":"keyframe","entity_id":sample["keyframe_id"],
+            "data":{"source_frame_id":sample["frame_id"],"T_map_camera":pose(),
+                    "position":[0,0,0],"units":"arbitrary"},
+        }])
+        self._delete_anchor(sample["keyframe_id"])
+        _, _, missing, excluded = self.manager.repo.resolve_keyframes_for_fit(
+            self.map_id,[sample],exclude_deleted=True)
+        self.assertEqual(missing,[sample["observation_id"]])
+        self.assertEqual(excluded,[])
+
+    def test_measured_endpoint_deletion_stays_strict(self):
+        sid = self.measured_data()
+        self.manager.fit(sid,{"distance_m":3.0,"validation_distance_m":2.0})
+        self.assertEqual(self.manager.apply(sid)["availability"],"available")
+        self._delete_anchor("kf-0")
+        result = self.manager.attachment_status(self.map_id)
+        self.assertEqual(result["availability"],"unavailable")
+        resolution = result["candidate"]["anchor_resolution"]
+        self.assertEqual(resolution["excluded_observations"],[])
+        self.assertEqual(len(resolution["unresolved_observation_ids"]),1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ import time
 from types import SimpleNamespace
 
 import numpy as np
+from image_preprocessing import preprocessing_policy, preprocess_slam_image
 
 PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
@@ -138,6 +139,10 @@ def _saved_entities(document, source_frames):
 class SlamBackend:
     def __init__(self, config, state_dir):
         self.config = copy.deepcopy(config)
+        self._active_preprocessing = preprocessing_policy(self.config.get("preprocessing"))
+        self._loaded_preprocessing = None
+        self._descriptor_preprocessing_history = []
+        self._preprocessing_diagnostics = {"state": "not_observed"}
         self.state_dir = Path(state_dir)
         self.pyslam_root = Path(self.config.get("pyslam_root", self.state_dir / "vendor/pyslam"))
         self._lock = threading.RLock()
@@ -229,6 +234,17 @@ class SlamBackend:
             return Path(value)
         return Path(checkpoint) if checkpoint is not None else None
 
+    @staticmethod
+    def _checkpoint_preprocessing(manifest):
+        if "active_preprocessing" in manifest and not isinstance(manifest["active_preprocessing"], dict):
+            raise ValueError("Invalid active preprocessing profile")
+        active = preprocessing_policy(manifest.get("active_preprocessing"))
+        history = manifest.get("descriptor_preprocessing_history", [{"mode": "none", "version": 1}])
+        if (not isinstance(history, list) or not history or
+                any(not isinstance(value, dict) for value in history)):
+            raise ValueError("Invalid descriptor preprocessing history")
+        return active, [preprocessing_policy(value) for value in history]
+
     def _validate_checkpoint(self, path):
         manifest_path = path / "backend_manifest.json"
         if not manifest_path.is_file():
@@ -250,6 +266,10 @@ class SlamBackend:
         required = {"map.json", "config_info.json", "loop_closing.db"}
         if not required.issubset({entry["path"] for entry in manifest.get("files", [])}):
             raise CheckpointError("Checkpoint is missing map or loop database files")
+        try:
+            self._checkpoint_preprocessing(manifest)
+        except ValueError as exc:
+            raise CheckpointError("Invalid checkpoint preprocessing metadata") from exc
         document = json.loads((path / "map.json").read_text())
         entities = _saved_entities(document, manifest.get("source_frames", {}))
         next_index = manifest.get("next_frame_index")
@@ -277,6 +297,9 @@ class SlamBackend:
                 return self.status()
             path = self._checkpoint_path(checkpoint)
             manifest = self._validate_checkpoint(path) if path is not None else None
+            self._loaded_preprocessing, self._descriptor_preprocessing_history = (
+                self._checkpoint_preprocessing(manifest) if manifest is not None else (None, []))
+            self._preprocessing_diagnostics = {"state": "not_observed"}
             try:
                 self._slam = self._new_runtime()
                 if manifest is not None:
@@ -379,6 +402,8 @@ class SlamBackend:
                 # identity, rather than first export, determines a new keyframe.
                 with self._slam.map.update_lock:
                     known_keyframe_ids = {str(keyframe.id) for keyframe in self._slam.map.get_keyframes()}
+                image, diagnostics = preprocess_slam_image(image, self._active_preprocessing)
+                self._preprocessing_diagnostics = {**diagnostics, "frame_id": frame_id}
                 self._slam.track(image, None, None, index, timestamp_s)
                 native_state = self._slam.tracking.state.name
                 self._state = {"OK": "tracking", "LOST": "lost", "RELOCALIZE": "relocalizing",
@@ -387,6 +412,10 @@ class SlamBackend:
                 self._localization = self._empty_localization(frame_id, timestamp_s)
                 with self._slam.map.update_lock:
                     entities = self._read_entities()
+                    if (any(kind == "keyframe" and identifier not in known_keyframe_ids
+                            for kind, identifier in entities) and
+                            self._active_preprocessing not in self._descriptor_preprocessing_history):
+                        self._descriptor_preprocessing_history.append(copy.deepcopy(self._active_preprocessing))
                     if native_state == "OK":
                         transform, reference = self._current_pose()
                         if transform is not None:
@@ -457,6 +486,9 @@ class SlamBackend:
                 "format": FORMAT, "format_version": FORMAT_VERSION, "pyslam_commit": PYSLAM_COMMIT,
                 "map_id": self._map_id, "intrinsics_sha256": _intrinsics_hash(self.config["calibration"]),
                 "calibration": self.config["calibration"], "mounting": self.config.get("mounting"),
+                "active_preprocessing": copy.deepcopy(self._active_preprocessing),
+                "descriptor_preprocessing_history": copy.deepcopy(
+                    self._descriptor_preprocessing_history or [self._active_preprocessing]),
                 "next_frame_index": self._next_frame_index,
                 "source_frames": {k: self._source_frames[k] for k in used_indices if k in self._source_frames},
                 "units": "arbitrary", "scale_status": "unobserved", "files": files,
@@ -480,7 +512,15 @@ class SlamBackend:
                     "localization": copy.deepcopy(self._localization), "geometry": copy.deepcopy(self._geometry),
                     "calibration": copy.deepcopy(self.config.get("calibration")),
                     "mounting": copy.deepcopy(self.config.get("mounting")),
-                    "robot_extrinsics_available": False}
+                    "robot_extrinsics_available": False,
+                    "preprocessing": {
+                        "active": copy.deepcopy(self._active_preprocessing),
+                        "loaded": copy.deepcopy(self._loaded_preprocessing),
+                        "descriptor_history": copy.deepcopy(self._descriptor_preprocessing_history),
+                        "history_scope": "profiles_that_have_contributed_keyframe_descriptors",
+                        "point_colors": "from_keyframe_inputs_may_include_grayscale",
+                        "last_frame": copy.deepcopy(self._preprocessing_diagnostics),
+                    }}
 
     def close(self):
         with self._lock:

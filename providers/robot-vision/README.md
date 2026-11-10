@@ -566,3 +566,40 @@ RC camera or establish metric scale, obstacle coverage, or safe driving on the
 car. Every camera requires its own validated intrinsic and distortion record;
 the supplied 0.0635 m height and provisional zero downward pitch do not replace
 that calibration or a qualified map-scale reference.
+
+## Calibration recovery and low-contrast input
+
+Checkerboard fits resolve observations against the requested map revision.
+An explicitly deleted anchor can be excluded only when its capture revision
+and uninterrupted live history prove the same keyframe image identity and
+calibration. Unknown, replaced or ambiguous anchors remain unresolved.
+The candidate's `anchor_resolution` reports surviving training/validation
+counts and exclusions; all original samples and their roles stay preserved.
+The normal baseline, held-out validation and physical-size checks run again.
+Measured-distance endpoints remain strict and are never silently substituted.
+
+SLAM can optionally use an explicit contrast profile in `config.json`:
+
+```json
+{"slam":{"preprocessing":{"mode":"percentile_gray","version":1,
+                         "low_percentile":1.0,"high_percentile":99.0}}}
+```
+
+The default mode is `none`. The optional profile converts BGR to grayscale,
+stretches the configured intensity percentiles globally, and gives SLAM three
+identical channels without moving or resizing pixels. Flat images remain flat.
+Raw frame evidence and detector inputs retain their original bytes.
+Status reports the active/loaded policies, descriptor-policy history and
+brightness/blur diagnostics measured on the raw image. Contrast gain also
+amplifies noise; it does not qualify optical sharpness or localization.
+
+Checkpoint manifests distinguish the active profile from profiles that have
+contributed keyframe descriptors. Legacy maps retain their raw-profile history;
+a configured profile transition must freshly relocalize and cannot relabel old
+descriptors. A map may contain point colors from grayscale SLAM inputs.
+
+A featureless camera frame is retained as zero-length feature and association
+arrays. The native persistence qualifier includes a real blank input before
+saving, checks that its identity and empty arrays survive restore, and then
+requires a real non-keyframe image to relocalize. An empty image never supplies
+a current pose or deletes the initialized map.
