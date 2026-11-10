@@ -79,7 +79,7 @@ def main():
     offer['argv']=[sys.executable,'-S',live+'/providers/pi-docker/docker_cli.py',directory+'/manifest.json']
     atomic(directory+'/manifest.json',json.dumps(provider_manifest,indent=2).encode())
     for name,directory in (('biomerte-terminal',HOME+'/biomerte-terminal'),('biomerte-docker',HOME+'/biomerte-docker')):
-        unit='[Service]\nWorkingDirectory='+live+'\nEnvironment=PYTHONPATH='+live+'\nExecStart=\nExecStart=/usr/bin/python3 -S -m biomerte --home '+directory+' worker '+directory+'/manifest.json\n'
+        unit='[Service]\nKillMode=process\nWorkingDirectory='+live+'\nEnvironment=PYTHONPATH='+live+'\nExecStart=\nExecStart=/usr/bin/python3 -S -m biomerte --home '+directory+' worker '+directory+'/manifest.json\n'
         with tempfile.NamedTemporaryFile(delete=False) as stream:
             stream.write(unit.encode());temporary=stream.name
         target='/etc/systemd/system/'+name+'.service.d'
