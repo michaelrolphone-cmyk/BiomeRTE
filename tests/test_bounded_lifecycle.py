@@ -155,3 +155,23 @@ class BoundedLifecycle(unittest.TestCase):
         self.app.stores['site'].execute(lambda tx:tx.put('custom','shape',value))
         result=self.app.stores['site'].execute(lambda tx:tx.need('custom','shape'))
         self.assertEqual(value,result)
+
+    def test_adapter_launch_failure_retains_uncertainty_without_masking_error(self):
+        import os
+        from biomerte.worker import Worker
+        lease, action = self.action()
+        class Remote:
+            node='test'
+            site='site'
+            realm='site'
+            def call(inner, name, args, rid=None):
+                return self.app.call(name,args,rid or uid())
+        worker=Worker(os.path.join(self.tmp.name,'worker.sqlite'),Remote(),
+                      [{'contract':'sample:1','resource':'slot','argv':['/nonexistent/biomerte-adapter']}])
+        try:
+            worker.perform(action)
+            result=self.call('cap.status',operation='one')
+            self.assertEqual('uncertain',result['state'])
+            self.assertIn('No such file',result['result']['reason'])
+        finally:
+            worker.db.close()

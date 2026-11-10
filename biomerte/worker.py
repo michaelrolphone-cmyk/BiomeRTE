@@ -173,6 +173,7 @@ class Worker:
             self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
                             (a['id'], sig, 'uncertain', encode(out), guard))
             state = 'uncertain'
+            request = {'operation': a['id'], 'inputs': a['inputs']}
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
