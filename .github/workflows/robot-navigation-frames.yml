@@ -3,11 +3,15 @@ on:
   push:
     paths:
       - 'providers/robot-vision/navigation_frames.py'
+      - 'providers/robot-vision/vision_service.py'
+      - 'providers/robot-vision/tests/test_navigation_service.py'
       - 'providers/robot-vision/tests/test_navigation_frames.py'
       - '.github/workflows/robot-navigation-frames.yml'
   pull_request:
     paths:
       - 'providers/robot-vision/navigation_frames.py'
+      - 'providers/robot-vision/vision_service.py'
+      - 'providers/robot-vision/tests/test_navigation_service.py'
       - 'providers/robot-vision/tests/test_navigation_frames.py'
       - '.github/workflows/robot-navigation-frames.yml'
 permissions:
@@ -26,3 +30,17 @@ jobs:
           python-version: '3.12'
       - run: python3 -S -m unittest discover -s providers/robot-vision/tests -p test_navigation_frames.py -v
       - run: python3 -S -m unittest discover -s providers/robot-vision/tests -p test_mapping_preflight.py -v
+  service:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m pip install 'numpy==2.2.6' 'opencv-python-headless==4.12.0.88'
+      - run: python3 -m unittest discover -s providers/robot-vision/tests -p test_navigation_service.py -v
+      - run: python3 -m unittest discover -s providers/robot-vision/tests -p test_vision_service.py -v
