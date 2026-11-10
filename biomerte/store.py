@@ -329,6 +329,8 @@ class Store:
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        self._connections = []
+        self._connections_lock = threading.Lock()
         self._writer_diagnostic = None
         self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
@@ -400,9 +402,47 @@ class Store:
             raise
 
     def connect(self):
-        con = sqlite3.connect(self.path, timeout=12, isolation_level=None)
+        con = sqlite3.connect(self.path, timeout=12, isolation_level=None, check_same_thread=False)
         con.execute('PRAGMA synchronous=FULL')
         return con
+
+
+    @contextlib.contextmanager
+    def connection(self):
+        """Lease one warm connection exclusively, with a fresh transaction.
+
+        Opening a connection and loading the schema for every request contends
+        with SQLite 3.8 WAL I/O on the Pi. Reuse connections, never snapshots.
+        The idle bound limits retained page caches, not concurrent requests.
+        """
+        with self._connections_lock:
+            db = self._connections.pop() if self._connections else None
+        if db is None:
+            db = self.connect()
+        try:
+            yield db
+        finally:
+            reusable = False
+            try:
+                # Also handles callbacks that fail before normal rollback.
+                db.rollback()
+                db.execute('PRAGMA query_only=OFF')
+                reusable = True
+            except sqlite3.Error:
+                pass
+            with self._connections_lock:
+                if reusable and len(self._connections) < 8:
+                    self._connections.append(db)
+                    db = None
+            if db is not None:
+                db.close()
+
+    def close(self):
+        """Release idle connections; checked-out operations retain ownership."""
+        with self._connections_lock:
+            idle, self._connections = self._connections, []
+        for db in idle:
+            db.close()
 
     def _report_writer_timeout(self):
         # Diagnostic only: never emit record values, callback arguments or locals.
@@ -452,7 +492,7 @@ class Store:
 
     def _execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict, JournalReplay
-        with contextlib.closing(self.connect()) as db:
+        with self.connection() as db:
             entries = {}
             checkpoint = None
             if self.remote and not cached:
