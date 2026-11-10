@@ -257,8 +257,10 @@ if __name__ == '__main__':
 
 class DockerDeliveryRecoveryTests(unittest.TestCase):
     def test_upload_failure_keeps_exact_completion_without_reexecution(self):
-        import imp,hashlib,base64
-        docker=imp.load_source('runner_docker_delivery',os.path.join(os.path.dirname(__file__),'..','providers','pi-docker','docker_cli.py'))
+        import types,hashlib,base64
+        path=os.path.join(os.path.dirname(__file__),'..','providers','pi-docker','docker_cli.py')
+        docker=types.ModuleType('runner_docker_delivery');docker.__file__=path
+        with open(path) as source:exec(compile(source.read(),path,'exec'),docker.__dict__)
         with tempfile.TemporaryDirectory() as root:
             effects=os.path.join(root,'effects')
             args={'argv':['-S','-c',"open(%r,'a').write('once\\n');print('retained completion')"%effects]}

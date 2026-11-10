@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import uuid
 import os
 import socket
 import sys
