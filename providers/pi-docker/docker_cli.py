@@ -96,6 +96,7 @@ def capture(proc, directory, deadline, limit, progress_path=None):
     paths = {}
     counts = {'stdout': 0, 'stderr': 0}
     timed_out = False
+    stopped = False
     try:
         with selectors.DefaultSelector() as sel, open(os.path.join(directory, 'out'), 'wb') as out, \
                 open(os.path.join(directory, 'err'), 'wb') as err:
@@ -105,6 +106,7 @@ def capture(proc, directory, deadline, limit, progress_path=None):
             while sel.get_map():
                 progress.report(paths)
                 if progress.stopped():
+                    stopped = True
                     break
                 left = deadline - time.monotonic()
                 if left <= 0:
@@ -119,7 +121,7 @@ def capture(proc, directory, deadline, limit, progress_path=None):
                     remaining = max(0, limit - counts[name])
                     dest.write(data[:remaining])
                     counts[name] += len(data)
-            if not timed_out:
+            if not timed_out and not stopped:
                 try:
                     proc.wait(timeout=max(0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
