@@ -32,7 +32,7 @@ class RequestTrace:
 
     def emit(self, value):
         try:
-            self.records.put_nowait(value)
+            self.records.put_nowait(dict(value, observed_at=time.time()))
         except queue.Full:
             pass
 
