@@ -463,12 +463,30 @@ def claim(tx, ctx, provider, operation, generation):
 def result(tx, ctx, provider, operation, generation, state, result):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
-    if a['state'] == 'abandoned':
-        raise Fault('Superseded generation', 409)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
         raise Fault('Unknown outcome')
+    if a['state'] == 'abandoned':
+        # A signed completion is still evidence after its lease was superseded.
+        # Preserve abandonment and never rebind a guard, release a newer lease,
+        # or emit the success event used by ordinary workflow continuations.
+        if a['contract'] not in ('host.terminal.run:1', 'docker.cli:1') or state not in ('succeeded', 'failed'):
+            raise Fault('Superseded generation', 409)
+        if a.get('execution_state'):
+            if a['execution_state'] == state and (
+                    a.get('result') == result or
+                    (a.get('result_expired') and a.get('result_digest') == digest(result))):
+                return a
+            raise Fault('Conflicting late execution outcome', 409)
+        if state == 'succeeded':
+            validate(tx.need('contracts', a['contract'])['outputs'], result)
+        a.update(execution_state=state, result=result, reconciled_at=time.time(),
+                 abandonment_result=a.get('result', {}))
+        tx.put('actions', operation, a)
+        tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
+                                       'state': 'abandoned'})
+        return a
     if a.get('result_expired'):
         if a['state'] == state and a.get('result_digest') == digest(result):
             return a  # exact lost-ACK redelivery, no effects or payload restoration

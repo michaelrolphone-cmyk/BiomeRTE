@@ -81,6 +81,8 @@ class Worker:
         if row and row[0] != authority:
             raise Fault('Worker ledger belongs to another authority')
         self.db.execute('INSERT OR IGNORE INTO authority VALUES(1,?)', (authority,))
+        from .supervised_commands import initialize
+        initialize(self)
 
     def _initialize_result_recovery(self):
         # Disposable pending projection: never scan acknowledged history on a poll.
@@ -287,6 +289,9 @@ class Worker:
                          'activation': a['id'], 'success': ret == 0, 'evidence': info})
 
     def perform(self, a):
+        from . import supervised_commands
+        if supervised_commands.resume(self, a):
+            return
         args = {'provider': self.remote.node, 'operation': a['id'], 'generation': a['generation']}
         guard = a.get('guard', a['resource'])
         if not self.reconcile_guard(guard, exclude=a['id']):
@@ -325,10 +330,16 @@ class Worker:
                 self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
                                 (a['id'], sig, 'uncertain', encode(out), guard))
                 self.db.execute('INSERT INTO result_retention_eligible VALUES(?,?)', (a['id'], sig))
+                if supervised_commands.supported(a):
+                    self.db.execute('INSERT INTO supervised_pending VALUES(?,?,?,?,?)',
+                                    (a['id'], sig, encode(a), encode(adapter), encode(claimed['output_schema'])))
                 self.db.commit()
             except BaseException:
                 self.db.rollback()
                 raise
+            if supervised_commands.supported(a):
+                supervised_commands.finish(self, a, adapter, claimed['output_schema'], sig)
+                return
             state = 'uncertain'
             request = {'operation': a['id'], 'inputs': a['inputs']}
             try:
@@ -479,7 +490,7 @@ class Worker:
         after = getattr(self, '_result_recovery_after', '')
         query = ("SELECT a.id,a.signature,a.state,a.result FROM result_recovery_pending p "
                  "CROSS JOIN actions a ON a.id=p.id AND a.signature=p.signature "
-                 "WHERE p.id>? ORDER BY p.id LIMIT ?")
+                 "WHERE p.id>? AND NOT EXISTS (SELECT 1 FROM supervised_pending s WHERE s.id=p.id) ORDER BY p.id LIMIT ?")
         limit = max(0, min(8, limit))
         rows = self.db.execute(query, (after, limit)).fetchall()
         if not rows and after:
@@ -539,6 +550,9 @@ class Worker:
                 failure('activation', a, error)
         if callable(getattr(self, 'stream_handler', None)):
             self.stream_handler(queue.get('streams', []))
+        from .supervised_commands import pending
+        known = {a['id'] for a in queue['actions']}
+        queue['actions'].extend(a for a in pending(self) if a['id'] not in known)
         actions = [a for a in queue['actions']
                    if a.get('guard', a['resource']) not in blocked]
         if pool is not None:
