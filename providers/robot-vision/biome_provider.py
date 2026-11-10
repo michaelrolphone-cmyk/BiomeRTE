@@ -437,8 +437,7 @@ def worker_offers(cfg):
 def stream_offer(cfg, status):
     """Advertise only a service that actually supplies both native live feeds."""
     live = status.get("streaming", {})
-    available = (status.get("availability") == "available" and
-                 status.get("state") in ("running", "starting") and
+    available = (status.get("state") in ("running", "starting") and
                  live.get("available") is True and
                  set(live.get("lanes", [])) >= {"vision", "map"})
     return dict(provider=cfg["provider"], contract="robot.vision.stream:1",
@@ -486,9 +485,16 @@ def serve(cfg):
                     try:
                         status = client.query("robot.vision.status", {})
                         ready = supported_contracts(status)
-                    except ServiceError:
-                        status = {}
-                        ready = set()
+                    except ServiceError as error:
+                        # A busy/late health reply is unknown, not provider loss.
+                        # Only a confirmed missing endpoint or unsafe socket
+                        # withdraws offers; explicit service status still governs.
+                        if (isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
+                                or error.code == "unsafe_socket"):
+                            status = {}
+                            ready = set()
+                        else:
+                            raise
                     remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
                         "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
                     if stopping.is_set():return
