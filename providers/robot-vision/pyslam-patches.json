@@ -32,9 +32,9 @@
     },
     {
       "original_sha256": "ddbaa9d6f3f4f6f2d35d8e37e2c86f1616eb3189b1a6552ec1e21de62c7b9d50",
-      "patched_sha256": "19f0c2c23f33d03606651050ddf80bdbfc92a8bcf2370f1a02bfdcefb66fdd56",
+      "patched_sha256": "f587e1bb89ecbaed2dd0455f00d918703524d52d6a04ad6ff821898b6ba09a49",
       "path": "pyslam/loop_closing/loop_closing.py",
-      "reason": "Keep headless visualization images out of checkpoints and snapshot live native keyframe IDs for relocalization."
+      "reason": "Keep headless checkpoints small, filter live relocalization candidates, and try radio candidate hints through unchanged geometry before full visual fallback."
     },
     {
       "original_sha256": "3f7ccad825fea1d41f0fdde54e9fcebb640d0a189ad75804e6072b3e06da0ac1",
