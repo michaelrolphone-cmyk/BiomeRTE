@@ -66,8 +66,11 @@ def bounded_metadata(metadata, maximum=15872):
             while size(value) > maximum and any(arrays):
                 candidates = [rows for rows in arrays if rows]
                 largest = max(candidates, key=lambda rows: size(rows))
-                largest.pop()
-                omitted += 1
+                average = max(1, size(largest) // len(largest))
+                excess = size(value) - maximum
+                count = min(len(largest), max(1, (excess + average - 1) // average))
+                del largest[-count:]
+                omitted += count
                 cache["stream_scan_rows_omitted"] = omitted
             if omitted:
                 # Never leave an index pointing beyond a trimmed scan array.
