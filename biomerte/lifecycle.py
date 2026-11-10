@@ -128,7 +128,6 @@ def settled(tx, action, now=None):
 
 
 def abandon(tx, ctx, lease, reason, now):
-    from .providers import promote
     if lease['state'] == 'released':
         return False
     guard = tx.need('guards', lease['guard'])
@@ -137,7 +136,7 @@ def abandon(tx, ctx, lease, reason, now):
     guard.update(generation=guard['generation'] + 1, holder='', released_at=now)
     tx.put('guards', lease['guard'], guard)
     # A compact watermark prevents a swept guard resetting physical fence numbers.
-    tx.put('_fence_generations', lease['guard'], guard['generation'])
+    tx.put('_fence_generations', lease['resource'], guard['generation'])
     for action in tx.rows('actions'):
         if action['lease'] != lease['id'] or action['generation'] != lease['generation'] or action['state'] in TERMINAL:
             continue
@@ -214,7 +213,7 @@ def recover(tx, ctx, lease, actions, now):
 
 def sweep(tx, ctx, now):
     # Only capability-path events expire; workflow/knowledge history is untouched.
-    for kind in ('result_inbox', 'destinations'):
+    for kind in ('result_inbox', 'destinations', '_stream_grants'):
         for row in tx.rows(kind):
             if row['expires_at'] <= now:
                 tx.drop(kind, row['id'])
@@ -239,7 +238,9 @@ def sweep(tx, ctx, now):
         import json
         guard = json.loads(row[1])
         if not guard['holder'] and guard.get('released_at', now + 1) + 300 <= now:
-            tx.put('_fence_generations', row[0], max(guard['generation'], tx.get('_fence_generations', row[0], 0)))
+            resource = guard.get('resource', row[0].split(':')[1] if row[0].startswith('!slot:') else row[0])
+            if not resource.startswith('!shared:'):
+                tx.put('_fence_generations', resource, max(guard['generation'], tx.get('_fence_generations', resource, 0)))
             tx.drop('guards', row[0])
     for row in tx.db.execute("SELECT id,value FROM records WHERE kind='_receipt'").fetchall():
         import json
@@ -248,3 +249,38 @@ def sweep(tx, ctx, now):
     for event in tx.rows('events'):
         if event.get('expires_at', now + 1) <= now:
             tx.drop('events', '%020d' % event['seq'])
+
+@op('cap.command.state', 'provider:str operation:str generation:int', False)
+def command_state(tx, ctx, provider, operation, generation):
+    from .providers import executor
+    executor(tx, ctx, provider)
+    action = tx.need('actions', operation)
+    if (action['provider'], action['generation']) != (provider, generation):
+        raise Fault('Command identity mismatch', 409)
+    return {'state': action['state'], 'kill_requested': action.get('kill_requested', False)}
+
+
+@op('output.tail', 'operation:str lines?:int', False)
+def output_tail(tx, ctx, operation, lines=40):
+    from .providers import owner
+    action = tx.need('actions', operation)
+    owner(ctx, action['provider'])
+    if not 1 <= lines <= 1000:
+        raise Fault('Invalid line count')
+    output = action.get('checkpoint', {}).get('output', {})
+    return {'operation': operation, 'state': action['state'],
+            'output': {key: '\n'.join(value.splitlines()[-lines:]) for key, value in output.items()},
+            'last_progress_at': action.get('last_progress_at')}
+
+
+@op('cap.kill', 'operation:str')
+def kill(tx, ctx, operation):
+    if ctx.permissions is not None:
+        raise Fault('Task owner access required', 403)
+    action = tx.need('actions', operation)
+    if action['state'] not in TERMINAL:
+        action['kill_requested'] = True
+        tx.put('actions', operation, action)
+        if action['state'] == 'queued':
+            abandon(tx, ctx, tx.need('leases', action['lease']), 'explicit_kill', time.time())
+    return {'operation': operation, 'state': action['state'], 'kill_requested': True}

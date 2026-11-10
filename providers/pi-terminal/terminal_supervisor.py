@@ -12,7 +12,9 @@ from supervisor import pathlib, process_group_members, process_identity
 from terminal_limits import apply_limits
 
 
-def execute(journal_path, job_id):
+def execute(journal_path, job_id, progress_path=None):
+    from biomerte.command_watch import OutputProgress, capture
+    progress = OutputProgress(progress_path)
     j = Journal(journal_path)
     row = j.db.execute('SELECT body,state FROM jobs WHERE id=?', (job_id,)).fetchone()
     if not row or row[1] != 'queued':
@@ -45,14 +47,17 @@ def execute(journal_path, job_id):
     process = None
     try:
         with out.open('wb') as stdout, err.open('wb') as stderr:
-            process = subprocess.Popen(argv, cwd=str(work), env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(work)}, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, start_new_session=True, preexec_fn=restrict)
+            process = subprocess.Popen(argv, cwd=str(work), env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(work)}, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, preexec_fn=restrict)
+            counts = {}
+            readers = [capture(process.stdout, out, counts, 'stdout'), capture(process.stderr, err, counts, 'stderr')]
             j.put('process:' + job_id, {'pid': process.pid, 'kernel_identity': process_identity(process.pid), 'supervisor_pid': os.getpid(), 'started_monotonic': start, 'argv_sha256': hashlib.sha256(json.dumps(argv).encode()).hexdigest()})
             with j.db:
                 j.db.execute("UPDATE jobs SET state='running' WHERE id=?", (job_id,))
             while process.poll() is None:
+                progress.report({'stdout': out, 'stderr': err})
                 state, lease = j.db.execute('SELECT state,lease FROM jobs WHERE id=?', (job_id,)).fetchone()
-                if state == 'stop_requested' or (lease is not None and monotonic() >= lease):
-                    reason = 'stop_requested' if state == 'stop_requested' else 'lease_or_duration_expired'
+                if progress.stopped() or state == 'stop_requested' or (lease is not None and monotonic() >= lease):
+                    reason = 'stop_requested' if progress.stopped() or state == 'stop_requested' else 'lease_or_duration_expired'
                     os.killpg(process.pid, signal.SIGTERM)
                     try:
                         process.wait(timeout=5)
@@ -70,7 +75,10 @@ def execute(journal_path, job_id):
                     if not process_group_members(process.pid):
                         break
                     time.sleep(0.02)
-            result = {'exit_code': process.returncode, 'duration_seconds': monotonic() - start, 'reason': reason, 'stdout': str(out), 'stderr': str(err), 'process_identity': j.get('process:' + job_id), 'quiescent': not process_group_members(process.pid)}
+            for reader in readers:
+                reader.join()
+            progress.report({'stdout': out, 'stderr': err})
+            result = {'output_retention': counts, 'exit_code': process.returncode, 'duration_seconds': monotonic() - start, 'reason': reason, 'stdout': str(out), 'stderr': str(err), 'process_identity': j.get('process:' + job_id), 'quiescent': not process_group_members(process.pid)}
     except BaseException as exc:
         if process and process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)

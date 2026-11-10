@@ -60,7 +60,7 @@ class Worker:
         for o in self.offers:
             args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
                     'service': o.get('service', ''), 'state': o.get('state', 'ready')}
-            for field in ('capacity', 'usage'):
+            for field in ('capacity', 'usage', 'configuration', 'lease_class'):
                 if field in o:
                     args[field] = o[field]
             self.remote.call('cap.offer', args)
@@ -177,8 +177,13 @@ class Worker:
                 proc = subprocess.Popen(argv, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 try:
-                    stdout, stderr = proc.communicate(
-                        encode({'operation': a['id'], 'inputs': a['inputs']}).encode(), timeout=self.timeout)
+                    request = {'operation': a['id'], 'inputs': a['inputs']}
+                    if adapter.get('configuration', {}).get('lease_class') == 'long_command' or adapter.get('lease_class') == 'long_command':
+                        from .command_watch import communicate
+                        request['progress_path'] = os.path.join(os.path.dirname(self.path), 'progress-' + digest(a['id']) + '.json')
+                        stdout, stderr = communicate(self, proc, request, a, adapter)
+                    else:
+                        stdout, stderr = proc.communicate(encode(request).encode(), timeout=self.timeout)
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.communicate()
@@ -193,6 +198,9 @@ class Worker:
                     state = 'succeeded'
             except (OSError, ValueError, Fault) as exc:
                 out = {'reason': str(exc)}
+            for path in (request.get('progress_path', ''), request.get('progress_path', '') + '.stop'):
+                if path and os.path.exists(path):
+                    os.unlink(path)
             self.db.execute('UPDATE actions SET state=?,result=? WHERE id=?',
                             (state, encode(out), a['id']))
         args.update(state=state, result=out)

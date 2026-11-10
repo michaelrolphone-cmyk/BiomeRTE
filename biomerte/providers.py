@@ -229,7 +229,7 @@ def bind(tx, ctx, request):
                     break
         else:
             guard_key = '!shared:' + digest([resource, request['id']])
-        guard = tx.get('guards', guard_key, {'generation': tx.get('_fence_generations', guard_key, 0), 'holder': ''})
+        guard = tx.get('guards', guard_key, {'generation': tx.get('_fence_generations', resource, 0), 'holder': ''})
         if guard['holder']:
             continue
         generation = max(guard['generation'], request.get('generation', 0)) + 1
@@ -238,7 +238,7 @@ def bind(tx, ctx, request):
                      state='bound' if of['provider'] in ('builtin', 'routine') else 'fencing',
                      lease_class=lifecycle.policy(tx, {'offer': of['id'], 'provider': of['provider']})['lease_class'],
                      fencing_since=time.time(), last_progress_at=time.time(), missed_heartbeats=0)
-        tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id']})
+        tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id'], 'resource': resource})
         if lease.get('queue_key'):
             tx.drop('_lease_queue', lease.pop('queue_key'))
         tx.emit('lease.acquired', {'lease': lease['id'], 'generation': generation})
@@ -335,7 +335,7 @@ def release(tx, l):
     if guard['holder'] == l['id'] and guard['generation'] == l['generation']:
         guard.update(holder='', released_at=time.time())
         tx.put('guards', l['guard'], guard)
-        tx.put('_fence_generations', l['guard'], guard['generation'])
+        tx.put('_fence_generations', l['resource'], guard['generation'])
     l.update(state='released', released_at=time.time(), expires_at=time.time() + 300)
     tx.put('leases', l['id'], l)
     return True
@@ -412,7 +412,8 @@ def pending(tx, ctx, provider):
         guard = a.get('guard', a['resource'])
         (rest if guard in seen else first).append(a)
         seen.add(guard)
-    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations}
+    streams = [g for g in tx.rows('_stream_grants') if g['provider'] == provider and g['state'] == 'open' and g['expires_at'] > time.time()]
+    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations, 'streams': streams}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')

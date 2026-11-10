@@ -9,6 +9,7 @@ from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
 from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support, discovery
+from . import streams
 assistant_support.install_hooks()
 
 

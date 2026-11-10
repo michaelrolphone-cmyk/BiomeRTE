@@ -31,7 +31,9 @@ def terminal_pool(resource, profile, adapter_argv, slots=DEFAULT_SLOTS):
     if type(slots) is not int or slots < 1:
         raise ValueError('Terminal slots must be a positive integer')
     offer = {'contract': CONTRACT, 'resource': resource, 'service': 'terminal',
-             'capacity': slots, 'argv': adapter_argv, 'usage': terminal_usage(profile)}
+             'capacity': slots, 'argv': adapter_argv, 'usage': terminal_usage(profile),
+             'configuration': {'lease_class': 'long_command', 'heartbeat_interval_seconds': 60,
+                               'missed_heartbeats_limit': 3, 'reservation_policy': {'release_after_result': True}}}
     return {'offers': [offer], 'parallelism': slots}
 
 
@@ -117,7 +119,7 @@ def execute(cfg, home, request):
         recorded = json.loads(existing[0])
         if recorded['argv'] != argv or recorded['workspace'] != work:
             raise RuntimeError('Terminal operation identity conflict')
-        supervise(path, op)
+        supervise(path, op, request.get('progress_path'))
         row = journal.db.execute('SELECT body,state,result FROM jobs WHERE id=?', (op,)).fetchone()
         if row[1] != 'finished':
             raise RuntimeError('Unresolved terminal operation; inspect the supervisor journal')
