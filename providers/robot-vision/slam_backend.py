@@ -534,6 +534,59 @@ class SlamBackend:
                     "geometry": copy.deepcopy(self._geometry), "map_changes": changes,
                     "map_change_reason": "checkpoint", "exact_saved_geometry": True}
 
+    def capture_checkpoint(self, target_dir):
+        from async_checkpoint import capture
+        with self._lock:
+            if self._slam is None or self._slam.map.num_keyframes() < 2 or self._slam.map.num_points() == 0:
+                raise BackendNotReady("A real initialized SLAM map is required for a backend checkpoint")
+            native = capture(self._slam, target_dir)
+            entities = _saved_entities(native["document"], self._source_frames)
+            changes = self._diff(entities, complete=True)
+            return dict(native=native, entities=entities, map_changes=changes,
+                        geometry=copy.deepcopy(self._geometry), config=copy.deepcopy(self.config),
+                        map_id=self._map_id, next_frame_index=self._next_frame_index,
+                        source_frames=copy.deepcopy(self._source_frames),
+                        preprocessing=copy.deepcopy(self._active_preprocessing),
+                        preprocessing_history=copy.deepcopy(
+                            self._descriptor_preprocessing_history or [self._active_preprocessing]))
+
+    def write_checkpoint(self, ticket):
+        from async_checkpoint import write
+        target = write(ticket["native"])
+        # Upstream can catch a serialization exception internally. Verify
+        # actual files and parse the saved map before reporting success.
+        document = ticket["native"]["document"]
+        entities = ticket["entities"]
+        if not (target / "loop_closing.db").is_file():
+            raise CheckpointError("Loop database was not saved")
+        files = [{"path": str(path.relative_to(target)), "size": path.stat().st_size,
+                  "sha256": _sha_file(path)}
+                 for path in sorted(target.rglob("*")) if path.is_file()]
+        used_indices = {str(value["backend_frame_index"]) for (kind, _), value in entities.items()
+                        if kind == "keyframe"}
+        manifest = {
+            "format": FORMAT, "format_version": FORMAT_VERSION, "pyslam_commit": PYSLAM_COMMIT,
+            "map_id": ticket["map_id"], "intrinsics_sha256": _intrinsics_hash(ticket["config"]["calibration"]),
+            "calibration": ticket["config"]["calibration"], "mounting": ticket["config"].get("mounting"),
+            "active_preprocessing": ticket["preprocessing"],
+            "descriptor_preprocessing_history": ticket["preprocessing_history"],
+            "next_frame_index": ticket["next_frame_index"],
+            "source_frames": {k: ticket["source_frames"][k] for k in used_indices if k in ticket["source_frames"]},
+            "units": "arbitrary", "scale_status": "unobserved", "files": files,
+            "created_at_unix_s": time.time(), "geometry_source": "saved_map_json",
+        }
+        temporary = target / "backend_manifest.json.tmp"
+        with temporary.open("w") as handle:
+            handle.write(_canonical(manifest))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target / "backend_manifest.json")
+        changes = ticket["map_changes"]
+        return {**manifest, "availability": "available", "path": str(target),
+                "geometry": ticket["geometry"], "map_changes": changes,
+                "map_change_reason": "checkpoint", "exact_saved_geometry": True}
+
+
     def status(self):
         with self._lock:
             return {"backend": "pyslam", "pyslam_commit": PYSLAM_COMMIT, "runtime_loaded": self._slam is not None,
