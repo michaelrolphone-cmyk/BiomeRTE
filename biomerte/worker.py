@@ -551,8 +551,13 @@ class Worker:
         if callable(getattr(self, 'stream_handler', None)):
             self.stream_handler(queue.get('streams', []))
         from .supervised_commands import pending
-        known = {a['id'] for a in queue['actions']}
-        queue['actions'].extend(a for a in pending(self) if a['id'] not in known)
+        recovering = pending(self)
+        recovery_ids = {a['id'] for a in recovering}
+        recovery_guards = {a.get('guard', a['resource']) for a in recovering}
+        # Resolve old custody before admitting a newer fence on the same slot.
+        queue['fences'] = [l for l in queue['fences'] if l.get('guard', l['resource']) not in recovery_guards]
+        queue['actions'] = recovering + [a for a in queue['actions'] if a['id'] not in recovery_ids
+                                        and a.get('guard', a['resource']) not in recovery_guards]
         actions = [a for a in queue['actions']
                    if a.get('guard', a['resource']) not in blocked]
         if pool is not None:

@@ -481,8 +481,14 @@ def result(tx, ctx, provider, operation, generation, state, result):
             raise Fault('Conflicting late execution outcome', 409)
         if state == 'succeeded':
             validate(tx.need('contracts', a['contract'])['outputs'], result)
-        a.update(execution_state=state, result=result, reconciled_at=time.time(),
+        a.update(execution_state=state, reconciled_at=time.time(),
                  abandonment_result=a.get('result', {}))
+        if a.get('result_expired'):
+            # Preserve the established output-expiry boundary: retain the new
+            # receipt digest without restoring discarded bulk result payloads.
+            a['result_digest'] = digest(result)
+        else:
+            a['result'] = result
         tx.put('actions', operation, a)
         tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
                                        'state': 'abandoned'})

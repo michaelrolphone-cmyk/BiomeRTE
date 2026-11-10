@@ -135,7 +135,8 @@ def run(directory):
         except BaseException as exc:
             # No claim of quiescence: adapter descendants may still own effects.
             save(os.path.join(directory, 'completion.json'),
-                 dict(state='uncertain', reason=str(exc), adapter_pid=process.pid if process else None))
+                 dict(state='uncertain' if process else 'not_started', reason=str(exc),
+                      adapter_pid=process.pid if process else None))
 
 
 if __name__ == '__main__':

@@ -90,7 +90,10 @@ def finish(worker, action, adapter, schema, signature):
                     pass
             time.sleep(.2)
             observation = runner.inspect(directory)
-        if observation['state'] == 'finished' and observation['returncode'] == 0:
+        if observation['state'] == 'not_started':
+            state = 'failed'
+            out = {'reason': observation['reason'], 'evidence': {'executed': False, 'quiescent': True}}
+        elif observation['state'] == 'finished' and observation['returncode'] == 0:
             try:
                 with open(os.path.join(directory, 'stdout')) as source:
                     out = json.load(source)

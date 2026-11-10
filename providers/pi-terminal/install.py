@@ -92,7 +92,7 @@ def main():
     controller.call('peer.trust', {'public_key': provider['public_key'],
                     'label': socket.gethostname() + ' terminal',
                     'scopes': ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim',
-                               'provider.result', 'cap.status', 'artifact.put', 'cap.command.state', 'agent.progress', 'cap.heartbeat',
+                               'provider.result', 'cap.heartbeat', 'cap.command.state', 'agent.progress', 'cap.status', 'artifact.put', 'cap.command.state', 'agent.progress', 'cap.heartbeat',
                                'offer:' + CONTRACT, 'resource:' + resource]})
 
     manifest = os.path.join(home, 'manifest.json')

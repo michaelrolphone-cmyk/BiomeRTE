@@ -64,7 +64,7 @@ class RunnerTests(unittest.TestCase):
             runner.ensure(self.root, 'one', 'sig', argv, request)
         directory = runner.location(self.root, 'one')
         self.assertEqual(self.wait(directory)['state'], 'finished')
-        self.assertEqual(open(os.path.join(self.root, 'effects')).read(), 'once\n')
+        self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
         with self.assertRaises(ValueError):
             runner.ensure(self.root, 'one', 'different', argv, request)
     def test_runner_survives_requesting_process_death(self):
@@ -74,7 +74,7 @@ class RunnerTests(unittest.TestCase):
         subprocess.check_call([sys.executable, '-S', '-c', script])
         directory = runner.location(self.root, 'survive')
         self.assertEqual(self.wait(directory)['returncode'], 0)
-        self.assertEqual(open(os.path.join(self.root, 'effects')).read(), 'once\n')
+        self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
     def test_dead_custodian_never_replays_launch(self):
         directory = runner.location(self.root, 'dead')
         os.makedirs(directory)
@@ -83,12 +83,61 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(status['state'], 'interrupted')
         self.assertFalse(status['replay_allowed'])
         self.assertFalse(os.path.exists(os.path.join(self.root, 'effects')))
+    def text(self, path):
+        with open(path) as source:
+            return source.read()
+    def test_worker_process_death_reattaches_without_replay(self):
+        script = ("import sys; from tests.test_supervised_commands import RunnerTests,Remote; "
+                  "t=RunnerTests(); t.root=%r; "
+                  "w,o=t.worker(Remote()); "
+                  "o['argv']=t.argv(1.2); w.offers=[o]; w.perform(t.action())") % self.root
+        process = subprocess.Popen([sys.executable, '-S', '-c', script])
+        deadline = time.monotonic() + 10
+        while not os.path.exists(os.path.join(self.root, 'effects')):
+            if process.poll() is not None or time.monotonic() > deadline:
+                self.fail('worker failed before adapter launch')
+            time.sleep(.02)
+        process.kill()
+        process.wait()
+        remote = Remote()
+        worker, _ = self.worker(remote)
+        try:
+            worker.perform(supervised.pending(worker)[0])
+            self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
+            self.assertEqual(supervised.pending(worker), [])
+        finally:
+            worker.db.close()
+    def test_admission_waits_for_pending_custody(self):
+        remote = Remote()
+        worker, offer = self.worker(remote)
+        action = self.action()
+        signature = digest([action[k] for k in ('contract','inputs','resource','generation','lease')])
+        worker.db.execute('INSERT INTO supervised_pending VALUES(?,?,?,?,?)',
+                          ('command',signature,encode(action),encode(offer),encode({})))
+        remote.call = lambda name,args=None,rid=None: {'fences':[dict(id='new',guard='slot',resource='terminal')],
+                                                      'actions':[]} if name=='provider.poll' else {}
+        class Pool:
+            failures, running = {}, {}
+            def dispatch(self, actions, fences=()):
+                self.actions, self.fences = actions, fences
+                return 0
+        pool = Pool()
+        try:
+            worker.once(pool)
+            self.assertEqual(pool.fences, [])
+            self.assertEqual(pool.actions[0]['id'], 'command')
+        finally:
+            worker.db.close()
+    def test_launch_failure_is_known_not_executed(self):
+        runner.ensure(self.root,'missing','sig',['/no/such/executable'],{})
+        status = self.wait(runner.location(self.root,'missing'))
+        self.assertEqual(status['state'], 'not_started')
     def test_adapter_failure_retains_evidence(self):
         runner.ensure(self.root, 'bad', 'sig', [sys.executable, '-S', '-c',
                       "import sys; sys.stderr.write('failure'); sys.exit(7)"], {})
         directory = runner.location(self.root, 'bad')
         self.assertEqual(self.wait(directory)['returncode'], 7)
-        self.assertEqual(open(os.path.join(directory, 'stderr')).read(), 'failure')
+        self.assertEqual(self.text(os.path.join(directory, 'stderr')), 'failure')
     def worker(self, remote):
         offer = dict(contract='host.terminal.run:1', resource='terminal', argv=self.argv())
         worker = Worker(os.path.join(self.root, 'worker.sqlite'), remote, [offer], None)
@@ -111,7 +160,7 @@ class RunnerTests(unittest.TestCase):
             # Simulate an empty controller inbox: the local pending index owns recovery.
             worker.perform(supervised.pending(worker)[0])
             self.assertEqual(supervised.pending(worker), [])
-            self.assertEqual(open(os.path.join(self.root, 'effects')).read(), 'once\n')
+            self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
             self.assertEqual(remote.results['command']['state'], 'succeeded')
             directory = runner.location(os.path.join(self.root, 'command-runners'), 'command')
             self.assertFalse(os.path.exists(os.path.join(directory, 'stdout')))
@@ -136,7 +185,7 @@ class RunnerTests(unittest.TestCase):
         worker, _ = self.worker(remote)
         try:
             worker.perform(action)
-            self.assertEqual(open(os.path.join(self.root, 'effects')).read(), 'once\n')
+            self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
             self.assertGreater(remote.heartbeats, 0)
         finally:
             worker.db.close()
