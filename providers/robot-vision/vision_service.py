@@ -27,6 +27,7 @@ from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from radio_tracking import RadioTracking
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
+from navigation_frames import read_robot_pose
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
@@ -446,8 +447,12 @@ class VisionService:
                     else self.store.latest_snapshot(session_id=self.session_id))
         if snapshot.get("availability") == "unavailable":
             return snapshot
-        return {**snapshot, "availability": "available", "freshness": self._freshness(snapshot),
-                "metric_localization": self.metric.metric_localization(snapshot)}
+        result = {**snapshot, "availability": "available", "freshness": self._freshness(snapshot),
+                  "metric_localization": self.metric.metric_localization(snapshot)}
+        result["robot_localization"] = read_robot_pose(
+            result, self.state_dir / "navigation-frames.json", delivery_elapsed_s=0.0,
+            anchor_resolver=self.metric.repo.resolve_floor_anchors)
+        return result
 
     def _binding(self, snapshot):
         return {key: snapshot.get(key) for key in
@@ -628,7 +633,7 @@ class VisionService:
                     "camera_ground": "x forward, y left, z up; origin directly below optical center",
                     "map": "backend visual frame in arbitrary units",
                     "map_metric": "same native map origin and axes, translated coordinates in meters; separately qualified scale, floor alignment unmeasured",
-                    "robot": "unavailable until rigid camera-to-robot extrinsics are supplied",
+                    "robot": "qualified camera-derived pose in robot_localization; unavailable without matching metric floor and mounting attachments",
                     "imu": "native MPU axes; camera and robot mounting transforms unqualified",
                     "ahrs_reference": "gravity-aligned initial-yaw reference; relative yaw can drift",
                     "magnetometer": "native AK8963 axes; distinct from IMU axes; not calibrated compass"},
@@ -685,6 +690,7 @@ class VisionService:
                         "detection_metadata": snapshot["frame"].get("detection_metadata", {})}
             return {**self._binding(snapshot), "localization": snapshot["localization"],
                     "metric_localization": snapshot["metric_localization"],
+                    "robot_localization": snapshot["robot_localization"],
                     "spatial_evidence": snapshot["spatial_evidence"]}
         if operation == "robot.map.read":
             return self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),

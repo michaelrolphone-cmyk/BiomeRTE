@@ -161,6 +161,63 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
                 self.store._db.execute("UPDATE metric_sessions SET payload=? WHERE id=?",
                                        (_dump(session), session["session_id"]))
 
+    def resolve_floor_anchors(self, floor, snapshot):
+        """Prove a floor reference's supporting native keyframes never changed.
+
+        Exact indexed entity-version identities avoid scanning action/map history.
+        A changed row, even if it later returns to the same pose, needs explicit
+        requalification rather than an inferred continuation.
+        """
+        from navigation_frames import identity, rigid_transform
+
+        anchors = floor.get("supporting_keyframes")
+        if not isinstance(anchors, list) or not 1 <= len(anchors) <= 16:
+            raise ValueError("floor_anchor_records_required")
+        source_revision, target_revision = floor.get("map_revision"), snapshot.get("map_revision")
+        if (type(source_revision) is not int or type(target_revision) is not int
+                or source_revision < 0 or source_revision > target_revision
+                or floor.get("map_id") != snapshot.get("map_id")
+                or floor.get("calibration_id") != snapshot.get("calibration_id")):
+            raise ValueError("floor_anchor_revision_or_calibration_mismatch")
+        with self.store._lock:
+            self.store._open()
+            try:
+                source = self.store._map_locked(snapshot["map_id"], source_revision)
+                target = self.store._map_locked(snapshot["map_id"], target_revision)
+            except (ValueError, KeyError):
+                raise ValueError("floor_anchor_map_revision_unavailable") from None
+            if any(info.get("metadata", {}).get("calibration_id") != snapshot["calibration_id"]
+                   for info in (source, target)):
+                raise ValueError("floor_anchor_map_calibration_mismatch")
+            proof, seen = [], set()
+            sql = ("SELECT revision,deleted,payload FROM entity_versions "
+                   "WHERE map_id=? AND kind='keyframe' AND entity_id=? AND revision<=? "
+                   "ORDER BY revision DESC LIMIT 1")
+            for anchor in anchors:
+                if not isinstance(anchor, dict):
+                    raise ValueError("floor_anchor_record_invalid")
+                keyframe, frame = anchor.get("keyframe_id"), anchor.get("source_frame_id")
+                if not identity(keyframe) or not identity(frame) or keyframe in seen:
+                    raise ValueError("floor_anchor_identity_invalid")
+                seen.add(keyframe)
+                pose = rigid_transform(anchor.get("T_map_camera"))
+                original = self.store._db.execute(
+                    sql, (snapshot["map_id"], keyframe, source_revision)).fetchone()
+                current = self.store._db.execute(
+                    sql, (snapshot["map_id"], keyframe, target_revision)).fetchone()
+                if original is None or current is None or original["deleted"] or current["deleted"]:
+                    raise ValueError("floor_anchor_missing_or_deleted")
+                if current["revision"] != original["revision"]:
+                    raise ValueError("floor_anchor_version_changed")
+                data = json.loads(original["payload"])
+                if data.get("source_frame_id") != frame or data.get("T_map_camera") != pose:
+                    raise ValueError("floor_anchor_source_binding_mismatch")
+                proof.append({"keyframe_id": keyframe, "source_frame_id": frame,
+                              "native_entity_revision": original["revision"]})
+            return {"qualified_map_revision": source_revision,
+                    "resolved_map_revision": target_revision,
+                    "rule": "identical_native_keyframe_versions", "anchors": proof}
+
     def resolve_keyframes(self, map_id, samples, revision=None):
         """Resolve every exact source keyframe against one immutable map revision."""
         with self.store._lock:
