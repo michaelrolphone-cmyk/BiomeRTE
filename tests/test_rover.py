@@ -1,8 +1,7 @@
 import asyncio
-import json
-from biomerte.stream_router import frame,decode
 import unittest
 from biomerte.rover import Rover
+from biomerte.stream_router import frame as wire_frame
 
 
 class RoverOwnership(unittest.IsolatedAsyncioTestCase):
@@ -12,10 +11,10 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
         rover=Rover(Remote(),{})
         async with rover.subscribe() as first:
             async with rover.subscribe() as second:
-                message=frame({},b'fresh')
-                rover.broadcast('vision',message)
-                self.assertEqual(message,await first['vision'].get())
-                self.assertEqual(message,await second['vision'].get())
+                frame=wire_frame({'type':'frame'},b'fresh')
+                rover.broadcast('vision',frame)
+                self.assertEqual(frame,await first['vision'].get())
+                self.assertEqual(frame,await second['vision'].get())
         self.assertFalse(rover.browsers)
         self.assertTrue(rover.intent.empty())
 
@@ -36,16 +35,16 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
     async def test_slow_browser_video_does_not_backpressure_control(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(10000):rover.broadcast('vision',frame({},str(i).encode()))
+            for i in range(10000):rover.broadcast('vision',wire_frame({'sequence':i},b''))
             rover.broadcast('control',{'stage':'applied'})
-            self.assertEqual(b'9999',decode(await queues['vision'].get(),4194304)[1])
+            self.assertEqual(wire_frame({'sequence':9999},b''),await queues['vision'].get())
             self.assertEqual('applied',(await queues['control'].get())['stage'])
 
     async def test_map_revision_overflow_requests_snapshot(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(9):rover.broadcast('map',json.dumps({'type':'map_delta','map_id':'map','revision':i}))
-            self.assertEqual({'type':'snapshot_required','map_id':'map','revision':8},json.loads(await queues['map'].get()))
+            for i in range(9):rover.broadcast('map',wire_frame({'sequence':i},b''))
+            self.assertEqual('{"type": "snapshot_required"}',await queues['map'].get())
 
     async def test_fencing_polls_same_lease_and_disconnect_releases_before_retry(self):
         from unittest.mock import patch
