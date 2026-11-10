@@ -46,9 +46,9 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     from persistent_link import ControllerLink
     persistent = ControllerLink(origin, token, site_access)
 
-    def call(path, body):
+    def call(path, body, delivery_socket=None):
         if path == 'complete':
-            acknowledged = persistent.complete(body)
+            acknowledged = persistent.complete(body, delivery_socket)
             if acknowledged is not None:
                 return acknowledged
         return fetch(origin + '/bridge/' + path, body, token, timeout=45, site_access=site_access)
@@ -143,27 +143,13 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
                     value = json.loads(result['content'][0]['text'])
                     value['cluster'] = call('ha/status', {})
                     result['content'][0]['text'] = json.dumps(value)
-            call('complete', {'id': job['id'], 'lease': job['lease'], 'result': result})
+            call('complete', {'id': job['id'], 'lease': job['lease'], 'result': result},
+                 job.get('_delivery_socket'))
         except Exception as exc:
             # Keep uncertain requests reclaimable with their original identity.
             print('HA command retry: ' + type(exc).__name__, flush=True)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=settings.get('capacity', 1)) as pool:
-        active = set()
-        while True:
-            active = {future for future in active if not future.done()}
-            if len(active) >= settings.get('capacity', 1) or not status['ready']:
-                time.sleep(.1)
-                continue
-            try:
-                job = persistent.next()
-                if job is None:
-                    job = call('next', {})
-                if job.get('id'):
-                    active.add(pool.submit(process, job))
-                else:
-                    time.sleep(.05 if persistent.socket is not None else .4)
-            except Exception as exc:
-                print('HA link retry: ' + type(exc).__name__, flush=True)
-                time.sleep(2)
-
+    from controller_inbox import dispatch_loop
+    dispatch_loop(persistent, lambda: call('next', {}), process,
+                  settings.get('capacity', 1), lambda: status['ready'],
+                  lambda error: print('HA link retry: ' + type(error).__name__, flush=True))
