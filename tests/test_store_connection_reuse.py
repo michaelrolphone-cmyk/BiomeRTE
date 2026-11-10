@@ -1,9 +1,10 @@
+import gc
 import contextlib
 import sqlite3
 import tempfile
 import threading
 import unittest
-from biomerte.store import Store, _IDLE_CONNECTIONS
+from biomerte.store import Store, _IDLE_CONNECTIONS, _CONNECTIONS_LOCK
 
 
 class ConnectionReuseTests(unittest.TestCase):
@@ -101,6 +102,18 @@ class ConnectionReuseTests(unittest.TestCase):
         self.assertEqual(stores[0].execute(lambda tx: 42, read_only=True), 42)
         for store in stores:
             store.close()
+
+    def test_cyclic_store_finalization_can_reenter_idle_pool_cleanup(self):
+        other = Store(self.directory.name, 'cyclic')
+        other.cycle = [other]
+        with other.connection() as db:
+            self.assertEqual(db.execute('SELECT 1').fetchone()[0], 1)
+        del other
+        # Allocation while managing idle handles may trigger cyclic collection.
+        with _CONNECTIONS_LOCK:
+            gc.collect()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute('SELECT 1')
 
     def test_uncommitted_changes_cannot_escape_checkout(self):
         with self.store.connection() as db:

@@ -325,7 +325,7 @@ class Etcd:
         return head
 
 
-_CONNECTIONS_LOCK = threading.Lock()
+_CONNECTIONS_LOCK = threading.RLock()
 _IDLE_CONNECTIONS = []
 
 
