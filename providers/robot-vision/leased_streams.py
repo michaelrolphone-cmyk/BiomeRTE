@@ -2,6 +2,7 @@
 import asyncio
 import http.client
 import json
+import logging
 import socket
 import struct
 import threading
@@ -32,6 +33,7 @@ class VisionStreams:
         self.remote=remote
         self.socket_path=socket_path
         self.running={}
+        self.reported={}
 
     def update(self,grants):
         wanted={g['id']:g for g in grants if g['contract']=='robot.vision.stream:1'}
@@ -75,7 +77,14 @@ class VisionStreams:
                                         epoch=grant['epoch'],sequence=sequence)
                         if grant['lane']=='vision':metadata['type']='frame'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
-            except Exception:
+            except Exception as error:
+                key=(grant['id'],grant['lane'])
+                now=time.monotonic()
+                if now-self.reported.get(key,-100)>30:
+                    self.reported[key]=now
+                    response=getattr(error,'response',None)
+                    status=getattr(error,'status',getattr(response,'status_code',None))
+                    logging.warning('Vision live lane %s failed: %s status=%s',grant['lane'],type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
                 if local:local.close()
