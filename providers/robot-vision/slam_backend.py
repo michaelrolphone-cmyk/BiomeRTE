@@ -160,6 +160,8 @@ class SlamBackend:
         self._last_loop_id = 0
         self._geometry = self._geometry_summary({}, False)
         self._localization = self._empty_localization()
+        self._radio_prior = ()
+        self._last_radio_prior = ()
 
     def _empty_localization(self, frame_id=None, timestamp_s=None):
         return {
@@ -285,6 +287,7 @@ class SlamBackend:
             if self._slam is not None:
                 raise RuntimeError("Close the existing backend before starting another map")
             self._map_id = str(map_id)
+            self._radio_prior = self._last_radio_prior = ()
             self._entities = {}
             self._source_frames = {}
             self._next_frame_index = 0
@@ -374,6 +377,25 @@ class SlamBackend:
         transform = _inverse_pose(relative @ chain @ reference.Tcw())
         return transform, str(reference.id)
 
+    def set_relocalization_prior(self, keyframe_ids, *, map_id):
+        """A bounded candidate hint, never a camera pose or acceptance decision."""
+        with self._lock:
+            selected = []
+            if str(map_id) == self._map_id:
+                for identifier in keyframe_ids:
+                    if isinstance(identifier, bool):
+                        continue
+                    try:
+                        value = int(identifier)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if value < 0 or str(value) != str(identifier) or value in selected:
+                        continue
+                    selected.append(value)
+                    if len(selected) == 128:
+                        break
+            self._radio_prior = tuple(selected)
+
     def track(self, image_bgr, frame_id, timestamp_s):
         with self._lock:
             if self._slam is None:
@@ -404,6 +426,13 @@ class SlamBackend:
                     known_keyframe_ids = {str(keyframe.id) for keyframe in self._slam.map.get_keyframes()}
                 image, diagnostics = preprocess_slam_image(image, self._active_preprocessing)
                 self._preprocessing_diagnostics = {**diagnostics, "frame_id": frame_id}
+                loop = self._slam.loop_closing
+                self._last_radio_prior = tuple(
+                    identifier for identifier in self._radio_prior
+                    if str(identifier) in known_keyframe_ids)[:6]
+                if getattr(loop, "radio_relocalization_prior_version", 0) >= 1:
+                    loop.relocalization_prior_frame_ids = self._last_radio_prior
+                self._radio_prior = ()
                 self._slam.track(image, None, None, index, timestamp_s)
                 native_state = self._slam.tracking.state.name
                 self._state = {"OK": "tracking", "LOST": "lost", "RELOCALIZE": "relocalizing",
@@ -513,6 +542,14 @@ class SlamBackend:
                     "calibration": copy.deepcopy(self.config.get("calibration")),
                     "mounting": copy.deepcopy(self.config.get("mounting")),
                     "robot_extrinsics_available": False,
+                    "radio_prior": {
+                        "supported": self._slam is not None and getattr(
+                            getattr(self._slam, "loop_closing", None), "radio_relocalization_prior_version", 0) >= 1,
+                        "candidate_frame_ids": list(self._last_radio_prior),
+                        "last_native_result": copy.deepcopy(getattr(
+                            getattr(self._slam, "loop_closing", None), "last_radio_relocalization", None)) if self._slam else None,
+                        "acceptance": "unchanged_visual_geometry_with_full_visual_fallback",
+                    },
                     "preprocessing": {
                         "active": copy.deepcopy(self._active_preprocessing),
                         "loaded": copy.deepcopy(self._loaded_preprocessing),

@@ -193,6 +193,107 @@ def patch_relocalizer_membership(source):
     return replace_once(source, "            reloc_candidate_kfs = [\n                keyframes_map[idx]\n                for idx in detection_output.candidate_idxs\n                if idx in keyframes_map\n            ]  # get back the keyframes from their ids\n", "            reloc_candidate_kfs = []\n            for idx in detection_output.candidate_idxs:\n                # A keyframe can be culled while the detector process is querying.\n                candidate = keyframes_map.get(idx)\n                if candidate is not None and not candidate.is_bad():\n                    reloc_candidate_kfs.append(candidate)\n")
 
 
+# Installed verbatim after the live-keyframe eligibility snapshot. No BoW score
+# is invented for a radio hint, and the complete visual fallback stays intact.
+RADIO_RELOCALIZATION_PRIOR_BLOCK = """        # Radio supplies candidate Frame.id values only. Every accepted pose must
+        # still pass the unchanged native visual/geometric relocalizer.
+        requested_radio_ids = getattr(self, "relocalization_prior_frame_ids", ())
+        self.relocalization_prior_frame_ids = ()  # one attempt, never a sticky prior
+        eligible_radio_ids = set(eligible_keyframe_ids)
+        radio_ids = []
+        if isinstance(requested_radio_ids, (tuple, list)):
+            for candidate_id in requested_radio_ids:
+                if (type(candidate_id) is not int or candidate_id not in eligible_radio_ids
+                        or candidate_id in radio_ids):
+                    continue
+                candidate = self.keyframes_map.get(candidate_id)
+                if candidate is None or candidate.is_bad():
+                    continue
+                radio_ids.append(candidate_id)
+                if len(radio_ids) == 6:
+                    break
+        self.last_radio_relocalization = {
+            "frame_id": frame.id, "candidate_frame_ids": radio_ids,
+            "attempted": bool(radio_ids), "geometry_accepted": False,
+            "fallback_used": True, "error": None,
+        }
+        if radio_ids:
+            radio_started = time.perf_counter()
+            radio_accepted = False
+            saved_frame = None
+            saved_views = {}
+            try:
+                points = frame.points
+                outliers = frame.outliers
+                saved_frame = (
+                    frame.pose(), points, None if points is None else points.copy(),
+                    outliers, None if outliers is None else outliers.copy(),
+                    frame.kf_ref, getattr(frame, "_kd", None),
+                )
+                # Projection matching also adds transient MapPoint frame views.
+                # Record existing bindings so a failed prior cannot prevent the
+                # same visual match during the complete DBoW fallback.
+                for candidate_id in radio_ids:
+                    candidate = self.keyframes_map.get(candidate_id)
+                    if candidate is None or candidate.is_bad():
+                        continue
+                    for point in candidate.get_matched_points():
+                        if point is not None and point not in saved_views:
+                            saved_views[point] = point.get_frame_view_idx(frame)
+                radio_output = LoopDetectorOutput(
+                    task_type, candidate_idxs=radio_ids, candidate_scores=[],
+                    frame_id=frame.id,
+                )
+                radio_accepted = bool(self.relocalizer.relocalize(
+                    frame, radio_output, self.keyframes_map
+                ))
+            except Exception as error:
+                # This optional pass cannot suppress ordinary visual recovery.
+                self.last_radio_relocalization["error"] = type(error).__name__
+                LoopClosing.print(
+                    f"Relocalization radio prior failed on frame {frame.id}: "
+                    f"{type(error).__name__}"
+                )
+            finally:
+                if not radio_accepted and saved_frame is not None:
+                    try:
+                        for point, previous_index in saved_views.items():
+                            if previous_index < 0 and point.get_frame_view_idx(frame) >= 0:
+                                point.remove_frame_view(frame)
+                    except Exception as error:
+                        self.last_radio_relocalization["error"] = (
+                            "frame_view_restore:" + type(error).__name__
+                        )
+                        LoopClosing.print(
+                            f"Relocalization radio frame-view cleanup failed: {type(error).__name__}"
+                        )
+                    finally:
+                        pose, points, points_copy, outliers, outliers_copy, reference, kd = saved_frame
+                        if points is not None:
+                            points[:] = points_copy
+                        if outliers is not None:
+                            outliers[:] = outliers_copy
+                        frame.points, frame.outliers, frame.kf_ref, frame._kd = points, outliers, reference, kd
+                        frame.update_pose(pose)
+            self.last_radio_relocalization["geometry_accepted"] = radio_accepted
+            self.last_radio_relocalization["fallback_used"] = not radio_accepted
+            self.last_radio_relocalization["elapsed_s"] = time.perf_counter() - radio_started
+            LoopClosing.print(
+                f"Relocalization radio prior: candidates={radio_ids}, "
+                f"geometry_accepted={radio_accepted}, fallback={not radio_accepted}"
+            )
+            if radio_accepted:
+                return True
+"""
+
+
+def patch_radio_relocalization_prior(source):
+    source = replace_once(source, "class LoopClosing:\n",
+        "class LoopClosing:\n    radio_relocalization_prior_version = 1\n")
+    marker = "        task = LoopDetectorTask(\n            frame, img, task_type, covisible_keyframes=[], connected_keyframes=[],\n"
+    return replace_once(source, marker, RADIO_RELOCALIZATION_PRIOR_BLOCK + marker)
+
+
 def patch_loop_viewer(source):
     source = replace_once(source, "from pyslam.viz.qimage_thread import QimageViewer\n", "")
     source = replace_once(source,
@@ -206,7 +307,9 @@ def patch_loop_viewer(source):
         "        if self.headless:\n            return\n"
         "        from pyslam.viz.qimage_thread import QimageViewer\n"
         "        draw = False")
-    return patch_loop_relocalization_context(patch_headless_image_cache(source))
+    return patch_radio_relocalization_prior(
+        patch_loop_relocalization_context(patch_headless_image_cache(source))
+    )
 
 
 
@@ -366,7 +469,7 @@ class Installer:
                                         if name.endswith("/frame.py") else
                                         "Keep optional dense/GUI imports lazy and preserve headless mode on restore."
                                         if name.endswith("/slam.py") else
-                                        "Keep headless visualization images out of checkpoints and snapshot live native keyframe IDs for relocalization."
+                                        "Keep headless checkpoints small, filter live relocalization candidates, and try radio candidate hints through unchanged geometry before full visual fallback."
                                         if name.endswith("/loop_closing.py") else
                                         "Carry an immutable snapshot of eligible native keyframe IDs to the loop detector process."
                                          if name.endswith("/loop_detector_base.py") else

@@ -24,6 +24,8 @@ from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
 from vision_store import VisionStore
 from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
+from radio_tracking import RadioTracking
+from camera_telemetry import CameraHTTPError
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
@@ -31,6 +33,8 @@ CAPABILITIES = [
     "robot.map.read", "robot.map.changes", "robot.map.checkpoint",
     "robot.map.create", "robot.map.open", "robot.vision.calibration",
     "robot.vision.project_ground",
+    "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
+    "robot.camera.light.status", "robot.camera.light.set",
 ] + METRIC_CAPABILITIES
 LOG = logging.getLogger("robot-vision")
 
@@ -44,7 +48,8 @@ def unknown_localization(reason):
 
 
 class VisionService:
-    def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None):
+    def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
+                 radio_source=None, radio_model=None):
         self.config = copy.deepcopy(config)
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +57,8 @@ class VisionService:
         self.store = VisionStore(self.state_dir / "observations",
                                  max_observations=int(config.get("max_observations", 300)))
         self.camera = camera or CameraSource(config["camera"])
+        self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
+                                   source=radio_source, model=radio_model)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -183,6 +190,7 @@ class VisionService:
                 atomic_json(self.state_dir / "runtime.json",
                             {"map_id": prior_map, "calibration_id": prior_calibration["calibration_id"]})
                 self._lifecycle_state = "running"
+                self._reset_radio_context()
             raise
         self.backend = backend
         self.map_id, self.revision = map_id, revision
@@ -194,6 +202,22 @@ class VisionService:
         self._last_geometry = {}
         self._last_checkpoint_revision = None
         self._lifecycle_state = "running"
+        self._reset_radio_context()
+
+    def _radio_keyframes(self, map_id, revision=None):
+        keyframes, cursor = {}, None
+        while True:
+            page = self.store.read_map(map_id, revision=revision, kinds=["keyframe"],
+                                       cursor=cursor, limit=500)
+            for entity in page["entities"]:
+                keyframes[str(entity["entity_id"])] = copy.deepcopy(entity["data"])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return keyframes
+
+    def _reset_radio_context(self):
+        self.radio.set_context(self.map_id, self.calibration["calibration_id"],
+                               self._radio_keyframes(self.map_id, self.revision), self.revision)
 
     def _start_backend_and_session(self):
         self._activate_map(self.map_id, self.revision, self.calibration)
@@ -209,6 +233,7 @@ class VisionService:
 
     def start(self):
         self.metric.start_worker()
+        self.radio.start()
         self.camera.start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
@@ -275,6 +300,8 @@ class VisionService:
                 self.map_id, self.revision, self._pending_changes, reason=reason,
                 metadata={"session_id": self.session_id})
             self.revision = update["revision"] if isinstance(update, dict) else int(update)
+            self.radio.update_geometry(self.map_id, self.calibration["calibration_id"],
+                                       self._pending_changes, self.revision)
             self._pending_changes.clear()
 
     def process_frame(self, captured):
@@ -285,6 +312,11 @@ class VisionService:
                  "encoding_origin": "jpeg_reencoded_from_this_decoded_frame",
                  "receive_decode_monotonic_s": captured.decoded_monotonic}
         frame_id = frame["frame_id"]
+        gray = cv2.cvtColor(captured.image, cv2.COLOR_BGR2GRAY)
+        mean_luma = float(gray.mean())
+        frame["lighting"] = {"mean_luma_0_255": mean_luma, "low_light_observed": mean_luma < 35.0,
+                             "assessment": "image_brightness_not_measured_illumination",
+                             "light_control_operation": "robot.camera.light.set"}
         ok, encoded = cv2.imencode(".jpg", captured.image, [cv2.IMWRITE_JPEG_QUALITY, 90])
         if not ok:
             raise RuntimeError("frame_encoding_failed")
@@ -302,6 +334,9 @@ class VisionService:
                       "map_changes": []}
         else:
             try:
+                if hasattr(self.backend, "set_relocalization_prior"):
+                    self.backend.set_relocalization_prior(
+                        self.radio.prior(now_s=captured.decoded_monotonic), map_id=self.map_id)
                 result = self.backend.track(captured.image, frame_id, captured.decoded_monotonic)
             except Exception as exc:
                 self.backend.invalidate_tracking("backend_track_error")
@@ -346,6 +381,7 @@ class VisionService:
             "dropoffs": {"availability": "unavailable", "reason": "not_estimated"},
             "metric_depth": {"availability": "unavailable", "reason": "no_metric_depth_sensor_or_qualified_scale"},
             "robot_velocity": {"availability": "unavailable", "reason": "no_continuous_metric_odometry"},
+            "radio": self.radio.evidence(localization, now_s=captured.decoded_monotonic),
         }
         frame["processing_complete_time"] = utc_now()
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
@@ -360,6 +396,7 @@ class VisionService:
             self.store.pin_frame(frame_id, f"keyframe:{self.map_id}:{anchor['keyframe_id']}")
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
             self._commit_changes([semantic_change], "semantic_observation")
+        self.radio.record_pose(frame, localization)
         try:
             self.metric.offer(snapshot)
         except Exception as exc:
@@ -499,6 +536,32 @@ class VisionService:
         inputs = inputs or {}
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
+        if operation == "robot.radio.status":
+            return self.radio.status(include_observations=inputs.get("include_observations") is True)
+        if operation == "robot.radio.localize":
+            return self.radio.prediction()
+        if operation == "robot.map.radio.read":
+            map_id = inputs.get("map_id", self.map_id)
+            revision = inputs.get("revision")
+            info = self.store.read_map(map_id, revision=revision, kinds=["keyframe"], limit=1)["map"]
+            calibration_id = info.get("metadata", {}).get("calibration_id")
+            result = self.radio.read_map(
+                map_id, calibration_id, self._radio_keyframes(map_id, info["revision"]),
+                cursor=inputs.get("cursor"), limit=inputs.get("limit", 100),
+                source_id=inputs.get("source_id"))
+            return {**result, "map_id": map_id, "map_revision": info["revision"],
+                    "calibration_id": calibration_id, "units": "arbitrary",
+                    "clock_qualification": "approximate_host_receive_alignment"}
+        if operation in ("robot.camera.light.status", "robot.camera.light.set"):
+            try:
+                state = (self.radio.source.set_light(inputs) if operation.endswith(".set")
+                         else self.radio.source.light_status())
+                return {"availability": "available", "camera_light": state,
+                        "physical_verification": "use_reported_hardware_verified_and_optical_readback",
+                        "motion_commands": False}
+            except CameraHTTPError as exc:
+                return {"availability": "unavailable", **exc.as_dict(),
+                        "motion_commands": False}
         if operation in METRIC_CAPABILITIES:
             return self.metric.query(operation, inputs, map_id=self.map_id,
                                      calibration_id=self.calibration["calibration_id"])
@@ -521,7 +584,9 @@ class VisionService:
                                 "errors": calibration_errors(self.calibration)},
                 "metric_scale": self.metric.attachment_status(self.map_id),
                 "metric_calibration": self.metric.status(map_id=self.map_id),
-                "control": {"motion_commands": False, "brain": "external"},
+                "radio": self.radio.status(),
+                "control": {"motion_commands": False, "brain": "external",
+                            "camera_light": "explicit_authenticated_camera_api"},
             }
         if operation == "robot.vision.metadata":
             return {
@@ -538,7 +603,14 @@ class VisionService:
                     "robot": "unavailable until rigid camera-to-robot extrinsics are supplied"},
                 "time": {"capture": "unknown", "source_media": "relative clock",
                          "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations"},
-                "map_layers": ["keyframe", "sparse_point", "semantic_observation"],
+                "map_layers": ["keyframe", "sparse_point", "semantic_observation", "radio_fingerprint"],
+                "map_layer_readers": {"radio_fingerprint": "robot.map.radio.read"},
+                "radio_model": {"learning": "time_aligned_independently_verified_visual_poses",
+                                "inference": "adaptive_source_distributions_and_competing_spatial_modes",
+                                "visual_relocalization": "candidate_prior_with_unchanged_geometry_and_visual_fallback",
+                                "clock_qualification": "approximate_host_receive_alignment",
+                                "navigation_usable": False, "heading_available": False,
+                                "storage": "bounded_radio_sqlite_outside_vision_checkpoint_packages"},
                 "unknown_space_rule": "No detection or sparse point is not proof of free space.",
                 "identity_rule": "Tracker IDs are local to one tracker epoch, not durable object identities.",
                 "restart_rule": "New session; reuse map checkpoint; current pose requires fresh relocalization.",
@@ -651,6 +723,10 @@ class VisionService:
         self.camera.close()
         if self._thread:
             self._thread.join()
+        try:
+            self.radio.close()
+        except Exception:
+            LOG.exception("Radio shutdown failed; continuing vision shutdown")
         self.metric.close()
         with self._pipeline_lock:
             try:

@@ -44,6 +44,17 @@ def contract_definitions():
          "Localization and spatial evidence with explicit availability, quality and unknown coverage."),
         ("robot.vision.metadata", {}, "Source, calibration, implementation and coordinate metadata."),
         ("robot.vision.status", {}, "Camera, transport, decoding, inference and provider health."),
+        ("robot.radio.status", {"include_observations": field("bool")},
+         "Cached camera radio telemetry, model learning, freshness and coarse localization health."),
+        ("robot.radio.localize", {},
+         "Current radio location hypotheses; heuristic support only, not a visual pose or navigation permission."),
+        ("robot.map.radio.read", {"map_id": field("str"), "revision": field("int"),
+                                  "cursor": field("str"), "limit": field("int"), "source_id": field("str")},
+         "Bounded learned Wi-Fi/BLE signal distributions resolved through current or revision-pinned map anchors."),
+        ("robot.camera.light.status", {},
+         "Read authenticated camera light command/driver state; physical readback remains as reported."),
+        ("robot.camera.light.set", {"on": field("bool"), "brightness": field("int"), "rgb": field("list")},
+         "One-shot partial camera light update: on, brightness 0..255, rgb three bytes; inspect unknown outcomes before retry."),
         ("robot.map.read", {"map_id": field("str"), "revision": field("int"),
                            "bounds": field("obj"), "kinds": field("list"),
                            "cursor": field("str"), "limit": field("int")},
@@ -101,6 +112,7 @@ CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
 
 MUTATING_CONTRACTS = frozenset({
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
+    "robot.camera.light.set:1",
     "robot.vision.calibration:1",
     "robot.map.scale.start:1", "robot.map.scale.capture:1", "robot.map.scale.fit:1",
     "robot.map.scale.apply:1", "robot.map.scale.cancel:1", "robot.map.scale.reference:1",
@@ -470,7 +482,8 @@ def main(argv=None):
         output = execute(action, cfg, Remote(cfg))
     except ServiceError as exc:
         error = {"code": exc.code, "message": exc.message}
-        if exc.code == "service_unavailable" and args.contract in MUTATING_CONTRACTS:
+        if (exc.code in ("service_unavailable", "invalid_response", "response_too_large")
+                and args.contract in MUTATING_CONTRACTS):
             error.update(effect="unknown", next_action="Inspect current state before a new mutation request.")
         # A handled query error is a completed transport operation. The shared Worker
         # reserves nonzero exits for genuinely uncertain adapter execution.

@@ -156,12 +156,16 @@ class ScaleContractTests(unittest.TestCase):
         cls.fault = Fault
 
     def test_original_thirteen_v1_contracts_are_immutable(self):
+        extensions = self.NEW_CONTRACTS | {
+            "robot.radio.status:1", "robot.radio.localize:1", "robot.map.radio.read:1",
+            "robot.camera.light.status:1", "robot.camera.light.set:1",
+        }
         legacy = {name: spec for name, spec in adapter.CONTRACTS.items()
-                  if name not in self.NEW_CONTRACTS}
+                  if name not in extensions}
         self.assertEqual(len(legacy), 13)
         encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), "c8f552dc9a2ca49d35f641e4f5dc0c729a84bcbe13195da5aeac64207c540189")
-        self.assertEqual(set(adapter.CONTRACTS) - set(legacy), self.NEW_CONTRACTS)
+        self.assertEqual(set(adapter.CONTRACTS) - set(legacy), extensions)
 
     def valid_inputs(self):
         return {
@@ -449,7 +453,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 21)
+        self.assertEqual(len(offers), 26)
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])
