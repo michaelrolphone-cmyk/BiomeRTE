@@ -13,6 +13,7 @@ import os
 import sqlite3
 import ssl
 import sys
+import weakref
 import threading
 import time
 import uuid
@@ -324,6 +325,11 @@ class Etcd:
         return head
 
 
+def _close_connections(connections):
+    while connections:
+        connections.pop().close()
+
+
 class Store:
     def __init__(self, directory, realm, remote=None):
         mkdir(directory)
@@ -331,6 +337,7 @@ class Store:
         self.remote = remote
         self._connections = []
         self._connections_lock = threading.Lock()
+        self._connection_finalizer = weakref.finalize(self, _close_connections, self._connections)
         self._writer_diagnostic = None
         self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
@@ -440,7 +447,8 @@ class Store:
     def close(self):
         """Release idle connections; checked-out operations retain ownership."""
         with self._connections_lock:
-            idle, self._connections = self._connections, []
+            idle = self._connections[:]
+            self._connections[:] = []
         for db in idle:
             db.close()
 

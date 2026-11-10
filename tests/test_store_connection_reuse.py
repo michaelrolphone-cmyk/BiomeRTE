@@ -83,6 +83,14 @@ class ConnectionReuseTests(unittest.TestCase):
         self.assertEqual(self.store._connections, [])
         self.assertEqual(self.store.execute(lambda tx: 42, read_only=True), 42)
 
+    def test_store_disposal_closes_idle_handles_even_when_connection_is_referenced(self):
+        other = Store(self.directory.name, 'disposable')
+        with other.connection() as db:
+            self.assertEqual(db.execute('SELECT 1').fetchone()[0], 1)
+        del other
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute('SELECT 1')
+
     def test_uncommitted_changes_cannot_escape_checkout(self):
         with self.store.connection() as db:
             db.execute('BEGIN IMMEDIATE')
