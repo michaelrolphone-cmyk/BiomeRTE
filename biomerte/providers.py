@@ -40,7 +40,9 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
     definition = tx.need('contracts', contract)
-    configuration = dict(configuration or {})
+    key = digest([provider, contract, resource])
+    previous = tx.get('offers', key, {})
+    configuration = dict(previous.get('configuration', {}) if configuration is None else configuration)
     if lease_class:
         configuration['lease_class'] = lease_class
     configuration = lifecycle.configuration(configuration, provider in ('builtin', 'routine'))
@@ -452,7 +454,9 @@ def claim(tx, ctx, provider, operation, generation):
         now = time.time()
         cfg = lifecycle.policy(tx, l)
         a.update(state='claimed', claimed_at=now, last_progress_at=now, watch_until=now + cfg['watch_ttl_seconds'])
-        l.update(watch_until=a['watch_until'], last_progress_at=now, missed_heartbeats=0)
+        from .resource_recovery import protected
+        l.update(watch_until=a['watch_until'], last_progress_at=now, missed_heartbeats=0,
+                 execution_custody=protected(tx,l))
         tx.put('leases', l['id'], l)
         tx.put('actions', operation, a)
         observe(tx, operation, 'claimed')
@@ -463,12 +467,36 @@ def claim(tx, ctx, provider, operation, generation):
 def result(tx, ctx, provider, operation, generation, state, result):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
-    if a['state'] == 'abandoned':
-        raise Fault('Superseded generation', 409)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
         raise Fault('Unknown outcome')
+    if a['state'] == 'abandoned':
+        # A signed completion is still evidence after its lease was superseded.
+        # Preserve abandonment and never rebind a guard, release a newer lease,
+        # or emit the success event used by ordinary workflow continuations.
+        if a['contract'] not in ('host.terminal.run:1', 'docker.cli:1') or state not in ('succeeded', 'failed'):
+            raise Fault('Superseded generation', 409)
+        if a.get('execution_state'):
+            if a['execution_state'] == state and (
+                    a.get('result') == result or
+                    (a.get('result_expired') and a.get('result_digest') == digest(result))):
+                return a
+            raise Fault('Conflicting late execution outcome', 409)
+        if state == 'succeeded':
+            validate(tx.need('contracts', a['contract'])['outputs'], result)
+        a.update(execution_state=state, reconciled_at=time.time(),
+                 abandonment_result=a.get('result', {}))
+        if a.get('result_expired'):
+            # Preserve the established output-expiry boundary: retain the new
+            # receipt digest without restoring discarded bulk result payloads.
+            a['result_digest'] = digest(result)
+        else:
+            a['result'] = result
+        tx.put('actions', operation, a)
+        tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
+                                       'state': 'abandoned'})
+        return a
     if a.get('result_expired'):
         if a['state'] == state and a.get('result_digest') == digest(result):
             return a  # exact lost-ACK redelivery, no effects or payload restoration
@@ -480,9 +508,22 @@ def result(tx, ctx, provider, operation, generation, state, result):
     lifecycle.current(tx, a)
     if a['state'] not in ('claimed', 'uncertain'):
         raise Fault('Operation has not been claimed', 409)
+    if state in ('succeeded', 'failed'):
+        from .resource_recovery import protected
+        held = tx.need('leases', a['lease'])
+        proof = a.get('execution_reconciliation', {})
+        if protected(tx, held) and not (
+                a.get('custody', {}).get('state') in ('finished', 'not_started') or
+                result.get('evidence', {}).get('quiescent') is True or
+                (proof.get('quiescent') is True and proof.get('result_digest') == digest(result))):
+            raise Fault('Executor settlement proof required before resource release', 409)
     if state == 'succeeded':
         validate(tx.need('contracts', a['contract'])['outputs'], result)
     a.update(state=state, result=result)
+    a.pop('recovery', None)
+    lease = tx.get('leases', a['lease'])
+    if lease and lease.pop('recovery_required', None):
+        tx.put('leases', lease['id'], lease)
     tx.put('actions', operation, a)
     from .authorization import observe
     observe(tx, operation, state, result)
@@ -591,3 +632,7 @@ def settle_submissions(tx, ctx):
     if recover_reservations(tx, ctx):
         promote(tx, ctx)
 
+
+
+# Register explicit ownership and proof-backed execution reconciliation APIs.
+from . import resource_recovery

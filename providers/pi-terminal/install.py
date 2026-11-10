@@ -92,7 +92,7 @@ def main():
     controller.call('peer.trust', {'public_key': provider['public_key'],
                     'label': socket.gethostname() + ' terminal',
                     'scopes': ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim',
-                               'provider.result', 'cap.status', 'artifact.put', 'cap.command.state', 'agent.progress', 'cap.heartbeat',
+                               'provider.result', 'provider.reconcile', 'provider.custody', 'cap.heartbeat', 'cap.command.state', 'agent.progress', 'cap.status', 'artifact.put', 'cap.command.state', 'agent.progress', 'cap.heartbeat',
                                'offer:' + CONTRACT, 'resource:' + resource]})
 
     manifest = os.path.join(home, 'manifest.json')
@@ -108,7 +108,7 @@ def main():
     # Jessie systemd needs the first ExecStart token to be an unquoted absolute path.
     cmd = [os.path.join(checkout, 'biome'), '--home', home, 'worker', manifest]
     body = ['[Unit]', 'Description=BiomeRTE Pi terminal provider', 'After=biomerte.service',
-            'Wants=biomerte.service', '[Service]', 'User=' + account.pw_name, 'UMask=0077',
+            'Wants=biomerte.service', '[Service]', 'KillMode=process', 'User=' + account.pw_name, 'UMask=0077',
             'ExecStart=/usr/bin/env ' + ' '.join(quote(s) for s in cmd),
             'Restart=always', 'RestartSec=3', '[Install]', 'WantedBy=multi-user.target', '']
     path = os.path.join(home, unit)

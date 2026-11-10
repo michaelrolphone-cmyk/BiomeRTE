@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import uuid
 import os
 import socket
 import sys
@@ -72,8 +73,8 @@ def store_stream(path, remote, chunk_bytes=256 * 1024):
             if not chunks:
                 preview = block[:4096]
             sha = hashlib.sha256(block).hexdigest()
-            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'ttl_seconds': 900},
-                                  'terminal-chunk-' + sha)
+            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'transient': True},
+                                  'terminal-transient-chunk-' + str(uuid.uuid4()))
             if receipt != {'sha256': sha, 'size': len(block)}:
                 raise IOError('Artifact receipt mismatch')
             chunks.append(receipt)

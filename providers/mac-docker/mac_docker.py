@@ -28,8 +28,11 @@ class Remote:
     def __init__(self, cfg):
         self.node = cfg['provider']
         self.site = cfg['site']
+        self.controller = cfg.get('controller')
 
     def call(self, name, args, rid=None):
+        if self.controller:
+            return gateway.invoke('controller.invoke', dict(controller=self.controller, operation=name, arguments=args), rid, self.realm)
         return gateway.invoke(name, args, rid, self.realm)
 
 
@@ -39,7 +42,8 @@ def offer(cfg, state):
                         'continue running after the CLI returns and the lease is released.'
                         % (cfg['host'], cfg['slots']))
     return dict(provider=cfg['provider'], contract=CONTRACT, resource=cfg['resource'],
-                service='docker-cli', capacity=cfg['slots'], state=state, usage=guide)
+                service='docker-cli', capacity=cfg['slots'], state=state, usage=guide,
+                configuration={'execution_custody': True})
 
 
 def daemon_ready(cfg):
@@ -122,6 +126,8 @@ def install():
     cfg = dict(site=site, provider=provider, resource='docker.mac.' + node[:20], host=socket.gethostname(),
                executable=args.executable, socket=args.socket, slots=args.slots, chunk_bytes=48*1024,
                desktop=not args.external_engine)
+    if prior.get('controller'):
+        cfg['controller'] = prior['controller']
     for key in ('spool', 'client_config', 'workspace'):
         directory = STATE / key
         directory.mkdir(mode=0o700, exist_ok=True)
@@ -164,7 +170,8 @@ if __name__ == '__main__':
     else:
         cfg = json.loads((STATE / 'manifest.json').read_text())
         if sys.argv[1] == 'execute':
-            json.dump(execute(cfg, json.load(sys.stdin)['inputs'], Remote(cfg)), sys.stdout)
+            request = json.load(sys.stdin)
+            json.dump(execute(cfg, request['inputs'], Remote(cfg), request.get('progress_path')), sys.stdout)
         elif sys.argv[1] == 'serve':
             serve(cfg)
         else:

@@ -10,6 +10,8 @@ RETENTION = 900
 
 def configuration(value, builtin=False):
     value = dict(value or {})
+    if 'execution_custody' in value and type(value['execution_custody']) is not bool:
+        raise Fault('Execution custody must be boolean')
     cls = value.setdefault('lease_class', 'persistent' if builtin else 'command')
     if cls not in ('persistent', 'command', 'long_command'):
         raise Fault('Invalid lease class')
@@ -132,6 +134,11 @@ def settled(tx, action, now=None):
 def abandon(tx, ctx, lease, reason, now):
     if lease['state'] == 'released':
         return False
+    from .resource_recovery import protected, hold
+    if protected(tx, lease):
+        held = hold(tx, lease, reason, now)
+        if held is not None:
+            return held
     guard = tx.need('guards', lease['guard'])
     if (guard['holder'], guard['generation']) != (lease['id'], lease['generation']):
         return False
