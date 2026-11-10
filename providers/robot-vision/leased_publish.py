@@ -7,6 +7,8 @@ import threading
 
 
 def packet(metadata, image=b''):
+    from stream_telemetry import bounded_metadata
+    metadata = bounded_metadata(metadata)
     raw=json.dumps(metadata,separators=(',',':'),allow_nan=False).encode()
     value=struct.pack('!I',len(raw))+raw+image
     return struct.pack('!I',len(value))+value
