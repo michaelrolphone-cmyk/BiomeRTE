@@ -127,3 +127,25 @@ matching frames for multiple viewers, viewer detach/reconnect, slow consumers,
 map-gap recovery, authoritative revocation and fresh provider-applied control
 acknowledgements. Report processing-to-observer age separately from unknown
 camera-capture age and physical-contact timing.
+
+## Provider presence and control readiness
+
+Enable peer_status: true on a router paired with a Rover runtime configured with
+require_provider_ready=True. This opt-in protocol sends bound stream_status
+messages to the server control lane on provider attach/detach. Older router/client
+combinations retain their existing protocol until upgraded together.
+
+The Mac Rover service enables this mode whenever its private local-router URL is
+configured. Its installer verifies runtime support before replacing a running
+service. A connected server socket alone does not make controls ready: both the
+authenticated provider and server peers must be attached. Provider loss clears
+queued intent and disables input. Reattachment requires fresh input and cannot
+replay an old desired state. The server still retains its native resource lease;
+browser connections never own that lease.
+
+Private router health reports role/lane peer counts by issuing authority and a
+bounded list of recent failure classifications. Optional diagnostic_log uses
+rotating one-MiB files with one backup. Diagnostic records contain static reason
+codes, exception class/status and grant identity, excluding credentials, payloads
+and exception text. Transport readiness remains distinct from a provider-applied
+acknowledgment, and applied output remains distinct from physical contact feedback.
