@@ -54,7 +54,7 @@ class Rover:
             if inbox.full():
                 if lane == 'map':
                     while not inbox.empty():inbox.get_nowait()
-                    inbox.put_nowait(json.dumps({'type':'snapshot_required'}))
+                    inbox.put_nowait(json.dumps(dict(type='snapshot_required', **(self.map_head or {}))))
                     continue
                 inbox.get_nowait()
             inbox.put_nowait(message)
@@ -161,7 +161,7 @@ class Rover:
                 task=asyncio.create_task(send())
             else:
                 task=None
-            try:
+            async def receive():
                 revision=None
                 async for message in socket:
                     if lane=='map':
@@ -171,12 +171,18 @@ class Rover:
                                                            'revision':metadata.get('revision')}))
                         revision=metadata.get('revision')
                     self.broadcast(lane,message)
+            reader=asyncio.create_task(receive())
+            tasks=[reader]+([task] if task else [])
+            try:
+                # Observe both directions: a dead sender cannot stay ready.
+                done,pending=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
+                for completed in done:completed.result()
             finally:
                 if task:
                     self.control_ready=False
                     self.discard_intent()
-                    task.cancel()
-                    await asyncio.gather(task,return_exceptions=True)
+                for pending in tasks:pending.cancel()
+                await asyncio.gather(*tasks,return_exceptions=True)
         raise ConnectionError('Stream disconnected')
 
     async def start(self):
