@@ -11,12 +11,23 @@ import time
 
 class LocalConnection(http.client.HTTPConnection):
     def __init__(self,path):
-        super().__init__('localhost',timeout=2)
+        super().__init__('localhost',timeout=None)
+        self.stream_socket=None
         self.path=path
     def connect(self):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-        self.sock.settimeout(2)
+        self.sock.settimeout(None)
+        self.stream_socket=self.sock
         self.sock.connect(self.path)
+
+    def abort(self):
+        # HTTP/1.0 getresponse() clears self.sock while its response body still
+        # owns the descriptor. Retain that socket so lease loss can interrupt
+        # an otherwise valid idle stream read.
+        if self.stream_socket is not None:
+            try:self.stream_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:pass
+        self.close()
 
 
 def exact(source,size):
@@ -36,6 +47,7 @@ class VisionStreams:
         self.socket_path=socket_path
         self.running={}
         self.reported={}
+        self.connections={}
 
     def update(self,grants):
         wanted={g['id']:g for g in grants if g['contract']=='robot.vision.stream:1'}
@@ -43,6 +55,8 @@ class VisionStreams:
         for id,(stop,thread) in list(self.running.items()):
             if id not in wanted:
                 stop.set()
+                connection=self.connections.get(id)
+                if connection:connection.abort()
                 if not thread.is_alive():self.running.pop(id,None)
         for id,grant in wanted.items():
             if id in self.running and self.running[id][1].is_alive():continue
@@ -55,8 +69,10 @@ class VisionStreams:
         from websockets.asyncio.client import connect
         from biomerte.stream_router import decode,frame
         sequence=0
+        key=grant['id']+':'+grant['lane']
         while not stop.is_set():
             local=None
+            response=None
             stage='attachment'
             try:
                 descriptor=await asyncio.to_thread(self.remote.call,'stream.attach',{'session':grant['id'],'role':'provider'})
@@ -65,7 +81,10 @@ class VisionStreams:
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
                 async with connect(url+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
                     stage='local_feed'
+                    if stop.is_set():return
                     local=LocalConnection(self.socket_path)
+                    self.connections[key]=local
+                    if stop.is_set():return
                     await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))
                     response=await asyncio.to_thread(local.getresponse)
                     if response.status!=200:raise RuntimeError('live_feed_unavailable')
@@ -86,18 +105,21 @@ class VisionStreams:
                         stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:
-                key=grant['lane']
+                report_key=grant['lane']
                 now=time.monotonic()
-                if now-self.reported.get(key,-100)>30:
-                    self.reported[key]=now
-                    response=getattr(error,'response',None)
-                    status=getattr(error,'status',getattr(response,'status_code',None))
+                if now-self.reported.get(report_key,-100)>30:
+                    self.reported[report_key]=now
+                    error_response=getattr(error,'response',None)
+                    status=getattr(error,'status',getattr(error_response,'status_code',None))
                     logging.warning('Vision live lane %s stage=%s failed: %s status=%s',grant['lane'],stage,type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
-                if local:local.close()
+                if response is not None:response.close()
+                if local:local.abort()
+                if self.connections.get(key) is local:self.connections.pop(key,None)
 
     def close(self):
         for stop,thread in self.running.values():stop.set()
+        for connection in list(self.connections.values()):connection.abort()
         for stop,thread in self.running.values():thread.join()
         self.running.clear()
