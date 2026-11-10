@@ -128,3 +128,24 @@ class BoundedLifecycle(unittest.TestCase):
                     {'heartbeat_interval_seconds': 0}, {'missed_heartbeats_limit': 1.2}):
             with self.assertRaises(Fault):
                 self.call('cap.offer', provider='test', contract='sample:1', resource='slot', configuration=cfg)
+
+    def test_recovery_uses_active_state_and_expiry_indexes_not_historical_bodies(self):
+        from biomerte.store import Records
+        from biomerte.api import Context
+        from biomerte.providers import recover_reservations
+        lease, action = self.action()
+        def seed(tx):
+            for i in range(25000):
+                tx.put('actions','history-%05d'%i,dict(id='history-%05d'%i,lease='old',
+                    generation=1,state='succeeded',result={'large_history':'historical'},expires_at=20000))
+        self.app.stores['site'].execute(seed)
+        original = Records.rows
+        def no_history(tx, kind):
+            if kind in ('actions','leases','guards','events','runs','artifacts','_receipt'):
+                raise AssertionError('Recovery decoded complete historical '+kind)
+            return original(tx,kind)
+        self.now += 121
+        with patch.object(Records,'rows',no_history):
+            recovered = self.app.stores['site'].execute(lambda tx:recover_reservations(tx,Context(self.app)))
+        self.assertEqual(1,recovered)
+        self.assertEqual('abandoned',self.call('cap.status',operation='one')['state'])

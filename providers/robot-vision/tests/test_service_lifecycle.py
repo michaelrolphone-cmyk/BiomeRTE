@@ -47,6 +47,8 @@ class ParentLifecycleTests(unittest.TestCase):
 
         class Service:
             def __init__(self, *_args):
+                self.live_frames=types.SimpleNamespace(close=lambda:events.append("live_frames_closed"))
+                self.live_maps=types.SimpleNamespace(close=lambda:events.append("live_maps_closed"))
                 events.append("initialized")
                 if lose_parent_during_init:
                     parent[0] = 1
@@ -94,6 +96,8 @@ class ParentLifecycleTests(unittest.TestCase):
     def test_direct_service_runs_without_parent_monitor(self):
         events = self.run_service(native_parent=False)
         self.assertIn("started", events)
+        self.assertLess(events.index("live_frames_closed"),events.index("api_closed"))
+        self.assertLess(events.index("live_maps_closed"),events.index("api_closed"))
         self.assertEqual(events[-1], "closed")
 
     def test_live_native_parent_allows_start_and_ordinary_shutdown(self):

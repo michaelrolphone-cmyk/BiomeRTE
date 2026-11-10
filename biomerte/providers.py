@@ -143,7 +143,7 @@ def capacity_of(tx, offer):
 
 
 def active_on(tx, resource):
-    return [l for l in tx.rows('leases') if l['resource'] == resource and l['state'] in ('fencing', 'bound')]
+    return [l for l in tx.matching('leases', ('fencing', 'bound')) if l['resource'] == resource]
 
 
 def reservation_policy(tx, lease):
@@ -160,20 +160,16 @@ def touch_reservation(tx, lease):
 
 def recover_reservations(tx, ctx):
     now = time.time()
-    actions = {}
-    for action in tx.rows('actions'):
-        actions.setdefault(action['lease'], []).append(action)
     recovered = 0
-    for lease in tx.rows('leases'):
-        if lease['state'] not in ('bound', 'fencing'):
-            continue
-        if lifecycle.recover(tx, ctx, lease, actions.get(lease['id'], []), now):
+    for lease in tx.matching('leases', ('bound', 'fencing')):
+        lease_actions = tx.matching('actions', lease=lease['id'])
+        if lifecycle.recover(tx, ctx, lease, lease_actions, now):
             recovered += 1
             continue
         policy = reservation_policy(tx, lease)
         if not policy:
             continue
-        work = [a for a in actions.get(lease['id'], []) if a['generation'] == lease['generation']]
+        work = [a for a in lease_actions if a['generation'] == lease['generation']]
         if any(a['state'] not in lifecycle.TERMINAL for a in work):
             continue
         # Combined submissions retain enough information to repair dispatch.
@@ -312,7 +308,7 @@ def fenced(tx, ctx, provider, lease, generation):
     """Acknowledge durable installation of the fence at the actual enforcement point."""
     executor(tx, ctx, provider)
     l = tx.need('leases', lease)
-    guard = tx.need('guards', l['guard'])
+    guard = tx.get('guards', l['guard'], {'holder':'','generation':0})
     if l['state'] not in ('bound', 'fencing') or (l['provider'], guard['holder'], guard['generation']) != (provider, lease, generation):
         raise Fault('Superseded fence', 409)
     l['state'] = 'bound'
@@ -329,7 +325,7 @@ def release(tx, l):
         tx.put('leases', l['id'], l)
         return True
     if any(a['lease'] == l['id'] and a['state'] in ('queued', 'claimed', 'uncertain')
-           for a in tx.rows('actions')):
+           for a in tx.matching('actions', ('queued','claimed','uncertain'))):
         return False
     guard = tx.need('guards', l['guard'])
     if guard['holder'] == l['id'] and guard['generation'] == l['generation']:
@@ -407,17 +403,15 @@ def pending(tx, ctx, provider, limit=64):
     owner(ctx, provider)
     if limit < 1:
         raise Fault('Provider inbox page size must be positive')
-    leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
-    actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
-               ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
-    activations = [a for a in tx.rows('activations') if a['provider']
-                   == provider and a['state'] == 'pending']
+    leases = [l for l in tx.matching('leases', ('fencing',)) if l['provider'] == provider]
+    actions = [a for a in tx.matching('actions', ('queued', 'claimed')) if a['provider'] == provider and tx.need('leases', a['lease'])['state'] == 'bound']
+    activations = [a for a in tx.matching('activations', ('pending',)) if a['provider'] == provider]
     first, rest, seen = [], [], set()
     for a in actions:
         guard = a.get('guard', a['resource'])
         (rest if guard in seen else first).append(a)
         seen.add(guard)
-    streams = [g for g in tx.rows('_stream_grants') if g['provider'] == provider and g['state'] == 'open' and g['expires_at'] > time.time()]
+    streams = [g for g in tx.matching('_stream_grants', ('open',)) if g['provider'] == provider and g['expires_at'] > time.time()]
     return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations, 'streams': streams}
 
 
@@ -425,8 +419,10 @@ def pending(tx, ctx, provider, limit=64):
 def claim(tx, ctx, provider, operation, generation):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
+    if a['state'] in lifecycle.TERMINAL:
+        raise Fault('Superseded generation', 409)
     l = tx.need('leases', a['lease'])
-    g = tx.need('guards', l['guard'])
+    g = tx.get('guards', l['guard'], {'holder':'','generation':0})
     if (a['provider'], l['state'], a['generation'], g['holder'], g['generation']) != (
             provider, 'bound', generation, a['lease'], generation):
         raise Fault('Stale resource generation', 409)
@@ -514,7 +510,9 @@ def finish_submission(tx, ctx, operation):
     submission = tx.get('_submissions', operation)
     action = tx.get('actions', operation)
     if submission and action and action['state'] in lifecycle.TERMINAL:
-        release(tx, tx.need('leases', submission['lease']))
+        held = tx.get('leases', submission['lease'])
+        if held:
+            release(tx, held)
         if tx.get('_submission_active', operation):
             tx.drop('_submission_active', operation)
 

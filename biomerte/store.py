@@ -78,15 +78,62 @@ class Records:
         rows = self.db.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,))
         return [json.loads(row[0]) for row in rows]
 
+    def refresh_metadata(self, kind):
+        for key, raw in self.db.execute("SELECT r.id,r.value FROM records r JOIN record_lifecycle m ON r.kind=m.kind AND r.id=m.id WHERE m.kind=? AND m.state='@dirty'", (kind,)):
+            self.metadata(kind, key, json.loads(raw))
+
+    def matching(self, kind, states=None, lease=None, delivery=False):
+        self.refresh_metadata(kind)
+        sql = "SELECT r.value FROM records r JOIN record_lifecycle m ON m.kind=r.kind AND m.id=r.id WHERE r.kind=?"
+        args = [kind]
+        if states:
+            sql += " AND m.state IN (" + ','.join('?' for _ in states) + ")"
+            args.extend(states)
+        if lease is not None:
+            sql += " AND m.lease=?"
+            args.append(lease)
+        if delivery:
+            sql += " AND m.delivery=1"
+        sql += " ORDER BY r.id"
+        return [json.loads(row[0]) for row in self.db.execute(sql, args)]
+
+    def expired_keys(self, kind, now, limit=256):
+        self.refresh_metadata(kind)
+        return [r[0] for r in self.db.execute(
+            "SELECT id FROM record_lifecycle WHERE kind=? AND expires_at<=? ORDER BY expires_at,id LIMIT ?",
+            (kind, now, limit))]
+
+    def metadata(self, kind, key, value):
+        if not isinstance(value, dict):
+            self.db.execute("INSERT OR REPLACE INTO record_lifecycle VALUES(?,?,'','',NULL,0)", (kind, key))
+            return
+        expires = value.get('expires_at')
+        if expires is None and kind == 'actions' and value.get('state') in ('succeeded','failed','abandoned'):
+            expires = time.time() + 900
+        if expires is None and kind == 'leases' and value.get('state') == 'released':
+            expires = time.time() + 300
+        if expires is None and kind == 'guards' and not value.get('holder'):
+            expires = time.time() + 300
+        if kind == 'guards' and not value.get('holder') and value.get('released_at') is not None:
+            expires = value['released_at'] + 300
+        self.db.execute("INSERT OR REPLACE INTO record_lifecycle VALUES(?,?,?,?,?,?)",
+                        (kind, key, value.get('state', ''), value.get('lease', value.get('destination', '')), expires,
+                         int(kind == 'actions' and value.get('state') in ('succeeded','failed','abandoned') and
+                             bool(value.get('destination')) and not value.get('destination_delivered'))))
+
     def put(self, kind, key, value):
         text(key, 'record id', 512)
+        if kind == 'actions' and value.get('state') in ('succeeded', 'failed', 'abandoned') and not value.get('expires_at'):
+            value['expires_at'] = time.time() + 900
         self.db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)',
                         (kind, key, encode(value)))
+        self.metadata(kind, key, value)
         self.changes[(kind, key)] = value
         return value
 
     def drop(self, kind, key):
         self.db.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, key))
+        self.db.execute('DELETE FROM record_lifecycle WHERE kind=? AND id=?', (kind, key))
         self.changes[(kind, key)] = None
 
     def emit(self, topic, payload):
@@ -175,6 +222,23 @@ class Store:
                              ' PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS position('
                              'id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER,hash TEXT);'
                              "INSERT OR IGNORE INTO position VALUES(1,0,'');")
+            db.executescript('CREATE TABLE IF NOT EXISTS record_lifecycle(kind TEXT,id TEXT,state TEXT,lease TEXT,expires_at REAL,delivery INTEGER, PRIMARY KEY(kind,id));'
+                             'CREATE INDEX IF NOT EXISTS lifecycle_state ON record_lifecycle(kind,state,id);'
+                             'CREATE INDEX IF NOT EXISTS lifecycle_lease ON record_lifecycle(kind,lease,id);'
+                             'CREATE INDEX IF NOT EXISTS lifecycle_expiry ON record_lifecycle(kind,expires_at,id);'
+                             'CREATE INDEX IF NOT EXISTS lifecycle_delivery ON record_lifecycle(kind,delivery,id);')
+            db.executescript("CREATE TRIGGER IF NOT EXISTS lifecycle_insert AFTER INSERT ON records BEGIN INSERT OR REPLACE INTO record_lifecycle VALUES(NEW.kind,NEW.id,'@dirty','',NULL,0); END;"
+                             "CREATE TRIGGER IF NOT EXISTS lifecycle_update AFTER UPDATE ON records BEGIN INSERT OR REPLACE INTO record_lifecycle VALUES(NEW.kind,NEW.id,'@dirty','',NULL,0); END;"
+                             "CREATE TRIGGER IF NOT EXISTS lifecycle_delete AFTER DELETE ON records BEGIN DELETE FROM record_lifecycle WHERE kind=OLD.kind AND id=OLD.id; END;")
+            db.execute('BEGIN IMMEDIATE')
+            # Local derived index only: replay still goes through Records.put/drop.
+            # Stream rows instead of materializing historical result bodies.
+            tx = Records(db)
+            for kind, key, raw in db.execute("SELECT r.kind,r.id,r.value FROM records r LEFT JOIN record_lifecycle m ON r.kind=m.kind AND r.id=m.id WHERE m.id IS NULL"):
+                value = json.loads(raw)
+                tx.metadata(kind, key, value)
+            db.commit()
+
 
     def connect(self):
         con = sqlite3.connect(self.path, timeout=12, isolation_level=None)

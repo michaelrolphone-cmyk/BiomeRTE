@@ -34,7 +34,7 @@ def policy(tx, lease):
 
 def current(tx, action):
     lease = tx.need('leases', action['lease'])
-    guard = tx.need('guards', lease['guard'])
+    guard = tx.get('guards', lease['guard'], {'holder':'','generation':0})
     if (action['state'] == 'abandoned' or
             (guard['holder'], guard['generation']) != (lease['id'], action['generation'])):
         raise Fault('Superseded generation', 409)
@@ -73,7 +73,7 @@ def revoke(tx, ctx, id):
     row = destination(tx, ctx, id)
     row.update(state='revoked', expires_at=time.time())
     tx.put('destinations', id, row)
-    for entry in tx.rows('result_inbox'):
+    for entry in tx.matching('result_inbox', lease=id):
         if entry['destination'] == id:
             tx.drop('result_inbox', entry['id'])
     return row
@@ -106,6 +106,8 @@ def deliver(tx, action):
     row = tx.get('destinations', action['destination'])
     now = time.time()
     if not row or row['state'] != 'active' or row['expires_at'] <= now:
+        action['destination_delivered'] = 'skipped_expired'
+        tx.put('actions', action['id'], action)
         return
     key = digest([row['id'], action['id']])
     # ACK deletes the inbox entry, not this marker, so recovery cannot redeliver it.
@@ -137,7 +139,7 @@ def abandon(tx, ctx, lease, reason, now):
     tx.put('guards', lease['guard'], guard)
     # A compact watermark prevents a swept guard resetting physical fence numbers.
     tx.put('_fence_generations', lease['resource'], max(guard['generation'], tx.get('_fence_generations', lease['resource'], 0)))
-    for action in tx.rows('actions'):
+    for action in tx.matching('actions', ('queued','claimed','uncertain'), lease=lease['id']):
         if action['lease'] != lease['id'] or action['generation'] != lease['generation'] or action['state'] in TERMINAL:
             continue
         action.update(state='abandoned', abandoned_generation=lease['generation'],
@@ -212,43 +214,40 @@ def recover(tx, ctx, lease, actions, now):
 
 
 def sweep(tx, ctx, now):
-    # Only capability-path events expire; workflow/knowledge history is untouched.
-    for kind in ('result_inbox', 'destinations', '_stream_grants', 'artifacts'):
-        for row in tx.rows(kind):
-            if row.get('expires_at', now + 1) <= now:
-                tx.drop(kind, row['id'])
-    active_destinations = {r['id'] for r in tx.rows('destinations')}
-    for row in tx.rows('result_inbox'):
-        if row['destination'] not in active_destinations:
-            tx.drop('result_inbox', row['id'])
-    referenced = {t.get('action') for run in tx.rows('runs') if run['state'] not in ('completed', 'failed', 'cancelled')
-                  for t in run.get('tokens', [])}
-    for action in tx.rows('actions'):
+    # Index-only expiry selection; historical result bodies never enter the
+    # ordinary recovery path. Deletion batches catch up after missed ticks.
+    for action in tx.matching('actions', TERMINAL, delivery=True)[:64]:
         settled(tx, action, now)
-        if (action.get('expires_at') or now + 1) <= now and action['id'] not in referenced:
-            tx.drop('actions', action['id'])
+    referenced = {t.get('action') for run in tx.matching('runs', ('running',))
+                  for t in run.get('tokens', [])}
+    protected_leases = {a['lease'] for key in referenced if key
+                        for a in [tx.get('actions', key)] if a}
+    for key in tx.expired_keys('destinations', now):
+        for entry in tx.matching('result_inbox', lease=key):
+            tx.drop('result_inbox', entry['id'])
+        tx.drop('destinations', key)
+    for kind in ('result_inbox', '_stream_grants', 'artifacts', '_receipt'):
+        for key in tx.expired_keys(kind, now):
+            tx.drop(kind, key)
+    for key in tx.expired_keys('actions', now, 64):
+        if key not in referenced:
+            tx.drop('actions', key)
             for kind in ('_submissions', '_submission_active'):
-                tx.drop(kind, action['id'])
-    action_leases = {a['lease'] for a in tx.rows('actions')}
-    for lease in tx.rows('leases'):
-        if lease['state'] == 'released' and lease.get('expires_at', now + 1) <= now and lease['id'] not in action_leases:
+                tx.drop(kind, key)
+    for key in tx.expired_keys('leases', now):
+        if key not in protected_leases:
             for kind in ('leases', '_reservation_activity', '_submission_leases'):
-                tx.drop(kind, lease['id'])
-    for row in tx.db.execute("SELECT id,value FROM records WHERE kind='guards'").fetchall():
-        import json
-        guard = json.loads(row[1])
-        if not guard['holder'] and guard.get('released_at', now + 1) + 300 <= now:
-            resource = guard.get('resource', row[0].split(':')[1] if row[0].startswith('!slot:') else row[0])
+                tx.drop(kind, key)
+    for key in tx.expired_keys('guards', now):
+        guard = tx.need('guards', key)
+        if not guard['holder']:
+            resource = guard.get('resource', key.split(':')[1] if key.startswith('!slot:') else key)
             if not resource.startswith('!shared:'):
                 tx.put('_fence_generations', resource, max(guard['generation'], tx.get('_fence_generations', resource, 0)))
-            tx.drop('guards', row[0])
-    for row in tx.db.execute("SELECT id,value FROM records WHERE kind='_receipt'").fetchall():
-        import json
-        if json.loads(row[1]).get('expires_at', now + 1) <= now:
-            tx.drop('_receipt', row[0])
-    for event in tx.rows('events'):
-        if event.get('expires_at', now + 1) <= now:
-            tx.drop('events', '%020d' % event['seq'])
+            tx.drop('guards', key)
+    for key in tx.expired_keys('events', now):
+        tx.drop('events', key)
+
 
 @op('cap.command.state', 'provider:str operation:str generation:int', False)
 def command_state(tx, ctx, provider, operation, generation):
