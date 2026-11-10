@@ -110,6 +110,9 @@ class Rover:
                 await asyncio.gather(*lanes, return_exceptions=True)
                 if self.descriptors.get(contract) is descriptor:
                     self.descriptors.pop(contract, None)
+                    if descriptor is not None and 'map' in descriptor.get('lanes', []):
+                        self.map_head = None
+                        self.broadcast('map', json.dumps({'type':'snapshot_required'}))
                 if descriptor is not None:
                     try:
                         await self.call('stream.close', session=descriptor['id'])

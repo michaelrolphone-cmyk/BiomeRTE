@@ -60,4 +60,22 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(13,value['revision'])
         self.assertEqual([],remote.calls)
 
+
+    async def test_owner_shutdown_invalidates_cached_map_reference(self):
+        from biomerte.stream_router import frame
+        remote=Remote()
+        class Fixture(Rover):
+            async def lane(self,descriptor,lane):
+                await asyncio.Future()
+        rover=Fixture(remote,{'vision:1':'camera'})
+        await rover.start()
+        try:
+            for _ in range(100):
+                if rover.descriptors:break
+                await asyncio.sleep(.01)
+            rover.broadcast('map',frame({'map_id':'map','revision':12},b''))
+            self.assertIsNotNone(rover.map_head)
+        finally:await rover.close()
+        self.assertIsNone(rover.map_head)
+
 if __name__=='__main__':unittest.main()
