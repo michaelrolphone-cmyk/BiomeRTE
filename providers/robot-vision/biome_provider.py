@@ -364,7 +364,7 @@ class Remote:
         self.gateway = gateway or load_gateway(cfg["gateway_state"])
 
     def call(self, name, args, rid=None):
-        return self.gateway.invoke(name, args, rid, self.realm)
+        return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
 
 
 def offer(cfg, contract, state):
@@ -433,6 +433,23 @@ def worker_offers(cfg):
             for contract in CONTRACTS]
 
 
+def stream_offer(cfg, status):
+    """Advertise only a service that actually supplies both native live feeds."""
+    live = status.get("streaming", {})
+    available = (status.get("availability") == "available" and
+                 status.get("state") in ("running", "starting") and
+                 live.get("available") is True and
+                 set(live.get("lanes", [])) >= {"vision", "map"})
+    return dict(provider=cfg["provider"], contract="robot.vision.stream:1",
+                resource=cfg["resource"], service="robot-vision", capacity=cfg["slots"],
+                state="ready" if available else "offline",
+                configuration={"lease_class": "persistent", "stream_only": True,
+                    "stream": {"enabled": True, "direction": "provider_to_server",
+                        "delivery": "supersedable", "lanes": ["vision", "map"],
+                        "policies": {"vision": "supersedable", "map": "ordered"},
+                        "buffer_depth": 8, "max_message_bytes": 2097152}})
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -469,8 +486,10 @@ def serve(cfg):
                     now = time.monotonic()
                     if now >= checked:
                         try:
-                            ready = supported_contracts(client.query("robot.vision.status", {}))
+                            status = client.query("robot.vision.status", {})
+                            ready = supported_contracts(status)
                         except ServiceError:
+                            status = {}
                             ready = set()
                         for contract in sorted(ready - registered):
                             remote.call("cap.define", CONTRACTS[contract])
@@ -484,12 +503,7 @@ def serve(cfg):
                                 advertised[contract] = state
                         remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
                             "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
-                        remote.call("cap.offer", dict(provider=cfg["provider"],contract="robot.vision.stream:1",
-                            resource=cfg["resource"],service="robot-vision",capacity=cfg["slots"],
-                            state="ready" if ready else "offline",
-                            configuration={"lease_class":"persistent","stream_only":True,
-                                "stream":{"enabled":True,"direction":"provider_to_server","delivery":"supersedable",
-                                          "lanes":["vision","map"],"policies":{"vision":"supersedable","map":"ordered"},"buffer_depth":8,"max_message_bytes":2097152}}))
+                        remote.call("cap.offer", stream_offer(cfg, status))
                         checked = now + cfg.get("health_seconds", 10)
                     if defined:
                         worker.once(pool)
@@ -500,6 +514,10 @@ def serve(cfg):
                     time.sleep(5)
         finally:
             try:
+                try:
+                    remote.call("cap.offer", stream_offer(cfg, {}))
+                except Exception:
+                    pass
                 for contract in sorted(defined):
                     try:
                         remote.call("cap.offer", offer(cfg, contract, "offline"))

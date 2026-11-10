@@ -9,6 +9,7 @@ export async function leasedStream(req,env){
  // STREAM_ROUTER is a persistent service binding, or an explicitly configured
  // TLS endpoint. An absent deployment fails clearly instead of falling back to
  // controller jobs or stateless Worker tables.
+ if(env.CUSTOMER_HTTP_STREAM_ROUTER)return env.CUSTOMER_HTTP_STREAM_ROUTER.fetch(new Request('http://stream-router/'+route,req));
  if(env.STREAM_ROUTER)return env.STREAM_ROUTER.fetch(new Request('https://stream-router/'+route,req));
  if(!env.STREAM_ROUTER_ORIGIN)return Response.json({error:'Persistent stream router is not configured'},{status:503});
  const target=new URL(env.STREAM_ROUTER_ORIGIN);

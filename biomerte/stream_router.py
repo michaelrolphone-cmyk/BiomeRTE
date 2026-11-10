@@ -217,6 +217,17 @@ class Router:
             await peer.close(1000, 'Detached')
 
 
+def listener_tls(config):
+    """Only an explicitly private loopback listener may omit its own TLS."""
+    if config.get('transport') == 'private_http':
+        if config.get('listen', '127.0.0.1') not in ('127.0.0.1', '::1'):
+            raise ValueError('Private stream listener must bind loopback')
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(config['certificate'], config['key'])
+    return context
+
+
 async def serve(config):
     from websockets.asyncio.server import serve as websocket_server
     from .app import Application
@@ -226,8 +237,11 @@ async def serve(config):
         secrets[app.node] = app.config['stream_router_secret']
         validators[app.node] = lambda id, app=app: app.call('stream.inspect', {'session': id}, realm='site')
     router = Router(secrets, validators)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(config['certificate'], config['key'])
+    context = listener_tls(config)
+    async def health(connection, request):
+        if request.path == '/health':
+            return connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
+                'sessions': len(router.sessions), 'transport': config.get('transport', 'tls')}))
     async def handle(socket):
         try:
             await router.attach(socket, socket.request.path,
@@ -235,7 +249,7 @@ async def serve(config):
         except Exception:
             await socket.close(1008, 'Stream rejected')
     async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
-                                ssl=context, max_size=4194304, max_queue=1, write_limit=65536):
+                                ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
         await asyncio.Future()
 
 

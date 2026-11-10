@@ -132,7 +132,7 @@ export async function providerSocket(req,env,conf){
     // other invocations remain independent on the multiplexed connection.
     while(open&&a?.operation==='provider.poll'&&!result.isError){
      const value=toolValue(result);
-     if(value.actions?.length||value.fences?.length||value.activations?.length)break;
+     if(value.actions?.length||value.fences?.length||value.activations?.length||value.streams?.length)break;
      await transportSleep(250);
      if(!await bearerPrincipal(req,conf)){socket.close(1008,'Reauthorize');open=false;return}
      result=await runTool(env,'biome_invoke',{...a,request_id:crypto.randomUUID()});

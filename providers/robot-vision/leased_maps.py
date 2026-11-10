@@ -28,7 +28,7 @@ class LiveMap:
             self.current={"type":"snapshot_required","map_id":map_id,"revision":revision}
             value=packet({"type":"map_delta","map_id":map_id,"from_revision":previous,
                           "revision":revision,"changes":changes})
-            if len(value)>1048576:value=packet(self.current)
+            if len(value)>16392:value=packet(self.current)
             for inbox in self.subscribers:
                 if inbox.full():
                     while not inbox.empty():inbox.get_nowait()
