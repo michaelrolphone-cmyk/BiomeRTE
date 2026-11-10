@@ -1,23 +1,11 @@
-"""Patch only terminal stream delivery; preserve concurrent runtime overlays."""
+"""Patch native terminal delivery while preserving concurrent source overlays."""
 import os
 import stat
 import sys
 import tempfile
 
-OLD = """            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'transient': True},
-                                  'terminal-transient-chunk-' + str(uuid.uuid4()))"""
-NEW = """            arguments = {'data': base64.b64encode(block).decode('ascii'), 'transient': True}
-            request_id = 'terminal-transient-chunk-' + str(uuid.uuid4())
-            while True:
-                try:
-                    receipt = remote.call('artifact.put', arguments, request_id)
-                    break
-                except Exception:
-                    # The command has already settled. Keep its custodian alive
-                    # and retry this exact immutable upload, never the argv.
-                    # The supervising runner continues custody heartbeats while
-                    # transport/remote storage is unavailable.
-                    time.sleep(5)"""
+OLD = "            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'transient': True},\n                                  'terminal-transient-chunk-' + str(uuid.uuid4()))"
+NEW = "            arguments = {'data': base64.b64encode(block).decode('ascii'), 'transient': True}\n            request_id = 'terminal-transient-chunk-' + str(uuid.uuid4())\n            while True:\n                try:\n                    receipt = remote.call('artifact.put', arguments, request_id)\n                    break\n                except Exception:\n                    if not retry:\n                        raise\n                    # The command has already settled. Keep its custodian alive\n                    # and retry this exact immutable upload, never the argv.\n                    # The supervising runner continues custody heartbeats while\n                    # transport/remote storage is unavailable.\n                    time.sleep(5)"
 
 
 def main(paths):
@@ -26,16 +14,30 @@ def main(paths):
         path = os.path.realpath(path)
         with open(path) as source:
             original = source.read()
-        if NEW in original:
-            print('CURRENT', path)
-            continue
-        if original.count(OLD) != 1:
-            raise RuntimeError('Concurrent uploader source differs: ' + path)
-        updated = original.replace(OLD, NEW)
-        if '\nimport time\n' not in updated:
-            updated = updated.replace('import socket\n', 'import socket\nimport time\n', 1)
+        updated = original
+        if os.path.basename(path) == 'terminal_adapter.py':
+            old = 'store_stream(path, remote, 48 * 1024)'
+            new = 'store_stream(path, remote, 48 * 1024, retry=True)'
+            if new not in updated:
+                if updated.count(old) != 1:
+                    raise RuntimeError('Concurrent Mac adapter differs: ' + path)
+                updated = updated.replace(old, new, 1)
+        else:
+            if NEW not in updated:
+                if updated.count(OLD) != 1:
+                    raise RuntimeError('Concurrent uploader differs: ' + path)
+                updated = updated.replace(OLD, NEW)
+            updated = updated.replace('def store_stream(path, remote, chunk_bytes=256 * 1024):',
+                                      'def store_stream(path, remote, chunk_bytes=256 * 1024, retry=False):')
+            updated = updated.replace('store_stream(result[name], remote)',
+                                      'store_stream(result[name], remote, retry=True)')
+            if '\nimport time\n' not in updated:
+                updated = updated.replace('import socket\n', 'import socket\nimport time\n', 1)
         compile(updated, path, 'exec')
-        prepared.append((path, original, updated, stat.S_IMODE(os.stat(path).st_mode)))
+        if updated == original:
+            print('CURRENT', path)
+        else:
+            prepared.append((path, original, updated, stat.S_IMODE(os.stat(path).st_mode)))
     for path, original, updated, mode in prepared:
         with open(path) as source:
             if source.read() != original:
