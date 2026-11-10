@@ -105,7 +105,17 @@ def main():
             time.sleep(.5)
     else:raise RuntimeError('New controller recovery interface unavailable; maintenance remains online')
     for parent,label in ((terminal_domain,'org.biomerte.mac-terminal'),(docker_domain,'org.biomerte.mac-docker')):
-        subprocess.check_call(['/bin/launchctl','kickstart','-k',parent+'/'+label])
+        if parent == 'system':
+            import re,signal
+            status=subprocess.check_output(['/bin/launchctl','print',parent+'/'+label]).decode()
+            match=re.search(r'\\bpid = (\\d+)',status)
+            if not match:raise RuntimeError('System provider PID unavailable')
+            pid=int(match.group(1))
+            owner=int(subprocess.check_output(['/bin/ps','-o','uid=','-p',str(pid)]).decode().strip())
+            if owner!=os.getuid():raise RuntimeError('Provider process belongs to another account')
+            os.kill(pid,signal.SIGTERM)  # Existing KeepAlive service restarts this account-owned worker.
+        else:
+            subprocess.check_call(['/bin/launchctl','kickstart','-k',parent+'/'+label])
     print(json.dumps({'activated':True,'stage':str(STAGE),'controller':'restarted','terminal':'restarted',
                       'docker':'restarted','gateway':'preserved','stream_router':'preserved'}),flush=True)
 
