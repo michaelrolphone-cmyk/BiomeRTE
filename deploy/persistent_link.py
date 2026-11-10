@@ -23,18 +23,38 @@ class ControllerLink:
         self.send_lock = threading.Lock()
         self.pending = {}
         self.lock = threading.Lock()
+        self.connection_attempt = 0
+        self.connected_monotonic = None
         self.last_http_poll = 0
         self.http_poll_interval = 2.0
         thread = threading.Thread(target=self.run)
         thread.daemon = True
         thread.start()
 
+    def _diagnostic(self, event, error=None):
+        # Never print exception messages, URLs, authentication or job payloads.
+        value = {'event': event, 'at': time.time(),
+                 'connection_attempt': getattr(self, 'connection_attempt', 0)}
+        if error is not None:
+            value['error_type'] = type(error).__name__
+            status = getattr(error, 'status_code', None)
+            if type(status) is int:
+                value['http_status'] = status
+        started = getattr(self, 'connected_monotonic', None)
+        if started is not None:
+            value['connection_age_s'] = round(time.monotonic() - started, 3)
+        self.last_transport_event = value
+        print('Controller WebSocket ' + json.dumps(value, sort_keys=True),
+              file=sys.stderr, flush=True)
+
     def run(self):
         try:
             import websocket
-        except ImportError:
+        except ImportError as error:
+            self._diagnostic('dependency_unavailable', error)
             return
         while True:
+            self.connection_attempt += 1
             ws = None
             try:
                 headers = ['Authorization: Bearer ' + self.token]
@@ -43,28 +63,25 @@ class ControllerLink:
                 ws = websocket.create_connection(self.origin.replace('https://', 'wss://', 1) +
                     '/bridge/connect', header=headers, timeout=30, suppress_origin=True,
                     enable_multithread=True)
-                self.socket = ws
+                with self.send_lock:
+                    self.socket = ws
+                self.connected_monotonic = time.monotonic()
+                self._diagnostic('connected')
                 thread = threading.Thread(target=self.heartbeat, args=(ws,))
                 thread.daemon = True
                 thread.start()
                 while self.socket is ws:
                     raw = ws.recv()
                     if not raw:
+                        self._diagnostic('peer_closed')
                         break
-                    frame = json.loads(raw)
-                    if frame.get('type') == 'job':
-                        self.jobs.put(frame)
-                    elif frame.get('type') == 'accepted':
-                        with self.lock:
-                            item = self.pending.get(frame['id'])
-                            if item:
-                                item['accepted'] = frame['accepted']
-                                item['ready'].set()
-            except Exception:
-                pass
+                    self._receive(ws, json.loads(raw))
+            except Exception as error:
+                self._diagnostic('disconnected', error)
             finally:
-                if self.socket is ws:
-                    self.socket = None
+                with self.send_lock:
+                    if self.socket is ws:
+                        self.socket = None
                 if ws:
                     try:
                         ws.close()
@@ -72,8 +89,28 @@ class ControllerLink:
                         pass
                 with self.lock:
                     for item in self.pending.values():
-                        item['ready'].set()
+                        if item['socket'] is ws:
+                            item['ready'].set()
             time.sleep(2)
+
+    def _receive(self, ws, frame):
+        if frame.get('type') == 'job':
+            # Local-only provenance, never part of the native request or result.
+            # The gateway socket can acknowledge only jobs it delivered itself.
+            frame['_delivery_socket'] = ws
+            self.jobs.put(frame)
+        elif frame.get('type') == 'accepted':
+            with self.lock:
+                item = self.pending.get(frame['id'])
+                if item and item['socket'] is ws:
+                    if frame.get('lease') == item['lease']:
+                        item['accepted'] = frame['accepted']
+                    elif 'lease' in frame:
+                        # A delayed ACK for an earlier lease is not this result.
+                        return
+                    # Legacy gateways omit the lease. Wake into authenticated
+                    # HTTP fallback rather than trusting an ambiguous ID-only ACK.
+                    item['ready'].set()
 
     def heartbeat(self, ws):
         while self.socket is ws:
@@ -81,7 +118,8 @@ class ControllerLink:
             try:
                 with self.send_lock:
                     ws.send(json.dumps({'type': 'ping'}))
-            except Exception:
+            except Exception as error:
+                self._diagnostic('heartbeat_send_failed', error)
                 try:
                     ws.close()
                 except Exception:
@@ -101,16 +139,23 @@ class ControllerLink:
                 return None
             return {'idle': True}
 
-    def complete(self, body):
-        ws = self.socket
-        if ws is None:
+    def complete(self, body, delivery_socket=None):
+        # HTTP claims and jobs delivered before reconnect use durable HTTP
+        # completion immediately, rather than waiting for an impossible ACK.
+        if delivery_socket is None:
             return None
-        item = {'ready': threading.Event()}
-        with self.lock:
-            self.pending[body['id']] = item
+        item = {'ready': threading.Event(), 'socket': delivery_socket, 'lease': body['lease']}
         try:
             with self.send_lock:
-                ws.send(json.dumps(dict(body, type='complete')))
+                if self.socket is not delivery_socket:
+                    return None
+                with self.lock:
+                    # ACKs carry the job ID, not its lease. Never replace an
+                    # outstanding waiter for another lease of that same job.
+                    if body['id'] in self.pending:
+                        return None
+                    self.pending[body['id']] = item
+                delivery_socket.send(json.dumps(dict(body, type='complete')))
             # Transport ACK timeout falls back to the same id/lease over HTTP.
             if not item['ready'].wait(15):
                 return None
@@ -121,5 +166,6 @@ class ControllerLink:
             return None
         finally:
             with self.lock:
-                self.pending.pop(body['id'], None)
+                if self.pending.get(body['id']) is item:
+                    self.pending.pop(body['id'], None)
 
