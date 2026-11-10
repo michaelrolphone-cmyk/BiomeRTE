@@ -70,26 +70,48 @@ class Rover:
     async def owner(self, contract, resource):
         # Only this server lifecycle acquires resources. Browser handlers never do.
         while not self.closed:
+            lease = None
+            descriptor = None
+            lanes = []
             try:
                 lease = await self.call('cap.acquire', contract=contract, resource=resource,
                                         task=self.task+':'+contract)
-                if lease['state'] != 'bound':
+                while lease['state'] != 'bound':
+                    if lease['state'] not in ('queued', 'fencing'):
+                        raise ConnectionError('Lease unavailable')
                     await asyncio.sleep(.5)
-                    continue
+                    lease = await self.call('cap.lease', lease=lease['id'])
                 sessions = await self.call('stream.list', lease=lease['id'])
                 for old in sessions:
                     await self.call('stream.close', session=old['id'])
                 descriptor = await self.call('stream.open', lease=lease['id'])
                 self.descriptors[contract] = descriptor
-                lanes=[asyncio.create_task(self.lane(descriptor,lane)) for lane in descriptor['lanes']]
-                try:
-                    await asyncio.gather(*lanes)
-                finally:
-                    for lane in lanes:lane.cancel()
-                    await asyncio.gather(*lanes,return_exceptions=True)
+                lanes = [asyncio.create_task(self.lane(descriptor, lane))
+                         for lane in descriptor['lanes']]
+                await asyncio.gather(*lanes)
             except asyncio.CancelledError:
                 raise
             except Exception:
+                pass
+            finally:
+                for lane in lanes:
+                    lane.cancel()
+                await asyncio.gather(*lanes, return_exceptions=True)
+                if self.descriptors.get(contract) is descriptor:
+                    self.descriptors.pop(contract, None)
+                if descriptor is not None:
+                    try:
+                        await self.call('stream.close', session=descriptor['id'])
+                    except Exception:
+                        pass
+                # Also release queued/fencing leases on shutdown or failed startup.
+                # A retry must not queue behind capacity retained by this owner.
+                if lease is not None:
+                    try:
+                        await self.call('cap.release', lease=lease['id'])
+                    except Exception:
+                        pass
+            if not self.closed:
                 await asyncio.sleep(.5)
 
     async def lane(self, descriptor, lane):
