@@ -778,6 +778,10 @@ PRAGMA user_version=1;
 
 
     def checkpoint(self, map_id, backend_artifact=None, metadata=None):
+        prepared = self.prepare_checkpoint(map_id, metadata)
+        return self.finish_checkpoint(prepared, backend_artifact)
+
+    def prepare_checkpoint(self, map_id, metadata=None):
         extra = _copy(metadata or {})
         if not isinstance(extra, dict):
             raise ValueError("metadata must be an object")
@@ -787,75 +791,93 @@ PRAGMA user_version=1;
             if extra.get("map_revision", info["revision"]) != info["revision"]:
                 raise RevisionConflict("backend checkpoint revision differs from current map")
             checkpoint_id = str(uuid.uuid4())
-            folder = self.checkpoint_dir / checkpoint_id
             staging = self.checkpoint_dir / (checkpoint_id + ".partial")
             staging.mkdir()
-            published = False
             try:
-                artifact = {"availability": "unavailable", "reason": "backend_artifact_not_supplied"}
-                if backend_artifact is not None:
-                    source = Path(backend_artifact).expanduser()
-                    if not source.exists() or source.is_symlink():
-                        raise ValueError("backend artifact must be an existing regular file or directory")
-                    source = source.resolve()
-                    if source == folder or source in folder.parents:
-                        raise ValueError("backend artifact cannot contain the checkpoint destination")
-                    if source.is_dir():
-                        if any(path.is_symlink() for path in source.rglob("*")):
-                            raise ValueError("backend artifact must not contain symlinks")
-                        destination = staging / "backend"
-                        shutil.copytree(source, destination)
-                        files = sorted(path for path in destination.rglob("*") if path.is_file())
-                    else:
-                        destination = staging / "backend" / source.name
-                        destination.parent.mkdir()
-                        shutil.copyfile(source, destination)
-                        files = [destination]
-                    if not files:
-                        raise ValueError("backend artifact directory is empty")
-                    manifest = []
-                    for path in files:
-                        manifest.append({"path": str(path.relative_to(staging)),
-                                         "size_bytes": path.stat().st_size,
-                                         "sha256": _file_digest(path)})
-                        with path.open("rb") as stream:
-                            os.fsync(stream.fileno())
-                    for directory in sorted((p for p in (staging / "backend").rglob("*")
-                                             if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
-                        _sync_directory(directory)
-                    _sync_directory(staging / "backend")
-                    artifact = {"availability": "available",
-                                "path": str(folder / destination.relative_to(staging)),
-                                "files": manifest, "qualified_for_relocalization": False,
-                                "qualification_reason": "saving_does_not_verify_relocalization"}
-                result = {
-                    "checkpoint_id": checkpoint_id, "map_id": map_id,
-                    "map_revision": info["revision"], "created_at": _now(),
-                    "database_path": str(folder / "vision.sqlite3"),
-                    "backend_artifact": artifact, "metadata": extra,
-                    "publication": "complete_v2",
-                    "image_retention": "rolling_and_explicitly_pinned",
-                    "relocalization_qualification": "not_tested_by_store"}
-                # The finalized record contains this backup's hash. It belongs
-                # in the external manifest, never self-referentially in the backup.
                 self._backup_database(staging / "vision.sqlite3")
-                result["database_sha256"] = _file_digest(staging / "vision.sqlite3")
-                with (staging / "manifest.json").open("w", encoding="utf8") as stream:
-                    stream.write(_dump(result))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                _sync_directory(staging)
-                staging.replace(folder)
-                published = True
-                _sync_directory(self.checkpoint_dir)
-                self._record_checkpoint(result)
-                return result
             except BaseException:
-                # Once published, retain the complete package even if SQLite
-                # inventory insertion fails. Startup can adopt that orphan.
-                if not published:
-                    shutil.rmtree(staging, ignore_errors=True)
+                shutil.rmtree(staging, ignore_errors=True)
                 raise
+            return dict(checkpoint_id=checkpoint_id, map_id=map_id,
+                        info=_copy(info), metadata=extra, created_at=_now())
+
+    def discard_checkpoint(self, prepared):
+        staging = self.checkpoint_dir / (prepared["checkpoint_id"] + ".partial")
+        shutil.rmtree(staging, ignore_errors=True)
+
+    def finish_checkpoint(self, prepared, backend_artifact=None):
+        checkpoint_id, map_id = prepared["checkpoint_id"], prepared["map_id"]
+        info, extra = prepared["info"], prepared["metadata"]
+        folder = self.checkpoint_dir / checkpoint_id
+        staging = self.checkpoint_dir / (checkpoint_id + ".partial")
+        published = False
+        try:
+            artifact = {"availability": "unavailable", "reason": "backend_artifact_not_supplied"}
+            if backend_artifact is not None:
+                source = Path(backend_artifact).expanduser()
+                if not source.exists() or source.is_symlink():
+                    raise ValueError("backend artifact must be an existing regular file or directory")
+                source = source.resolve()
+                if source == folder or source in folder.parents:
+                    raise ValueError("backend artifact cannot contain the checkpoint destination")
+                if source.is_dir():
+                    if any(path.is_symlink() for path in source.rglob("*")):
+                        raise ValueError("backend artifact must not contain symlinks")
+                    destination = staging / "backend"
+                    shutil.copytree(source, destination)
+                    files = sorted(path for path in destination.rglob("*") if path.is_file())
+                else:
+                    destination = staging / "backend" / source.name
+                    destination.parent.mkdir()
+                    shutil.copyfile(source, destination)
+                    files = [destination]
+                if not files:
+                    raise ValueError("backend artifact directory is empty")
+                manifest = []
+                for path in files:
+                    manifest.append({"path": str(path.relative_to(staging)),
+                                     "size_bytes": path.stat().st_size,
+                                     "sha256": _file_digest(path)})
+                    with path.open("rb") as stream:
+                        os.fsync(stream.fileno())
+                for directory in sorted((p for p in (staging / "backend").rglob("*")
+                                         if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                    _sync_directory(directory)
+                _sync_directory(staging / "backend")
+                artifact = {"availability": "available",
+                            "path": str(folder / destination.relative_to(staging)),
+                            "files": manifest, "qualified_for_relocalization": False,
+                            "qualification_reason": "saving_does_not_verify_relocalization"}
+            result = {
+                "checkpoint_id": checkpoint_id, "map_id": map_id,
+                "map_revision": info["revision"], "created_at": prepared["created_at"],
+                "database_path": str(folder / "vision.sqlite3"),
+                "backend_artifact": artifact, "metadata": extra,
+                "publication": "complete_v2",
+                "image_retention": "rolling_and_explicitly_pinned",
+                "relocalization_qualification": "not_tested_by_store"}
+            # The finalized record contains this backup's hash. It belongs
+            # in the external manifest, never self-referentially in the backup.
+            result["database_sha256"] = _file_digest(staging / "vision.sqlite3")
+            with (staging / "manifest.json").open("w", encoding="utf8") as stream:
+                stream.write(_dump(result))
+                stream.flush()
+                os.fsync(stream.fileno())
+            _sync_directory(staging)
+            staging.replace(folder)
+            published = True
+            _sync_directory(self.checkpoint_dir)
+            with self._lock:
+                self._open()
+                self._record_checkpoint(result)
+            return result
+        except BaseException:
+            # Once published, retain the complete package even if SQLite
+            # inventory insertion fails. Startup can adopt that orphan.
+            if not published:
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+
 
     def _backup_database(self, destination):
         backup = sqlite3.connect(str(destination))
