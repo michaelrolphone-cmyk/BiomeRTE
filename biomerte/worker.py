@@ -127,49 +127,6 @@ class Worker:
             self.db.rollback()
             raise
 
-    def _initialize_result_recovery(self):
-        # Disposable pending projection: never scan acknowledged history on a poll.
-        # DDL stays inside executescript BEGIN for Python 3.4 compatibility.
-        self.db.executescript("""BEGIN IMMEDIATE;
-            CREATE TABLE IF NOT EXISTS result_recovery_pending(id TEXT PRIMARY KEY,signature TEXT);
-            CREATE TABLE IF NOT EXISTS result_recovery_schema(version INTEGER PRIMARY KEY);
-            CREATE TRIGGER IF NOT EXISTS result_recovery_action_update AFTER UPDATE ON actions BEGIN
-                DELETE FROM result_recovery_pending WHERE id=OLD.id;
-                INSERT OR REPLACE INTO result_recovery_pending
-                    SELECT NEW.id,NEW.signature FROM result_retention_eligible e
-                    WHERE e.id=NEW.id AND e.signature=NEW.signature
-                      AND NEW.state IN ('succeeded','failed')
-                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=NEW.id);
-            END;
-            CREATE TRIGGER IF NOT EXISTS result_recovery_action_delete AFTER DELETE ON actions BEGIN
-                DELETE FROM result_recovery_pending WHERE id=OLD.id;
-            END;
-            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_insert AFTER INSERT ON result_retention_eligible BEGIN
-                INSERT OR REPLACE INTO result_recovery_pending
-                    SELECT a.id,a.signature FROM actions a WHERE a.id=NEW.id AND a.signature=NEW.signature
-                      AND a.state IN ('succeeded','failed')
-                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id);
-            END;
-            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_delete AFTER DELETE ON result_retention_eligible BEGIN
-                DELETE FROM result_recovery_pending WHERE id=OLD.id;
-            END;
-            CREATE TRIGGER IF NOT EXISTS result_recovery_ack_insert AFTER INSERT ON result_acknowledged BEGIN
-                DELETE FROM result_recovery_pending WHERE id=NEW.id;
-            END;
-        """)
-        try:
-            if not self.db.execute('SELECT 1 FROM result_recovery_schema WHERE version=1').fetchone():
-                self.db.execute("INSERT OR IGNORE INTO result_recovery_pending "
-                                "SELECT a.id,a.signature FROM result_retention_eligible e "
-                                "CROSS JOIN actions a ON a.id=e.id AND a.signature=e.signature "
-                                "WHERE a.state IN ('succeeded','failed') AND NOT EXISTS "
-                                "(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id)")
-                self.db.execute('INSERT INTO result_recovery_schema VALUES(1)')
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
-
     def advertise(self):
         for o in self.offers:
             args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
