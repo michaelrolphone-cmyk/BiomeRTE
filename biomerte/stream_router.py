@@ -8,6 +8,8 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+from collections import deque
 import ssl
 import struct
 import time
@@ -143,6 +145,42 @@ class Router:
         self.validators = validators
         self.sessions = {}
         self.tasks = {}
+        self.diagnostics = deque(maxlen=32)
+        self.reported = {}
+
+    def report(self, stage, grant, error):
+        # Never retain exception text, wire data or attachment credentials.
+        status = getattr(error, 'status', getattr(error, 'code', None))
+        if type(status) is not int:
+            status = None
+        event = {'stage': stage, 'authority': (grant or {}).get('authority'),
+                 'session': (grant or {}).get('id'), 'error': type(error).__name__,
+                 'status': status,
+                 'reason': {'Expired or invalid driving intent': 'invalid_intent_freshness',
+                            'Old or duplicate sequence': 'old_sequence',
+                            'Superseded stream epoch': 'superseded_epoch',
+                            'Superseded stream grant': 'superseded_grant',
+                            'Attachment binding mismatch': 'attachment_binding',
+                            'Ordered stream consumer too slow': 'slow_ordered_consumer'}.get(str(error))}
+        key = (stage, event['authority'], event['error'], status)
+        now = time.monotonic()
+        if now - self.reported.get(key, -100) < 30:
+            return
+        if len(self.reported) >= 128:
+            self.reported.pop(next(iter(self.reported)))
+        self.reported[key] = now
+        event['observed_at'] = time.time()
+        self.diagnostics.append(event)
+        logging.getLogger(__name__).warning('Stream diagnostic %s', json.dumps(event))
+
+    def health(self):
+        peers = {node: {'provider': {}, 'server': {}} for node in self.secrets}
+        for session in self.sessions.values():
+            roles = peers[session.grant['authority']]
+            for role, lane in session.peers:
+                roles[role][lane] = roles[role].get(lane, 0) + 1
+        return {'sessions': len(self.sessions), 'stream_peers': peers,
+                'recent_errors': list(self.diagnostics)}
 
     async def validate(self, grant):
         fn = self.validators.get(grant['authority'])
@@ -159,7 +197,8 @@ class Router:
             while not session.closed:
                 await self.validate(session.grant)
                 await asyncio.sleep(1)
-        except Exception:
+        except Exception as error:
+            self.report('authority_validation', session.grant, error)
             await session.close()
         finally:
             self.sessions.pop(session.grant['id'], None)
@@ -239,16 +278,22 @@ async def serve(config):
     from .stream_inspection import add_remote
     add_remote(config, secrets, validators)
     router = Router(secrets, validators)
+    if config.get('diagnostic_log'):
+        from logging.handlers import RotatingFileHandler
+        logger = logging.getLogger(__name__)
+        logger.addHandler(RotatingFileHandler(config['diagnostic_log'], maxBytes=1048576, backupCount=1))
+        logger.propagate = False
     context = listener_tls(config)
     async def health(connection, request):
         if request.path == '/health':
             return connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
-                'sessions': len(router.sessions), 'transport': config.get('transport', 'tls')}))
+                **router.health(), 'transport': config.get('transport', 'tls')}))
     async def handle(socket):
         try:
             await router.attach(socket, socket.request.path,
                                 socket.request.headers.get('Authorization', ''))
-        except Exception:
+        except Exception as error:
+            router.report('attachment', None, error)
             await socket.close(1008, 'Stream rejected')
     async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
                                 ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
