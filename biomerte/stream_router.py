@@ -61,6 +61,7 @@ def frame(metadata, data):
 class Session:
     def __init__(self, grant, peer_status=False):
         self.peer_status = peer_status
+        self.quarantined = False
         self.grant = grant
         self.peers = {}
         self.sequences = {}
@@ -74,7 +75,18 @@ class Session:
             target.put(json.dumps({'type': 'stream_status', 'lane': 'control',
                 'authority': g['authority'], 'generation': g['generation'],
                 'epoch': g['epoch'], 'provider_connected': ('provider', 'control') in self.peers,
-                'server_connected': True}))
+                'server_connected': True, 'authority_available': not self.quarantined}))
+
+    def quarantine(self, value):
+        if self.quarantined == value:
+            return
+        self.quarantined = value
+        # This mode is only enabled for the supersedable relay-control lane.
+        # Neither expiry nor renewed verification may replay saved intent.
+        for peer in self.peers.values():
+            while not peer.queue.empty():
+                peer.queue.get_nowait()
+        self.notify_control_status()
 
     def check(self, role, lane, message, now=None):
         g = self.grant
@@ -191,7 +203,9 @@ class Router:
             for role, lane in session.peers:
                 roles[role][lane] = roles[role].get(lane, 0) + 1
         return {'sessions': len(self.sessions), 'stream_peers': peers,
-                'recent_errors': list(self.diagnostics)}
+                'recent_errors': list(self.diagnostics),
+                'quarantined_sessions': [{'id': s.grant['id'], 'authority': s.grant['authority']}
+                                         for s in self.sessions.values() if s.quarantined]}
 
     async def validate(self, grant):
         fn = self.validators.get(grant['authority'])
@@ -203,14 +217,33 @@ class Router:
             raise Fault('Superseded stream grant', 409)
         return value
 
+    def can_quarantine(self, session, error):
+        g = session.grant
+        status = getattr(error, 'status', getattr(error, 'code', None))
+        unavailable = status in (408, 429, 500, 502, 503, 504) or (
+            status is None and isinstance(error, (OSError, ConnectionError, TimeoutError)))
+        return (self.peer_status and g.get('contract') == 'device.outputs.stream:1'
+                and set(g.get('lanes', [])) == {'control'}
+                and g.get('policies', {}).get('control', g.get('delivery')) == 'supersedable'
+                and unavailable)
+
     async def watch(self, session):
         try:
             while not session.closed:
-                await self.validate(session.grant)
+                try:
+                    await self.validate(session.grant)
+                except Exception as error:
+                    self.report('authority_validation', session.grant, error)
+                    if not self.can_quarantine(session, error):
+                        await session.close()
+                        break
+                    # Unknown authority reachability is not confirmed lease loss.
+                    # Retain the sockets, but forward no payload until the exact
+                    # authority/fence/epoch grant has been revalidated.
+                    session.quarantine(True)
+                else:
+                    session.quarantine(False)
                 await asyncio.sleep(1)
-        except Exception as error:
-            self.report('authority_validation', session.grant, error)
-            await session.close()
         finally:
             self.sessions.pop(session.grant['id'], None)
             self.tasks.pop(session.grant['id'], None)
@@ -251,6 +284,7 @@ class Router:
                     if count > grant['limits']['messages_per_second']:
                         raise Fault('Stream rate exceeded', 429)
                     session.check(role, lane, message)
+                    if session.quarantined:continue
                     other = session.peers.get(('provider' if role == 'server' else 'server', lane))
                     if other:
                         other.put(message)
@@ -301,6 +335,7 @@ async def serve(config):
         if request.path == '/health':
             response = connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
                 **router.health(), 'transport': config.get('transport', 'tls')}))
+            del response.headers['Content-Type']
             response.headers['Content-Type'] = 'application/json'
             return response
     async def handle(socket):
