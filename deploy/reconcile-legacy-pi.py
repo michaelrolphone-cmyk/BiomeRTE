@@ -23,7 +23,7 @@ def main():
         # is an executor fence. Daemon-side effects remain explicitly unknown.
         fence_ok='KillMode=control-group' in status and 'MainPID=0' not in status
         for item in items:
-            if item['provider']!=node['node']:continue
+            if item['provider']!=node['node'] or item['state']!='historical_uncertainty':continue
             op=item['operation']
             a=remote.call('cap.status',{'operation':op,'recovery':True})
             identity=digest([a[k] for k in ('contract','inputs','resource','generation','lease')])
@@ -66,12 +66,14 @@ def main():
                     group_path=[l.split(':',2)[2] for l in group.splitlines() if ':name=systemd:' in l]
                     if not group_path:raise RuntimeError('No systemd custody group')
                     pids=open('/sys/fs/cgroup/systemd'+group_path[0]+'/cgroup.procs').read().split()
+                    main_start=int(open('/proc/'+str(pid)+'/stat').read().rsplit(')',1)[1].split()[19])
                     processes=[]
                     for p in pids:
                         try:cmd=open('/proc/'+p+'/cmdline','rb').read().replace(b'\0',b' ').decode('utf8','replace')
                         except OSError:continue
-                        processes.append({'pid':int(p),'command':cmd})
-                        if 'docker_cli.py' in cmd or '--supervise' in cmd:
+                        start=int(open('/proc/'+p+'/stat').read().rsplit(')',1)[1].split()[19])
+                        processes.append({'pid':int(p),'start_ticks':start})
+                        if start < main_start and ('docker_cli.py' in cmd or '--supervise' in cmd):
                             raise RuntimeError('Unsettled legacy executor in provider group')
                     evidence.update(provider_pid=pid,cgroup=group_path[0],processes=processes,
                                     native_record_absent=True,scope='command executor; external effects unknown')
