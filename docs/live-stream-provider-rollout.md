@@ -1,36 +1,55 @@
 # Live vision and persistent Rover rollout
 
-The paired Mac Rover process owns persistent native leases. Browsers subscribe to its vision, map and control lanes; attaching or detaching a browser does not acquire or release resources. Camera and relay grants remain separate. Existing state, maps, calibration, camera settings and provider identities must be preserved.
+The paired Mac Rover process owns persistent native camera and relay leases. Browser subscriptions do not acquire or release resources. Preserve existing maps, calibration, camera settings, provider identities and worker ledgers.
 
-## Deployed transport
+## Public interface and session owner
 
-The public session router is https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com, from michaelrolphone-cmyk/BiomeRTE-Heorku-Gateway-Stream. Its deployment label is not a controller authority: the actual Mac/Pi fingerprints remain the authorities. The gateway exposes public WSS descriptors and authenticated stream inspection. Inspection validates the current owning controller's grant; a signed attachment alone is insufficient evidence of current authority.
+The public interface is https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com/, from michaelrolphone-cmyk/BiomeRTE-Heorku-Gateway-Stream. The deployment label is not a lease authority: the Mac and Pi controller fingerprints remain authoritative.
 
-Gateway Site v68 uses STREAM_ROUTER_ORIGIN and a private signing secret. Both controllers publish wss://biomerte-controller.cantikash.chatgpt.site/api/stream descriptors. Secret values belong only in private runtime configuration.
+Both controllers' private node.json files contain the matching stream_router_secret and publish stream_gateway_url=wss://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com. Secrets are runtime configuration and must not be committed.
 
-org.biomerte.rover-server connects outbound from the Mac to the Heroku Rover ingress. Each live lane and HTTP response has a separate connection. HTTP responses transfer in backpressured 64 KiB chunks so a complete map can exceed a single message size without occupying the attachment/control link. No controller action, artifact or durable journal row is created per live message.
+The Mac runs org.biomerte.stream-router at ws://127.0.0.1:8751 beside its controller. Heroku controllers.json explicitly selects router_owner: mac_bridge. The authenticated outbound Mac bridge forwards public native sockets to that session owner. Public descriptors and remote provider connections remain WSS. Only an explicitly validated loopback override may use plaintext WS.
 
-Rover Site v22 uses the Heroku origin and a derived server credential. Its existing custom audience is preserved. Native control readiness is reported separately from service reachability. Complete revision-pinned snapshots have no short state-request timer. Source: Site commit7df1057046cd8bf6abdd42fadf4a3b756bfb2fb1, Heroku commitb21d451d881360f4d27765d570363fa8f4c3ca30.
+The camera provider manifest uses stream_local_router_url; the Rover service uses BIOMERTE_LOCAL_STREAM_ROUTER. Both point to ws://127.0.0.1:8751 and retain the original controller-issued role credentials and fence bindings. Gateway Site v68 retains STREAM_ROUTER_ORIGIN pointing at Heroku for its optional proxy path and authenticated inspection. Direct descriptors avoid the additional Site proxy hops.
 
-The optional Mac loopback router, org.biomerte.stream-router at127.0.0.1:8751, remains installed. Its private-tunnel adapter is an alternate deployment path, not a prerequisite for the deployed Heroku ingress.
+org.biomerte.rover-server connects outbound to Heroku. Vision, map, control and each HTTP response have independent connections. Complete snapshots transfer in backpressured 64 KiB chunks, allowing a 10 MB map without placing it on the attachment/control link. No live message becomes a controller action, artifact or durable journal row.
+
+## Readiness, recovery and feedback
+
+Rover Site v22 uses the Heroku origin and a derived server credential with its existing audience. Leases belong to the paired server. A public bridge outage or browser detach must not reacquire them.
+
+The Mac router enables opt-in peer_status. The paired Rover requires the corresponding native capability and reports control ready only when its server socket and the relay provider peer are present. Provider loss clears queued input and readiness; reconnect requires fresh input. Older clients retain the legacy protocol unless this mode is explicitly enabled. The companion installer checks runtime support before stopping the previous service.
+
+Control freshness is separate from transport and lease liveness. ROVER_INTENT_TTL_MS is configured to 500 ms; the router and relay retain the maximum one-second intent bound. Pings, acknowledgements, attachment and lease maintenance cannot extend a driving intent. Reconnection discards saved intent. A fresh desired state supersedes pending state without waiting for an applied acknowledgement.
+
+The private router health body exposes per-authority provider/server lane counts and bounded recent failure categories. Diagnostic files rotate at 1 MiB with one backup. Public Heroku session counts describe that process, not the Mac owner's sessions; inspect private health for native peers. Authority inspection timeouts have been observed and remain a separate recovery investigation from relay ACK delivery.
 
 ## Native vision provider
 
-The service exposes owner-only Unix-socket /v1/live and /v1/live/map feeds from the existing decode/CV pipeline. The provider advertises robot.vision.stream:1 as persistent and stream-only only when those feeds are available. Large map deltas become pinned snapshot requests before exceeding the metadata bound.
+The vision service exposes owner-only Unix-socket /v1/live and /v1/live/map feeds from the existing decode/CV pipeline. The provider advertises robot.vision.stream:1 as persistent and stream-only when those feeds are available. It publishes newest-only frames. Large map deltas and revision gaps require complete snapshots pinned to map_id and revision.
 
-Install requirements-streaming.txt in the existing vision virtual environment. Keep the canonical org.biomerte.robot-vision-provider as the sole worker-lock owner. Preserve its saved worker ledger and identity. The provider implementation may remain on the preserved vision release while provider-manifest.json repo selects the integrated worker runtime; verify compatibility before changing that runtime. On2026-11-10, the provider implementation was byte-identical between streaming-e2840545e298 and full-spec-7f791edf85e7, while worker.py differed. The manifest was updated to the integrated worker and the canonical provider restarted.
+Keep org.biomerte.robot-vision-provider as the sole worker-lock owner. The qualified idle-stream-1cd797 provider runtime allows an idle HTTP stream body and explicitly aborts its retained descriptor on withdrawal/shutdown. A two-second idle read timeout previously caused reconnects and remote attachment delays that amplified source pauses into 5–9 second public gaps.
 
-The Rover owner refreshes lane attachment credentials under the same lease/epoch. A failed sender clears control readiness and pending intent even if its receiver remains alive. Late map subscribers receive the latest known map reference; map queue overflow retains a pinned snapshot target. Owner replacement invalidates the cached map reference.
+The vision service release rover-wire-2aab8017ab6f preserves asynchronous SLAM checkpoint capture/save and cached AHRS/RF telemetry. Wire metadata stays within the 16 KiB header bound, carries measurement-age bindings and explicitly identifies omitted RF scan details. Neither source capture-clock accuracy nor calibrated physical map scale is inferred from transport timing.
 
-## Qualification recorded on2026-11-10
+## Recorded qualification, 2026-11-10
 
-- Current pre-PR60 native runtime:445tests passed in92.2s. PR60 sender/map regressions:12focusedRover tests passed after integration.
-- Vision provider suite:437tests total,26skipped in this native environment; test skips are not live qualification.
-- Heroku:14tests passed, including actual independent WebSocket lanes and a10MB chunked snapshot. Rover Site:160tests, build and artifact validation passed.
-- Public camera reverse ingress delivered20matchingJPEGs to two subscribers. Processing-to-subscriber age:median285ms,max634ms. Source capture-clock accuracy remains unknown.
-- Public pinned map snapshot revision15157 for mapb1b584da-30d3-4935-9b10-f5bcad4c0c38 returned complete:true,6,283entities,10,082,852JSONbytes in7.67s. No pages were dropped.
-- Legacy discrete relay ownership was neutralized to mask0 and released. Applied output is distinct from physical contact feedback. No motion was issued in these checks.
+These are observations from named qualification windows, not a claim that every deployment gate is closed.
 
-Open acceptance is explicit: sustained public ownership has shown repeated revocations and is being requalified; relay persistent fencing remains blocked by expired stream-attachment recovery in firmware; neutral streamed acknowledgements, physical timing and live authority-change behavior still require qualification. A Sites dispatch credential returned401SIGN_IN_REQUIRED from the Rover API and does not establish authenticated browser acceptance. Existing public camera/map successes do not close these gates. Current GitHub qualification is queued, not passed.
+- Native core baseline: 450 tests passed. Subsequent private diagnostics and real WebSocket provider-readiness/no-replay regressions passed focused suites. The final source still requires its applicable checks.
+- Vision provider idle-read candidate: 450 reported tests with 26 expected skips. The real Unix HTTP/1.0 regression verifies idle-body continuity and prompt explicit shutdown. The preserved vision service's async checkpoint/telemetry suite reported 449 tests with 26 skips.
+- Heroku transport/policy companion: 21 tests passed, including independent lanes and a 10 MB response. Rover Site v22: 160 tests, build and artifact validation passed.
+- Two public camera viewers received 429/428 frames over 123 seconds, with 428 matching frame identities and JPEG digests. Maximum processing-to-observer ages were 0.494/0.445 seconds; reattachment took 0.548 seconds. Source capture time remains unknown.
+- After the idle-read fix, qualification319 ran 90.775 seconds: local302/public301 frames, 301 shared identities. Maximum local/public gaps were 2.121/2.367 seconds; maximum matched public-added latency was 0.566 seconds. A viewer held without reads for 10 seconds and detached while the fast viewer continued. Source CV pauses remain.
+- Qualification326 returned a complete pinned snapshot: revision15524, 6,306 entities, 10,123,213 JSON bytes in7.58 seconds. During that transfer 24 live frames continued, maximum gap0.889 seconds.
+- Actual public frames carried valid IMU, attitude, pressure and fresh RF telemetry with18 age bindings; sampled metadata headers were15,787–15,814 bytes.
+- Relay firmware PR210 and PR211 were built and flashed to board30:ED:A0:D9:5F:24 with the application at0x50000, preserving Wi-Fi and pairing. Expired attachment recovery and the signed WebSocket handshake buffer were repaired; the final d327 image connected over WebSocket.
+- Live neutral controls remain intermittent. Qualification2114 observed both relay peers present throughout, unchanged generation110, no router faults, but only2/8 fresh neutral intents applied to both public subscribers. Separate qualification336 captured a Pi authority-inspection TimeoutError and subsequent peer churn.
+- ACK feedback repair PR212 retains feedback until a complete SDK write succeeds and retries latest feedback without reapplying output intent. Exact f3a host failure-injection and deterministic pin checks passed; its Linux sanitizer and ESP-IDF target checks, flash and live acceptance remain pending.
+- No nonzero motion was issued in these checks. Applied ACK describes commanded output state and does not establish physical contact feedback.
 
-The relay correction is tracked in RiscRTE-System-Apps PR210. Do not replay uncertain hardware commands or clear unknown external effects to force readiness. The active Rhizome task is biomerte-bounded-leases-streaming-20261110.
+## Open acceptance
+
+Finish sustained fresh relay acknowledgement qualification and authority-unavailability recovery without replaying old input or weakening definitive revocation. Requalify the final router/Rover/firmware combination after coordinated deployment. Live authority-change behavior and physical contact timing remain distinct checks. A programmatic Site credential does not establish a signed-in browser session; current visual acceptance is unobserved while the connected browser is unavailable.
+
+The active Rhizome task is biomerte-bounded-leases-streaming-20261110. Read its latest coordination comments before any restart or firmware flash. Do not replay uncertain hardware effects or clear unknown outcomes to force readiness.
