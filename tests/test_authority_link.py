@@ -29,7 +29,7 @@ class AuthorityLinkTests(unittest.TestCase):
             def __enter__(self):return self
             def __exit__(self,*args):self.close()
         def call(request,timeout):
-            observed.append((request.full_url,json.loads(request.data),timeout))
+            observed.append((request.full_url,json.loads(request.data.decode()),timeout))
             return Response(json.dumps(dict(authority=NODE,id=SID,generation=7)).encode())
         with patch.object(link.urllib.request,'urlopen',side_effect=call):
             value=link.inspect(self.config(),self.request())
