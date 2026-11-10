@@ -23,7 +23,17 @@ from urllib.parse import urlparse
 log = logging.getLogger('biomerte.store')
 
 # Disposable scalar projections; canonical values remain in records/journal.
-LOOKUP_FIELDS = {'runs': ('state',), 'leases': ('state', 'task'), 'actions': ('lease', 'state')}
+LOOKUP_FIELDS = {'runs': ('state',), 'leases': ('state', 'task'), 'actions': ('lease', 'state'),
+                 'assistant_background': ('state', 'settlement_checked'),
+                 'assistant_learning_outbox': ('delivered',)}
+LOOKUP_DEFAULTS = {('assistant_background', 'settlement_checked'): False,
+                   ('assistant_learning_outbox', 'delivered'): False}
+
+
+def lookup_value(kind, field, value):
+    if field in value:
+        return value[field]
+    return LOOKUP_DEFAULTS[(kind, field)]
 
 
 class Fault(Exception):
@@ -123,7 +133,11 @@ class Records:
         result = []
         for key, encoded in self.db.execute(sql, args):
             value = json.loads(encoded)
-            if field in value and encode(value[field]) in encoded_values and self._execution_eligible(kind,key,value):
+            try:
+                selected = encode(lookup_value(kind, field, value)) in encoded_values
+            except KeyError:
+                selected = False
+            if selected and self._execution_eligible(kind,key,value):
                 result.append(value)
         return result
 
@@ -133,9 +147,12 @@ class Records:
         self.db.execute('DELETE FROM record_lookup WHERE kind=? AND id=?', (kind, key))
         if value is not None:
             for field in LOOKUP_FIELDS[kind]:
-                if field in value:
-                    self.db.execute('INSERT INTO record_lookup VALUES (?,?,?,?)',
-                                    (kind, key, field, encode(value[field])))
+                try:
+                    selected = lookup_value(kind, field, value)
+                except KeyError:
+                    continue
+                self.db.execute('INSERT INTO record_lookup VALUES (?,?,?,?)',
+                                (kind, key, field, encode(selected)))
         self.db.execute('DELETE FROM record_lookup_dirty WHERE kind=? AND id=?', (kind, key))
 
     def _session_write_allowed(self, kind, key, value=None):
@@ -354,11 +371,11 @@ class Store:
             'CREATE TABLE IF NOT EXISTS record_lookup_version(version INTEGER PRIMARY KEY)']
         kinds = ','.join("'" + kind + "'" for kind in sorted(LOOKUP_FIELDS))
         for event, prefix in (('INSERT', 'NEW'), ('DELETE', 'OLD'), ('UPDATE', 'OLD')):
-            schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_' + event.lower() +
+            schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_v2_' + event.lower() +
                           ' AFTER ' + event + ' ON records WHEN ' + prefix + '.kind IN (' + kinds + ') '
                           'BEGIN INSERT OR REPLACE INTO record_lookup_dirty VALUES (' +
                           prefix + '.kind,' + prefix + '.id); END')
-        schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_update_new AFTER UPDATE ON records '
+        schema.append('CREATE TRIGGER IF NOT EXISTS record_lookup_v2_update_new AFTER UPDATE ON records '
                       'WHEN NEW.kind IN (' + kinds + ') BEGIN INSERT OR REPLACE INTO record_lookup_dirty '
                       'VALUES (NEW.kind,NEW.id); END')
         try:
@@ -368,11 +385,15 @@ class Store:
             if not db.execute('SELECT 1 FROM record_lookup_version WHERE version=1').fetchone():
                 db.execute('INSERT OR IGNORE INTO record_lookup_dirty SELECT kind,id FROM records '
                            'WHERE kind IN (' + kinds + ')')
+            if not db.execute('SELECT 1 FROM record_lookup_version WHERE version=2').fetchone():
+                db.execute("INSERT OR IGNORE INTO record_lookup_dirty SELECT kind,id FROM records "
+                           "WHERE kind IN ('assistant_background','assistant_learning_outbox')")
             dirty = db.execute('SELECT kind,id FROM record_lookup_dirty').fetchall()
             tx = Records(db)
             for kind, key in dirty:
                 tx._index(kind, key, tx.get(kind, key))
             db.execute('INSERT OR IGNORE INTO record_lookup_version VALUES(1)')
+            db.execute('INSERT OR IGNORE INTO record_lookup_version VALUES(2)')
             db.commit()
         except BaseException:
             db.rollback()
