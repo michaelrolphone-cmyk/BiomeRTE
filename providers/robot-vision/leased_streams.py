@@ -55,15 +55,19 @@ class VisionStreams:
         sequence=0
         while not stop.is_set():
             local=None
+            stage='attachment'
             try:
                 descriptor=await asyncio.to_thread(self.remote.call,'stream.attach',{'session':grant['id'],'role':'provider'})
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
+                stage='public_socket'
                 async with connect(descriptor['url']+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
+                    stage='local_feed'
                     local=LocalConnection(self.socket_path)
                     await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))
                     response=await asyncio.to_thread(local.getresponse)
                     if response.status!=200:raise RuntimeError('live_feed_unavailable')
                     while not stop.is_set():
+                        stage='local_read'
                         header=await asyncio.to_thread(exact,response,4)
                         size=struct.unpack('!I',header)[0]
                         if not 4<=size<=4194304:raise ValueError('live_frame_size')
@@ -76,15 +80,16 @@ class VisionStreams:
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
                         if grant['lane']=='vision':metadata['type']='frame'
+                        stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:
-                key=(grant['id'],grant['lane'])
+                key=grant['lane']
                 now=time.monotonic()
                 if now-self.reported.get(key,-100)>30:
                     self.reported[key]=now
                     response=getattr(error,'response',None)
                     status=getattr(error,'status',getattr(response,'status_code',None))
-                    logging.warning('Vision live lane %s failed: %s status=%s',grant['lane'],type(error).__name__,status)
+                    logging.warning('Vision live lane %s stage=%s failed: %s status=%s',grant['lane'],stage,type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
                 if local:local.close()
