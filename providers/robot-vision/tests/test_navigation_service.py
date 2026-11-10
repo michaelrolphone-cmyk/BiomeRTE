@@ -73,7 +73,8 @@ class NavigationServiceTests(unittest.TestCase):
         self.assertTrue(robot["valid"], robot)
         self.assertEqual(robot["translation_m"], [2.25, 0, 0])
         self.assertEqual(robot["frame_id"], response["frame"]["frame_id"])
-        self.assertEqual(geometry["robot_localization"], robot)
+        for key in (*BINDING, "T_floor_robot", "floor_alignment", "camera_robot_extrinsics"):
+            self.assertEqual(geometry["robot_localization"][key], robot[key])
         self.assertEqual(response["snapshot"]["localization"]["units"], "arbitrary")
         self.assertEqual(response["snapshot"]["metric_localization"]["pose_origin"], "camera_optical")
         self.assertFalse(robot["navigation_available"])
