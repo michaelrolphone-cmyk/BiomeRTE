@@ -1,4 +1,4 @@
-import asyncio,json,unittest
+import asyncio,json,unittest,sys,types
 from unittest.mock import patch
 from biomerte.rover import Rover
 
@@ -13,7 +13,15 @@ class ControlFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_sender_failure_clears_readiness_and_pending_intent(self):
         rover=Rover(None,{})
         descriptor=dict(url='wss://router/session',attachment_credential='credential',authority='owner',generation=1,epoch='epoch')
-        with patch('websockets.asyncio.client.connect',return_value=Socket()):
+        websocket=types.ModuleType('websockets')
+        async_package=types.ModuleType('websockets.asyncio')
+        client=types.ModuleType('websockets.asyncio.client')
+        client.connect=lambda *args,**kwargs:Socket()
+        websocket.asyncio=async_package
+        async_package.client=client
+        # This is a transport-unit test; actual sockets run in live-streaming CI.
+        with patch.dict(sys.modules,{'websockets':websocket,'websockets.asyncio':async_package,
+                                    'websockets.asyncio.client':client}):
             lane=asyncio.create_task(rover.lane(descriptor,'control'))
             for _ in range(20):
                 if rover.control_ready:break
