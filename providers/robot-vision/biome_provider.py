@@ -460,7 +460,7 @@ def serve(cfg):
     worker_state.chmod(0o700)
     remote = Remote(cfg)
     from leased_streams import VisionStreams
-    live_streams = VisionStreams(remote, cfg["socket"])
+    live_streams = VisionStreams(remote, cfg["socket"], cfg.get("stream_local_router_url"))
     client = VisionClient(cfg["socket"], cfg.get("health_timeout_seconds", 5))
     local = worker_offers(cfg)
     with open(worker_state / "worker.lock", "a") as lock:

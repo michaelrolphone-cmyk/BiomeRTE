@@ -29,7 +29,9 @@ def exact(source,size):
 
 
 class VisionStreams:
-    def __init__(self,remote,socket_path):
+    def __init__(self,remote,socket_path,local_router_url=None):
+        from biomerte.stream_inspection import loopback_url
+        self.local_router_url=loopback_url(local_router_url)
         self.remote=remote
         self.socket_path=socket_path
         self.running={}
@@ -60,7 +62,8 @@ class VisionStreams:
                 descriptor=await asyncio.to_thread(self.remote.call,'stream.attach',{'session':grant['id'],'role':'provider'})
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
-                async with connect(descriptor['url']+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
+                url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
+                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
                     stage='local_feed'
                     local=LocalConnection(self.socket_path)
                     await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))

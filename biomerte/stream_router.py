@@ -236,6 +236,8 @@ async def serve(config):
         app = Application(directory)
         secrets[app.node] = app.config['stream_router_secret']
         validators[app.node] = lambda id, app=app: app.call('stream.inspect', {'session': id}, realm='site')
+    from .stream_inspection import add_remote
+    add_remote(config, secrets, validators)
     router = Router(secrets, validators)
     context = listener_tls(config)
     async def health(connection, request):
