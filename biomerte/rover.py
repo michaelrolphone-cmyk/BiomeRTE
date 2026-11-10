@@ -86,7 +86,7 @@ class Rover:
                     await self.call('stream.close', session=old['id'])
                 descriptor = await self.call('stream.open', lease=lease['id'])
                 self.descriptors[contract] = descriptor
-                lanes = [asyncio.create_task(self.lane(descriptor, lane))
+                lanes = [asyncio.create_task(self.maintain_lane(descriptor, lane))
                          for lane in descriptor['lanes']]
                 await asyncio.gather(*lanes)
             except asyncio.CancelledError:
@@ -112,6 +112,23 @@ class Rover:
                     except Exception:
                         pass
             if not self.closed:
+                await asyncio.sleep(.5)
+
+    async def maintain_lane(self, descriptor, lane):
+        # A transport outage is not a release of a persistent resource. Mint a
+        # fresh attachment credential and reconnect this lane under its existing
+        # epoch. Other lanes keep running. Only authoritative rejection returns
+        # to the owner lifecycle to close the superseded session.
+        while not self.closed:
+            try:
+                current = await self.call('stream.attach', session=descriptor['id'], role='server')
+                await self.lane(current, lane)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                status = getattr(error, 'status', getattr(error, 'code', None))
+                if status in (403, 404, 409, 410):
+                    raise
                 await asyncio.sleep(.5)
 
     async def lane(self, descriptor, lane):
