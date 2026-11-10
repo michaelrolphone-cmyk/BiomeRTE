@@ -181,7 +181,7 @@ def recover_reservations(tx, ctx):
             start_submission(tx, ctx, lease)
             continue
         reason = None
-        if work and policy.get('release_after_result'):
+        if work and (policy.get('release_after_result') or any(a.get('release_after_result') for a in work)):
             reason = 'settled_exchange'
         elif not work and policy.get('idle_seconds', 0) > 0:
             activity = tx.get('_reservation_activity', lease['id'])
@@ -335,7 +335,7 @@ def release(tx, l):
     if guard['holder'] == l['id'] and guard['generation'] == l['generation']:
         guard.update(holder='', released_at=time.time())
         tx.put('guards', l['guard'], guard)
-        tx.put('_fence_generations', l['resource'], guard['generation'])
+        tx.put('_fence_generations', l['resource'], max(guard['generation'], tx.get('_fence_generations', l['resource'], 0)))
     l.update(state='released', released_at=time.time(), expires_at=time.time() + 300)
     tx.put('leases', l['id'], l)
     return True
@@ -359,14 +359,15 @@ def release_lease(tx, ctx, lease):
     return l
 
 
-@op('cap.invoke', 'lease:str inputs:obj operation:str destination?:str')
-def dispatch(tx, ctx, lease, inputs, operation, destination=''):
+@op('cap.invoke', 'lease:str inputs:obj operation:str destination?:str release_after_result?:bool')
+def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_result=None):
     """Submit once with a unique operation ID. Read cap.status with that ID for the result; the lease remains held until released."""
     l = tx.need('leases', lease)
     key = ident(operation)
     prev = tx.get('actions', key)
     if prev:
-        if prev['lease'] != lease or prev['inputs'] != inputs or prev.get('destination', '') != destination:
+        if (prev['lease'] != lease or prev['inputs'] != inputs or prev.get('destination', '') != destination or
+                release_after_result is not None and prev.get('release_after_result') != release_after_result):
             raise Fault('Operation identity conflict', 409)
         return prev
     if destination:
@@ -381,7 +382,7 @@ def dispatch(tx, ctx, lease, inputs, operation, destination=''):
     guard(tx, key, l['contract'], l['resource'], inputs, ctx)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l['provider'],
          'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs, 'guard': l['guard'],
-         'destination': destination, 'created_at': time.time(), 'expires_at': None,
+         'destination': destination, 'release_after_result': (reservation_policy(tx, l).get('release_after_result', False) if release_after_result is None else release_after_result), 'created_at': time.time(), 'expires_at': None,
          'status_query': {'operation': 'cap.status', 'arguments': {'operation': key}}}
     if l['provider'] == 'builtin' and l['contract'] == 'core.echo:1':
         a.update(state='succeeded', result={'value': inputs['value']})
@@ -439,7 +440,7 @@ def claim(tx, ctx, provider, operation, generation):
             observe(tx, operation, 'failed', a['result'])
             lifecycle.settled(tx, a)
             finish_submission(tx, ctx, operation)
-            if reservation_policy(tx, l).get('release_after_result'):
+            if a.get('release_after_result', reservation_policy(tx, l).get('release_after_result')):
                 release(tx, l)
                 promote(tx, ctx)
             return a
@@ -481,7 +482,7 @@ def result(tx, ctx, provider, operation, generation, state, result):
     tx.emit('operation.' + state, {'id': operation})
     lifecycle.settled(tx, a)
     finish_submission(tx, ctx, operation)
-    if state in ('succeeded', 'failed') and reservation_policy(tx, tx.need('leases', a['lease'])).get('release_after_result'):
+    if state in ('succeeded', 'failed') and a.get('release_after_result', reservation_policy(tx, tx.need('leases', a['lease'])).get('release_after_result')):
         if release(tx, tx.need('leases', a['lease'])):
             promote(tx, ctx)
     return a

@@ -81,15 +81,18 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
     lanes = stream.get('lanes', ['data'])
     if not isinstance(lanes, list) or not 1 <= len(lanes) <= 8 or any(lane not in ('data', 'vision', 'telemetry', 'pose', 'map', 'control') for lane in lanes):
         raise Fault('Invalid stream lanes')
+    policies = stream.get('policies', {})
+    if not isinstance(policies, dict) or any(k not in lanes or v not in ('supersedable', 'ordered', 'ack_required') for k,v in policies.items()):
+        raise Fault('Invalid per-lane delivery policies')
     grant = dict(id=uid(), epoch=uid(), lease=lease, authority=ctx.app.node, site=ctx.app.site,
         realm=ctx.scope, contract=l['contract'], resource=l['resource'], provider=l['provider'],
         generation=l['generation'], server=ctx.actor, direction=direction, delivery=delivery,
-        limits=limits, lanes=stream.get('lanes', ['data']), schema=stream.get('schema', {}), state='open', expires_at=time.time() + ttl_seconds)
+        limits=limits, policies=policies, lanes=stream.get('lanes', ['data']), schema=stream.get('schema', {}), state='open', expires_at=time.time() + ttl_seconds)
     tx.put('_stream_grants', grant['id'], grant)
     return dict(grant, url=url.rstrip('/') + '/' + grant['id'], role='server', attachment_credential=token(ctx, grant, 'server'))
 
 
-@op('stream.attach', 'session:str role:str')
+@op('stream.attach', 'session:str role:str', False)
 def attach(tx, ctx, session, role):
     if role not in ('server', 'provider'):
         raise Fault('Invalid stream role')
@@ -122,3 +125,9 @@ def revoke(tx, ctx, session):
     grant = tx.need('_stream_grants', session)
     grant.update(state='revoked', expires_at=time.time())
     return tx.put('_stream_grants', session, grant)
+
+@op('stream.list', 'lease?:str', False)
+def listing(tx, ctx, lease=''):
+    return [g for g in tx.rows('_stream_grants') if (not lease or g['lease'] == lease) and
+            (ctx.permissions is None or ctx.actor in (g['server'], g['provider'])) and
+            g['state'] == 'open' and g['expires_at'] > time.time()]

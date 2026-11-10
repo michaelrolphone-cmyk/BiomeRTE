@@ -58,14 +58,21 @@ def search(tx, ctx, query=''):
             any(q in str(tx.need('revisions', h)['body']).lower() for h in d['heads'])]
 
 
-@op('artifact.put', 'data:str')
-def artifact(tx, ctx, data):
+@op('artifact.put', 'data:str ttl_seconds?:int')
+def artifact(tx, ctx, data, ttl_seconds=None):
     """Put an immutable base64 chunk (up to 256 KiB); larger artifacts use a manifest of chunks."""
     raw = un64(data)
     if len(raw) > 262144:
         raise Fault('Split artifact into 256 KiB chunks', 413)
     key = hashlib.sha256(raw).hexdigest()
-    tx.put('artifacts', key, {'id': key, 'data': b64(raw)})
+    old = tx.get('artifacts', key)
+    row = {'id': key, 'data': b64(raw)}
+    if ttl_seconds is not None:
+        if not 0 < ttl_seconds <= 86400:
+            raise Fault('Invalid artifact lifetime')
+        if old is None or old.get('expires_at') is not None:
+            row['expires_at'] = max(__import__('time').time() + ttl_seconds, (old or {}).get('expires_at', 0))
+    tx.put('artifacts', key, row)
     return {'sha256': key, 'size': len(raw)}
 
 

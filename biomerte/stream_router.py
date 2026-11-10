@@ -182,30 +182,37 @@ class Router:
         previous = session.peers.get(key)
         if previous:
             await previous.close(1000, 'Reattached')
-        peer = Peer(socket, grant['limits']['buffer_depth'], grant['delivery'])
+        delivery=grant.get('policies', {}).get(lane, grant['delivery'])
+        peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
         session.peers[key] = peer
         pump = asyncio.create_task(peer.pump())
         window, count = time.monotonic(), 0
+        async def receive():
+                nonlocal window, count
+                # Attachment subscribes; it never emits a saved desired state.
+                async for message in socket:
+                    if pump.done():
+                        pump.result()
+                    now = time.monotonic()
+                    if now - window >= 1:
+                        window, count = now, 0
+                    count += 1
+                    if count > grant['limits']['messages_per_second']:
+                        raise Fault('Stream rate exceeded', 429)
+                    session.check(role, lane, message)
+                    other = session.peers.get(('provider' if role == 'server' else 'server', lane))
+                    if other:
+                        other.put(message)
+        reader=asyncio.create_task(receive())
         try:
-            # Attachment subscribes; it never emits a saved desired state.
-            async for message in socket:
-                if pump.done():
-                    pump.result()
-                now = time.monotonic()
-                if now - window >= 1:
-                    window, count = now, 0
-                count += 1
-                if count > grant['limits']['messages_per_second']:
-                    raise Fault('Stream rate exceeded', 429)
-                session.check(role, lane, message)
-                other = session.peers.get(('provider' if role == 'server' else 'server', lane))
-                if other:
-                    other.put(message)
+            done,pending=await asyncio.wait((reader,pump),return_when=asyncio.FIRST_COMPLETED)
+            for task in done:task.result()
         finally:
             if session.peers.get(key) is peer:
                 session.peers.pop(key, None)
+            reader.cancel()
             pump.cancel()
-            await asyncio.gather(pump, return_exceptions=True)
+            await asyncio.gather(reader, pump, return_exceptions=True)
             # Disconnect discards queued payloads. Providers enforce intent expiry.
             await peer.close(1000, 'Detached')
 

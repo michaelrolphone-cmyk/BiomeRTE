@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "profile": "native Apple Silicon Python-core ORB2 + g2o + DBoW3",
+  "purpose": "Real feature-map serialization, restore, and image-based relocalization",
+  "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15",
+  "started_at_unix_s": 1794214636.544707,
+  "finished_at_unix_s": 1794214728.216352,
+  "source_sha256": {
+    "setup_slam.py": "6024a70fb8986acc73861fa0418256fa3763eaec67b23964a7b1960938625988",
+    "slam_backend.py": "0409c73512fd6e70ad492cb28402dce9a87d588ac78e0c8f3c97e7bdee777bcd",
+    "tests/test_slam_backend.py": "e019ec470570299bbd7d5fb3b1bc0d569039d970db70e3f020f3c3e6dcf171ae",
+    "tests/qualify_slam.py": "1005d65ee2ad49bb3944897e90a6b16a74d62e9ff3c0775f21673b68a3459e06"
+  },
+  "dataset": {
+    "source": "https://github.com/luigifreda/pyslam/tree/a4e6a31f211ac6b2f9ecf4ab628734f6194caa15/data/videos/kitti06",
+    "video_sha256": "05d1b1fbd12d9f3378008ac4bd377baad0ac3cab87d3dbb7afbe929ce292aeb6",
+    "timestamps_sha256": "61c8f09665fb7e89e59515990425f41ec42049bbb2fc94493e69133ca14100cd",
+    "settings_sha256": "83454549c4df0db0c098cb07bc4d9596d3a4f2baa19aef8a43e5a782be27cdf3",
+    "width": 1226,
+    "height": 370,
+    "frame_count": 1101
+  },
+  "calibration": {
+    "calibration_id": "pyslam-kitti04-12-83454549c4df0db0",
+    "cx": 601.8873,
+    "cy": 183.1104,
+    "distortion": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "fx": 707.0912,
+    "fy": 707.0912,
+    "height": 370,
+    "provenance": "pySLAM a4e6a31f211ac6b2f9ecf4ab628734f6194caa15 settings/KITTI04-12.yaml",
+    "validated": true,
+    "width": 1226
+  },
+  "runtime_versions": {
+    "kornia": "0.8.2",
+    "numba": "0.61.2",
+    "numpy": "1.26.4",
+    "torch": "2.15.0",
+    "torchvision": "0.29.2"
+  },
+  "elapsed_seconds": {
+    "checkpoint": 1.7739978329627775,
+    "new_start": 29.339281749969814,
+    "relocalization": 0.17762000003131106,
+    "restore": 54.60115387500264,
+    "total": 91.69602174998727,
+    "training": 1.2593158750096336
+  },
+  "training": {
+    "frames_processed": 11,
+    "tracked_frame_count": 9,
+    "nonzero_translation": true
+  },
+  "checkpoint": {
+    "format": "pyslam-system-state",
+    "format_version": 1,
+    "exact_saved_geometry": true,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": true,
+      "keyframe_count": 6,
+      "point_count": 471,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "keyframe_descriptor_records": 6,
+    "keypoint_count": 16000,
+    "loop_database_bytes": 11849282,
+    "files": [
+      {
+        "path": "config_info.json",
+        "sha256": "4b62696e3d0764fe86a678352c0f8cbc74f806148d89ff52a86fab5c5c46f92b",
+        "size": 1127
+      },
+      {
+        "path": "kf_image_map.pkl",
+        "sha256": "b5f1634ed8378284be42969d7cef4d9b131be4700da522f119b9ece069fd69f8",
+        "size": 8165751
+      },
+      {
+        "path": "loop_closing.db",
+        "sha256": "c0bd511a00234ddde04d9407c2d053dc55946212692c27cd43f1d71986003468",
+        "size": 11849282
+      },
+      {
+        "path": "loop_closing_db_maps.json",
+        "sha256": "2557ad0c31069fbe32e1201db44c927ca49b05bce823ae8ab5b8616fc33d3a5f",
+        "size": 135
+      },
+      {
+        "path": "map.json",
+        "sha256": "28841a31e9c670fbdaab8791ce4f29cd343b6b490104d1829313735c4d28ec24",
+        "size": 25917111
+      }
+    ]
+  },
+  "restore": {
+    "original_engine_closed": true,
+    "initial_localization": {
+      "T_map_camera": null,
+      "camera_axes": "x_right_y_down_z_forward",
+      "frame_id": null,
+      "pose_origin": "camera_optical",
+      "reason": "Restored map; a fresh frame must relocalize before a current pose is valid.",
+      "reference_keyframe_id": null,
+      "scale_status": "unobserved",
+      "status": "relocalizing",
+      "timestamp_s": null,
+      "units": "arbitrary",
+      "valid": false
+    },
+    "input_dataset_frame_index": 9,
+    "input_sha256": "c22c7a4d65c06f4067de53a9a6e6af20d2d1e3f291e04ceab95c6079f9c38337",
+    "input_was_saved_keyframe": false
+  },
+  "relocalized": {
+    "full_snapshot_upserts": 477,
+    "geometry": {
+      "available": true,
+      "complete_snapshot": true,
+      "keyframe_count": 6,
+      "point_count": 471,
+      "scale_status": "unobserved",
+      "units": "arbitrary"
+    },
+    "is_keyframe": false,
+    "localization": {
+      "T_map_camera": [
+        [
+          0.9999791299521629,
+          -0.0016287372282618392,
+          0.006251949708409339,
+          0.001051250930031329
+        ],
+        [
+          0.0016199099463654989,
+          0.9999976843827844,
+          0.0014167289206652902,
+          -0.00888562507545765
+        ],
+        [
+          -0.006254242710422405,
+          -0.0014065717579481146,
+          0.9999794527909107,
+          0.5041510959189889
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_axes": "x_right_y_down_z_forward",
+      "frame_id": "kitti06-relocalize-9",
+      "pose_origin": "camera_optical",
+      "reason": null,
+      "reference_keyframe_id": "10",
+      "scale_status": "unobserved",
+      "status": "tracking",
+      "timestamp_s": 403409.727122125,
+      "units": "arbitrary",
+      "valid": true
+    },
+    "observation_anchor": null
+  },
+  "live_camera_qualification": false,
+  "scope": "One real monocular KITTI prefix and one freshly submitted non-keyframe revisit. This verifies this native engine profile's state roundtrip and relocalization; it does not qualify live ESP32 intrinsics, metric scale, latency, or all environments.",
+  "evidence": {
+    "run_directory": "STATE/qualification/kitti06/run-20261109-02",
+    "controller_stdout_sha256": "bfeaed60723aa13ee63c8540c39ba77a745689a01ea8b06bb10dd672f0cff2c3"
+  }
+}

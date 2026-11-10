@@ -232,6 +232,8 @@ class Worker:
                 fenced += 1
             except Exception as error:
                 failure('fence', lease, error)
+        if callable(getattr(self, 'stream_handler', None)):
+            self.stream_handler(queue.get('streams', []))
         actions = [a for a in queue['actions']
                    if a.get('guard', a['resource']) not in blocked]
         if pool is not None:

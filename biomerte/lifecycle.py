@@ -136,7 +136,7 @@ def abandon(tx, ctx, lease, reason, now):
     guard.update(generation=guard['generation'] + 1, holder='', released_at=now)
     tx.put('guards', lease['guard'], guard)
     # A compact watermark prevents a swept guard resetting physical fence numbers.
-    tx.put('_fence_generations', lease['resource'], guard['generation'])
+    tx.put('_fence_generations', lease['resource'], max(guard['generation'], tx.get('_fence_generations', lease['resource'], 0)))
     for action in tx.rows('actions'):
         if action['lease'] != lease['id'] or action['generation'] != lease['generation'] or action['state'] in TERMINAL:
             continue
@@ -213,9 +213,9 @@ def recover(tx, ctx, lease, actions, now):
 
 def sweep(tx, ctx, now):
     # Only capability-path events expire; workflow/knowledge history is untouched.
-    for kind in ('result_inbox', 'destinations', '_stream_grants'):
+    for kind in ('result_inbox', 'destinations', '_stream_grants', 'artifacts'):
         for row in tx.rows(kind):
-            if row['expires_at'] <= now:
+            if row.get('expires_at', now + 1) <= now:
                 tx.drop(kind, row['id'])
     active_destinations = {r['id'] for r in tx.rows('destinations')}
     for row in tx.rows('result_inbox'):

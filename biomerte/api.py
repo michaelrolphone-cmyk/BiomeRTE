@@ -92,7 +92,7 @@ def command(tx, ctx, name, args, request_id):
         return old['result']
     result = invoke(tx, ctx, name, args)
     receipt = {'signature': signature, 'result': result}
-    if name.startswith(('cap.', 'provider.', 'destination.', 'inbox.', 'stream.')):
+    if name == 'agent.progress' or (name == 'artifact.put' and args.get('ttl_seconds')) or name.startswith(('cap.', 'provider.', 'destination.', 'inbox.', 'stream.')):
         receipt['expires_at'] = __import__('time').time() + 900
     tx.put('_receipt', key, receipt)
     return result
