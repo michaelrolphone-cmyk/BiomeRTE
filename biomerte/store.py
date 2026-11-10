@@ -116,8 +116,13 @@ class Records:
             expires = time.time() + 300
         if kind == 'guards' and not value.get('holder') and value.get('released_at') is not None:
             expires = value['released_at'] + 300
+        state = value.get('state', '')
+        link = value.get('lease', value.get('destination', ''))
+        if not isinstance(state, str):state = ''
+        if not isinstance(link, str):link = ''
+        if isinstance(expires, bool) or not isinstance(expires, (int,float)) or not __import__('math').isfinite(expires):expires = None
         self.db.execute("INSERT OR REPLACE INTO record_lifecycle VALUES(?,?,?,?,?,?)",
-                        (kind, key, value.get('state', ''), value.get('lease', value.get('destination', '')), expires,
+                        (kind, key, state, link, expires,
                          int(kind == 'actions' and value.get('state') in ('succeeded','failed','abandoned') and
                              bool(value.get('destination')) and not value.get('destination_delivered'))))
 

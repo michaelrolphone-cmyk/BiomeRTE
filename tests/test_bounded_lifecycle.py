@@ -149,3 +149,9 @@ class BoundedLifecycle(unittest.TestCase):
             recovered = self.app.stores['site'].execute(lambda tx:recover_reservations(tx,Context(self.app)))
         self.assertEqual(1,recovered)
         self.assertEqual('abandoned',self.call('cap.status',operation='one')['state'])
+
+    def test_derived_index_does_not_constrain_arbitrary_document_shapes(self):
+        value={'state':{'mode':'ready'},'lease':{'nested':True},'expires_at':{'not_a_lifecycle':True}}
+        self.app.stores['site'].execute(lambda tx:tx.put('custom','shape',value))
+        result=self.app.stores['site'].execute(lambda tx:tx.need('custom','shape'))
+        self.assertEqual(value,result)
