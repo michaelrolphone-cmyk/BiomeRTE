@@ -425,10 +425,25 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
-            "radio": self.radio.status(), "ahrs": self.ahrs.status(),
+            "radio": self.radio.status(include_observations=True),
+            "ahrs": self._stream_ahrs(),
             "map_snapshot_required_on_revision_gap": True,
         }, encoded.tobytes())
         return snapshot
+
+    def _stream_ahrs(self):
+        """Publish cached sensor values with original source identity and timing."""
+        status = self.ahrs.status()
+        snapshot = self.ahrs.snapshot()
+        if not isinstance(snapshot, dict):
+            return status
+        telemetry = snapshot.get("telemetry")
+        if not isinstance(telemetry, dict):
+            return status
+        # Keep provider health fields and the complete firmware envelope.
+        # No camera request is made on the frame publication path.
+        return {**status, **copy.deepcopy(telemetry),
+                "snapshot": snapshot}
 
     def _freshness(self, snapshot):
         frame = snapshot.get("frame", {})
