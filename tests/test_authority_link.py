@@ -30,7 +30,7 @@ class AuthorityLinkTests(unittest.TestCase):
             def __exit__(self,*args):self.close()
         def call(request,timeout):
             observed.append((request.full_url,json.loads(request.data.decode()),timeout))
-            return Response(json.dumps(dict(authority=NODE,id=SID,generation=7)).encode())
+            return Response(json.dumps({'result':dict(authority=NODE,id=SID,generation=7)}).encode())
         with patch.object(link.urllib.request,'urlopen',side_effect=call):
             value=link.inspect(self.config(),self.request())
         self.assertEqual(value['status'],200)
@@ -59,11 +59,21 @@ class AuthorityLinkTests(unittest.TestCase):
 
     def test_wrong_binding_or_oversized_reply_never_becomes_grant(self):
         for value in (dict(authority='d'*64,id=SID),dict(authority=NODE,id='d'*32),'x'*16385):
-            raw=json.dumps(value).encode()
+            raw=json.dumps({'result':value}).encode()
             class Response(io.BytesIO):
                 def __enter__(self):return self
                 def __exit__(self,*args):self.close()
             with patch.object(link.urllib.request,'urlopen',return_value=Response(raw)):
+                self.assertEqual(link.inspect(self.config(),self.request())['status'],503)
+
+    def test_unwrapped_or_ambiguous_native_responses_fail_closed(self):
+        grant=dict(authority=NODE,id=SID)
+        for value in (grant,{'error':'bad'},{'result':grant,'error':'bad'}):
+            class Response(io.BytesIO):
+                def __enter__(self):return self
+                def __exit__(self,*args):self.close()
+            with patch.object(link.urllib.request,'urlopen',
+                              return_value=Response(json.dumps(value).encode())):
                 self.assertEqual(link.inspect(self.config(),self.request())['status'],503)
 
     def test_only_tls_outbound_url_and_private_existing_config_are_accepted(self):

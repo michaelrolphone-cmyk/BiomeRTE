@@ -55,7 +55,10 @@ def inspect(config, request):
             raw = response.read(16385)
             if len(raw) > 16384:
                 raise ValueError('Authority reply too large')
-            grant = json.loads(raw.decode())
+            envelope = json.loads(raw.decode())
+            if not isinstance(envelope, dict) or set(envelope) != {'result'}:
+                raise ValueError('Invalid native authority response envelope')
+            grant = envelope['result']
             if (not isinstance(grant, dict) or grant.get('authority') != config['node']
                     or grant.get('id') != request['session']):
                 raise ValueError('Authority reply binding mismatch')
