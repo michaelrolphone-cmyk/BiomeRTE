@@ -8,6 +8,8 @@ import base64
 import hashlib
 import hmac
 import json
+import collections
+import logging
 import ssl
 import struct
 import time
@@ -63,6 +65,7 @@ class Session:
         self.sequences = {}
         self.closed = False
         self.revisions = {}
+        self.activity = {}
 
     def check(self, role, lane, message, now=None):
         g = self.grant
@@ -143,6 +146,27 @@ class Router:
         self.validators = validators
         self.sessions = {}
         self.tasks = {}
+        self.failures = collections.deque(maxlen=32)
+        self.next_failure_log = 0
+
+    def failed(self, stage, error, session=None):
+        value = dict(at=time.time(), stage=stage, error=type(error).__name__,
+                     status=getattr(error, 'status', getattr(error, 'code', None)))
+        if session is not None:
+            value.update(session=session.grant['id'], authority=session.grant['authority'])
+        if isinstance(error, Fault):value['reason'] = str(error)[:160]
+        self.failures.append(value)
+        if time.monotonic() >= self.next_failure_log:
+            self.next_failure_log = time.monotonic()+30
+            logging.warning('Stream %s failed: %s status=%s reason=%s',
+                            stage, value['error'], value['status'], value.get('reason', ''))
+
+    def health(self):
+        return dict(sessions=len(self.sessions), failures=list(self.failures),
+                    streams=[dict(id=s.grant['id'], authority=s.grant['authority'],
+                        contract=s.grant['contract'], closed=s.closed,
+                        peers=[role+'.'+lane for role,lane in s.peers], activity=s.activity)
+                        for s in self.sessions.values()])
 
     async def validate(self, grant):
         fn = self.validators.get(grant['authority'])
@@ -159,7 +183,8 @@ class Router:
             while not session.closed:
                 await self.validate(session.grant)
                 await asyncio.sleep(1)
-        except Exception:
+        except Exception as error:
+            self.failed('authority_watch', error, session)
             await session.close()
         finally:
             self.sessions.pop(session.grant['id'], None)
@@ -200,9 +225,15 @@ class Router:
                     if count > grant['limits']['messages_per_second']:
                         raise Fault('Stream rate exceeded', 429)
                     session.check(role, lane, message)
+                    key = role+'.'+lane
+                    activity = session.activity.setdefault(key, dict(received=0, forwarded=0, no_peer=0))
+                    activity.update(received=activity['received']+1, last_received=time.time())
                     other = session.peers.get(('provider' if role == 'server' else 'server', lane))
                     if other:
                         other.put(message)
+                        activity['forwarded'] += 1
+                    else:
+                        activity['no_peer'] += 1
         reader=asyncio.create_task(receive())
         try:
             done,pending=await asyncio.wait((reader,pump),return_when=asyncio.FIRST_COMPLETED)
@@ -243,12 +274,13 @@ async def serve(config):
     async def health(connection, request):
         if request.path == '/health':
             return connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
-                'sessions': len(router.sessions), 'transport': config.get('transport', 'tls')}))
+                **router.health(), 'transport': config.get('transport', 'tls')}))
     async def handle(socket):
         try:
             await router.attach(socket, socket.request.path,
                                 socket.request.headers.get('Authorization', ''))
-        except Exception:
+        except Exception as error:
+            router.failed('attachment_or_message', error)
             await socket.close(1008, 'Stream rejected')
     async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
                                 ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
