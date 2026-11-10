@@ -13,8 +13,11 @@ def initialize(worker):
                       '(id TEXT PRIMARY KEY, signature TEXT, action TEXT, adapter TEXT, schema TEXT)')
     worker.db.execute('CREATE TABLE IF NOT EXISTS supervised_delivery '
                       '(id TEXT PRIMARY KEY, signature TEXT, state TEXT, result_digest TEXT)')
+    worker.db.execute('CREATE TABLE IF NOT EXISTS supervised_expiry(id TEXT PRIMARY KEY)')
     worker.db.execute('CREATE TRIGGER IF NOT EXISTS supervised_delivery_expiry AFTER DELETE ON actions '
-                      'BEGIN DELETE FROM supervised_delivery WHERE id=OLD.id; END')
+                      'BEGIN INSERT OR IGNORE INTO supervised_expiry SELECT OLD.id '
+                      'WHERE EXISTS(SELECT 1 FROM supervised_delivery WHERE id=OLD.id); '
+                      'DELETE FROM supervised_delivery WHERE id=OLD.id; END')
 
 
 def pending(worker):
@@ -149,3 +152,35 @@ def cleanup(worker, action, adapter, signature):
                 os.unlink(path)
     worker.db.execute('DELETE FROM supervised_pending WHERE id=? AND signature=?',
                       (action['id'], signature))
+
+
+def cleanup_expired(worker, limit=8):
+    """Remove only acknowledged runner files after authoritative action expiry."""
+    import stat
+    for operation, in worker.db.execute('SELECT id FROM supervised_expiry ORDER BY id LIMIT ?', (limit,)).fetchall():
+        directory = runner.location(os.path.join(os.path.dirname(worker.path), 'command-runners'), operation)
+        if os.path.lexists(directory):
+            if os.path.islink(directory) or os.path.realpath(directory) != directory:
+                raise Fault('Unsafe runner expiry directory')
+            if not os.path.exists(os.path.join(directory, 'acknowledged.json')):
+                raise Fault('Runner expiry has no durable acknowledgement')
+            handle = runner.locked(os.path.join(directory, 'custody.lock'))
+            if handle is None:
+                continue
+            with handle:
+                names = ('input.json','request.json','stdout','stderr','runner.log','progress.json',
+                         'progress.json.stop','completion.json','state.json','prepare.lock',
+                         'custody.lock','acknowledged.json')
+                for name in names:
+                    path = os.path.join(directory, name)
+                    if os.path.lexists(path):
+                        info = os.lstat(path)
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                            raise Fault('Unsafe runner expiry file')
+                for name in names:
+                    path = os.path.join(directory, name)
+                    if os.path.exists(path):
+                        os.unlink(path)
+                if not os.listdir(directory):
+                    os.rmdir(directory)
+        worker.db.execute('DELETE FROM supervised_expiry WHERE id=?', (operation,))

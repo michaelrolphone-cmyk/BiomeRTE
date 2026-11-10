@@ -15,7 +15,9 @@ Completion stdout, stderr and exit status remain local until the worker saves
 the result and receives an exact controller acknowledgement. A compact pending
 index is merged into normal worker dispatch, so results remain recoverable even
 when the controller no longer lists a command in its inbox. Lost acknowledgements
-are safely redelivered. A durable delivery receipt precedes output cleanup.
+are safely redelivered. A durable delivery receipt precedes output cleanup. Compact runner receipts and
+launch markers expire with the controller-acknowledged action lifecycle; only
+known generated regular files are removed, and unresolved runs are retained.
 
 A late terminal/Docker completion for an abandoned lease records execution_state
 and result on that abandoned action. It does not restore the lease, release any

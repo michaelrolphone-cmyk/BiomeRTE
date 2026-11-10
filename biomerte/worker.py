@@ -524,6 +524,11 @@ class Worker:
         except Exception as error:
             # A filesystem cleanup failure cannot requeue the physical effect.
             logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
+        from .supervised_commands import cleanup_expired
+        try:
+            cleanup_expired(self)
+        except Exception as error:
+            logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
         self.recover_result_acknowledgements()
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
         try:

@@ -189,6 +189,19 @@ class RunnerTests(unittest.TestCase):
             self.assertGreater(remote.heartbeats, 0)
         finally:
             worker.db.close()
+    def test_acknowledged_runner_receipts_expire_with_action(self):
+        remote = Remote()
+        worker, offer = self.worker(remote)
+        try:
+            worker.perform(self.action())
+            directory = runner.location(os.path.join(self.root, 'command-runners'), 'command')
+            self.assertTrue(os.path.exists(os.path.join(directory,'acknowledged.json')))
+            worker.db.execute("DELETE FROM actions WHERE id='command'")
+            supervised.cleanup_expired(worker)
+            self.assertFalse(os.path.exists(directory))
+            self.assertEqual(list(worker.db.execute('SELECT id FROM supervised_delivery')), [])
+        finally:
+            worker.db.close()
     def test_ack_cleanup_retry_does_not_republish_empty_result(self):
         remote = Remote()
         worker, offer = self.worker(remote)
