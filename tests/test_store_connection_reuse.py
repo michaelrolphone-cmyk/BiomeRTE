@@ -3,7 +3,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from biomerte.store import Store
+from biomerte.store import Store, _IDLE_CONNECTIONS
 
 
 class ConnectionReuseTests(unittest.TestCase):
@@ -75,12 +75,12 @@ class ConnectionReuseTests(unittest.TestCase):
             self.assertEqual(len(set(id(db) for db in connections)), 12)
             for db in connections:
                 self.assertEqual(db.execute('PRAGMA synchronous').fetchone()[0], 2)
-        self.assertEqual(len(self.store._connections), 8)
+        self.assertEqual(sum(owner is self.store._connection_key for owner, db in _IDLE_CONNECTIONS), 8)
 
     def test_closed_or_failed_connection_is_discarded(self):
         with self.store.connection() as db:
             db.close()
-        self.assertEqual(self.store._connections, [])
+        self.assertFalse(any(owner is self.store._connection_key for owner, db in _IDLE_CONNECTIONS))
         self.assertEqual(self.store.execute(lambda tx: 42, read_only=True), 42)
 
     def test_store_disposal_closes_idle_handles_even_when_connection_is_referenced(self):
@@ -90,6 +90,17 @@ class ConnectionReuseTests(unittest.TestCase):
         del other
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute('SELECT 1')
+
+    def test_many_live_stores_cannot_accumulate_unbounded_idle_handles(self):
+        stores = []
+        for index in range(20):
+            store = Store(self.directory.name, 'many-' + str(index))
+            stores.append(store)
+            store.execute(lambda tx: 1, read_only=True)
+        self.assertLessEqual(len(_IDLE_CONNECTIONS), 8)
+        self.assertEqual(stores[0].execute(lambda tx: 42, read_only=True), 42)
+        for store in stores:
+            store.close()
 
     def test_uncommitted_changes_cannot_escape_checkout(self):
         with self.store.connection() as db:
