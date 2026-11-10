@@ -200,7 +200,8 @@ def main(argv=None):
                 elif args.command in ('worker', 'sync', 'resolve-effect'):
                     cfg = read_json(args.manifest)
                     remote = Remote(cfg['url'], cfg['site'], app.node, app.key,
-                                    cfg.get('ca'), realm=cfg.get('realm', 'site'))
+                                    cfg.get('ca'), realm=cfg.get('realm', 'site'),
+                                    controller=cfg.get('controller'))
                     if args.command == 'resolve-effect':
                         from .worker import reconcile_receipt
                         output = reconcile_receipt(

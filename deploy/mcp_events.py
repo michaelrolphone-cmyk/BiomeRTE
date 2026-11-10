@@ -110,10 +110,11 @@ def signed_post(send, url, sub_id, keys, event_id, event):
 
 
 class EventStore:
-    def __init__(self, path, feed, authorize, post=post_callback, topic_feed=None):
+    def __init__(self, path, feed, authorize, post=post_callback, topic_feed=None, controller=None):
         self.db = sqlite3.connect(path, timeout=10)
         self.db.row_factory = sqlite3.Row
         self.feed, self.authorize, self.post, self.topic_feed = feed, authorize, post, topic_feed
+        self.controller = controller
         self.db.execute('CREATE TABLE IF NOT EXISTS receiver_receipts (id TEXT PRIMARY KEY, signature TEXT, result TEXT)')
         self.db.execute('''CREATE TABLE IF NOT EXISTS subscriptions (
           id TEXT PRIMARY KEY, owner TEXT, grant_id TEXT, url TEXT, args TEXT, key TEXT, old_key TEXT,
@@ -132,6 +133,12 @@ class EventStore:
         if set(args) - allowed or args.get('realm','site') not in ('site','local'):
             raise ValueError('Invalid event filters')
         args = dict(args, realm=args.get('realm','site'))
+        if 'controller' in params:
+            controller = params['controller']
+            if (not isinstance(controller, str) or not re.match(r'^[0-9a-f]{64}\Z', controller) or
+                    controller != self.controller):
+                raise ValueError('Controller selector does not match this producer')
+            args['controller'] = controller
         if 'target' in args and (not isinstance(args['target'], str) or not re.match(r'^[A-Za-z0-9_.:-]{1,128}\Z', args['target'])):
             raise ValueError('Invalid delegation target')
         if 'workflow' in args and (not isinstance(args['workflow'],str) or
@@ -213,6 +220,8 @@ class EventStore:
                              (now,now)).fetchall()
         for sub in rows:
             args=json.loads(sub['args'])
+            if 'controller' in args and args['controller'] != self.controller:
+                continue
             grok = sub['id'].startswith('grok_')
             topic = args.get('topic', EVENT)
             page = (self.feed(args['realm'], sub['cursor'], 16) if topic == EVENT else
@@ -238,6 +247,8 @@ class EventStore:
                     break
                 eid = 'delegate_' + data['delegation_id'] if topic == EVENT else item['id']
                 event = {'eventId':eid, 'name':topic, 'data':data, 'cursor':str(seq)}
+                if 'controller' in args:
+                    event['controller'] = args['controller']
                 if 'timestamp' in item:
                     event['timestamp'] = item['timestamp']
                 if grok:
