@@ -24,6 +24,8 @@ Control freshness is separate from transport and lease liveness. ROVER_INTENT_TT
 
 The private router health body exposes per-authority provider/server lane counts and bounded recent failure categories. Diagnostic files rotate at 1 MiB with one backup. Public Heroku session counts describe that process, not the Mac owner's sessions; inspect private health for native peers. Authority inspection timeouts have been observed and remain a separate recovery investigation from relay ACK delivery.
 
+For opt-in supersedable control, transient authority unavailability pauses forwarding, clears queues and reports notready while retaining valid sockets. Resumption requires exact grant revalidation and fresh input. Definitive authorization/fence rejection still closes the session. Other contracts and legacy protocol retain their existing fail-closed behavior.
+
 ## Native vision provider
 
 The vision service exposes owner-only Unix-socket /v1/live and /v1/live/map feeds from the existing decode/CV pipeline. The provider advertises robot.vision.stream:1 as persistent and stream-only when those feeds are available. It publishes newest-only frames. Large map deltas and revision gaps require complete snapshots pinned to map_id and revision.
@@ -36,7 +38,7 @@ The vision service release rover-wire-2aab8017ab6f preserves asynchronous SLAM c
 
 These are observations from named qualification windows, not a claim that every deployment gate is closed.
 
-- Native core baseline: 450 tests passed. Subsequent private diagnostics and real WebSocket provider-readiness/no-replay regressions passed focused suites. The final source still requires its applicable checks.
+- Final integrated491 runtime qualification340: 456 core tests passed; 450 vision-provider tests passed with26 expected skips. Combined native run exited0 in91.68seconds. Real network tests also cover provider-bound readiness, timeout quarantine, fresh-input recovery and confirmed revocation.
 - Vision provider idle-read candidate: 450 reported tests with 26 expected skips. The real Unix HTTP/1.0 regression verifies idle-body continuity and prompt explicit shutdown. The preserved vision service's async checkpoint/telemetry suite reported 449 tests with 26 skips.
 - Heroku transport/policy companion: 21 tests passed, including independent lanes and a 10 MB response. Rover Site v22: 160 tests, build and artifact validation passed.
 - Two public camera viewers received 429/428 frames over 123 seconds, with 428 matching frame identities and JPEG digests. Maximum processing-to-observer ages were 0.494/0.445 seconds; reattachment took 0.548 seconds. Source capture time remains unknown.
@@ -45,7 +47,9 @@ These are observations from named qualification windows, not a claim that every 
 - Actual public frames carried valid IMU, attitude, pressure and fresh RF telemetry with18 age bindings; sampled metadata headers were15,787–15,814 bytes.
 - Relay firmware PR210 and PR211 were built and flashed to board30:ED:A0:D9:5F:24 with the application at0x50000, preserving Wi-Fi and pairing. Expired attachment recovery and the signed WebSocket handshake buffer were repaired; the final d327 image connected over WebSocket.
 - Live neutral controls remain intermittent. Qualification2114 observed both relay peers present throughout, unchanged generation110, no router faults, but only2/8 fresh neutral intents applied to both public subscribers. Separate qualification336 captured a Pi authority-inspection TimeoutError and subsequent peer churn.
-- ACK feedback repair PR212 retains feedback until a complete SDK write succeeds and retries latest feedback without reapplying output intent. Exact f3a host failure-injection and deterministic pin checks passed; its Linux sanitizer and ESP-IDF target checks, flash and live acceptance remain pending.
+- ACK feedback repair PR212 was qualified and flashed. Exact candidatef3a1117ab89c24c3b7de460de31d11a153f68dbd passed native host/pin checks and GitHub42904625604 Linux host/ASan/UBSan plus ESP-IDF6.1 no-PSRAM build. Flash2136 verified board30:ED:A0:D9:5F:24 and wrote only the1,243,632-byte application at0x50000, SHA256c144c5ebeaba6d1751c5d1966e6fee108f3f471bcdf3ce1b5c69679a3e813b9c. Pairing and Wi-Fi partitions were preserved.
+- Post-flash qualification2143 observed five consecutive fresh neutral intents applied to both public subscribers, then an authority-check timeout interrupted one intent and the next input was correctly rejected while unavailable; a later fresh intent applied after recovery. Overall6/8, unchanged generation111 and epoch, applied-ACK roundtrips378–1848ms. This is improved feedback evidence, not a complete control-availability pass. The190-second serial window had no ACK write-failure or stale-intent rejection, and one native provider-poll HTTP503.
+- Pi timing separated the remaining intermittent failure: direct warm stream.inspect9.93–10.13ms; loopback /health8.67–31.03ms, but authenticated loopback /mcp stream.inspect once exceeded10seconds and later took2641/158ms. Another quieter window returned20/45ms. Resident realm is local SQLite, not a stale remote-journal mode. Public HMAC and signed inspection routes both took1.3–2.9seconds; switching between them was not justified as a speed repair.
 - No nonzero motion was issued in these checks. Applied ACK describes commanded output state and does not establish physical contact feedback.
 
 ## Open acceptance
