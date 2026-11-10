@@ -147,8 +147,9 @@ Python again.
 
 ## Capabilities
 
-All 26 names below have version :1. The original 13 envelopes are unchanged;
-the eight scale/metric-read and five radio/light contracts are additive. The BiomeRTE adapter
+All 29 names below have version :1. The original 13 envelopes are unchanged;
+the eight scale/metric-read, five radio/light and three AHRS contracts are additive.
+The BiomeRTE adapter
 wraps local responses under result. Inputs are optional unless specified.
 The worker advertises an operation as ready only when the running service lists
 it as supported.
@@ -181,6 +182,9 @@ it as supported.
 | robot.map.radio.read | map_id, revision, source_id, cursor (opaque string), limit | Learned radio distributions resolved at a pinned visual-map revision, with independent model revision and guarded pagination |
 | robot.camera.light.status | none | Explicit firmware light command/driver state with physical-readback qualification |
 | robot.camera.light.set | nonempty partial on, brightness, rgb | One explicit authenticated light command; firmware result and unknown-outcome semantics retained |
+| robot.ahrs.status | none | Cached AHRS health, per-sensor freshness, reference identity and calibration-request state |
+| robot.ahrs.snapshot | none | Full cached sensor envelope, native frames/units and explicit timing/validity limits |
+| robot.ahrs.calibrate | empty inputs | One explicit gyro-bias calibration request; queued acceptance and unknown outcomes remain separate from completion |
 
 Bounds use min_x, min_y, max_x, max_y and optional min_z, max_z. Map coordinates
 remain arbitrary monocular units until an independently qualified scale estimate
@@ -522,6 +526,179 @@ Neither radio location evidence nor an illuminated image establishes dark
 obstacle coverage, free space, metric depth, or safe driving. The existing
 geometry and navigation availability rules continue to apply.
 
+## AHRS sensor and motion evidence
+
+The optional AHRS path reads the camera's sensor snapshot independently of
+radio polling. It adds raw sensor observations and compact, frame-associated
+motion evidence to the existing observation stream. It does not alter the
+SLAM pose, establish metric scale, integrate acceleration into distance, or
+provide a camera/world orientation correction.
+
+### Firmware contract and configuration
+
+The source contract is firmware `1.0-radio.5`, pinned to
+[RiscRTE-System-Apps commit `04e016e77a465c8727f9e3832e44c4b9c7b309f8`](https://github.com/michaelrolphone-cmyk/RiscRTE-System-Apps/blob/04e016e77a465c8727f9e3832e44c4b9c7b309f8/firmware/esp32cam-rtsp-radio/AHRS.md).
+It exposes full `GET /api/ahrs` snapshots and an `ahrs` object in
+`GET /api/telemetry`. Firmware acquisition targets 50 Hz and its separate
+AHRS UDP publication defaults to 10 Hz. This provider polls the full HTTP
+snapshot; it is not a UDP consumer or a lossless 50 Hz inertial recorder.
+
+Background AHRS polling is disabled by default. Add the following top-level
+section to `STATE/config.json` to enable it on a compatible camera:
+
+```json
+{
+  "ahrs": {
+    "enabled": true,
+    "poll_interval_s": 0.1,
+    "network_timeout_s": 2.0,
+    "history_capacity": 256,
+    "history_retention_s": 30.0
+  }
+}
+```
+
+The 0.1-second interval targets approximately 10 HTTP snapshots per second;
+request duration, scheduling and failures can reduce the achieved rate.
+The poller uses the same camera host and authentication as the shared camera
+HTTP client. Optional `ahrs.base_url` overrides that HTTP origin. It has its own
+polling schedule and does not enable or change radio polling. The history
+retains at most `history_capacity` snapshots and discards entries older than
+`history_retention_s`; both limits apply. Capacity must be an integer from
+1 through 4096, and retention must be positive and no greater than 300 seconds.
+The default capacity is 256 and the default retention is 30 seconds.
+
+The complete firmware payload and source annotations stay in bounded memory.
+There is no raw AHRS disk journal, new SLAM checkpoint layer or duplicate AHRS
+checkpoint package. Compact `spatial_evidence.ahrs` values can be retained with
+the existing observations under their normal retention rules. Source replay
+and epoch bookkeeping are also bounded.
+
+`robot.ahrs.status` and `robot.ahrs.snapshot` read the local cache. They do not
+start a camera request or wait for network I/O. Status reports ingestion
+health, errors, each sensor's validity/age, reference identity and the last
+calibration-command receipt. A successful snapshot response has `availability: "available"` and places the
+full cached source envelope under `snapshot`, including the firmware payload
+and sensor/timing annotations. Its `interpretation` is
+`inspect_each_sensor_validity_age_frame_and_units`.
+If no retained snapshot is available, the response instead reports
+`availability: "unavailable"`, `reason: "ahrs_snapshot_unavailable"` and
+cached status. Availability of an envelope does not mean every sensor is valid.
+An older firmware's HTTP 404 sets source support to false and exposes the error;
+camera, radio and light operation remain independent.
+
+### Frames, units and reference identity
+
+Interpret each sensor in its declared frame and units:
+
+| Evidence | Meaning and limit |
+| --- | --- |
+| `imu.accel_m_s2` | MPU9250 native XYZ acceleration in m/s², including gravity; no translation, velocity or distance is derived |
+| `imu.gyro_rad_s` and `gyro_raw_rad_s` | Native XYZ angular rates in rad/s, with bias application/provenance retained |
+| `attitude.quaternion_wxyz` | Scalar-first Hamilton quaternion mapping native MPU axes into the gravity-aligned initial-yaw reference |
+| `attitude.roll_deg`, `pitch_deg`, `yaw_deg` | Relative attitude angles in degrees; yaw is not a north-referenced or calibrated compass heading |
+| `mag.field_uT` | AK8963 native-axis magnetic field in microtesla; its axes differ from the MPU axes and it is not calibrated/fused as heading |
+| `barometer.pressure_pa` | Pressure in pascals |
+| `barometer.pressure_altitude_m` | Altitude relative to the firmware's 101325 Pa standard-pressure reference; not floor clearance or map Z |
+| Sensor temperatures | Chip temperatures in degrees Celsius, not a calibrated ambient-temperature measurement |
+
+The attitude reference is `relative_yaw`, its frame is
+`MPU_axes_to_gravity_aligned_initial_yaw`, `heading_absolute` is false and
+`mounting_alignment_applied` is false. The identity of an attitude reference
+includes `receiver_id`, `boot_id`, `attitude.generation` and
+`attitude.yaw_origin_uptime_ms`. Retain `reset_reason`, the IMU sample identity
+and validity alongside that tuple. A reboot, IMU reinitialization or successful
+gyro calibration can start a different reference. Equal numeric quaternion
+values across that boundary do not establish a comparable orientation.
+
+No rigid camera-to-IMU or robot-to-IMU mounting transform is qualified here.
+The camera exposure time and its offset from the IMU clock are also unknown.
+The data therefore remains sensor-frame evidence. It does not correct camera
+or map coordinates, grant a valid localization flag, prove metric distance,
+or make radio-derived positions independent training labels. Camera/world
+pose fusion and navigation usability remain unavailable until their separate
+geometry, timing and empirical requirements are met.
+
+### Per-frame timing and motion evidence
+
+For a camera observation, the source selects a retained HTTP receipt at or
+before that frame's receive/decode monotonic timestamp. A receipt that arrives
+while image processing is still running cannot be attached retrospectively
+to an earlier frame. Long processing delays or expired history may leave no
+eligible sensor snapshot. A separate latest-snapshot API call can refer to
+different evidence; retain the observation's `snapshot_id` for coherent reads.
+
+Each sensor keeps its own firmware age, sample count/uptime and validity.
+Effective age advances with local monotonic time. Freshness uses a conservative
+age bound that includes the HTTP round-trip duration. The default limits are
+500 ms for IMU and attitude, 1000 ms for magnetometer and 2000 ms for barometer.
+A fresh HTTP envelope cannot refresh an old repeated sample. Missing, malformed,
+paused, unavailable, stale or replayed data remains explicit, independently for
+each sensor. Invalid IMU support also invalidates dependent attitude evidence.
+
+The approximate sample time is the HTTP request midpoint minus firmware sample
+age. The source retains network timing uncertainty; this is not synchronized
+camera exposure timing. Evidence reports `timing_qualified: false`, and the
+camera-exposure time remains unqualified even when an age check passes.
+
+The coordinator can report an incremental sensor rotation angle between
+distinct, valid attitude samples in the same reference epoch. Quaternion
+signs `q` and `-q` represent the same rotation. Repeated samples, reference
+resets, invalid values and gaps beyond the 0.5-second endpoint/frame limits
+are not bridged. Independently sampled valid barometer readings can similarly
+supply a relative standard-pressure altitude change; weather, drift and
+reference limitations remain, so this is not a measured floor-height change.
+
+Incremental evidence advances only after the corresponding vision observation
+is successfully published. Failed publication does not silently consume its
+baseline. Map, camera-calibration and observation-session transitions clear
+the comparison context. Neither increments nor source availability change the
+existing visual localization, camera/robot extrinsics, metric scale, obstacle
+coverage or free-space qualification.
+
+### Explicit gyro calibration
+
+`robot.ahrs.calibrate` is an explicit mutation with empty inputs. It works even
+when `ahrs.enabled` is false; that option controls background ingestion only.
+The client sends one `POST /api/ahrs/calibrate` with the body `{}`. When a caller
+intentionally requests calibration, keep the board stationary through the
+firmware's approximately two-second measurement window. No calibration command
+is issued automatically by startup, snapshot reads, low image brightness or
+mapping.
+
+A valid HTTP 202 response means the request was queued. The service returns
+`availability: "available"` with `calibration_command` containing
+`accepted: true`, `status: "queued"`, `completed: false` and
+`completion_correlated: false`; `motion_commands` remains false.
+The firmware supplies no calibration request identifier, so a later successful
+calibration state cannot be attributed conclusively to that particular HTTP
+request. Command acceptance, request uncertainty and subsequent sensor state
+remain separate evidence.
+
+Read later `robot.ahrs.status` or `robot.ahrs.snapshot` results when polling is
+enabled, and inspect `gyro_bias_valid` and calibration status. With polling
+disabled, these cache-only reads do not refresh sensor state; use the camera's
+AHRS panel to inspect a later result. The estimated gyro bias is RAM-only.
+Reboot or IMU reinitialization clears it; successful calibration resets attitude
+and the next accepted sample begins a new attitude generation.
+
+HTTP 409 means calibration is already pending; HTTP 503 means no fresh running
+IMU is available. Known rejections, including an unsupported route, remain
+distinct from unknown outcomes. A transport failure, malformed acceptance
+response or unexpected success/server response after the POST can leave the
+outcome unknown. The service preserves `CameraHTTPError` details and
+`outcome_known`; an unknown outcome is not proof that nothing happened.
+The client never automatically retries this mutation.
+
+Requesting calibration clears the coordinator's pending and accepted motion
+comparison endpoints, including when the POST outcome is uncertain. Raw source
+history remains available under its existing age and identity rules; a cached
+pre-request measurement is not evidence of calibration completion.
+
+These APIs and fixture checks establish software behavior. They do not verify
+the connected sensor board, physical mounting, gyro calibration accuracy,
+camera/IMU timing, visual-inertial fusion, real-world altitude, or safe driving.
+
 ## Metric scale sessions
 
 A calibrated monocular camera still needs an independent physical reference
@@ -776,7 +953,11 @@ invalid-calibration behavior, metric evidence and qualification, and the
 provider/installer boundaries. Radio tests cover source/boot replay, time/pose
 alignment, adaptive spatial distributions, competing modes, bounded retention,
 manual light errors/uncertainty, and native prior fallback with unchanged visual
-acceptance gates. Adapter tests pin the original public schemas,
+acceptance gates. AHRS tests cover source identity and epochs, independent sensor
+freshness, causal frame association, quaternion sign/reset handling, failed
+observation publication, lifecycle resets, optional/older firmware, and one-shot
+calibration acceptance/unknown outcomes. These fixtures do not establish physical
+sensor accuracy or visual-inertial performance. Adapter tests pin the original public schemas,
 validate new numeric inputs through the real controller, preserve revisioned
 metric telemetry, and retain mutation uncertainty after lost responses. Genuine
 SLAM save/load/relocalization requires the additional recorded-sequence

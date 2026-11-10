@@ -25,6 +25,7 @@ from vision_config import DEFAULT_STATE, atomic_json, load_config
 from vision_store import VisionStore
 from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from radio_tracking import RadioTracking
+from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
 
 CAPABILITIES = [
@@ -35,6 +36,7 @@ CAPABILITIES = [
     "robot.vision.project_ground",
     "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
     "robot.camera.light.status", "robot.camera.light.set",
+    "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
 ] + METRIC_CAPABILITIES
 LOG = logging.getLogger("robot-vision")
 
@@ -49,7 +51,7 @@ def unknown_localization(reason):
 
 class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
-                 radio_source=None, radio_model=None):
+                 radio_source=None, radio_model=None, ahrs_source=None):
         self.config = copy.deepcopy(config)
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -59,6 +61,7 @@ class VisionService:
         self.camera = camera or CameraSource(config["camera"])
         self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
                                    source=radio_source, model=radio_model)
+        self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -190,7 +193,7 @@ class VisionService:
                 atomic_json(self.state_dir / "runtime.json",
                             {"map_id": prior_map, "calibration_id": prior_calibration["calibration_id"]})
                 self._lifecycle_state = "running"
-                self._reset_radio_context()
+                self._reset_tracking_context()
             raise
         self.backend = backend
         self.map_id, self.revision = map_id, revision
@@ -202,7 +205,7 @@ class VisionService:
         self._last_geometry = {}
         self._last_checkpoint_revision = None
         self._lifecycle_state = "running"
-        self._reset_radio_context()
+        self._reset_tracking_context()
 
     def _radio_keyframes(self, map_id, revision=None):
         keyframes, cursor = {}, None
@@ -215,9 +218,10 @@ class VisionService:
             if not cursor:
                 return keyframes
 
-    def _reset_radio_context(self):
+    def _reset_tracking_context(self):
         self.radio.set_context(self.map_id, self.calibration["calibration_id"],
                                self._radio_keyframes(self.map_id, self.revision), self.revision)
+        self.ahrs.set_context(self.map_id, self.calibration["calibration_id"], self.session_id)
 
     def _start_backend_and_session(self):
         self._activate_map(self.map_id, self.revision, self.calibration)
@@ -234,6 +238,7 @@ class VisionService:
     def start(self):
         self.metric.start_worker()
         self.radio.start()
+        self.ahrs.start()
         self.camera.start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
@@ -382,6 +387,7 @@ class VisionService:
             "metric_depth": {"availability": "unavailable", "reason": "no_metric_depth_sensor_or_qualified_scale"},
             "robot_velocity": {"availability": "unavailable", "reason": "no_continuous_metric_odometry"},
             "radio": self.radio.evidence(localization, now_s=captured.decoded_monotonic),
+            "ahrs": self.ahrs.evidence(frame, localization),
         }
         frame["processing_complete_time"] = utc_now()
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
@@ -397,6 +403,7 @@ class VisionService:
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
             self._commit_changes([semantic_change], "semantic_observation")
         self.radio.record_pose(frame, localization)
+        self.ahrs.record_pose(frame, localization)
         try:
             self.metric.offer(snapshot)
         except Exception as exc:
@@ -536,6 +543,25 @@ class VisionService:
         inputs = inputs or {}
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
+        if operation == "robot.ahrs.status":
+            return self.ahrs.status()
+        if operation == "robot.ahrs.snapshot":
+            snapshot = self.ahrs.snapshot()
+            if snapshot is None:
+                return {"availability": "unavailable", "reason": "ahrs_snapshot_unavailable",
+                        "status": self.ahrs.status()}
+            return {"availability": "available", "snapshot": snapshot,
+                    "interpretation": "inspect_each_sensor_validity_age_frame_and_units"}
+        if operation == "robot.ahrs.calibrate":
+            if inputs:
+                raise ValueError("ahrs_calibrate_takes_no_inputs")
+            try:
+                receipt = self.ahrs.calibrate_gyro()
+                return {"availability": "available", "calibration_command": receipt,
+                        "motion_commands": False}
+            except CameraHTTPError as exc:
+                return {"availability": "unavailable", **exc.as_dict(),
+                        "motion_commands": False}
         if operation == "robot.radio.status":
             return self.radio.status(include_observations=inputs.get("include_observations") is True)
         if operation == "robot.radio.localize":
@@ -585,8 +611,10 @@ class VisionService:
                 "metric_scale": self.metric.attachment_status(self.map_id),
                 "metric_calibration": self.metric.status(map_id=self.map_id),
                 "radio": self.radio.status(),
+                "ahrs": self.ahrs.status(),
                 "control": {"motion_commands": False, "brain": "external",
-                            "camera_light": "explicit_authenticated_camera_api"},
+                            "camera_light": "explicit_authenticated_camera_api",
+                            "gyro_calibration": "explicit_authenticated_camera_api"},
             }
         if operation == "robot.vision.metadata":
             return {
@@ -600,9 +628,13 @@ class VisionService:
                     "camera_ground": "x forward, y left, z up; origin directly below optical center",
                     "map": "backend visual frame in arbitrary units",
                     "map_metric": "same native map origin and axes, translated coordinates in meters; separately qualified scale, floor alignment unmeasured",
-                    "robot": "unavailable until rigid camera-to-robot extrinsics are supplied"},
+                    "robot": "unavailable until rigid camera-to-robot extrinsics are supplied",
+                    "imu": "native MPU axes; camera and robot mounting transforms unqualified",
+                    "ahrs_reference": "gravity-aligned initial-yaw reference; relative yaw can drift",
+                    "magnetometer": "native AK8963 axes; distinct from IMU axes; not calibrated compass"},
                 "time": {"capture": "unknown", "source_media": "relative clock",
-                         "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations"},
+                         "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations",
+                         "ahrs": "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified"},
                 "map_layers": ["keyframe", "sparse_point", "semantic_observation", "radio_fingerprint"],
                 "map_layer_readers": {"radio_fingerprint": "robot.map.radio.read"},
                 "radio_model": {"learning": "time_aligned_independently_verified_visual_poses",
@@ -611,6 +643,16 @@ class VisionService:
                                 "clock_qualification": "approximate_host_receive_alignment",
                                 "navigation_usable": False, "heading_available": False,
                                 "storage": "bounded_radio_sqlite_outside_vision_checkpoint_packages"},
+                "ahrs_evidence": {
+                    "use": "sensor-frame motion and tilt evidence attached to coherent observations",
+                    "orientation": "Hamilton quaternion wxyz maps IMU axes into initial-yaw reference",
+                    "reset_identity": ["receiver_id", "boot_id", "generation", "yaw_origin_uptime_ms"],
+                    "acceleration": "m/s^2 including gravity; no position or velocity integration",
+                    "altitude": "standard-pressure reference; not height above floor or map z",
+                    "camera_pose_fusion": "unavailable_until_mounting_and_exposure_timing_are_qualified",
+                    "navigation_usable": False,
+                    "storage": "bounded_memory_history_and_existing_retained_observations",
+                    "raw_disk_journal": False},
                 "unknown_space_rule": "No detection or sparse point is not proof of free space.",
                 "identity_rule": "Tracker IDs are local to one tracker epoch, not durable object identities.",
                 "restart_rule": "New session; reuse map checkpoint; current pose requires fresh relocalization.",
@@ -727,6 +769,10 @@ class VisionService:
             self.radio.close()
         except Exception:
             LOG.exception("Radio shutdown failed; continuing vision shutdown")
+        try:
+            self.ahrs.close()
+        except Exception:
+            LOG.exception("AHRS shutdown failed; continuing vision shutdown")
         self.metric.close()
         with self._pipeline_lock:
             try:
