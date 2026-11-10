@@ -91,7 +91,10 @@ def command(tx, ctx, name, args, request_id):
             raise Fault('Request ID reused with different arguments', 409)
         return old['result']
     result = invoke(tx, ctx, name, args)
-    tx.put('_receipt', key, {'signature': signature, 'result': result})
+    receipt = {'signature': signature, 'result': result}
+    if name.startswith(('cap.', 'provider.', 'destination.', 'inbox.', 'stream.')):
+        receipt['expires_at'] = __import__('time').time() + 900
+    tx.put('_receipt', key, receipt)
     return result
 
 

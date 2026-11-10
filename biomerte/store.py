@@ -93,6 +93,8 @@ class Records:
         counter = self.get('_meta', 'events', 0) + 1
         self.put('_meta', 'events', counter)
         event = {'id': uid(), 'seq': counter, 'topic': topic, 'payload': payload}
+        if topic.startswith(('lease.', 'operation.', 'offer.')):
+            event['expires_at'] = time.time() + 3600
         return self.put('events', '%020d' % counter, event)
 
 
