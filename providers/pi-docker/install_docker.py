@@ -71,7 +71,7 @@ def main():
     unit = 'biomerte-docker.service'
     boot = [os.path.join(checkout, 'biome'), '--home', home, 'worker', manifest]
     body = ['[Unit]', 'Description=BiomeRTE Docker CLI provider', 'Requires=' + args.daemon_unit,
-            'Wants=biomerte.service', 'After=biomerte.service ' + args.daemon_unit, '[Service]',
+            'Wants=biomerte.service', 'After=biomerte.service ' + args.daemon_unit, '[Service]', 'KillMode=process',
             'User=' + user.pw_name, 'SupplementaryGroups=' + group, 'UMask=0077',
             'ExecStartPre=/usr/bin/env ' + ' '.join(quote(x) for x in [exe, '-H', 'unix://' + sock, 'version']),
             'ExecStart=/usr/bin/env ' + ' '.join(quote(x) for x in boot),
