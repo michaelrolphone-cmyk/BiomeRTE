@@ -118,7 +118,7 @@ def execute(request, cfg, remote):
             save_receipt(receipt, saved)
         result = dict(saved['result'], streams={})
         for name, path in paths.items():
-            result[name], result['streams'][name] = store_stream(path, remote, 48 * 1024)
+            result[name], result['streams'][name] = store_stream(path, remote, 48 * 1024, retry=True)
         # A lost upload/return can be resumed from the finished receipt without
         # launching the command again. No timer deletes unresolved or saved output.
         save_receipt(directory / 'published.json', result)
