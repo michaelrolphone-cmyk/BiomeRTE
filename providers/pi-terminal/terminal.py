@@ -5,6 +5,7 @@ import json
 import uuid
 import os
 import socket
+import time
 import sys
 
 CONTRACT = 'host.terminal.run:1'
@@ -73,8 +74,18 @@ def store_stream(path, remote, chunk_bytes=256 * 1024):
             if not chunks:
                 preview = block[:4096]
             sha = hashlib.sha256(block).hexdigest()
-            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii'), 'transient': True},
-                                  'terminal-transient-chunk-' + str(uuid.uuid4()))
+            arguments = {'data': base64.b64encode(block).decode('ascii'), 'transient': True}
+            request_id = 'terminal-transient-chunk-' + str(uuid.uuid4())
+            while True:
+                try:
+                    receipt = remote.call('artifact.put', arguments, request_id)
+                    break
+                except Exception:
+                    # The command has already settled. Keep its custodian alive
+                    # and retry this exact immutable upload, never the argv.
+                    # The supervising runner continues custody heartbeats while
+                    # transport/remote storage is unavailable.
+                    time.sleep(5)
             if receipt != {'sha256': sha, 'size': len(block)}:
                 raise IOError('Artifact receipt mismatch')
             chunks.append(receipt)
