@@ -67,6 +67,11 @@ class StreamRetryTests(unittest.TestCase):
         self.assertEqual(preview, 'exact re')
         self.assertNotEqual(remote.calls[2][2], remote.calls[3][2])
 
+    def test_caller_managed_recovery_receives_upload_failure(self):
+        with self.assertRaises(RuntimeError):
+            self.terminal.store_stream(str(self.path), Transport())
+        self.assertEqual(self.delays, [])
+
     def test_receipt_corruption_stays_visible(self):
         remote = Transport(0)
         remote.call = lambda *args: {'sha256': 'wrong', 'size': 1}
