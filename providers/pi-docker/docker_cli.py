@@ -158,7 +158,24 @@ def execute(cfg, args, remote, progress_path=None):
         except (ValueError, OSError) as exc:
             return rejected(exc)
         paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024, progress_path)
-        result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {}}
+        result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {},
+                  'evidence': {'quiescent': True, 'cli_pid': proc.pid, 'exit_code': proc.returncode,
+                               'reason': 'stop_requested' if progress_path and os.path.exists(progress_path+'.stop') else 'exited'}}
+        if progress_path:
+            # Persist local completion before delivery; recovery never invokes CLI.
+            import shutil
+            from biomerte.command_runner import save
+            from biomerte.store import digest
+            retained={}
+            for name,path in paths.items():
+                target=os.path.join(os.path.dirname(progress_path),'docker.'+name)
+                with open(path,'rb') as source, open(target,'wb') as destination:
+                    shutil.copyfileobj(source,destination);destination.flush();os.fsync(destination.fileno())
+                with open(target,'rb') as stream:
+                    sha=hashlib.sha256(stream.read()).hexdigest()
+                retained[name]={'sha256':sha,'total_bytes':counts[name]}
+            save(os.path.join(os.path.dirname(progress_path),'docker-completion.json'),
+                 {'input_digest':digest(args),'result':result,'streams':retained})
         for name, path in paths.items():
             result[name], meta = store_stream(path, remote, cfg.get('chunk_bytes', 256 * 1024))
             meta.update(total_bytes=counts[name], truncated=counts[name] > meta['size'])

@@ -30,12 +30,17 @@ def main():
         remote=RecoveryRemote('http://127.0.0.1:'+str(cfg['port']),cfg['site'],node['node'],directory+'/node.key')
         db=sqlite3.connect(directory+'/worker.sqlite',timeout=30,isolation_level=None)
         db.execute('CREATE TABLE IF NOT EXISTS legacy_custody_audit(id TEXT PRIMARY KEY,identity TEXT,proof TEXT,outcome TEXT,controller_ack TEXT,observed REAL)')
+        db.execute('CREATE TABLE IF NOT EXISTS reconciliations(id TEXT PRIMARY KEY,previous_result TEXT,state TEXT,result TEXT,observed REAL)')
         unit=name+'.service'
         status=subprocess.check_output(['systemctl','show',unit,'-p','KillMode','-p','MainPID']).decode()
         # Legacy commands had no detached runner; a completed control-group restart
         # is an executor fence. Daemon-side effects remain explicitly unknown.
         fence_ok='KillMode=control-group' in status and 'MainPID=0' not in status
-        for item in items:
+        extra=[r[0] for r in db.execute("SELECT id FROM actions WHERE state='uncertain'")]
+        current=list(items)
+        known=set(x['operation'] for x in current)
+        current.extend(dict(operation=x,provider=node['node'],state='historical_uncertainty') for x in extra if x not in known)
+        for item in current:
             if item['provider']!=node['node'] or item['state']!='historical_uncertainty':continue
             op=item['operation']
             a=remote.call('cap.status',{'operation':op,'recovery':True})
@@ -44,7 +49,7 @@ def main():
             if local and local[0]!=identity:raise RuntimeError('Local identity mismatch '+op)
             old=db.execute('SELECT identity,proof,outcome FROM legacy_custody_audit WHERE id=?',(op,)).fetchone()
             evidence={'service':unit,'service_observation':status,'boot_id':boot}
-            if old:
+            if old and name!='biomerte-docker':
                 if old[0]!=identity:raise RuntimeError('Audit identity conflict '+op)
                 proof=json.loads(old[1]);out=json.loads(old[2])
             else:
@@ -98,7 +103,7 @@ def main():
                 print('READY',op,proof['method'],out.get('exit_code'),flush=True);continue
             # Save exact proof/outcome before network mutation; an interrupted
             # retry reuses this immutable evidence and never runs original argv.
-            db.execute('INSERT OR IGNORE INTO legacy_custody_audit VALUES(?,?,?,?,?,?)',
+            db.execute('INSERT OR REPLACE INTO legacy_custody_audit VALUES(?,?,?,?,?,?)',
                        (op,identity,encode(proof),encode(out),'',time.time()))
             ack=remote.call('provider.reconcile',dict(provider=node['node'],operation=op,generation=a['generation'],state='failed' if out.get('effects_unknown') or out.get('reason') else 'succeeded',result=out,proof=proof))
             state='failed' if out.get('effects_unknown') or out.get('reason') else 'succeeded'
