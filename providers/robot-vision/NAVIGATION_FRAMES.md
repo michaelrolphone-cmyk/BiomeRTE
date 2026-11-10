@@ -57,12 +57,11 @@ are mathematical examples, not this robot's measurements. Qualification records
 are supplied evidence: this module validates their structure/bindings and
 performs geometry; acquisition and physical qualification remain separate.
 
-A map revision or scale solution change invalidates the prior floor alignment.
-Revalidate the alignment for the new geometry and publish a new attachment
-revision rather than silently reusing old axes after loop corrections. This
-initial layer deliberately supports only exact revision matches. A future
-anchor resolver can preserve alignments across provably unchanged geometry.
-A camera/mount change similarly needs a new mounting/calibration record.
+A scale solution change invalidates the prior floor alignment. A changed map
+revision requires either explicit requalification or the unchanged-anchor proof
+described below. Corrected/deleted/recreated reference keyframes cannot silently
+retain a qualification. A camera/mount change similarly needs a new
+mounting/calibration record.
 
 ## Output and interpretation
 
@@ -114,11 +113,27 @@ Derived poses are not written back into historical observations.
 The service evaluates freshness at query time. Consumers must still account
 for response-delivery time before using the observation. A stale frame or a
 frame from a prior observation session never yields a current derived pose.
-This initial implementation requires the floor attachment's exact map revision.
-Normal map updates can therefore withhold the derived pose as well as genuine
-loop corrections. Revalidation or an independently evidenced unchanged-anchor
-resolver is required before extending validity to another revision; revision
-ranges are not silently treated as equivalent.
+Without supporting native keyframes, the attachment requires its exact map
+revision. To preserve alignment across unrelated map updates, include
+supporting_keyframes in the qualified floor record. Supply 1–16 unique records,
+each with keyframe_id, source_frame_id and its exact native T_map_camera at the
+record's qualified map_revision. These native translations retain arbitrary
+SLAM units; the floor transform itself remains in metres.
+
+For a later snapshot revision, the service looks up each supporting keyframe
+at both revisions using indexed entity-version queries. The source image and
+native matrix must match the qualified record, and the current entity must be
+the exact same entity-version row. New landmarks or semantic labels can then
+advance the map without invalidating the floor. Any reference-row update,
+deletion or replacement withholds the derived pose, even if a later pose equals
+the original. Scale and calibration identities must still match.
+
+The output includes the source/resolved revisions and native anchor-version
+proof. The configuration file and original qualification revision are never
+rewritten by a read. No history-wide JSON scan or guessed revision range is
+used. Physical qualification owns which supporting keyframes established the
+floor reference; the resolver does not infer that reference from arbitrary
+landmarks.
 
 Fixture integration tests exercise the actual vision service and retained
 SQLite observation path using injected camera/detector/SLAM fixtures:

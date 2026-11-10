@@ -4,6 +4,7 @@ on:
     paths:
       - 'providers/robot-vision/navigation_frames.py'
       - 'providers/robot-vision/vision_service.py'
+      - 'providers/robot-vision/metric_store.py'
       - 'providers/robot-vision/tests/test_navigation_service.py'
       - 'providers/robot-vision/tests/test_navigation_frames.py'
       - '.github/workflows/robot-navigation-frames.yml'
@@ -11,6 +12,7 @@ on:
     paths:
       - 'providers/robot-vision/navigation_frames.py'
       - 'providers/robot-vision/vision_service.py'
+      - 'providers/robot-vision/metric_store.py'
       - 'providers/robot-vision/tests/test_navigation_service.py'
       - 'providers/robot-vision/tests/test_navigation_frames.py'
       - '.github/workflows/robot-navigation-frames.yml'

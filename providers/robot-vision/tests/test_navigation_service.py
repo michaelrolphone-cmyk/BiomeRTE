@@ -100,7 +100,7 @@ class NavigationServiceTests(unittest.TestCase):
         self.write()
         with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
             response = self.service.query("robot.vision.geometry")
-        self.assertEqual(response["robot_localization"]["reason"], "floor_alignment_binding_mismatch")
+        self.assertEqual(response["robot_localization"]["reason"], "floor_alignment_anchor_resolution_failed")
         self.assertTrue(response["localization"]["valid"])
         self.assertTrue(response["metric_localization"]["valid"])
 
@@ -161,6 +161,108 @@ class NavigationServiceTests(unittest.TestCase):
         result = read_robot_pose(self.snapshot, self.path, delivery_elapsed_s=0)
         self.assertNotIn("DO_NOT_ECHO", json.dumps(result))
         self.assertFalse(result["valid"])
+
+    def anchored_floor(self):
+        captured = self.fixture.frame(self.service, "qualified-floor-anchor")
+        frame_id = captured.metadata["frame_id"]
+        transform = fixtures.identity_pose()
+        self.service.backend.scripted.append({
+            "localization": {"valid": True, "status": "tracking",
+                             "T_map_camera": transform, "units": "arbitrary"},
+            "geometry": {"available": True, "complete_snapshot": False},
+            "map_changes": [{"op": "upsert", "kind": "keyframe", "entity_id": "floor-anchor",
+                             "data": {"T_map_camera": transform, "position": [0,0,0],
+                                      "source_frame_id": frame_id, "units": "arbitrary"}}]})
+        reference = self.fixture.process(self.service, captured)
+        self.floor["map_revision"] = reference["map_revision"]
+        self.floor["supporting_keyframes"] = [{
+            "keyframe_id": "floor-anchor", "source_frame_id": frame_id,
+            "T_map_camera": transform}]
+        self.write()
+        return reference
+
+    def advance_map(self, changes):
+        update = self.service.store.apply_map_update(
+            self.service.map_id, self.service.revision, changes)
+        self.service.revision = update["revision"]
+        return self.fixture.process(
+            self.service, self.fixture.frame(self.service, "after-map-update"))
+
+    def test_unrelated_semantic_revision_preserves_alignment_with_native_anchor_proof(self):
+        reference = self.anchored_floor()
+        latest = self.advance_map([{
+            "op": "upsert", "kind": "semantic_observation", "entity_id": "independent-label",
+            "data": {"frame_id": "independent-label", "detections": []}}])
+        with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
+            robot = self.service.query("robot.vision.snapshot")["snapshot"]["robot_localization"]
+        self.assertTrue(robot["valid"], robot)
+        proof = robot["floor_alignment"]["resolution"]
+        self.assertEqual(proof["qualified_map_revision"], reference["map_revision"])
+        self.assertEqual(proof["resolved_map_revision"], latest["map_revision"])
+        self.assertEqual(proof["rule"], "identical_native_keyframe_versions")
+        self.assertEqual(proof["anchors"][0]["keyframe_id"], "floor-anchor")
+        self.assertEqual(json.loads(self.path.read_text())["floor_alignment"]["map_revision"],
+                         reference["map_revision"])
+
+    def test_unrelated_sparse_landmark_update_preserves_alignment(self):
+        self.anchored_floor()
+        self.advance_map([{"op": "upsert", "kind": "sparse_point", "entity_id": "new-point",
+                           "data": {"xyz": [1,2,3], "units": "arbitrary"}}])
+        with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
+            robot = self.service.query("robot.vision.geometry")["robot_localization"]
+        self.assertTrue(robot["valid"], robot)
+
+    def test_floor_anchor_correction_withholds_robot_pose(self):
+        self.anchored_floor()
+        anchor = self.floor["supporting_keyframes"][0]
+        corrected = copy.deepcopy(anchor["T_map_camera"])
+        corrected[0][3] = 0.2
+        self.advance_map([{"op": "upsert", "kind": "keyframe", "entity_id": "floor-anchor",
+                           "data": {"T_map_camera": corrected,
+                                    "source_frame_id": anchor["source_frame_id"]}}])
+        with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
+            response = self.service.query("robot.vision.geometry")
+        self.assertFalse(response["robot_localization"]["valid"])
+        self.assertEqual(response["robot_localization"]["reason"], "floor_alignment_anchor_resolution_failed")
+        self.assertTrue(response["metric_localization"]["valid"])
+
+    def test_deleted_then_recreated_anchor_cannot_reuse_original_floor_qualification(self):
+        self.anchored_floor()
+        anchor = self.floor["supporting_keyframes"][0]
+        self.advance_map([{"op": "delete", "kind": "keyframe", "entity_id": "floor-anchor",
+                           "data": {}}])
+        self.advance_map([{"op": "upsert", "kind": "keyframe", "entity_id": "floor-anchor",
+                           "data": {"T_map_camera": anchor["T_map_camera"],
+                                    "source_frame_id": anchor["source_frame_id"]}}])
+        with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
+            robot = self.service.query("robot.vision.geometry")["robot_localization"]
+        self.assertFalse(robot["valid"])
+        self.assertEqual(robot["reason"], "floor_alignment_anchor_resolution_failed")
+
+    def test_anchor_record_must_match_the_original_native_source_pose(self):
+        self.anchored_floor()
+        self.floor["supporting_keyframes"][0]["T_map_camera"][0][3] = 9
+        self.write()
+        self.advance_map([{"op": "upsert", "kind": "sparse_point", "entity_id": "later-point",
+                           "data": {"xyz": [1,0,0], "units": "arbitrary"}}])
+        with patch.object(self.service.metric, "metric_localization", side_effect=self.metric):
+            robot = self.service.query("robot.vision.geometry")["robot_localization"]
+        self.assertFalse(robot["valid"])
+
+    def test_unchanged_anchor_cannot_cross_a_scale_solution_change(self):
+        self.anchored_floor()
+        self.advance_map([{"op": "upsert", "kind": "sparse_point", "entity_id": "later-point",
+                           "data": {"xyz": [1,0,0], "units": "arbitrary"}}])
+        original_metric = self.metric
+        def refitted(snapshot):
+            result = original_metric(snapshot)
+            result["solution_id"] = "new-scale-solution"
+            return result
+        with patch.object(self.service.metric, "metric_localization", side_effect=refitted):
+            robot = self.service.query("robot.vision.geometry")["robot_localization"]
+        self.assertFalse(robot["valid"])
+        self.assertEqual(robot["reason"], "floor_alignment_binding_mismatch")
+
 
 
 if __name__ == "__main__":
