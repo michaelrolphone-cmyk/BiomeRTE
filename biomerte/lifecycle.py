@@ -173,6 +173,7 @@ def heartbeat(tx, ctx, provider, operation, generation):
     action['last_progress_at'] = now
     if cfg['lease_class'] == 'command':
         action['watch_until'] = now + cfg['watch_ttl_seconds']
+        lease['watch_until'] = action['watch_until']
     lease.update(last_progress_at=now, missed_heartbeats=0)
     tx.put('actions', operation, action)
     tx.put('leases', lease['id'], lease)
@@ -181,6 +182,8 @@ def heartbeat(tx, ctx, provider, operation, generation):
 
 def recover(tx, ctx, lease, actions, now):
     cfg = policy(tx, lease)
+    if tx.get('offers', lease.get('offer', ''), {}).get('state') == 'offline':
+        return abandon(tx, ctx, lease, 'provider_offline', now)
     changed = False
     if 'lease_class' not in lease:
         lease.update(lease_class=cfg['lease_class'], fencing_since=now,
