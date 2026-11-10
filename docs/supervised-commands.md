@@ -36,3 +36,16 @@ Firmware relay watchdogs and deduplication remain a separate device concern.
 Only host.terminal.run:1 and docker.cli:1 enter the runner automatically. Other
 providers retain their established execution path. Existing retention,
 acknowledgement hooks, streaming handlers, and per-slot admission remain active.
+
+## Ownership and recovery operations
+
+Supervised terminal/Docker offers advertise execution_custody=true. A missed
+heartbeat or offline provider moves executing work into explicit recovery and
+retains its guard. An unclaimed fencing timeout remains safely reclaimable.
+
+cap.resource.status reports the current command owner, guard/generation,
+last observation, runner state and next recovery action. cap.recovery.list
+pages active and historical uncertain work without decoding completed history.
+provider.custody records identity-bound runner observations. provider.reconcile
+requires an exact command digest and signed executor-quiescence evidence before
+settling an interrupted command. A transport timeout is never such evidence.

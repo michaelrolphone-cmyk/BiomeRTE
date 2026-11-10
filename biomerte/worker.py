@@ -134,6 +134,8 @@ class Worker:
             for field in ('capacity', 'usage', 'configuration', 'lease_class'):
                 if field in o:
                     args[field] = o[field]
+            if o['contract'] in ('host.terminal.run:1', 'docker.cli:1'):
+                args['configuration'] = dict(args.get('configuration', {}), execution_custody=True)
             self.remote.call('cap.offer', args)
 
 

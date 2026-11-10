@@ -24,6 +24,9 @@ class Remote:
             return dict(state='claimed', output_schema={'ok': {'type':'bool','required':True}})
         if name == 'cap.command.state':
             return {'state': 'claimed', 'kill_requested': False}
+        if name == 'provider.custody':
+            self.heartbeats += 1
+            return {}
         if name == 'cap.heartbeat':
             self.heartbeats += 1
             return {}
@@ -250,3 +253,35 @@ class LateCompletionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DockerDeliveryRecoveryTests(unittest.TestCase):
+    def test_upload_failure_keeps_exact_completion_without_reexecution(self):
+        import types,hashlib,base64
+        path=os.path.join(os.path.dirname(__file__),'..','providers','pi-docker','docker_cli.py')
+        docker=types.ModuleType('runner_docker_delivery');docker.__file__=path
+        with open(path) as source:exec(compile(source.read(),path,'exec'),docker.__dict__)
+        with tempfile.TemporaryDirectory() as root:
+            effects=os.path.join(root,'effects')
+            args={'argv':['-S','-c',"open(%r,'a').write('once\\n');print('retained completion')"%effects]}
+            cfg=dict(executable=sys.executable,workspace=root,spool=root,socket='/unused',client_config=root)
+            class Offline:
+                def call(self,*args,**kwargs):raise IOError('lost output upload')
+            progress=os.path.join(root,'progress.json')
+            with self.assertRaises(IOError):docker.execute(cfg,args,Offline(),progress)
+            self.assertTrue(os.path.isfile(os.path.join(root,'docker-completion.json')))
+            class Online:
+                def call(self,name,args,rid=None):
+                    block=base64.b64decode(args['data'])
+                    return dict(sha256=hashlib.sha256(block).hexdigest(),size=len(block))
+            result=supervised.recover_docker_result(root,dict(inputs=args),Online())
+            self.assertEqual(result['exit_code'],0)
+            self.assertEqual(result['stdout'],'retained completion\n')
+            self.assertEqual(set(result),set(docker.OUTPUTS))
+            with open(os.path.join(root,'docker-completion.json')) as stream:
+                self.assertTrue(json.load(stream)['result']['evidence']['quiescent'])
+            with open(effects) as source:self.assertEqual(source.read(),'once\n')
+            with self.assertRaises(Fault):
+                supervised.recover_docker_result(root,dict(inputs={'argv':['different']}),Online())
+            with open(os.path.join(root,'docker.stdout'),'ab') as stream:stream.write(b'tampered')
+            with self.assertRaises(Fault):supervised.recover_docker_result(root,dict(inputs=args),Online())
