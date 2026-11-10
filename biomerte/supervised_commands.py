@@ -82,7 +82,12 @@ def finish(worker, action, adapter, schema, signature):
                     if control.get('kill_requested') or control.get('state') == 'abandoned':
                         runner.save(request['progress_path'] + '.stop', {'stop': True})
                     else:
-                        worker.remote.call('cap.heartbeat', args)
+                        try:
+                            worker.remote.call('provider.custody', dict(args, observation=dict(
+                                observation, signature=signature, recovery_path=directory,
+                                local_observed_at=observation.get('observed_at'))))
+                        except Exception:
+                            worker.remote.call('cap.heartbeat', args)
                     if os.path.exists(request['progress_path']):
                         progress = runner.read(request['progress_path'])
                         if progress.get('signature') != last_progress:
@@ -93,6 +98,12 @@ def finish(worker, action, adapter, schema, signature):
                     pass
             time.sleep(.2)
             observation = runner.inspect(directory)
+        try:
+            worker.remote.call('provider.custody', dict(args, observation=dict(
+                observation, signature=signature, recovery_path=directory,
+                local_observed_at=observation.get('observed_at'))))
+        except Exception:
+            pass
         if observation['state'] == 'not_started':
             state = 'failed'
             out = {'reason': observation['reason'], 'evidence': {'executed': False, 'quiescent': True}}

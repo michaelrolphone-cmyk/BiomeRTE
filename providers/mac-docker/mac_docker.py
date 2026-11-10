@@ -39,7 +39,8 @@ def offer(cfg, state):
                         'continue running after the CLI returns and the lease is released.'
                         % (cfg['host'], cfg['slots']))
     return dict(provider=cfg['provider'], contract=CONTRACT, resource=cfg['resource'],
-                service='docker-cli', capacity=cfg['slots'], state=state, usage=guide)
+                service='docker-cli', capacity=cfg['slots'], state=state, usage=guide,
+                configuration={'execution_custody': True})
 
 
 def daemon_ready(cfg):

@@ -57,7 +57,7 @@ def main():
                               'usage': guide})
     admin.call('peer.trust', {'public_key': node['public_key'], 'label': os.uname()[1] + ' Docker CLI',
                               'scopes': ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim', 'provider.result',
-                                         'cap.status', 'cap.heartbeat', 'cap.command.state', 'agent.progress', 'artifact.get', 'artifact.put', 'offer:' + CONTRACT, 'resource:' + resource]})
+                                         'cap.status', 'provider.custody', 'cap.heartbeat', 'cap.command.state', 'agent.progress', 'artifact.get', 'artifact.put', 'offer:' + CONTRACT, 'resource:' + resource]})
     manifest = os.path.join(home, 'manifest.json')
     adapter = os.path.join(here, 'docker_cli.py')
     offer = {'contract': CONTRACT, 'resource': resource, 'service': 'docker-cli', 'capacity': args.slots,

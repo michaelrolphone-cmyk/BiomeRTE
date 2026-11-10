@@ -24,6 +24,9 @@ class Remote:
             return dict(state='claimed', output_schema={'ok': {'type':'bool','required':True}})
         if name == 'cap.command.state':
             return {'state': 'claimed', 'kill_requested': False}
+        if name == 'provider.custody':
+            self.heartbeats += 1
+            return {}
         if name == 'cap.heartbeat':
             self.heartbeats += 1
             return {}

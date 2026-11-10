@@ -504,9 +504,22 @@ def result(tx, ctx, provider, operation, generation, state, result):
     lifecycle.current(tx, a)
     if a['state'] not in ('claimed', 'uncertain'):
         raise Fault('Operation has not been claimed', 409)
+    if state in ('succeeded', 'failed'):
+        from .resource_recovery import protected
+        held = tx.need('leases', a['lease'])
+        proof = a.get('execution_reconciliation', {})
+        if protected(tx, held) and not (
+                a.get('custody', {}).get('state') in ('finished', 'not_started') or
+                result.get('evidence', {}).get('quiescent') is True or
+                (proof.get('quiescent') is True and proof.get('result_digest') == digest(result))):
+            raise Fault('Executor settlement proof required before resource release', 409)
     if state == 'succeeded':
         validate(tx.need('contracts', a['contract'])['outputs'], result)
     a.update(state=state, result=result)
+    a.pop('recovery', None)
+    lease = tx.get('leases', a['lease'])
+    if lease and lease.pop('recovery_required', None):
+        tx.put('leases', lease['id'], lease)
     tx.put('actions', operation, a)
     from .authorization import observe
     observe(tx, operation, state, result)
@@ -615,3 +628,7 @@ def settle_submissions(tx, ctx):
     if recover_reservations(tx, ctx):
         promote(tx, ctx)
 
+
+
+# Register explicit ownership and proof-backed execution reconciliation APIs.
+from . import resource_recovery
