@@ -1,4 +1,6 @@
 import asyncio
+import json
+from biomerte.stream_router import frame,decode
 import unittest
 from biomerte.rover import Rover
 
@@ -10,9 +12,10 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
         rover=Rover(Remote(),{})
         async with rover.subscribe() as first:
             async with rover.subscribe() as second:
-                rover.broadcast('vision',b'fresh')
-                self.assertEqual(b'fresh',await first['vision'].get())
-                self.assertEqual(b'fresh',await second['vision'].get())
+                message=frame({},b'fresh')
+                rover.broadcast('vision',message)
+                self.assertEqual(message,await first['vision'].get())
+                self.assertEqual(message,await second['vision'].get())
         self.assertFalse(rover.browsers)
         self.assertTrue(rover.intent.empty())
 
@@ -33,16 +36,16 @@ class RoverOwnership(unittest.IsolatedAsyncioTestCase):
     async def test_slow_browser_video_does_not_backpressure_control(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(10000):rover.broadcast('vision',i)
+            for i in range(10000):rover.broadcast('vision',frame({},str(i).encode()))
             rover.broadcast('control',{'stage':'applied'})
-            self.assertEqual(9999,await queues['vision'].get())
+            self.assertEqual(b'9999',decode(await queues['vision'].get(),4194304)[1])
             self.assertEqual('applied',(await queues['control'].get())['stage'])
 
     async def test_map_revision_overflow_requests_snapshot(self):
         rover=Rover(None,{})
         async with rover.subscribe() as queues:
-            for i in range(9):rover.broadcast('map',str(i))
-            self.assertEqual('{"type": "snapshot_required"}',await queues['map'].get())
+            for i in range(9):rover.broadcast('map',json.dumps({'type':'map_delta','map_id':'map','revision':i}))
+            self.assertEqual({'type':'snapshot_required','map_id':'map','revision':8},json.loads(await queues['map'].get()))
 
     async def test_fencing_polls_same_lease_and_disconnect_releases_before_retry(self):
         from unittest.mock import patch
