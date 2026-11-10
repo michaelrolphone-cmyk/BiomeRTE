@@ -8,6 +8,8 @@ import tempfile
 import threading
 import time
 import unittest
+import contextlib
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -82,16 +84,22 @@ class SequenceReservationTests(unittest.TestCase):
 
 
 class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def publish_once(self,publisher,binding,router):
+    async def publish_once(self,publisher,binding,router,slow_reservation=False):
         stop=threading.Event();accepted=[];failures=[]
         metadata=dict(type='map_delta',frame_id='fresh-frame',source_timestamp=1,
                       processing_timestamp=2,processed_monotonic=time.monotonic(),
                       calibration_revision='kept',map_revision=13,
                       map_id='kept-map',revision=13)
+        clock={'now':100.0}
+        if slow_reservation:metadata['processed_monotonic']=clock['now']
         packet=frame(metadata,b'JPEG')
+        data=struct.pack('!I',len(packet))+packet
+        if slow_reservation:
+            newer=dict(metadata,processed_monotonic=101.1,frame_id='fresh-after-reserve')
+            packet=frame(newer,b'JPEG');data+=struct.pack('!I',len(packet))+packet
         class Response(io.BytesIO):
             status=200
-        response=Response(struct.pack('!I',len(packet))+packet)
+        response=Response(data)
         class Local:
             def request(self,*args):pass
             def getresponse(self):return response
@@ -112,16 +120,29 @@ class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 return {'url':'ws://127.0.0.1:8751/'+binding['id'],
                         'attachment_credential':'fixture'}
         publisher.remote=Remote()
-        with patch('leased_streams.LocalConnection',return_value=Local()),patch(
-                'websockets.asyncio.client.connect',return_value=Wire()):
+        with contextlib.ExitStack() as patches:
+            patches.enter_context(patch('leased_streams.LocalConnection',return_value=Local()))
+            patches.enter_context(patch('websockets.asyncio.client.connect',return_value=Wire()))
+            if slow_reservation:
+                original=publisher.sequences.next
+                def reserve(value):
+                    sequence=original(value);clock['now']=101.1;return sequence
+                patches.enter_context(patch.object(publisher.sequences,'next',side_effect=reserve))
+                patches.enter_context(patch('leased_streams.time',SimpleNamespace(monotonic=lambda:clock['now'])))
             await publisher.run(binding,stop)
         self.assertEqual(failures,[],'Router rejected a fresh recovery frame')
         self.assertEqual(len(accepted),1)
         meta,image=accepted[0]
         self.assertEqual(image,b'JPEG')
+        self.assertEqual(meta['frame_id'],'fresh-after-reserve' if slow_reservation else 'fresh-frame')
         self.assertEqual((meta['calibration_revision'],meta['map_id'],meta['map_revision']),
                          ('kept','kept-map',13))
         return meta['sequence']
+
+    async def test_slow_durable_reservation_discards_frame_that_became_stale(self):
+        publisher=VisionStreams(None,'fixture');binding=grant();router=Session(binding)
+        sequence=await self.publish_once(publisher,binding,router,slow_reservation=True)
+        self.assertEqual(sequence,2)
 
     async def test_lane_thread_recreation_preserves_router_watermark(self):
         binding=grant();router=Session(binding);publisher=VisionStreams(None,'fixture')

@@ -100,6 +100,8 @@ class VisionStreams:
                         # draining old images buffered before reconnection.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
                         sequence=self.sequences.next(grant)
+                        # Reserving a new range may wait for durable storage.
+                        if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
                         if grant['lane']=='vision':metadata['type']='frame'
