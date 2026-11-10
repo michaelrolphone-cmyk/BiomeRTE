@@ -58,7 +58,7 @@ def check_argv(argv, profile):
     return [exe] + argv[1:]
 
 
-def store_stream(path, remote, chunk_bytes=256 * 1024):
+def store_stream(path, remote, chunk_bytes=256 * 1024, retry=False):
     """Keep small replies readable and make every original byte retrievable."""
     whole = hashlib.sha256()
     chunks = []
@@ -81,6 +81,8 @@ def store_stream(path, remote, chunk_bytes=256 * 1024):
                     receipt = remote.call('artifact.put', arguments, request_id)
                     break
                 except Exception:
+                    if not retry:
+                        raise
                     # The command has already settled. Keep its custodian alive
                     # and retry this exact immutable upload, never the argv.
                     # The supervising runner continues custody heartbeats while
@@ -144,7 +146,7 @@ def execute(cfg, home, request):
     remote = Remote(cfg['url'], cfg['site'], node['node'], os.path.join(home, 'node.key'))
     out = {'exit_code': result['exit_code'], 'streams': {}}
     for name in ('stdout', 'stderr'):
-        out[name], out['streams'][name] = store_stream(result[name], remote)
+        out[name], out['streams'][name] = store_stream(result[name], remote, retry=True)
     out['evidence'] = {k: result[k] for k in ('exit_code', 'duration_seconds', 'reason',
                                               'process_identity', 'quiescent')}
     out['evidence'].update(executed=True, host=socket.gethostname(), executor_identity=inventory())
