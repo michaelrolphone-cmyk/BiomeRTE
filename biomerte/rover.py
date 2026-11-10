@@ -7,8 +7,9 @@ from .stream_router import decode
 
 
 class Rover:
-    def __init__(self, remote, resources, task='rover-server'):
+    def __init__(self, remote, resources, task='rover-server', require_provider_ready=False):
         self.remote, self.resources, self.task = remote, resources, task
+        self.require_provider_ready = require_provider_ready
         self.descriptors = {}
         self.browsers = set()
         self.intent = asyncio.Queue(1)
@@ -151,11 +152,11 @@ class Rover:
         async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_queue=1,write_limit=65536) as socket:
             if lane=='control':
                 self.discard_intent()
-                self.control_ready=True
+                self.control_ready=not self.require_provider_ready
                 async def send():
                     while True:
                         intent=await self.intent.get()
-                        if intent['expires_at']<=time.time():continue
+                        if not self.control_ready or intent['expires_at']<=time.time():continue
                         intent.update(authority=descriptor['authority'],generation=descriptor['generation'],epoch=descriptor['epoch'])
                         await asyncio.wait_for(socket.send(json.dumps(intent)),.1)
                 task=asyncio.create_task(send())
@@ -164,6 +165,17 @@ class Rover:
             async def receive():
                 revision=None
                 async for message in socket:
+                    if lane=='control' and self.require_provider_ready:
+                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        if metadata.get('type')=='stream_status':
+                            if self.require_provider_ready:
+                                if any(metadata.get(k)!=descriptor[k] for k in ('authority','generation','epoch')):
+                                    raise ValueError('Mismatched router peer status')
+                                if any(type(metadata.get(k)) is not bool for k in ('provider_connected','server_connected')):
+                                    raise ValueError('Invalid router peer status')
+                                self.discard_intent()
+                                self.control_ready=metadata['provider_connected'] and metadata['server_connected']
+                            continue
                     if lane=='map':
                         metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:

@@ -59,12 +59,22 @@ def frame(metadata, data):
 
 
 class Session:
-    def __init__(self, grant):
+    def __init__(self, grant, peer_status=False):
+        self.peer_status = peer_status
         self.grant = grant
         self.peers = {}
         self.sequences = {}
         self.closed = False
         self.revisions = {}
+
+    def notify_control_status(self):
+        target = self.peers.get(('server', 'control'))
+        if self.peer_status and target is not None:
+            g = self.grant
+            target.put(json.dumps({'type': 'stream_status', 'lane': 'control',
+                'authority': g['authority'], 'generation': g['generation'],
+                'epoch': g['epoch'], 'provider_connected': ('provider', 'control') in self.peers,
+                'server_connected': True}))
 
     def check(self, role, lane, message, now=None):
         g = self.grant
@@ -140,7 +150,8 @@ class Peer:
 
 
 class Router:
-    def __init__(self, secrets, validators):
+    def __init__(self, secrets, validators, peer_status=False):
+        self.peer_status = peer_status
         self.secrets = secrets
         self.validators = validators
         self.sessions = {}
@@ -212,7 +223,7 @@ class Router:
         await self.validate(grant)
         session = self.sessions.get(session_id)
         if not session:
-            session = self.sessions[session_id] = Session(grant)
+            session = self.sessions[session_id] = Session(grant, self.peer_status)
             self.tasks[session_id] = asyncio.create_task(self.watch(session))
         if session.closed or session.grant['epoch'] != grant['epoch']:
             raise Fault('Superseded stream epoch', 409)
@@ -224,6 +235,7 @@ class Router:
         delivery=grant.get('policies', {}).get(lane, grant['delivery'])
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
         session.peers[key] = peer
+        if lane == 'control':session.notify_control_status()
         pump = asyncio.create_task(peer.pump())
         window, count = time.monotonic(), 0
         async def receive():
@@ -249,6 +261,7 @@ class Router:
         finally:
             if session.peers.get(key) is peer:
                 session.peers.pop(key, None)
+                if lane == 'control':session.notify_control_status()
             reader.cancel()
             pump.cancel()
             await asyncio.gather(reader, pump, return_exceptions=True)
@@ -277,7 +290,7 @@ async def serve(config):
         validators[app.node] = lambda id, app=app: app.call('stream.inspect', {'session': id}, realm='site')
     from .stream_inspection import add_remote
     add_remote(config, secrets, validators)
-    router = Router(secrets, validators)
+    router = Router(secrets, validators, peer_status=config.get('peer_status', False))
     if config.get('diagnostic_log'):
         from logging.handlers import RotatingFileHandler
         logger = logging.getLogger(__name__)
@@ -286,8 +299,10 @@ async def serve(config):
     context = listener_tls(config)
     async def health(connection, request):
         if request.path == '/health':
-            return connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
+            response = connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
                 **router.health(), 'transport': config.get('transport', 'tls')}))
+            response.headers['Content-Type'] = 'application/json'
+            return response
     async def handle(socket):
         try:
             await router.attach(socket, socket.request.path,
