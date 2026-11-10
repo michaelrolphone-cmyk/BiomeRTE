@@ -450,7 +450,8 @@ class VisionService:
         result = {**snapshot, "availability": "available", "freshness": self._freshness(snapshot),
                   "metric_localization": self.metric.metric_localization(snapshot)}
         result["robot_localization"] = read_robot_pose(
-            result, self.state_dir / "navigation-frames.json", delivery_elapsed_s=0.0)
+            result, self.state_dir / "navigation-frames.json", delivery_elapsed_s=0.0,
+            anchor_resolver=self.metric.repo.resolve_floor_anchors)
         return result
 
     def _binding(self, snapshot):
