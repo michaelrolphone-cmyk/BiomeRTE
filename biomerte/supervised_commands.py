@@ -160,7 +160,9 @@ def cleanup_expired(worker, limit=8):
     for operation, in worker.db.execute('SELECT id FROM supervised_expiry ORDER BY id LIMIT ?', (limit,)).fetchall():
         directory = runner.location(os.path.join(os.path.dirname(worker.path), 'command-runners'), operation)
         if os.path.lexists(directory):
-            if os.path.islink(directory) or os.path.realpath(directory) != directory:
+            if (os.path.islink(directory) or os.path.islink(os.path.dirname(directory)) or
+                    os.path.realpath(directory) != os.path.join(os.path.realpath(os.path.dirname(directory)),
+                                                               os.path.basename(directory))):
                 raise Fault('Unsafe runner expiry directory')
             if not os.path.exists(os.path.join(directory, 'acknowledged.json')):
                 raise Fault('Runner expiry has no durable acknowledgement')
