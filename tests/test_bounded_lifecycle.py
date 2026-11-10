@@ -175,3 +175,11 @@ class BoundedLifecycle(unittest.TestCase):
             self.assertIn('No such file',result['result']['reason'])
         finally:
             worker.db.close()
+
+    def test_persistent_provider_offline_revokes_authority_without_duration_watch(self):
+        lease,action=self.action('persistent')
+        self.call('cap.offer',provider='test',contract='sample:1',resource='slot',state='offline',
+                  configuration={'lease_class':'persistent'})
+        self.app.tick('site')
+        self.assertEqual('abandoned',self.call('cap.status',operation='one')['state'])
+        self.assertEqual('provider_offline',self.call('cap.status',operation='one')['result']['reason'])

@@ -4,7 +4,7 @@ import {controllerStatus,claimControllerJob} from './ha.mjs';
 import {openGrokJob} from './grok.mjs';
 
 const transportSleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-const terminalStates=new Set(['succeeded','failed','uncertain']);
+const terminalStates=new Set(['succeeded','failed','uncertain','abandoned']);
 function toolValue(result){
  if(result.isError)throw new Error(result.content?.map(x=>x.text||'').join(' ')||'Controller unavailable');
  return result.structuredContent??JSON.parse(result.content.find(x=>x.type==='text').text);
