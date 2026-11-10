@@ -85,6 +85,7 @@ class VisionService:
         self._last_checkpoint_revision = None
         self._checkpoint_error = None
         self._checkpoint_cleanup_error = None
+        self._checkpoint_future = None
         self._last_geometry = {}
         self._pending_changes = []
         self._reconcile_geometry = False
@@ -482,12 +483,105 @@ class VisionService:
             return None
         try:
             if self.revision != self._last_checkpoint_revision:
-                return self._checkpoint(origin="automatic")
+                return (self._schedule_checkpoint(origin="automatic")
+                        if hasattr(self.backend, "capture_checkpoint") else
+                        self._checkpoint(origin="automatic"))
         finally:
             # A failed save must not be retried on each arriving camera frame.
             self._last_checkpoint_tick = time.monotonic()
 
+    def _wait_checkpoint(self):
+        future = self._checkpoint_future
+        if future is not None:
+            try:
+                future.result()
+            except Exception:
+                LOG.exception("Background checkpoint failed; preserving prior checkpoint")
+
+    def _schedule_checkpoint(self, *, origin="automatic"):
+        from concurrent.futures import Future
+        from slam_backend import BackendNotReady
+        with self._pipeline_lock:
+            if self._checkpoint_future is not None and not self._checkpoint_future.done():
+                return self._checkpoint_future
+            target = self.state_dir / "maps" / self.map_id / ("backend-" + uuid.uuid4().hex)
+            prepared = None
+            ticket = None
+            try:
+                try:
+                    ticket = self.backend.capture_checkpoint(target)
+                except BackendNotReady:
+                    # Preserve the existing metadata-only checkpoint behavior.
+                    return self._checkpoint(origin=origin)
+                geometry = ticket["geometry"]
+                changes = self._reconcile_changes(ticket["map_changes"], geometry)
+                self._commit_changes(changes, "checkpoint_reconciliation")
+                revision = self.revision
+                prepared = self.store.prepare_checkpoint(self.map_id, metadata={
+                    "session_id": self.session_id,
+                    "calibration_id": self.calibration["calibration_id"],
+                    "checkpoint_origin": origin,
+                    "backend_status": self._backend_status(),
+                    "map_revision": revision,
+                    "geometry_matches_backend_state": True,
+                    "backend_checkpoint": {"format": "pyslam-system-state",
+                                           "capture": "immutable_map_and_fifo_database_barrier"},
+                })
+            except Exception as exc:
+                self._checkpoint_error = "checkpoint_failed:" + type(exc).__name__
+                if ticket is None:
+                    shutil.rmtree(target, ignore_errors=True)
+                else:
+                    # A queued native save must settle before another can begin,
+                    # even when freezing the SQLite revision failed.
+                    failed = Future()
+                    self._checkpoint_future = failed
+                    backend = self.backend
+                    # Bind the exception: Python clears an except variable.
+                    error = exc
+                    def cleanup(error=error):
+                        try:
+                            backend.write_checkpoint(ticket)
+                        except Exception:
+                            LOG.exception("Native checkpoint cleanup failed")
+                        finally:
+                            shutil.rmtree(target, ignore_errors=True)
+                            failed.set_exception(error)
+                    threading.Thread(target=cleanup, name="checkpoint-cleanup", daemon=True).start()
+                raise
+            future = Future()
+            self._checkpoint_future = future
+            backend = self.backend
+            def finish():
+                started = time.monotonic()
+                try:
+                    artifact = backend.write_checkpoint(ticket)
+                    saved = self.store.finish_checkpoint(prepared, artifact["path"])
+                    self._last_checkpoint_revision = revision
+                    self._checkpoint_error = None
+                    self._checkpoint_cleanup_error = None
+                    try:
+                        saved["retention"] = self.store.retire_superseded_checkpoints()
+                        if saved["retention"]["cleanup_errors"]:
+                            self._checkpoint_cleanup_error = "checkpoint_retirement_cleanup_failed"
+                    except Exception:
+                        self._checkpoint_cleanup_error = "checkpoint_retirement_failed"
+                        LOG.exception("Asynchronous checkpoint retention failed")
+                    LOG.info("Asynchronous checkpoint saved revision=%s write_seconds=%.3f",
+                             revision, time.monotonic()-started)
+                    future.set_result(saved)
+                except Exception as exc:
+                    self._checkpoint_error = "checkpoint_failed:" + type(exc).__name__
+                    self.store.discard_checkpoint(prepared)
+                    LOG.exception("Asynchronous checkpoint failed; prior checkpoint retained")
+                    future.set_exception(exc)
+                finally:
+                    shutil.rmtree(target, ignore_errors=True)
+            threading.Thread(target=finish, name="checkpoint-writer", daemon=True).start()
+            return future
+
     def _checkpoint(self, *, origin="automatic"):
+        self._wait_checkpoint()
         target = self.state_dir / "maps" / self.map_id / ("backend-"+uuid.uuid4().hex)
         from slam_backend import BackendNotReady
         self._checkpoint_cleanup_error = None
@@ -627,6 +721,7 @@ class VisionService:
                 "error": self._error, "camera": self.camera.status(), "detector": self.detector.status(),
                 "localization": self._backend_status(), "persistence": self.store.status(),
                 "checkpoint_error": self._checkpoint_error,
+                "checkpoint_running": self._checkpoint_future is not None and not self._checkpoint_future.done(),
                 "checkpoint_cleanup_error": self._checkpoint_cleanup_error,
                 "robot_model": self._robot_model(summary=True),
                 "latest_checkpoint": self.store.latest_checkpoint(self.map_id),
@@ -732,6 +827,11 @@ class VisionService:
                                     [frame["width"], frame["height"]],
                                     confirmed_floor_contact=inputs.get("confirmed_floor_contact", False))
             return {**self._binding(snapshot), "projection": result}
+        if operation == "robot.map.checkpoint" and hasattr(self.backend, "capture_checkpoint"):
+            if inputs.get("map_id", self.map_id) != self.map_id:
+                raise ValueError("only_active_map_can_be_checkpointed")
+            value = self._schedule_checkpoint(origin="explicit")
+            return value.result() if hasattr(value, "result") else value
         with self._pipeline_lock:
             if operation == "robot.map.checkpoint":
                 if inputs.get("map_id", self.map_id) != self.map_id:
@@ -802,6 +902,7 @@ class VisionService:
         except Exception:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
         self.metric.close()
+        self._wait_checkpoint()
         with self._pipeline_lock:
             try:
                 # The final SQLite backup must include the completed session.
