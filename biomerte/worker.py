@@ -195,7 +195,7 @@ class Worker:
                     out = json.loads(stdout.decode())
                     from .api import validate
                     validate(claimed['output_schema'], out)
-                    state = 'succeeded'
+                    state = 'failed' if out.get('evidence', {}).get('reason') == 'stop_requested' else 'succeeded'
             except (OSError, ValueError, Fault) as exc:
                 out = {'reason': str(exc)}
             for path in (request.get('progress_path', ''), request.get('progress_path', '') + '.stop'):

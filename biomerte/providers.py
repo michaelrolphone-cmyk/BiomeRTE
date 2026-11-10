@@ -371,6 +371,8 @@ def dispatch(tx, ctx, lease, inputs, operation, destination=''):
         return prev
     if destination:
         lifecycle.destination(tx, ctx, destination)
+    if tx.need('offers', l['offer']).get('configuration', {}).get('stream_only'):
+        raise Fault('Use stream.open for this streaming interface', 409)
     contract = tx.need('contracts', l['contract'])
     validate(contract['inputs'], inputs)
     if l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer'])):
@@ -398,10 +400,12 @@ def dispatch(tx, ctx, lease, inputs, operation, destination=''):
     return a
 
 
-@op('provider.poll', 'provider:str', False)
-def pending(tx, ctx, provider):
+@op('provider.poll', 'provider:str limit?:int', False)
+def pending(tx, ctx, provider, limit=64):
     """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
     owner(ctx, provider)
+    if limit < 1:
+        raise Fault('Provider inbox page size must be positive')
     leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
     actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
                ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
@@ -413,7 +417,7 @@ def pending(tx, ctx, provider):
         (rest if guard in seen else first).append(a)
         seen.add(guard)
     streams = [g for g in tx.rows('_stream_grants') if g['provider'] == provider and g['state'] == 'open' and g['expires_at'] > time.time()]
-    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations, 'streams': streams}
+    return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations, 'streams': streams}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')

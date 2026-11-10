@@ -86,7 +86,7 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         generation=l['generation'], server=ctx.actor, direction=direction, delivery=delivery,
         limits=limits, lanes=stream.get('lanes', ['data']), schema=stream.get('schema', {}), state='open', expires_at=time.time() + ttl_seconds)
     tx.put('_stream_grants', grant['id'], grant)
-    return dict(grant, url=url.rstrip('/') + '/' + grant['id'], attachment_credential=token(ctx, grant, 'server'))
+    return dict(grant, url=url.rstrip('/') + '/' + grant['id'], role='server', attachment_credential=token(ctx, grant, 'server'))
 
 
 @op('stream.attach', 'session:str role:str')
@@ -96,7 +96,7 @@ def attach(tx, ctx, session, role):
     grant = valid(tx, ctx, tx.need('_stream_grants', session))
     authorize(tx, ctx, grant, role)
     unused, url = settings(ctx)
-    return dict(grant, url=url.rstrip('/') + '/' + session, attachment_credential=token(ctx, grant, role))
+    return dict(grant, url=url.rstrip('/') + '/' + session, role=role, attachment_credential=token(ctx, grant, role))
 
 
 @op('stream.inspect', 'session:str', False)
