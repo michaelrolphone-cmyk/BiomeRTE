@@ -16,8 +16,13 @@ except ImportError:
 
 
 class ControllerLink:
-    def __init__(self, origin, token, site_access=None):
+    def __init__(self, origin, token, site_access=None, status_path=None):
         self.origin, self.token, self.site_access = origin, token, site_access
+        self.status_path = status_path
+        self.status_lock = threading.Lock()
+        self.status_after = 0
+        self.transport_status = {'connected': False, 'connections': 0, 'errors': 0,
+                                 'socket_jobs': 0, 'socket_acks': 0}
         self.jobs = queue.Queue()
         self.socket = None
         self.send_lock = threading.Lock()
@@ -29,10 +34,58 @@ class ControllerLink:
         thread.daemon = True
         thread.start()
 
+    def _diagnostic(self, event, error=None):
+        # One bounded snapshot; no request bodies, identities, URLs or credentials.
+        path = getattr(self, 'status_path', None)
+        if not path:
+            return
+        events = {'connected', 'disconnected', 'job', 'ack', 'pong', 'unavailable'}
+        if event not in events:
+            return
+        try:
+            with self.status_lock:
+                value = self.transport_status
+                now = time.time()
+                value['observed_at'] = now
+                value['event'] = event
+                if event == 'connected':
+                    value['connected'] = True
+                    value['connections'] += 1
+                elif event in ('disconnected', 'unavailable'):
+                    value['connected'] = False
+                elif event == 'job':
+                    value['socket_jobs'] += 1
+                elif event == 'ack':
+                    value['socket_acks'] += 1
+                elif event == 'pong':
+                    value['last_pong_at'] = now
+                if error is not None:
+                    value['errors'] += 1
+                    names = {'ImportError', 'OSError', 'TimeoutError', 'SSLError',
+                             'WebSocketBadStatusException', 'WebSocketTimeoutException',
+                             'WebSocketConnectionClosedException'}
+                    name = type(error).__name__
+                    value['last_error'] = name if name in names else 'TransportError'
+                    status = getattr(error, 'status_code', None)
+                    value['last_http_status'] = status if type(status) is int and 100 <= status <= 599 else None
+                clock = time.monotonic()
+                if event in ('job', 'ack', 'pong') and clock < self.status_after:
+                    return
+                self.status_after = clock + 1
+                temporary = path + '.tmp-' + str(os.getpid())
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, 'w') as handle:
+                    json.dump(value, handle, sort_keys=True)
+                os.replace(temporary, path)
+        except Exception:
+            # Diagnostic storage must never interrupt dispatch or acknowledgement.
+            pass
+
     def run(self):
         try:
             import websocket
-        except ImportError:
+        except ImportError as error:
+            self._diagnostic('unavailable', error)
             return
         while True:
             ws = None
@@ -45,6 +98,7 @@ class ControllerLink:
                     enable_multithread=True)
                 with self.send_lock:
                     self.socket = ws
+                self._diagnostic('connected')
                 thread = threading.Thread(target=self.heartbeat, args=(ws,))
                 thread.daemon = True
                 thread.start()
@@ -53,12 +107,13 @@ class ControllerLink:
                     if not raw:
                         break
                     self._receive(ws, json.loads(raw))
-            except Exception:
-                pass
+            except Exception as error:
+                self._diagnostic('disconnected', error)
             finally:
                 with self.send_lock:
                     if self.socket is ws:
                         self.socket = None
+                self._diagnostic('disconnected')
                 if ws:
                     try:
                         ws.close()
@@ -76,6 +131,9 @@ class ControllerLink:
             # The gateway socket can acknowledge only jobs it delivered itself.
             frame['_delivery_socket'] = ws
             self.jobs.put(frame)
+            self._diagnostic('job')
+        elif frame.get('type') == 'pong':
+            self._diagnostic('pong')
         elif frame.get('type') == 'accepted':
             with self.lock:
                 item = self.pending.get(frame['id'])
@@ -87,6 +145,7 @@ class ControllerLink:
                         return
                     # Legacy gateways omit the lease. Wake into authenticated
                     # HTTP fallback rather than trusting an ambiguous ID-only ACK.
+                    self._diagnostic('ack')
                     item['ready'].set()
 
     def heartbeat(self, ws):

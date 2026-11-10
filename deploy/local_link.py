@@ -61,7 +61,8 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     local = 'http://127.0.0.1:' + str(args.port)
     from persistent_link import ControllerLink
     from result_delivery import complete
-    persistent = ControllerLink(origin, token, site_access)
+    persistent = ControllerLink(origin, token, site_access,
+                                os.path.join(args.home, 'gateway-transport-status.json'))
     ready = threading.Event()
     event_lock = threading.Lock()
     events_path = os.path.join(os.path.dirname(args.key), 'events.sqlite')
