@@ -25,9 +25,13 @@ def answer(status, body):
         {'status': status, 'body': body}, separators=(',', ':'))}]}
 
 
-def valid_envelope(data, site):
-    if not isinstance(data, dict) or set(data) != set(
-            ('site', 'realm', 'id', 'operation', 'arguments', 'auth')):
+def valid_envelope(data, site, controller=None):
+    fields = set(('site', 'realm', 'id', 'operation', 'arguments', 'auth'))
+    if not isinstance(data, dict) or set(data) not in (fields, fields | {'controller'}):
+        return False
+    if 'controller' in data and (not isinstance(data['controller'], str) or
+            not ACTOR.match(data['controller']) or '\n' in data['controller'] or
+            data['controller'] != controller):
         return False
     if data['site'] != site or data['realm'] != 'site':
         return False
@@ -54,7 +58,7 @@ def valid_envelope(data, site):
             (data['operation'] != 'stream.attach' and data['arguments'].get('provider') == actor))
 
 
-def dispatch_signed_provider(arguments, local, site, opener):
+def dispatch_signed_provider(arguments, local, site, opener, controller=None):
     """Return a native HTTP reply inside the durable gateway's result envelope."""
     if not isinstance(arguments, dict) or set(arguments) != set(('envelope',)):
         return answer(400, {'error': 'Invalid signed-provider transport'})
@@ -63,7 +67,7 @@ def dispatch_signed_provider(arguments, local, site, opener):
         return answer(400, {'error': 'Expected original JSON envelope'})
     try:
         data = json.loads(raw)
-        valid = valid_envelope(data, site)
+        valid = valid_envelope(data, site, controller)
     except (ValueError, TypeError, KeyError):
         valid = False
     if not valid:

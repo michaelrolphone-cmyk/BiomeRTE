@@ -5,45 +5,42 @@ import hashlib
 import json
 import os
 import socket
+import ssl
 import sys
 import time
 import threading
 from mcp_events import EventStore, CallbackError
+from result_delivery import complete
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHandler
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-opener = build_opener(NoRedirect)
-
-
-def fetch(url, payload=None, token=None, timeout=18, site_access=None):
-    data = None if payload is None else json.dumps(payload).encode('utf-8')
-    headers = {'User-Agent': 'BiomeRTE-Controller-Link/1.0', 'Content-Type': 'application/json'}
-    if token:
-        headers['Authorization'] = 'Bearer ' + token
-    if site_access:
-        headers['OAI-Sites-Authorization'] = 'Bearer ' + site_access
-    req = Request(url, data=data, headers=headers)
-    with opener.open(req, timeout=timeout) as res:
-        body = res.read()
-    return json.loads(body.decode('utf-8'))
+# Share the existing credential and HTTP transport with normal session operations.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from biomerte.gateway_transport import NoRedirect, opener, fetch, read_secret, credentials
 
 
 def dispatch(job, local, conf):
     call = job['request']
     name, args = call['name'], call.get('arguments', {})
+    if name == 'biome_native_call':
+        from native_call import dispatch_native_call
+        return dispatch_native_call(args, local, conf)
+    args = dict(args)
+    addressed = args.pop('controller', None)
+    args.pop('controller_owner', None)
+    if addressed is not None and addressed != conf['node']:
+        raise ValueError('Request addressed to a different controller')
     if name == 'signed_provider_pair':
         from provider_ingress import dispatch_provider_pair
         return dispatch_provider_pair(args, local, conf['site'], opener)
     if name == 'signed_provider_call':
         from provider_ingress import dispatch_signed_provider
-        return dispatch_signed_provider(args, local, conf['site'], opener)
+        return dispatch_signed_provider(args, local, conf['site'], opener, conf['node'])
+    if name in ('biome_dashboard_call', 'biome_dashboard_chunk', 'biome_dashboard_definition'):
+        from dashboard_proxy import dispatch_dashboard
+        return dispatch_dashboard(name, args, local, conf)
     if name == 'biome_status':
         status = fetch(local + '/health')
         rpc = {'jsonrpc': '2.0', 'id': str(job['id']) + '-progress', 'method': 'tools/call',
@@ -72,15 +69,11 @@ def dispatch(job, local, conf):
     return value['result']
 
 
-def read_secret(path):
-    with open(path) as f:
-        secret = f.read().strip()
-    if len(secret) != 64 or any(c not in '0123456789abcdef' for c in secret):
-        raise ValueError('Invalid dedicated bridge key')
-    return secret
 
 
 def event_service(path, local, home, origin, token, site_access):
+    with open(os.path.join(home, 'node.json')) as f:
+        controller = json.load(f)['node']
     def read_feed(realm, operation, arguments):
         with open(os.path.join(home, 'node.json')) as f:
             credential = json.load(f)['admin_token']
@@ -100,7 +93,7 @@ def event_service(path, local, home, origin, token, site_access):
     def topics(realm, topic, after, limit):
         return read_feed(realm, 'bus.event_page', {'topic': topic, 'after': after, 'limit': limit})
 
-    return EventStore(path, feed, authorize, topic_feed=topics)
+    return EventStore(path, feed, authorize, topic_feed=topics, controller=controller)
 
 
 def delivery_loop(factory):
@@ -154,6 +147,12 @@ def main():
         site_access = access['token']
     with open(os.path.join(args.home, 'node.json')) as handle:
         conf = json.load(handle)
+    if conf.get('gateway_link'):
+        from local_link import run
+        from session_service import maintenance_callback
+        maintain = maintenance_callback(args.home, origin, token, site_access, fetch)
+        return run(args, origin, token, site_access, fetch, dispatch, event_service, event_change,
+                   session_maintenance=maintain)
     if conf.get('gateway_journal'):
         from ha_link import run
         return run(args, origin, token, site_access, fetch, dispatch, event_service, event_change)
@@ -189,7 +188,8 @@ def main():
             except Exception as exc:
                 result = {'isError': True, 'content': [{'type': 'text', 'text': 'Controller request failed: ' + str(exc)}]}
             try:
-                fetch(origin + '/bridge/complete', {'id': job['id'], 'lease': job['lease'], 'result': result}, token, site_access=site_access)
+                complete({'id': job['id'], 'lease': job['lease'], 'result': result},
+                    lambda path, body: fetch(origin + '/bridge/' + path, body, token, site_access=site_access))
             except HTTPError as exc:
                 if exc.code != 409:
                     raise

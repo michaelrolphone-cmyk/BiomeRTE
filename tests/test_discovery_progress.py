@@ -1,12 +1,22 @@
 import tempfile, unittest
 from unittest.mock import patch
 from biomerte import discovery
-from biomerte.store import Fault
+from biomerte.store import Fault, Store
 
 class Tx:
     def __init__(self, data=None): self.data=data or {}
     def rows(self, kind): return self.data.get(kind, [])
 class Discovery(unittest.TestCase):
+    def progress(self, data):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(directory, 'site')
+            def seed(tx):
+                for kind, rows in data.items():
+                    for i, row in enumerate(rows):
+                        tx.put(kind, row.get('id', str(i)), row)
+            store.execute(seed)
+            return store.execute(lambda tx: discovery.progress(tx, None), read_only=True)
+
     def test_operations_page_uses_caller_permissions(self):
         from types import SimpleNamespace
         result=discovery.page(Tx(),SimpleNamespace(allowed=lambda name:name=='cap.discover'))
@@ -29,11 +39,13 @@ class Discovery(unittest.TestCase):
     def test_bad_cursor_returns_explicit_error(self):
         with self.assertRaises(Fault): discovery.page(Tx(),None,cursor='broken')
     def test_progress_exposes_uncertainty_separately(self):
-        tx=Tx({'actions':[dict(state='uncertain',provider='p',contract='c')]})
-        self.assertEqual(discovery.progress(tx,None)['state'],'degraded')
+        result = self.progress({'actions':[dict(state='uncertain',provider='p',contract='c')]})
+        self.assertEqual(result['state'], 'degraded')
+
     def test_assistant_business_failure_is_visible(self):
-        tx=Tx({'assistant_responsibilities':[{'id':'r'}]})
-        with patch('biomerte.assistant_support.assistant_status',return_value=dict(id='r',desired='run',state='blocked',active_cycle=None,blocked_dispatches=[{'result_code':'operation_failed'}])):
-            result=discovery.progress(tx,None)
-        self.assertEqual(result['state'],'degraded')
-        self.assertEqual(result['assistants'][0]['state'],'blocked')
+        result = self.progress({
+            'assistant_responsibilities': [{'id':'r', 'desired':'run'}],
+            'assistant_dispatch_failures': [{'id':'failure', 'responsibility_id':'r',
+                                           'result_code':'operation_failed'}]})
+        self.assertEqual(result['state'], 'degraded')
+        self.assertEqual(result['assistants'][0]['state'], 'blocked')

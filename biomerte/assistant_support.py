@@ -14,7 +14,8 @@ from .store import Fault, uid, digest
 from . import authorization, providers, process, assistant_workspaces, assistant_impact
 
 ROOT=Path(__file__).resolve().parent
-CAT=json.loads((ROOT/'assistant_catalog.json').read_text())
+with (ROOT/'assistant_catalog.json').open(encoding='utf-8') as stream:
+    CAT=json.load(stream)
 DISPOSITIONS={'completed','rejected','deferred','pending','unresolved','faulted'}
 
 def outcome(frame, disposition='completed', code='ok', data=None, continuation=None):
@@ -597,7 +598,7 @@ def cli_action(tx,cfg,operation,arguments):
     if len(chunks)>28:raise Fault('Controller command exceeds terminal argument capacity; decompose its context',413)
     code='import json,sys; from biomerte.app import Application; print(json.dumps(Application('+repr(home)+').call('+repr(operation)+',json.loads("".join(sys.argv[1:])),request_id='+repr('assistant-'+digest([operation,arguments]))+',realm="site")))'
     command='cd '+shlex.quote(source)+' && exec '+shlex.quote(cfg['python_executable'])+' -S -c '+shlex.quote(code)+' "$@"'
-    return {'contract':'host.terminal.run:1','resource':resource,'inputs':{'argv':['/bin/bash','-c',command,'biome-assistant',*chunks]}}
+    return {'contract':'host.terminal.run:1','resource':resource,'inputs':{'argv':['/bin/bash','-c',command,'biome-assistant']+chunks}}
 
 def known_action(tx,cfg,f,key):
     action=f.get(key)

@@ -203,7 +203,8 @@ def start(tx, ctx, name, inputs, task=''):
 
 @op('process.get', 'run:str', False)
 def get(tx, ctx, run):
-    return tx.need('runs', run)
+    from .retention import require_payload
+    return require_payload(tx.need('runs', run))
 
 
 @op('process.list', write=False)
@@ -516,7 +517,7 @@ def tick(tx, ctx, budget=64):
                 moves += 1
                 if moves == budget:
                     return moves
-    runs = [r for r in tx.rows('runs') if r['state'] == 'running']
+    runs = tx.matching('runs', 'state', ('running',))
     cursor = tx.get('_meta', 'last_run', '')
     runs.sort(key=lambda r: (r['id'] <= cursor, r['id']))
     for r in runs:
@@ -708,6 +709,8 @@ def cancel(tx, ctx, run):
 def learn(tx, ctx, run, name, bindings=None):
     """Extract successful provider calls. Map activity/input names to new parameter names."""
     r = tx.need('runs', run)
+    from .retention import require_payload
+    require_payload(r)
     if r['state'] != 'completed' or not r['trace']:
         raise Fault('A completed run with observed provider calls is required')
     steps, inputs = [], {}

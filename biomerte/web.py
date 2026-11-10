@@ -80,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not admin and not isinstance(auth, dict):
                     raise Fault('Credentials required', 401)
                 result = app.call(data['operation'], data.get('arguments', {}), data.get('id'),
-                                  data.get('realm', 'site'), auth, bool(data.get('cached', False) and admin))
+                                  data.get('realm', 'site'), auth, bool(data.get('cached', False) and admin),
+                                  controller=data.get('controller'))
             else:
                 raise Fault('Unknown path', 404)
             self.send(200, {'result': result})
