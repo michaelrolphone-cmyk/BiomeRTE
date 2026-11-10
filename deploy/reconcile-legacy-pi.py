@@ -1,10 +1,23 @@
 """Reconcile legacy Pi outcomes from local journals without executing commands."""
-import os,sys,json,sqlite3,time,subprocess,hashlib,imp
+import os,sys,json,sqlite3,time,subprocess,hashlib,imp,socket
+from urllib.error import HTTPError,URLError
 HOME='/home/pi/.local/share'
 LIVE=HOME+'/biomerte-releases/bounded-stream-bcef0dad6f8c'
 sys.path.insert(0,LIVE)
 from biomerte.worker import Remote
-from biomerte.store import digest,encode
+from biomerte.store import digest,encode,uid
+
+class RecoveryRemote(Remote):
+    def call(self,name,args,rid=None):
+        rid=rid or uid()
+        while True:
+            try:return super().call(name,args,rid)
+            except HTTPError as error:
+                if error.code not in (408,429,502,503,504):raise
+            except (socket.timeout,URLError):pass
+            print('RETRY_SAME_REQUEST',name,rid,flush=True)
+            time.sleep(1)
+
 cfg=json.load(open(HOME+'/biomerte/node.json'))
 admin=Remote('http://127.0.0.1:'+str(cfg['port']),cfg['site'],cfg['node'],None,token=cfg['admin_token'])
 boot=open('/proc/sys/kernel/random/boot_id').read().strip()
@@ -14,7 +27,7 @@ def main():
     items=admin.call('cap.recovery.list',{'limit':64})['items']
     for name in ('biomerte-terminal','biomerte-docker'):
         directory=HOME+'/'+name;node=json.load(open(directory+'/node.json'))
-        remote=Remote('http://127.0.0.1:'+str(cfg['port']),cfg['site'],node['node'],directory+'/node.key')
+        remote=RecoveryRemote('http://127.0.0.1:'+str(cfg['port']),cfg['site'],node['node'],directory+'/node.key')
         db=sqlite3.connect(directory+'/worker.sqlite',timeout=30,isolation_level=None)
         db.execute('CREATE TABLE IF NOT EXISTS legacy_custody_audit(id TEXT PRIMARY KEY,identity TEXT,proof TEXT,outcome TEXT,controller_ack TEXT,observed REAL)')
         unit=name+'.service'
@@ -54,7 +67,7 @@ def main():
                     out['evidence'].pop('stdout',None);out['evidence'].pop('stderr',None)
                     if '--apply' in sys.argv and all(os.path.isfile(result[k]) for k in ('stdout','stderr')):
                         for stream in ('stdout','stderr'):
-                            out[stream],out['streams'][stream]=terminal.store_stream(result[stream],remote)
+                            out[stream],out['streams'][stream]=terminal.store_stream(result[stream],remote,chunk_bytes=32768)
                     elif not all(os.path.isfile(result[k]) for k in ('stdout','stderr')):
                         out.update(reason='completion_recovered_output_unavailable',original_exit_code=result['exit_code'])
                         out['evidence']['output_unavailable']=True
