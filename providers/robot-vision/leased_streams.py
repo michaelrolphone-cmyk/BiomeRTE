@@ -40,9 +40,11 @@ def exact(source,size):
 
 
 class VisionStreams:
-    def __init__(self,remote,socket_path,local_router_url=None):
+    def __init__(self,remote,socket_path,local_router_url=None,sequence_path=None):
         from biomerte.stream_inspection import loopback_url
         self.local_router_url=loopback_url(local_router_url)
+        from stream_sequences import StreamSequences
+        self.sequences=StreamSequences(sequence_path)
         self.remote=remote
         self.socket_path=socket_path
         self.running={}
@@ -68,7 +70,6 @@ class VisionStreams:
     async def run(self,grant,stop):
         from websockets.asyncio.client import connect
         from biomerte.stream_router import decode,frame
-        sequence=0
         key=grant['id']+':'+grant['lane']
         while not stop.is_set():
             local=None
@@ -98,7 +99,7 @@ class VisionStreams:
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
-                        sequence+=1
+                        sequence=self.sequences.next(grant)
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
                         if grant['lane']=='vision':metadata['type']='frame'
