@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -73,6 +74,12 @@ class StreamRetryTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'darwin', 'native Mac adapter qualification')
     def test_native_command_runs_once_across_failed_uploads(self):
+        subprocess.check_call([sys.executable, '-c',
+            'from tests.test_terminal_stream_retry import StreamRetryTests; '
+            't=StreamRetryTests(); t.setUp(); '
+            't.native_command_proof(); t.doCleanups()'])
+
+    def native_command_proof(self):
         from biomerte import command_watch
         home = Path(self.temp.name)
         marker = home / 'executions'
