@@ -32,9 +32,27 @@
     },
     {
       "original_sha256": "ddbaa9d6f3f4f6f2d35d8e37e2c86f1616eb3189b1a6552ec1e21de62c7b9d50",
-      "patched_sha256": "e7893cba6048c97e8447a65acfd30893274cc4d22bf7670bc97e14db57ce813a",
+      "patched_sha256": "19f0c2c23f33d03606651050ddf80bdbfc92a8bcf2370f1a02bfdcefb66fdd56",
       "path": "pyslam/loop_closing/loop_closing.py",
-      "reason": "Keep headless loop visualization images out of memory and checkpoints; import GUI lazily."
+      "reason": "Keep headless visualization images out of checkpoints and snapshot live native keyframe IDs for relocalization."
+    },
+    {
+      "original_sha256": "3f7ccad825fea1d41f0fdde54e9fcebb640d0a189ad75804e6072b3e06da0ac1",
+      "patched_sha256": "af7e19fe9f4793c930ddae2f7a02fd1df7397fd81e829444ceaba8cdef5e440b",
+      "path": "pyslam/loop_closing/loop_detector_base.py",
+      "reason": "Carry an immutable snapshot of eligible native keyframe IDs to the loop detector process."
+    },
+    {
+      "original_sha256": "ef623f5049a072e589fd76fc3c805f3b8dc9f4e87e5a9accbfffaf64bcf5726b",
+      "patched_sha256": "e0827d2ed9d6d97f0df8a2d3d401eebad9c9f53e5466d353322852be666404af",
+      "path": "pyslam/loop_closing/loop_detector_dbow3.py",
+      "reason": "Apply retained-map membership before the ranked relocalization candidate budget."
+    },
+    {
+      "original_sha256": "c60086bbbba82c233f687ce7f64c3918b18a8f09b5065e4f50ee3a50148c0753",
+      "patched_sha256": "95045f7d2c17277e3d0c6097eda8b0e0da0303a355c739605e00d15eb4a0bd85",
+      "path": "pyslam/slam/relocalizer.py",
+      "reason": "Recheck live candidate membership without a check-then-lookup race after loop detection."
     }
   ],
   "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"

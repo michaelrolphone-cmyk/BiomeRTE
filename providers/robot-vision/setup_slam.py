@@ -125,6 +125,74 @@ def patch_headless_image_cache(source):
         "        if not self.headless and (\n            (self.loop_consistent_candidate_imgs is not None\n             and self.loop_consistent_candidate_imgs.candidates is not None)\n            or self.draw_similarity_matrix_init\n        ):")
 
 
+# This method is installed verbatim in the pinned DBoW3 detector. Keeping its
+# source here makes the eligibility query testable without native SLAM imports.
+RELOCALIZATION_QUERY_METHOD = """    def db_query_relocalization(
+        self, global_des, frame_id, max_num_results=5, eligible_frame_ids=None
+    ):
+        # Map culling does not remove DBoW3 entries. Apply current-map membership
+        # before the candidate budget, while retaining DBoW3's score ordering.
+        if eligible_frame_ids is None:
+            return self.db_query(global_des, frame_id, max_num_results)
+        eligible = set(eligible_frame_ids)
+        eligible.discard(frame_id)
+        budget = max_num_results + 1  # Preserve this upstream profile's budget.
+        database_size = int(self.db.size())
+        if not eligible or budget <= 0 or database_size <= 0:
+            return []
+        limit = min(budget, database_size)
+        queries = 0
+        started = time.perf_counter()
+        while True:
+            results = self.db.query(global_des, max_results=limit)
+            queries += 1
+            selected = []
+            seen = set()
+            for result in results:
+                candidate_id = self.map_entry_id_to_frame_id.get(result.id)
+                if candidate_id in eligible and candidate_id not in seen:
+                    selected.append(result)
+                    seen.add(candidate_id)
+                    if len(selected) >= budget:
+                        break
+            if (
+                len(selected) >= min(budget, len(eligible))
+                or limit >= database_size
+                or len(results) < limit
+            ):
+                LoopDetectorBase.print(
+                    f"LoopDetectorDBoW3: Relocalization eligibility: frame: {frame_id}, "
+                    f"eligible: {len(eligible)}, database: {database_size}, "
+                    f"query_limit: {limit}, queries: {queries}, "
+                    f"elapsed_s: {time.perf_counter()-started:.6f}, "
+                    f"selected: {[self.map_entry_id_to_frame_id[r.id] for r in selected]}"
+                )
+                return selected
+            limit = min(database_size, limit * 2)
+
+"""
+
+
+def patch_loop_detector_task(source):
+    source = replace_once(source, "        load_save_path=None,\n    ):\n", "        load_save_path=None,\n        relocalization_keyframe_ids=None,\n    ):\n")
+    return replace_once(source, "        self.load_save_path = load_save_path\n", "        self.load_save_path = load_save_path\n        # Native Frame.id values, not keyframe kid or source image indices.\n        self.relocalization_keyframe_ids = (\n            None if relocalization_keyframe_ids is None\n            else tuple(int(frame_id) for frame_id in relocalization_keyframe_ids)\n        )\n")
+
+
+def patch_loop_relocalization_context(source):
+    return replace_once(source, "        task = LoopDetectorTask(\n            frame, img, task_type, covisible_keyframes=[], connected_keyframes=[]\n        )\n", "        # Snapshot under the map's lock; the relocalizer rechecks live membership.\n        eligible_keyframe_ids = tuple(\n            kf.id for kf in self.map.get_keyframes()\n            if not kf.is_bad() and kf.id != frame.id\n            and kf.des is not None and len(kf.des) > 0\n        )\n        task = LoopDetectorTask(\n            frame, img, task_type, covisible_keyframes=[], connected_keyframes=[],\n            relocalization_keyframe_ids=eligible_keyframe_ids,\n        )\n")
+
+
+def patch_dbow3_relocalization(source):
+    source = replace_once(
+        source, "    def run_task(self, task: LoopDetectorTask):\n",
+        RELOCALIZATION_QUERY_METHOD + "    def run_task(self, task: LoopDetectorTask):\n")
+    return replace_once(source, "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure\n                )\n", "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query_relocalization(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure,\n                    eligible_frame_ids=getattr(task, \"relocalization_keyframe_ids\", None),\n                )\n")
+
+
+def patch_relocalizer_membership(source):
+    return replace_once(source, "            reloc_candidate_kfs = [\n                keyframes_map[idx]\n                for idx in detection_output.candidate_idxs\n                if idx in keyframes_map\n            ]  # get back the keyframes from their ids\n", "            reloc_candidate_kfs = []\n            for idx in detection_output.candidate_idxs:\n                # A keyframe can be culled while the detector process is querying.\n                candidate = keyframes_map.get(idx)\n                if candidate is not None and not candidate.is_bad():\n                    reloc_candidate_kfs.append(candidate)\n")
+
+
 def patch_loop_viewer(source):
     source = replace_once(source, "from pyslam.viz.qimage_thread import QimageViewer\n", "")
     source = replace_once(source,
@@ -138,7 +206,7 @@ def patch_loop_viewer(source):
         "        if self.headless:\n            return\n"
         "        from pyslam.viz.qimage_thread import QimageViewer\n"
         "        draw = False")
-    return patch_headless_image_cache(source)
+    return patch_loop_relocalization_context(patch_headless_image_cache(source))
 
 
 
@@ -185,6 +253,9 @@ PATCHES = {
     "pyslam/slam/slam.py": patch_slam,
     "pyslam/loop_closing/loop_detector_configs.py": patch_loop_configs,
     "pyslam/loop_closing/loop_closing.py": patch_loop_viewer,
+    "pyslam/loop_closing/loop_detector_base.py": patch_loop_detector_task,
+    "pyslam/loop_closing/loop_detector_dbow3.py": patch_dbow3_relocalization,
+    "pyslam/slam/relocalizer.py": patch_relocalizer_membership,
 }
 
 
@@ -295,9 +366,15 @@ class Installer:
                                         if name.endswith("/frame.py") else
                                         "Keep optional dense/GUI imports lazy and preserve headless mode on restore."
                                         if name.endswith("/slam.py") else
-                                        "Keep headless loop visualization images out of memory and checkpoints; import GUI lazily."
+                                        "Keep headless visualization images out of checkpoints and snapshot live native keyframe IDs for relocalization."
                                         if name.endswith("/loop_closing.py") else
-                                        "Import optional dense, GUI, and nonselected loop engines only on use.")})
+                                        "Carry an immutable snapshot of eligible native keyframe IDs to the loop detector process."
+                                         if name.endswith("/loop_detector_base.py") else
+                                         "Apply retained-map membership before the ranked relocalization candidate budget."
+                                         if name.endswith("/loop_detector_dbow3.py") else
+                                         "Recheck live candidate membership without a check-then-lookup race after loop detection."
+                                         if name.endswith("/relocalizer.py") else
+                                         "Import optional dense, GUI, and nonselected loop engines only on use.")})
         artifact = {"pyslam_commit": PYSLAM_COMMIT, "patches": manifest}
         (self.source / "biome-patches.json").write_text(json.dumps(artifact, sort_keys=True, indent=2))
         self.record("patches", artifact)
