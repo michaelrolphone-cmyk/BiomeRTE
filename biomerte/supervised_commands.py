@@ -81,6 +81,7 @@ def finish(worker, action, adapter, schema, signature):
                     control = worker.remote.call('cap.command.state', args)
                     if control.get('kill_requested') or control.get('state') == 'abandoned':
                         runner.save(request['progress_path'] + '.stop', {'stop': True})
+                        stop_native_terminal(worker, action)
                     else:
                         try:
                             worker.remote.call('provider.custody', dict(args, observation=dict(
@@ -114,7 +115,8 @@ def finish(worker, action, adapter, schema, signature):
                 from .api import validate
                 validate(schema, out)
                 state = 'failed' if (out.get('evidence', {}).get('reason') == 'stop_requested' or
-                                     os.path.exists(request['progress_path'] + '.stop')) else 'succeeded'
+                                     (action['contract'] == 'docker.cli:1' and
+                                      os.path.exists(request['progress_path'] + '.stop'))) else 'succeeded'
             except (OSError, ValueError, Fault) as error:
                 out = {'reason': str(error), 'runner': observation}
         else:
@@ -198,3 +200,29 @@ def cleanup_expired(worker, limit=8):
                 if not os.listdir(directory):
                     os.rmdir(directory)
         worker.db.execute('DELETE FROM supervised_expiry WHERE id=?', (operation,))
+
+
+def stop_native_terminal(worker, action):
+    """Forward explicit stop to the existing Pi custodian, never a new execution."""
+    if action['contract'] != 'host.terminal.run:1':
+        return
+    import sqlite3
+    path=os.path.join(os.path.dirname(worker.path),'terminal.sqlite')
+    if not os.path.exists(path):
+        return
+    db=sqlite3.connect(path,timeout=10)
+    try:
+        row=db.execute('SELECT body,state FROM jobs WHERE id=?',(action['id'],)).fetchone()
+        if not row or row[1] not in ('queued','launching','running'):
+            return
+        body=json.loads(row[0])
+        expected=action['inputs']['argv']
+        actual=body['argv']
+        if (actual[1:] != expected[1:] or
+                os.path.realpath(actual[0]) != os.path.realpath(expected[0])):
+            raise Fault('Native terminal stop identity mismatch',409)
+        with db:
+            db.execute("UPDATE jobs SET state='stop_requested' WHERE id=? AND state IN ('queued','launching','running')",
+                       (action['id'],))
+    finally:
+        db.close()

@@ -108,5 +108,41 @@ class ResourceRecovery(unittest.TestCase):
         self.assertEqual(self.call('cap.lease',lease=lease['id'])['state'],'released')
 
 
+class NativeStopTests(unittest.TestCase):
+    def test_existing_pi_custodian_receives_stop_without_reexecution(self):
+        import os,json,sqlite3
+        from types import SimpleNamespace
+        from biomerte.supervised_commands import stop_native_terminal
+        with tempfile.TemporaryDirectory() as home:
+            path=os.path.join(home,'terminal.sqlite')
+            db=sqlite3.connect(path)
+            db.execute('CREATE TABLE jobs(id TEXT PRIMARY KEY,body TEXT,state TEXT)')
+            db.execute('INSERT INTO jobs VALUES(?,?,?)',('command',json.dumps({'argv':['/bin/bash','-c','sleep 10']}),'running'))
+            db.commit()
+            worker=SimpleNamespace(path=os.path.join(home,'worker.sqlite'))
+            action={'id':'command','contract':'host.terminal.run:1','inputs':{'argv':['/bin/bash','-c','sleep 10']}}
+            stop_native_terminal(worker,action)
+            self.assertEqual(db.execute('SELECT state FROM jobs').fetchone()[0],'stop_requested')
+            db.execute("UPDATE jobs SET state='running'")
+            db.commit()
+            action['inputs']['argv']=['/bin/bash','-c','different command']
+            with self.assertRaises(Fault):
+                stop_native_terminal(worker,action)
+            self.assertEqual(db.execute('SELECT state FROM jobs').fetchone()[0],'running')
+            db.close()
+    def test_docker_cli_stop_marker_terminates_client(self):
+        import os,runpy,subprocess,sys,time
+        root=os.path.dirname(os.path.dirname(__file__))
+        adapter=runpy.run_path(os.path.join(root,'providers','pi-docker','docker_cli.py'))
+        with tempfile.TemporaryDirectory() as home:
+            marker=os.path.join(home,'progress.json')
+            with open(marker+'.stop','w') as target:target.write('stop')
+            child=subprocess.Popen([sys.executable,'-S','-c','import time;time.sleep(20)'],
+                                   stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            paths,counts,expired=adapter['capture'](child,home,time.monotonic()+30,1024,marker)
+            self.assertLess(child.returncode,0)
+            self.assertFalse(expired)
+
+
 if __name__=='__main__':
     unittest.main()
