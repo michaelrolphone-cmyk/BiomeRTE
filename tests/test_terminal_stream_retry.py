@@ -14,10 +14,20 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def read_bytes(path):
+    with path.open('rb') as source:
+        return source.read()
+
+
+def read_text(path):
+    with path.open() as source:
+        return source.read()
+
+
 def load_source(path, name):
     module = types.ModuleType(name)
     module.__file__ = str(path)
-    exec(compile(path.read_text(), str(path), 'exec'), module.__dict__)
+    exec(compile(read_text(path), str(path), 'exec'), module.__dict__)
     return module
 
 
@@ -39,7 +49,8 @@ class StreamRetryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'stdout'
-        self.path.write_bytes(b'exact retained output\n')
+        with self.path.open('wb') as output:
+            output.write(b'exact retained output\n')
         self.terminal = load_source(ROOT / 'providers/pi-terminal/terminal.py', 'retry_terminal')
         self.delays = []
         self.terminal.time = types.SimpleNamespace(sleep=self.delays.append)
@@ -50,9 +61,9 @@ class StreamRetryTests(unittest.TestCase):
         self.assertEqual(remote.calls[0], remote.calls[1])
         self.assertEqual(remote.calls[1], remote.calls[2])
         self.assertEqual(self.delays, [5, 5])
-        self.assertEqual(self.path.read_bytes(), b'exact retained output\n')
+        self.assertEqual(read_bytes(self.path), b'exact retained output\n')
         self.assertEqual(stream['size'], self.path.stat().st_size)
-        self.assertEqual(stream['sha256'], hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(stream['sha256'], hashlib.sha256(read_bytes(self.path)).hexdigest())
         self.assertEqual(preview, 'exact re')
         self.assertNotEqual(remote.calls[2][2], remote.calls[3][2])
 
@@ -70,7 +81,7 @@ class StreamRetryTests(unittest.TestCase):
         remote.call = interrupted
         with self.assertRaises(KeyboardInterrupt):
             self.terminal.store_stream(str(self.path), remote)
-        self.assertEqual(self.path.read_bytes(), b'exact retained output\n')
+        self.assertEqual(read_bytes(self.path), b'exact retained output\n')
 
     @unittest.skipUnless(sys.platform == 'darwin', 'native Mac adapter qualification')
     def test_native_command_runs_once_across_failed_uploads(self):
@@ -93,17 +104,17 @@ class StreamRetryTests(unittest.TestCase):
             adapter = load_source(ROOT / 'providers/mac-terminal/terminal_adapter.py', 'retry_adapter')
             executable = os.path.realpath('/bin/bash')
             config = {'terminal_profile': {'executable': executable,
-                       'executable_sha256': hashlib.sha256(Path(executable).read_bytes()).hexdigest()}}
+                       'executable_sha256': hashlib.sha256(read_bytes(Path(executable))).hexdigest()}}
             request = {'operation': 'one-effect', 'inputs': {'argv':
                        [executable, '-c', "echo once >> '" + str(marker) + "'; echo result"]}}
             result = adapter.execute(request, config, Transport())
             self.assertEqual(result['exit_code'], 0)
             self.assertEqual(result['stdout'], 'result\n')
-            self.assertEqual(marker.read_text(), 'once\n')
+            self.assertEqual(read_text(marker), 'once\n')
             # Reattaching to the exact saved receipt republishes only output.
             again = adapter.execute(request, config, Transport(0))
             self.assertEqual(again['stdout'], 'result\n')
-            self.assertEqual(marker.read_text(), 'once\n')
+            self.assertEqual(read_text(marker), 'once\n')
 
 
 if __name__ == '__main__':
