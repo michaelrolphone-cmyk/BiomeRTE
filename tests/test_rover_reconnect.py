@@ -42,4 +42,22 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
             await rover.maintain_lane({'id':'session'},'control')
         self.assertEqual(1,len(remote.calls))
 
+
+    async def test_late_subscriber_gets_latest_pinned_map_ref_without_replayed_delta(self):
+        import json
+        from biomerte.stream_router import frame
+        remote=Remote()
+        rover=Rover(remote,{})
+        rover.broadcast('vision',frame({'map_id':'map','map_revision':12},b'jpeg'))
+        rover.broadcast('map',frame({'map_id':'map','revision':11,'from_revision':10},b''))
+        async with rover.subscribe() as first:
+            value=json.loads(await asyncio.wait_for(first['map'].get(),.1))
+            self.assertEqual({'type':'snapshot_required','map_id':'map','revision':12},value)
+            rover.broadcast('map',frame({'map_id':'map','revision':13,'from_revision':12},b''))
+            await first['map'].get()
+            async with rover.subscribe() as second:
+                value=json.loads(await second['map'].get())
+                self.assertEqual(13,value['revision'])
+        self.assertEqual([],remote.calls)
+
 if __name__=='__main__':unittest.main()

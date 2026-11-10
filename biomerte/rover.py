@@ -16,6 +16,7 @@ class Rover:
         self.control_ready = False
         self.closed = False
         self.tasks = []
+        self.map_head = None
 
     async def call(self, operation, **args):
         return await asyncio.to_thread(self.remote.call, operation, args)
@@ -31,6 +32,8 @@ class Rover:
         if not hasattr(self, '_queues'):
             self._queues = {}
         self._queues[record] = queues
+        if self.map_head is not None:
+            queues['map'].put_nowait(json.dumps(dict(type='snapshot_required', **self.map_head)))
         try:
             yield queues
         finally:
@@ -38,6 +41,14 @@ class Rover:
             self._queues.pop(record, None)
 
     def broadcast(self, lane, message):
+        if lane in ('vision', 'map'):
+            metadata, unused = decode(message, 4194304)
+            revision = metadata.get('map_revision') if lane == 'vision' else metadata.get('revision')
+            identity = metadata.get('map_id')
+            if isinstance(identity, str) and type(revision) is int and revision >= 0:
+                if (self.map_head is None or self.map_head['map_id'] != identity or
+                        revision >= self.map_head['revision']):
+                    self.map_head = {'map_id': identity, 'revision': revision}
         for queues in getattr(self, '_queues', {}).values():
             inbox = queues[lane]
             if inbox.full():
