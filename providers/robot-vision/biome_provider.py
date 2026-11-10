@@ -18,6 +18,7 @@ import socket
 import stat
 import sys
 import tempfile
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -472,47 +473,59 @@ def serve(cfg):
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
         defined = read_registered(registry, cfg)
-        checked, stopping = 0.0, False
+        stopping = threading.Event()
 
         def stop(_sig, _frame):
-            nonlocal stopping
-            stopping = True
+            stopping.set()
+
+        def advertise():
+            # Registration and health may need remote round trips. They must
+            # not block the worker inbox or an already leased live stream.
+            while not stopping.is_set():
+                try:
+                    try:
+                        status = client.query("robot.vision.status", {})
+                        ready = supported_contracts(status)
+                    except ServiceError:
+                        status = {}
+                        ready = set()
+                    remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
+                        "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
+                    if stopping.is_set():return
+                    remote.call("cap.offer", stream_offer(cfg, status))
+                    for contract in sorted(ready - registered):
+                        if stopping.is_set():return
+                        remote.call("cap.define", CONTRACTS[contract])
+                        registered.add(contract)
+                        defined.add(contract)
+                    write_registered(registry, cfg, defined)
+                    for contract in sorted(defined):
+                        if stopping.is_set():return
+                        state = "ready" if contract in ready else "offline"
+                        if advertised.get(contract) != state:
+                            remote.call("cap.offer", offer(cfg, contract, state))
+                            advertised[contract] = state
+                    stopping.wait(cfg.get("health_seconds", 10))
+                except Exception as exc:
+                    print("Vision advertisement retry:", type(exc).__name__, file=sys.stderr, flush=True)
+                    stopping.wait(5)
 
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
+        publisher = threading.Thread(target=advertise, name="vision-advertisement", daemon=True)
+        publisher.start()
         try:
-            while not stopping:
+            while not stopping.is_set():
                 try:
-                    now = time.monotonic()
-                    if now >= checked:
-                        try:
-                            status = client.query("robot.vision.status", {})
-                            ready = supported_contracts(status)
-                        except ServiceError:
-                            status = {}
-                            ready = set()
-                        for contract in sorted(ready - registered):
-                            remote.call("cap.define", CONTRACTS[contract])
-                            registered.add(contract)
-                            defined.add(contract)
-                        write_registered(registry, cfg, defined)
-                        for contract in sorted(defined):
-                            state = "ready" if contract in ready else "offline"
-                            if advertised.get(contract) != state:
-                                remote.call("cap.offer", offer(cfg, contract, state))
-                                advertised[contract] = state
-                        remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
-                            "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
-                        remote.call("cap.offer", stream_offer(cfg, status))
-                        checked = now + cfg.get("health_seconds", 10)
-                    if defined:
-                        worker.once(pool)
-                    time.sleep(cfg.get("poll_seconds", 2))
+                    worker.once(pool)
+                    stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
                     # Request/image bytes and gateway credential errors never enter logs.
                     print("Vision provider retry:", type(exc).__name__, file=sys.stderr, flush=True)
-                    time.sleep(5)
+                    stopping.wait(5)
         finally:
+            stopping.set()
+            publisher.join()
             try:
                 try:
                     remote.call("cap.offer", stream_offer(cfg, {}))
