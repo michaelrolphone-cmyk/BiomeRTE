@@ -277,7 +277,9 @@ class DockerDeliveryRecoveryTests(unittest.TestCase):
             result=supervised.recover_docker_result(root,dict(inputs=args),Online())
             self.assertEqual(result['exit_code'],0)
             self.assertEqual(result['stdout'],'retained completion\n')
-            self.assertTrue(result['evidence']['quiescent'])
+            self.assertEqual(set(result),set(docker.OUTPUTS))
+            with open(os.path.join(root,'docker-completion.json')) as stream:
+                self.assertTrue(json.load(stream)['result']['evidence']['quiescent'])
             with open(effects) as source:self.assertEqual(source.read(),'once\n')
             with self.assertRaises(Fault):
                 supervised.recover_docker_result(root,dict(inputs={'argv':['different']}),Online())

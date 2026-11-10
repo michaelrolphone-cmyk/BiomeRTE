@@ -176,6 +176,7 @@ def execute(cfg, args, remote, progress_path=None):
                 retained[name]={'sha256':sha,'total_bytes':counts[name]}
             save(os.path.join(os.path.dirname(progress_path),'docker-completion.json'),
                  {'input_digest':digest(args),'result':result,'streams':retained})
+        result.pop('evidence',None)  # Custody proof stays in the private receipt, outside the public contract.
         for name, path in paths.items():
             result[name], meta = store_stream(path, remote, cfg.get('chunk_bytes', 256 * 1024))
             meta.update(total_bytes=counts[name], truncated=counts[name] > meta['size'])

@@ -113,7 +113,7 @@ def finish(worker, action, adapter, schema, signature):
             out = recover_docker_result(directory, action, worker.remote)
             from .api import validate
             validate(schema,out)
-            state = 'failed' if out.get('evidence',{}).get('reason') == 'stop_requested' else 'succeeded'
+            state = 'failed' if os.path.exists(request['progress_path']+'.stop') else 'succeeded'
         elif observation['state'] == 'finished' and observation['returncode'] == 0:
             try:
                 with open(os.path.join(directory, 'stdout')) as source:
@@ -265,4 +265,5 @@ def recover_docker_result(directory, action, remote):
         result['streams'][name]=dict(sha256=meta['sha256'],size=size,chunks=chunks,
                                     preview_truncated=size>len(preview),
                                     total_bytes=meta['total_bytes'],truncated=meta['total_bytes']>size)
+    result.pop('evidence',None)
     return result
