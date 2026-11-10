@@ -16,7 +16,7 @@ class HealthEvidenceTests(unittest.TestCase):
         for cause,withdraws in [(TimeoutError(),False),(ConnectionRefusedError(),True),(FileNotFoundError(),True)]:
             with self.subTest(cause=type(cause).__name__):
                 queried=threading.Event();advertised=threading.Event();closing=threading.Event()
-                handlers={};offline=[]
+                handlers={};offline=[];sequence_paths=[]
                 class Remote:
                     def __init__(self,cfg):pass
                     def call(self,operation,args):
@@ -36,7 +36,7 @@ class HealthEvidenceTests(unittest.TestCase):
                 class Pool:
                     def __init__(self,*args):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
                 class Streams:
-                    def __init__(self,*args):pass
+                    def __init__(self,*args,sequence_path=None):sequence_paths.append(sequence_path)
                     def update(self,*args):pass
                     def close(self):pass
                 with tempfile.TemporaryDirectory() as folder:
@@ -48,4 +48,5 @@ class HealthEvidenceTests(unittest.TestCase):
                          patch('biomerte.worker.Worker',Worker),patch('biomerte.worker.ActionPool',Pool),\
                          patch('leased_streams.VisionStreams',Streams):
                         adapter.serve(cfg)
+                self.assertEqual([pathlib.Path(folder)/'provider/stream-sequences.sqlite'],sequence_paths)
                 self.assertEqual(withdraws,bool(offline))
