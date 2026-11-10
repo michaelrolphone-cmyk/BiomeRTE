@@ -55,6 +55,12 @@ def contract_definitions():
          "Read authenticated camera light command/driver state; physical readback remains as reported."),
         ("robot.camera.light.set", {"on": field("bool"), "brightness": field("int"), "rgb": field("list")},
          "One-shot partial camera light update: on, brightness 0..255, rgb three bytes; inspect unknown outcomes before retry."),
+        ("robot.ahrs.status", {},
+         "Cached AHRS health, per-sensor freshness, attitude reference and calibration command state."),
+        ("robot.ahrs.snapshot", {},
+         "Cached full camera AHRS telemetry with sensor frames, units, ages and host timing qualification."),
+        ("robot.ahrs.calibrate", {},
+         "One-shot gyro calibration request; hold the board still for the firmware measurement window, then inspect status."),
         ("robot.map.read", {"map_id": field("str"), "revision": field("int"),
                            "bounds": field("obj"), "kinds": field("list"),
                            "cursor": field("str"), "limit": field("int")},
@@ -112,7 +118,7 @@ CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
 
 MUTATING_CONTRACTS = frozenset({
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
-    "robot.camera.light.set:1",
+    "robot.camera.light.set:1", "robot.ahrs.calibrate:1",
     "robot.vision.calibration:1",
     "robot.map.scale.start:1", "robot.map.scale.capture:1", "robot.map.scale.fit:1",
     "robot.map.scale.apply:1", "robot.map.scale.cancel:1", "robot.map.scale.reference:1",
@@ -174,6 +180,34 @@ SCALE_GUIDANCE = {
                        "does not establish floor alignment, gravity, occupancy or free space.",
     },
 }
+
+AHRS_GUIDANCE = {
+    "robot.ahrs.status:1": {
+        "before": "This reads the local cache and never contacts the camera. Background AHRS "
+                  "polling is opt-in and independent of radio polling.",
+        "read_result": "Read each sensor validity and age, receiver/boot/attitude epoch, faults, "
+                       "and gyro_bias_valid. A command receipt and subsequent calibration state "
+                       "are separate evidence; firmware provides no calibration request identifier.",
+    },
+    "robot.ahrs.snapshot:1": {
+        "before": "This returns cached full telemetry without a camera request.",
+        "read_result": "Acceleration includes gravity; yaw is relative; magnetometer axes are "
+                       "distinct and not a calibrated heading. Pressure altitude is not floor "
+                       "height. Sensor mounting and camera exposure timing remain unqualified; "
+                       "this evidence does not establish a camera/world pose or metric distance.",
+    },
+    "robot.ahrs.calibrate:1": {
+        "before": "Hold the board still, invoke once with empty inputs, and keep it stationary "
+                  "through the approximately two-second firmware measurement window. This "
+                  "explicit command is available even when background AHRS polling is disabled.",
+        "read_result": "Queued means accepted, not completed. Read robot.ahrs.status or "
+                       "robot.ahrs.snapshot for later state when polling is enabled, or the "
+                       "camera AHRS panel when disabled. Check gyro_bias_valid; calibration is "
+                       "RAM-only and success resets attitude. Inspect unknown outcomes before "
+                       "any new request; do not automatically retry.",
+    },
+}
+
 
 class ServiceError(RuntimeError):
     def __init__(self, code, message):
@@ -342,7 +376,8 @@ def offer(cfg, contract, state):
                        "artifact.get for each SHA256 chunk in frame.artifact; verify the "
                        "complete SHA256 after concatenation."
     }
-    for name, guidance in SCALE_GUIDANCE.get(contract, {}).items():
+    for name, guidance in {**SCALE_GUIDANCE.get(contract, {}),
+                           **AHRS_GUIDANCE.get(contract, {})}.items():
         usage[name] += " " + guidance
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
                 service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)

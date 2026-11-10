@@ -46,6 +46,13 @@ DEFAULT_CONFIG = {
         "pose_history_limit": 1200,
         "mapping": {},
     },
+    "ahrs": {
+        "enabled": False,
+        "poll_interval_s": 0.1,
+        "network_timeout_s": 2.0,
+        "history_capacity": 256,
+        "history_retention_s": 30.0,
+    },
     "max_observations": 300,
     "checkpoint_interval_s": 60.0,
     "freshness_threshold_s": 2.0,

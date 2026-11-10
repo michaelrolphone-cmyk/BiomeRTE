@@ -252,7 +252,7 @@ class CameraHTTPClient:
         except (ValueError, TypeError, UnicodeError):
             raise CameraHTTPError("camera_http_configuration_invalid") from None
 
-    def _request(self, path, *, body=None):
+    def _request(self, path, *, body=None, success_statuses=(200,), known_rejections=()):
         origin, headers = self._connection()
         mutation = body is not None
         if mutation:
@@ -271,15 +271,15 @@ class CameraHTTPClient:
             try:
                 payload = _json_object(data)
             except (ValueError, UnicodeError, RecursionError):
-                if status == 200:
+                if status in success_statuses:
                     raise CameraHTTPError("camera_http_invalid_response", http_status=status,
                                           outcome_known=not mutation) from None
-            if status != 200:
+            if status not in success_statuses:
                 code = {401: "camera_http_authentication_required",
                         403: "camera_http_forbidden",
                         404: "camera_http_endpoint_unavailable"}.get(status, "camera_http_error")
                 # These firmware rejection statuses happen before hardware apply.
-                known = not mutation or status in (400, 401, 403, 404, 413, 415)
+                known = not mutation or status in (400, 401, 403, 404, 413, 415) + tuple(known_rejections)
                 raise CameraHTTPError(code, http_status=status, response=payload, outcome_known=known)
             return payload
         except CameraHTTPError:
@@ -295,6 +295,30 @@ class CameraHTTPClient:
             return validate_telemetry_snapshot(value)
         except (ValueError, UnicodeError):
             raise CameraHTTPError("camera_telemetry_invalid_response", http_status=200) from None
+
+    def get_ahrs(self):
+        """Read full AHRS JSON; the AHRS source validates each sensor separately."""
+        return self._request("/api/ahrs")
+
+    def calibrate_gyro(self):
+        """Queue once. HTTP 202 is acceptance, never calibration completion."""
+        try:
+            value = self._request("/api/ahrs/calibrate", body=b"{}",
+                                  success_statuses=(202,), known_rejections=(409, 503))
+        except CameraHTTPError as error:
+            code = {409: "camera_ahrs_calibration_busy",
+                    503: "camera_ahrs_calibration_unavailable"}.get(error.http_status)
+            if code:
+                raise CameraHTTPError(code, http_status=error.http_status,
+                                      response=error.response,
+                                      outcome_known=error.outcome_known) from None
+            raise
+        if value.get("status") != "queued":
+            raise CameraHTTPError("camera_ahrs_calibration_invalid_response",
+                                  http_status=202, response=value, outcome_known=False)
+        return {"status": "queued", "accepted": True, "http_status": 202,
+                "outcome_known": True, "completed": False,
+                "completion_correlated": False, "camera_response": value}
 
     def get_light(self):
         value = self._request("/api/light")

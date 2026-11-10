@@ -159,6 +159,7 @@ class ScaleContractTests(unittest.TestCase):
         extensions = self.NEW_CONTRACTS | {
             "robot.radio.status:1", "robot.radio.localize:1", "robot.map.radio.read:1",
             "robot.camera.light.status:1", "robot.camera.light.set:1",
+            "robot.ahrs.status:1", "robot.ahrs.snapshot:1", "robot.ahrs.calibrate:1",
         }
         legacy = {name: spec for name, spec in adapter.CONTRACTS.items()
                   if name not in extensions}
@@ -453,7 +454,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 26)
+        self.assertEqual(len(offers), 29)
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])
