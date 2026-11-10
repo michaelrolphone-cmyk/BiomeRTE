@@ -40,7 +40,9 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
     definition = tx.need('contracts', contract)
-    configuration = dict(configuration or {})
+    key = digest([provider, contract, resource])
+    previous = tx.get('offers', key, {})
+    configuration = dict(previous.get('configuration', {}) if configuration is None else configuration)
     if lease_class:
         configuration['lease_class'] = lease_class
     configuration = lifecycle.configuration(configuration, provider in ('builtin', 'routine'))
@@ -452,7 +454,9 @@ def claim(tx, ctx, provider, operation, generation):
         now = time.time()
         cfg = lifecycle.policy(tx, l)
         a.update(state='claimed', claimed_at=now, last_progress_at=now, watch_until=now + cfg['watch_ttl_seconds'])
-        l.update(watch_until=a['watch_until'], last_progress_at=now, missed_heartbeats=0)
+        from .resource_recovery import protected
+        l.update(watch_until=a['watch_until'], last_progress_at=now, missed_heartbeats=0,
+                 execution_custody=protected(tx,l))
         tx.put('leases', l['id'], l)
         tx.put('actions', operation, a)
         observe(tx, operation, 'claimed')

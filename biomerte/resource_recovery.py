@@ -8,7 +8,7 @@ SUPPORTED = ('host.terminal.run:1', 'docker.cli:1')
 
 
 def protected(tx, lease):
-    return bool(tx.get('offers', lease.get('offer', ''), {}).get('configuration', {}).get('execution_custody'))
+    return bool(lease.get('execution_custody') or tx.get('offers', lease.get('offer', ''), {}).get('configuration', {}).get('execution_custody'))
 
 
 def hold(tx, lease, reason, now):

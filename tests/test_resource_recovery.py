@@ -46,6 +46,19 @@ class ResourceRecovery(unittest.TestCase):
         self.assertEqual(detail['owners'][0]['operation'],'one')
         self.assertFalse(detail['owners'][0]['reassignable'])
         self.assertTrue(detail['owners'][0]['next_action'])
+    def test_state_only_offer_update_preserves_execution_custody(self):
+        lease,action=self.start()
+        self.call('cap.offer',provider='test',contract='host.terminal.run:1',resource='slot',state='offline')
+        self.app.tick('site')
+        self.assertEqual(self.call('cap.lease',lease=lease['id'])['state'],'bound')
+        self.assertEqual(self.call('cap.status',operation='one')['state'],'uncertain')
+    def test_policy_downgrade_cannot_drop_claimed_custody(self):
+        lease,action=self.start()
+        self.call('cap.offer',provider='test',contract='host.terminal.run:1',resource='slot',
+                  state='offline',configuration={'execution_custody':False})
+        self.app.tick('site')
+        self.assertEqual(self.call('cap.lease',lease=lease['id'])['state'],'bound')
+        self.assertFalse(self.call('cap.resource.status',resource='slot')['owners'][0]['reassignable'])
     def test_unproved_result_cannot_unlock_supervised_resource(self):
         lease,action=self.start()
         with self.assertRaises(Fault):
