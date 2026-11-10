@@ -28,8 +28,11 @@ class Remote:
     def __init__(self, cfg):
         self.node = cfg['provider']
         self.site = cfg['site']
+        self.controller = cfg.get('controller')
 
     def call(self, name, args, rid=None):
+        if self.controller:
+            return gateway.invoke('controller.invoke', dict(controller=self.controller, operation=name, arguments=args), rid, self.realm)
         return gateway.invoke(name, args, rid, self.realm)
 
 
@@ -123,6 +126,8 @@ def install():
     cfg = dict(site=site, provider=provider, resource='docker.mac.' + node[:20], host=socket.gethostname(),
                executable=args.executable, socket=args.socket, slots=args.slots, chunk_bytes=48*1024,
                desktop=not args.external_engine)
+    if prior.get('controller'):
+        cfg['controller'] = prior['controller']
     for key in ('spool', 'client_config', 'workspace'):
         directory = STATE / key
         directory.mkdir(mode=0o700, exist_ok=True)
