@@ -84,8 +84,14 @@ def finish(worker, action, adapter, schema, signature):
                     control = worker.remote.call('cap.command.state', args)
                     if control.get('kill_requested') or control.get('state') == 'abandoned':
                         runner.save(request['progress_path'] + '.stop', {'stop': True})
+                        stop_native_terminal(worker, action)
                     else:
-                        worker.remote.call('cap.heartbeat', args)
+                        try:
+                            worker.remote.call('provider.custody', dict(args, observation=dict(
+                                observation, signature=signature, recovery_path=directory,
+                                local_observed_at=observation.get('observed_at'))))
+                        except Exception:
+                            worker.remote.call('cap.heartbeat', args)
                     progress = runner.read(request['progress_path']) if os.path.exists(request['progress_path']) else {}
                     changed, checkpoint = liveness.observe(progress)
                     if changed:
@@ -95,16 +101,30 @@ def finish(worker, action, adapter, schema, signature):
                     pass
             time.sleep(min(.2, interval))
             observation = runner.inspect(directory)
+        try:
+            worker.remote.call('provider.custody', dict(args, observation=dict(
+                observation, signature=signature, recovery_path=directory,
+                local_observed_at=observation.get('observed_at'))))
+        except Exception:
+            pass
         if observation['state'] == 'not_started':
             state = 'failed'
             out = {'reason': observation['reason'], 'evidence': {'executed': False, 'quiescent': True}}
+        elif (observation['state'] == 'finished' and action['contract'] == 'docker.cli:1'
+              and os.path.exists(os.path.join(directory,'docker-completion.json'))):
+            out = recover_docker_result(directory, action, worker.remote)
+            from .api import validate
+            validate(schema,out)
+            state = 'failed' if os.path.exists(request['progress_path']+'.stop') else 'succeeded'
         elif observation['state'] == 'finished' and observation['returncode'] == 0:
             try:
                 with open(os.path.join(directory, 'stdout')) as source:
                     out = json.load(source)
                 from .api import validate
                 validate(schema, out)
-                state = 'failed' if out.get('evidence', {}).get('reason') == 'stop_requested' else 'succeeded'
+                state = 'failed' if (out.get('evidence', {}).get('reason') == 'stop_requested' or
+                                     (action['contract'] == 'docker.cli:1' and
+                                      os.path.exists(request['progress_path'] + '.stop'))) else 'succeeded'
             except (OSError, ValueError, Fault) as error:
                 out = {'reason': str(error), 'runner': observation}
         else:
@@ -148,7 +168,7 @@ def cleanup(worker, action, adapter, signature):
     if os.path.isdir(directory):
         runner.save(os.path.join(directory, 'acknowledged.json'),
                     dict(signature=receipt[0], state=receipt[1], result_digest=receipt[2]))
-        for name in ('input.json', 'request.json', 'stdout', 'stderr', 'runner.log', 'progress.json', 'progress.json.stop'):
+        for name in ('input.json', 'request.json', 'stdout', 'stderr', 'runner.log', 'progress.json', 'progress.json.stop','docker-completion.json','docker.stdout','docker.stderr'):
             path = os.path.join(directory, name)
             if os.path.exists(path):
                 os.unlink(path)
@@ -174,7 +194,7 @@ def cleanup_expired(worker, limit=8):
             with handle:
                 names = ('input.json','request.json','stdout','stderr','runner.log','progress.json',
                          'progress.json.stop','completion.json','state.json','prepare.lock',
-                         'custody.lock','acknowledged.json')
+                         'custody.lock','acknowledged.json','docker-completion.json','docker.stdout','docker.stderr')
                 for name in names:
                     path = os.path.join(directory, name)
                     if os.path.lexists(path):
@@ -188,3 +208,64 @@ def cleanup_expired(worker, limit=8):
                 if not os.listdir(directory):
                     os.rmdir(directory)
         worker.db.execute('DELETE FROM supervised_expiry WHERE id=?', (operation,))
+
+
+def stop_native_terminal(worker, action):
+    """Forward explicit stop to the existing Pi custodian, never a new execution."""
+    if action['contract'] != 'host.terminal.run:1':
+        return
+    import sqlite3
+    path=os.path.join(os.path.dirname(worker.path),'terminal.sqlite')
+    if not os.path.exists(path):
+        return
+    db=sqlite3.connect(path,timeout=10)
+    try:
+        row=db.execute('SELECT body,state FROM jobs WHERE id=?',(action['id'],)).fetchone()
+        if not row or row[1] not in ('queued','launching','running'):
+            return
+        body=json.loads(row[0])
+        expected=action['inputs']['argv']
+        actual=body['argv']
+        if (actual[1:] != expected[1:] or
+                os.path.realpath(actual[0]) != os.path.realpath(expected[0])):
+            raise Fault('Native terminal stop identity mismatch',409)
+        with db:
+            db.execute("UPDATE jobs SET state='stop_requested' WHERE id=? AND state IN ('queued','launching','running')",
+                       (action['id'],))
+    finally:
+        db.close()
+
+
+def recover_docker_result(directory, action, remote):
+    """Deliver exact retained CLI completion, without invoking any executable."""
+    import base64,hashlib,stat,uuid
+    receipt=runner.read(os.path.join(directory,'docker-completion.json'))
+    if receipt.get('input_digest') != digest(action['inputs']):
+        raise Fault('Docker retained completion identity mismatch',409)
+    result=dict(receipt['result']);result['streams']={}
+    if result.get('evidence',{}).get('quiescent') is not True:
+        raise Fault('Docker retained completion is not quiescent',409)
+    for name in ('stdout','stderr'):
+        path=os.path.join(directory,'docker.'+name)
+        info=os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+            raise Fault('Unsafe retained Docker output')
+        meta=receipt['streams'][name]
+        with open(path,'rb') as source:
+            whole=hashlib.sha256()
+            for block in iter(lambda:source.read(32768),b''):whole.update(block)
+            if whole.hexdigest()!=meta['sha256']:raise Fault('Retained Docker output digest mismatch',409)
+            source.seek(0);chunks=[];preview=b'';size=0
+            for block in iter(lambda:source.read(32768),b''):
+                if not chunks:preview=block[:4096]
+                expected={'sha256':hashlib.sha256(block).hexdigest(),'size':len(block)}
+                ack=remote.call('artifact.put',{'data':base64.b64encode(block).decode('ascii'),'transient':True},
+                                'docker-retained-chunk-'+str(uuid.uuid4()))
+                if ack != expected:raise Fault('Docker artifact receipt mismatch',409)
+                chunks.append(ack);size+=len(block)
+        result[name]=preview.decode('utf8','replace')
+        result['streams'][name]=dict(sha256=meta['sha256'],size=size,chunks=chunks,
+                                    preview_truncated=size>len(preview),
+                                    total_bytes=meta['total_bytes'],truncated=meta['total_bytes']>size)
+    result.pop('evidence',None)
+    return result

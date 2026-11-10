@@ -90,10 +90,13 @@ def prepare_input(args, target, remote):
     target.seek(0)
 
 
-def capture(proc, directory, deadline, limit):
+def capture(proc, directory, deadline, limit, progress_path=None):
+    from biomerte.command_watch import OutputProgress
+    progress = OutputProgress(progress_path)
     paths = {}
     counts = {'stdout': 0, 'stderr': 0}
     timed_out = False
+    stopped = False
     try:
         with selectors.DefaultSelector() as sel, open(os.path.join(directory, 'out'), 'wb') as out, \
                 open(os.path.join(directory, 'err'), 'wb') as err:
@@ -101,6 +104,10 @@ def capture(proc, directory, deadline, limit):
                 paths[name] = dest.name
                 sel.register(pipe, selectors.EVENT_READ, (name, dest))
             while sel.get_map():
+                progress.report(paths)
+                if progress.stopped():
+                    stopped = True
+                    break
                 left = deadline - time.monotonic()
                 if left <= 0:
                     timed_out = True
@@ -114,7 +121,7 @@ def capture(proc, directory, deadline, limit):
                     remaining = max(0, limit - counts[name])
                     dest.write(data[:remaining])
                     counts[name] += len(data)
-            if not timed_out:
+            if not timed_out and not stopped:
                 try:
                     proc.wait(timeout=max(0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
@@ -131,7 +138,7 @@ def capture(proc, directory, deadline, limit):
     return paths, counts, timed_out
 
 
-def execute(cfg, args, remote):
+def execute(cfg, args, remote, progress_path=None):
     argv = args['argv']
     if not isinstance(argv, list) or any(not isinstance(a, str) or '\0' in a for a in argv):
         return rejected('argv must be a list of strings without NUL')
@@ -150,8 +157,26 @@ def execute(cfg, args, remote):
                                              DOCKER_CONFIG=cfg['client_config']))
         except (ValueError, OSError) as exc:
             return rejected(exc)
-        paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024)
-        result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {}}
+        paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024, progress_path)
+        result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {},
+                  'evidence': {'quiescent': True, 'cli_pid': proc.pid, 'exit_code': proc.returncode,
+                               'reason': 'stop_requested' if progress_path and os.path.exists(progress_path+'.stop') else 'exited'}}
+        if progress_path:
+            # Persist local completion before delivery; recovery never invokes CLI.
+            import shutil
+            from biomerte.command_runner import save
+            from biomerte.store import digest
+            retained={}
+            for name,path in paths.items():
+                target=os.path.join(os.path.dirname(progress_path),'docker.'+name)
+                with open(path,'rb') as source, open(target,'wb') as destination:
+                    shutil.copyfileobj(source,destination);destination.flush();os.fsync(destination.fileno())
+                with open(target,'rb') as stream:
+                    sha=hashlib.sha256(stream.read()).hexdigest()
+                retained[name]={'sha256':sha,'total_bytes':counts[name]}
+            save(os.path.join(os.path.dirname(progress_path),'docker-completion.json'),
+                 {'input_digest':digest(args),'result':result,'streams':retained})
+        result.pop('evidence',None)  # Custody proof stays in the private receipt, outside the public contract.
         for name, path in paths.items():
             result[name], meta = store_stream(path, remote, cfg.get('chunk_bytes', 256 * 1024))
             meta.update(total_bytes=counts[name], truncated=counts[name] > meta['size'])
@@ -171,4 +196,5 @@ if __name__ == '__main__':
         remote.call('cap.offer', {'provider': node['node'], 'contract': CONTRACT, 'resource': offer['resource'],
                                   'service': offer['service'], 'state': 'offline', 'capacity': offer['capacity']})
     else:
-        json.dump(execute(cfg, json.load(sys.stdin)['inputs'], remote), sys.stdout)
+        request = json.load(sys.stdin)
+        json.dump(execute(cfg, request['inputs'], remote, request.get('progress_path')), sys.stdout)
