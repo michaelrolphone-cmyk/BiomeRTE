@@ -156,7 +156,7 @@ class BoundedLifecycle(unittest.TestCase):
         result=self.app.stores['site'].execute(lambda tx:tx.need('custom','shape'))
         self.assertEqual(value,result)
 
-    def test_adapter_launch_failure_retains_uncertainty_without_masking_error(self):
+    def test_adapter_launch_failure_records_nonexecution_without_masking_error(self):
         import os
         from biomerte.worker import Worker
         lease, action = self.action()
@@ -171,7 +171,9 @@ class BoundedLifecycle(unittest.TestCase):
         try:
             worker.perform(action)
             result=self.call('cap.status',operation='one')
-            self.assertEqual('uncertain',result['state'])
+            self.assertEqual('failed',result['state'])
+            self.assertFalse(result['result']['evidence']['executed'])
+            self.assertTrue(result['result']['evidence']['quiescent'])
             self.assertIn('No such file',result['result']['reason'])
         finally:
             worker.db.close()

@@ -81,6 +81,51 @@ class Worker:
         if row and row[0] != authority:
             raise Fault('Worker ledger belongs to another authority')
         self.db.execute('INSERT OR IGNORE INTO authority VALUES(1,?)', (authority,))
+        from .supervised_commands import initialize
+        initialize(self)
+
+    def _initialize_result_recovery(self):
+        # Disposable pending projection: never scan acknowledged history on a poll.
+        # DDL stays inside executescript BEGIN for Python 3.4 compatibility.
+        self.db.executescript("""BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS result_recovery_pending(id TEXT PRIMARY KEY,signature TEXT);
+            CREATE TABLE IF NOT EXISTS result_recovery_schema(version INTEGER PRIMARY KEY);
+            CREATE TRIGGER IF NOT EXISTS result_recovery_action_update AFTER UPDATE ON actions BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+                INSERT OR REPLACE INTO result_recovery_pending
+                    SELECT NEW.id,NEW.signature FROM result_retention_eligible e
+                    WHERE e.id=NEW.id AND e.signature=NEW.signature
+                      AND NEW.state IN ('succeeded','failed')
+                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=NEW.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_action_delete AFTER DELETE ON actions BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_insert AFTER INSERT ON result_retention_eligible BEGIN
+                INSERT OR REPLACE INTO result_recovery_pending
+                    SELECT a.id,a.signature FROM actions a WHERE a.id=NEW.id AND a.signature=NEW.signature
+                      AND a.state IN ('succeeded','failed')
+                      AND NOT EXISTS(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_eligible_delete AFTER DELETE ON result_retention_eligible BEGIN
+                DELETE FROM result_recovery_pending WHERE id=OLD.id;
+            END;
+            CREATE TRIGGER IF NOT EXISTS result_recovery_ack_insert AFTER INSERT ON result_acknowledged BEGIN
+                DELETE FROM result_recovery_pending WHERE id=NEW.id;
+            END;
+        """)
+        try:
+            if not self.db.execute('SELECT 1 FROM result_recovery_schema WHERE version=1').fetchone():
+                self.db.execute("INSERT OR IGNORE INTO result_recovery_pending "
+                                "SELECT a.id,a.signature FROM result_retention_eligible e "
+                                "CROSS JOIN actions a ON a.id=e.id AND a.signature=e.signature "
+                                "WHERE a.state IN ('succeeded','failed') AND NOT EXISTS "
+                                "(SELECT 1 FROM result_acknowledged k WHERE k.id=a.id)")
+                self.db.execute('INSERT INTO result_recovery_schema VALUES(1)')
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def _initialize_result_recovery(self):
         # Disposable pending projection: never scan acknowledged history on a poll.
@@ -287,6 +332,9 @@ class Worker:
                          'activation': a['id'], 'success': ret == 0, 'evidence': info})
 
     def perform(self, a):
+        from . import supervised_commands
+        if supervised_commands.resume(self, a):
+            return
         args = {'provider': self.remote.node, 'operation': a['id'], 'generation': a['generation']}
         guard = a.get('guard', a['resource'])
         if not self.reconcile_guard(guard, exclude=a['id']):
@@ -314,6 +362,11 @@ class Worker:
                 (o for o in self.offers if o['contract'] == a['contract'] and o['resource'] == a['resource']), None)
             if not adapter:
                 raise Fault('No local implementation')
+            if claimed.get('lease_policy'):
+                adapter = dict(adapter)
+                adapter['configuration'] = dict(adapter.get('configuration') or {})
+                adapter['configuration'].update(claimed['lease_policy'])
+                adapter['lease_class'] = claimed['lease_policy']['lease_class']
             argv = adapter['argv']
             if not isinstance(argv, list) or not argv or not os.path.isabs(argv[0]):
                 raise Fault('Expected absolute executable argv')
@@ -325,15 +378,23 @@ class Worker:
                 self.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
                                 (a['id'], sig, 'uncertain', encode(out), guard))
                 self.db.execute('INSERT INTO result_retention_eligible VALUES(?,?)', (a['id'], sig))
+                if supervised_commands.supported(a):
+                    self.db.execute('INSERT INTO supervised_pending VALUES(?,?,?,?,?)',
+                                    (a['id'], sig, encode(a), encode(adapter), encode(claimed['output_schema'])))
                 self.db.commit()
             except BaseException:
                 self.db.rollback()
                 raise
+            if supervised_commands.supported(a):
+                supervised_commands.finish(self, a, adapter, claimed['output_schema'], sig)
+                return
             state = 'uncertain'
             request = {'operation': a['id'], 'inputs': a['inputs']}
+            proc = None
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        start_new_session=adapter.get('configuration', {}).get('lease_class') == 'long_command')
                 try:
                     request = {'operation': a['id'], 'inputs': a['inputs']}
                     if adapter.get('configuration', {}).get('lease_class') == 'long_command' or adapter.get('lease_class') == 'long_command':
@@ -349,6 +410,9 @@ class Worker:
                 if proc.returncode:
                     out = {'error': 'adapter exit ' + \
                            str(proc.returncode), 'detail': stderr.decode('utf-8', 'replace')[-1024:]}
+                    if request.get('progress_path') and os.path.exists(request['progress_path'] + '.stop'):
+                        state = 'failed'
+                        out['evidence'] = {'executed': True, 'quiescent': True, 'reason': 'stop_requested'}
                 else:
                     out = json.loads(stdout.decode())
                     from .api import validate
@@ -356,6 +420,9 @@ class Worker:
                     state = 'failed' if out.get('evidence', {}).get('reason') == 'stop_requested' else 'succeeded'
             except (OSError, ValueError, Fault) as exc:
                 out = {'reason': str(exc)}
+                if proc is None and isinstance(exc, OSError):
+                    state = 'failed'
+                    out['evidence'] = {'executed': False, 'quiescent': True, 'reason': 'adapter_launch_failed'}
             for path in (request.get('progress_path', ''), request.get('progress_path', '') + '.stop'):
                 if path and os.path.exists(path):
                     os.unlink(path)
@@ -479,7 +546,7 @@ class Worker:
         after = getattr(self, '_result_recovery_after', '')
         query = ("SELECT a.id,a.signature,a.state,a.result FROM result_recovery_pending p "
                  "CROSS JOIN actions a ON a.id=p.id AND a.signature=p.signature "
-                 "WHERE p.id>? ORDER BY p.id LIMIT ?")
+                 "WHERE p.id>? AND NOT EXISTS (SELECT 1 FROM supervised_pending s WHERE s.id=p.id) ORDER BY p.id LIMIT ?")
         limit = max(0, min(8, limit))
         rows = self.db.execute(query, (after, limit)).fetchall()
         if not rows and after:
@@ -513,6 +580,11 @@ class Worker:
         except Exception as error:
             # A filesystem cleanup failure cannot requeue the physical effect.
             logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
+        from .supervised_commands import cleanup_expired
+        try:
+            cleanup_expired(self)
+        except Exception as error:
+            logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
         self.recover_result_acknowledgements()
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
         try:
@@ -539,6 +611,14 @@ class Worker:
                 failure('activation', a, error)
         if callable(getattr(self, 'stream_handler', None)):
             self.stream_handler(queue.get('streams', []))
+        from .supervised_commands import pending
+        recovering = pending(self)
+        recovery_ids = {a['id'] for a in recovering}
+        recovery_guards = {a.get('guard', a['resource']) for a in recovering}
+        # Resolve old custody before admitting a newer fence on the same slot.
+        queue['fences'] = [l for l in queue['fences'] if l.get('guard', l['resource']) not in recovery_guards]
+        queue['actions'] = recovering + [a for a in queue['actions'] if a['id'] not in recovery_ids
+                                        and a.get('guard', a['resource']) not in recovery_guards]
         actions = [a for a in queue['actions']
                    if a.get('guard', a['resource']) not in blocked]
         if pool is not None:

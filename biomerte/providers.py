@@ -150,8 +150,7 @@ def active_on(tx, resource):
 
 
 def reservation_policy(tx, lease):
-    offer = tx.get('offers', lease.get('offer', ''), {})
-    return lifecycle.configuration(offer.get('configuration'), lease.get('provider') in ('builtin', 'routine'))['reservation_policy']
+    return lifecycle.policy(tx, lease)['reservation_policy']
 
 
 def touch_reservation(tx, lease):
@@ -180,7 +179,7 @@ def recover_reservations(tx, ctx):
             start_submission(tx, ctx, lease)
             continue
         reason = None
-        if work and (policy.get('release_after_result') or any(a.get('release_after_result') for a in work)):
+        if work and (any(a.get('release_after_result', policy.get('release_after_result', False)) for a in work)):
             reason = 'settled_exchange'
         elif not work and policy.get('idle_seconds', 0) > 0:
             activity = tx.get('_reservation_activity', lease['id'])
@@ -198,10 +197,10 @@ def recover_reservations(tx, ctx):
 
 def notify_bound(tx, ctx, lease):
     if lease.get('reply_to') and not lease.get('notified'):
-        from .api import send, Context
+        from .api import send_operational, Context
         body = {k: lease[k] for k in ('id', 'task', 'contract', 'resource', 'generation', 'reply_to')}
         body.update(type='lease.available', state='bound')
-        send(tx, Context(ctx.app, actor='controller', scope=ctx.scope), lease['reply_to'], body, lease['id'])
+        send_operational(tx, Context(ctx.app, actor='controller', scope=ctx.scope), lease['reply_to'], body, lease['id'])
         tx.emit('lease.available', body)
         lease['notified'] = True
 
@@ -232,10 +231,11 @@ def bind(tx, ctx, request):
         if guard['holder']:
             continue
         generation = max(guard['generation'], request.get('generation', 0)) + 1
+        lease_policy = lifecycle.policy(tx, {'offer': of['id'], 'provider': of['provider']})
         lease = dict(request, offer=of['id'], provider=of['provider'], resource=resource,
                      generation=generation, guard=guard_key,
                      state='bound' if of['provider'] in ('builtin', 'routine') else 'fencing',
-                     lease_class=lifecycle.policy(tx, {'offer': of['id'], 'provider': of['provider']})['lease_class'],
+                     lease_class=lease_policy['lease_class'], lease_policy=lease_policy,
                      fencing_since=time.time(), last_progress_at=time.time(), missed_heartbeats=0)
         tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id'], 'resource': resource})
         if lease.get('queue_key'):
@@ -271,6 +271,8 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     key = digest([task, contract, resource])
     batch_full = promote(tx, ctx)
     old = tx.get('leases', key, {})
+    if old.get('state') in ('queued', 'bound', 'fencing') and ctx.permissions is not None and old.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     if old.get('state') == 'queued':
         return old
     if old.get('state') in ('bound', 'fencing'):
@@ -278,7 +280,7 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
             return old
         batch_full = promote(tx, ctx)
     req = {'id': key, 'task': task, 'contract': contract, 'resource': resource,
-           'requested_resource': resource, 'generation': old.get('generation', 0),
+           'requested_resource': resource, 'generation': old.get('generation', 0), 'owner': ctx.actor,
            'provider': '', 'reply_to': reply_to}
     lease = None if batch_full else bind(tx, ctx, req)
     if lease:
@@ -296,6 +298,8 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
 def lease_status(tx, ctx, lease):
     """Read current lease and refresh its reservation heartbeat; new request IDs retain no receipt."""
     value = tx.need('leases', lease)
+    if ctx.permissions is not None and value.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     touch_reservation(tx, value)
     return value
 
@@ -350,7 +354,7 @@ def release_task(tx, task):
 def release_lease(tx, ctx, lease):
     """Release a held lease after work settles, or cancel a queued request. Results remain available via cap.status."""
     l = tx.need('leases', lease)
-    if ctx.permissions is not None:
+    if ctx.permissions is not None and l.get('owner') != ctx.actor:
         raise Fault('Lease release is controlled by the task owner', 403)
     if not release(tx, l):
         raise Fault('Reconcile outstanding operation before release', 409)
@@ -362,6 +366,8 @@ def release_lease(tx, ctx, lease):
 def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_result=None):
     """Submit once with a unique operation ID. Read cap.status with that ID for the result; the lease remains held until released."""
     l = tx.need('leases', lease)
+    if ctx.permissions is not None and l.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     key = ident(operation)
     prev = tx.get('actions', key)
     if prev:
@@ -429,6 +435,7 @@ def claim(tx, ctx, provider, operation, generation):
     if a['state'] in lifecycle.TERMINAL:
         raise Fault('Superseded generation', 409)
     l = tx.need('leases', a['lease'])
+    a['lease_policy'] = lifecycle.policy(tx, l)
     g = tx.get('guards', l['guard'], {'holder':'','generation':0})
     if (a['provider'], l['state'], a['generation'], g['holder'], g['generation']) != (
             provider, 'bound', generation, a['lease'], generation):
@@ -463,12 +470,36 @@ def claim(tx, ctx, provider, operation, generation):
 def result(tx, ctx, provider, operation, generation, state, result):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
-    if a['state'] == 'abandoned':
-        raise Fault('Superseded generation', 409)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
         raise Fault('Unknown outcome')
+    if a['state'] == 'abandoned':
+        # A signed completion is still evidence after its lease was superseded.
+        # Preserve abandonment and never rebind a guard, release a newer lease,
+        # or emit the success event used by ordinary workflow continuations.
+        if a['contract'] not in ('host.terminal.run:1', 'docker.cli:1') or state not in ('succeeded', 'failed'):
+            raise Fault('Superseded generation', 409)
+        if a.get('execution_state'):
+            if a['execution_state'] == state and (
+                    a.get('result') == result or
+                    (a.get('result_expired') and a.get('result_digest') == digest(result))):
+                return a
+            raise Fault('Conflicting late execution outcome', 409)
+        if state == 'succeeded':
+            validate(tx.need('contracts', a['contract'])['outputs'], result)
+        a.update(execution_state=state, reconciled_at=time.time(),
+                 abandonment_result=a.get('result', {}))
+        if a.get('result_expired'):
+            # Preserve the established output-expiry boundary: retain the new
+            # receipt digest without restoring discarded bulk result payloads.
+            a['result_digest'] = digest(result)
+        else:
+            a['result'] = result
+        tx.put('actions', operation, a)
+        tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
+                                       'state': 'abandoned'})
+        return a
     if a.get('result_expired'):
         if a['state'] == state and a.get('result_digest') == digest(result):
             return a  # exact lost-ACK redelivery, no effects or payload restoration

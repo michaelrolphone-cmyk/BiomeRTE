@@ -191,12 +191,24 @@ def send(tx, ctx, to, body, correlation=''):
     return msg
 
 
+def send_operational(tx, ctx, to, body, correlation='', ttl_seconds=900):
+    # Capability notifications are operational inbox entries, not user knowledge.
+    from time import time
+    msg = {'id': uid(), 'from': ctx.actor, 'to': text(to), 'body': body,
+           'correlation': correlation, 'read': False, 'expires_at': time() + ttl_seconds}
+    tx.put('messages', msg['id'], msg)
+    tx.emit('message.received', {'message': msg['id'], 'to': to})
+    return msg
+
+
 @op('bus.inbox', 'address?:str', False)
 def inbox(tx, ctx, address=''):
     address = address or ctx.actor
     if ctx.permissions is not None and address != ctx.actor:
         raise Fault('Other inbox', 403)
-    return [r for r in tx.rows('messages') if r['to'] == address]
+    from time import time
+    now = time()
+    return [r for r in tx.rows('messages') if r['to'] == address and r.get('expires_at', now + 1) > now]
 
 
 @op('bus.ack_message', 'message:str')

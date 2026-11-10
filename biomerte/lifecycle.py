@@ -28,8 +28,21 @@ def configuration(value, builtin=False):
 
 
 def policy(tx, lease):
-    return configuration(tx.get('offers', lease.get('offer', ''), {}).get('configuration'),
-                         lease.get('provider') in ('builtin', 'routine'))
+    value = lease.get('lease_policy')
+    if value is None:
+        value = dict(tx.get('offers', lease.get('offer', ''), {}).get('configuration') or {})
+        # Old leases already record their class. A later offer edit cannot
+        # retroactively turn a persistent resource into a watched command.
+        previous = lease.get('lease_class')
+        if previous and previous != value.get('lease_class', 'command'):
+            value['reservation_policy'] = dict(value.get('reservation_policy', {}),
+                                                release_after_result=previous != 'persistent')
+        if previous:
+            value['lease_class'] = previous
+    cfg = configuration(value, lease.get('provider') in ('builtin', 'routine'))
+    return {name: cfg[name] for name in ('lease_class', 'fence_ttl_seconds',
+        'watch_ttl_seconds', 'heartbeat_interval_seconds', 'missed_heartbeats_limit',
+        'reservation_policy')}
 
 
 def current(tx, action):
@@ -185,6 +198,9 @@ def recover(tx, ctx, lease, actions, now):
     if tx.get('offers', lease.get('offer', ''), {}).get('state') == 'offline':
         return abandon(tx, ctx, lease, 'provider_offline', now)
     changed = False
+    if 'lease_policy' not in lease:
+        lease['lease_policy'] = cfg
+        changed = True
     if 'lease_class' not in lease:
         lease.update(lease_class=cfg['lease_class'], fencing_since=now,
                      last_progress_at=now, missed_heartbeats=0)
@@ -216,6 +232,14 @@ def recover(tx, ctx, lease, actions, now):
     return False
 
 
+def drop_expired(tx, kind, key):
+    tx.drop(kind, key)
+    marker_key = kind + ':' + key
+    marker = tx.get('_retention', marker_key)
+    if marker and (marker.get('id'), marker.get('kind'), marker.get('key')) == (marker_key, kind, key):
+        tx.drop('_retention', marker_key)
+
+
 def sweep(tx, ctx, now):
     # Index-only expiry selection; historical result bodies never enter the
     # ordinary recovery path. Deletion batches catch up after missed ticks.
@@ -229,18 +253,18 @@ def sweep(tx, ctx, now):
         for entry in tx.matching('result_inbox', lease=key):
             tx.drop('result_inbox', entry['id'])
         tx.drop('destinations', key)
-    for kind in ('result_inbox', '_stream_grants', 'artifacts', '_receipt'):
+    for kind in ('result_inbox', 'messages', '_stream_grants', 'artifacts', '_receipt'):
         for key in tx.expired_keys(kind, now):
-            tx.drop(kind, key)
+            drop_expired(tx, kind, key)
     for key in tx.expired_keys('actions', now, 64):
         if key not in referenced:
-            tx.drop('actions', key)
+            drop_expired(tx, 'actions', key)
             for kind in ('_submissions', '_submission_active'):
-                tx.drop(kind, key)
+                drop_expired(tx, kind, key)
     for key in tx.expired_keys('leases', now):
         if key not in protected_leases:
             for kind in ('leases', '_reservation_activity', '_submission_leases'):
-                tx.drop(kind, key)
+                drop_expired(tx, kind, key)
     for key in tx.expired_keys('guards', now):
         guard = tx.need('guards', key)
         if not guard['holder']:
@@ -249,7 +273,7 @@ def sweep(tx, ctx, now):
                 tx.put('_fence_generations', resource, max(guard['generation'], tx.get('_fence_generations', resource, 0)))
             tx.drop('guards', key)
     for key in tx.expired_keys('events', now):
-        tx.drop('events', key)
+        drop_expired(tx, 'events', key)
 
 
 @op('cap.command.state', 'provider:str operation:str generation:int', False)

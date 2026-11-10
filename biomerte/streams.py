@@ -52,6 +52,8 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
     if not 0 < ttl_seconds <= 86400:
         raise Fault('Invalid stream lifetime')
     l = tx.need('leases', lease)
+    if ctx.permissions is not None and l.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     if l['state'] != 'bound' or lifecycle.policy(tx, l)['lease_class'] != 'persistent':
         raise Fault('Streaming requires a bound persistent lease', 409)
     offer = tx.need('offers', l['offer'])
