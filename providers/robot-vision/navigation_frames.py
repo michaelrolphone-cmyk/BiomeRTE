@@ -93,7 +93,7 @@ def _reject_constant(value):
     raise ValueError("nonfinite_navigation_configuration")
 
 
-def read_robot_pose(snapshot, path, *, delivery_elapsed_s):
+def read_robot_pose(snapshot, path, *, delivery_elapsed_s, anchor_resolver=None):
     """Read one bounded attachment document; failures never replace visual data."""
     result = _empty_pose(snapshot)
     try:
@@ -110,9 +110,21 @@ def read_robot_pose(snapshot, path, *, delivery_elapsed_s):
         return {**result, "reason": "navigation_frames_not_configured"}
     except (OSError, ValueError, UnicodeError):
         return {**result, "reason": "navigation_frames_configuration_invalid"}
-    return derive_robot_pose(snapshot, document.get("floor_alignment"),
-                             document.get("camera_robot_extrinsics"),
+    floor = document.get("floor_alignment")
+    resolution = None
+    if (anchor_resolver is not None and isinstance(snapshot, dict) and isinstance(floor, dict)
+            and floor.get("map_revision") != snapshot.get("map_revision")):
+        try:
+            resolution = anchor_resolver(floor, snapshot)
+            floor = copy.deepcopy(floor)
+            floor["map_revision"] = snapshot["map_revision"]
+        except (ValueError, KeyError, TypeError):
+            return {**result, "reason": "floor_alignment_anchor_resolution_failed"}
+    pose = derive_robot_pose(snapshot, floor, document.get("camera_robot_extrinsics"),
                              delivery_elapsed_s=delivery_elapsed_s)
+    if pose["valid"] and resolution is not None:
+        pose["floor_alignment"]["resolution"] = copy.deepcopy(resolution)
+    return pose
 
 
 def derive_robot_pose(snapshot, floor_alignment, camera_robot_extrinsics, *,
