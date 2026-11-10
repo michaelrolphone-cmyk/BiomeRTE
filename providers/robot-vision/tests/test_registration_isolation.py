@@ -5,7 +5,7 @@ import biome_provider as adapter
 
 class RegistrationIsolationTests(unittest.TestCase):
     def test_slow_registration_does_not_block_existing_stream_poll(self):
-        active=threading.Event();release=threading.Event();handlers={};observed=[]
+        active=threading.Event();release=threading.Event();handlers={};observed=[];sequence_paths=[]
         class Remote:
             def __init__(self,cfg):pass
             def call(self,operation,args):
@@ -29,7 +29,7 @@ class RegistrationIsolationTests(unittest.TestCase):
         class Pool:
             def __init__(self,*args):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
         class Streams:
-            def __init__(self,*args):pass
+            def __init__(self,*args,sequence_path=None):sequence_paths.append(sequence_path)
             def update(self,*args):pass
             def close(self):pass
         with tempfile.TemporaryDirectory() as folder:
@@ -40,4 +40,5 @@ class RegistrationIsolationTests(unittest.TestCase):
                  patch('biomerte.worker.Worker',Worker),patch('biomerte.worker.ActionPool',Pool),\
                  patch('leased_streams.VisionStreams',Streams):
                 adapter.serve(cfg)
+        self.assertEqual([pathlib.Path(folder)/'provider/stream-sequences.sqlite'],sequence_paths)
         self.assertEqual([True],observed,'Live polling waited behind unrelated registration')
