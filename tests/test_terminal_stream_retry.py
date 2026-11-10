@@ -57,7 +57,7 @@ class StreamRetryTests(unittest.TestCase):
 
     def test_lost_upload_ack_reuses_exact_request_and_retained_bytes(self):
         remote = Transport()
-        preview, stream = self.terminal.store_stream(str(self.path), remote, 8)
+        preview, stream = self.terminal.store_stream(str(self.path), remote, 8, retry=True)
         self.assertEqual(remote.calls[0], remote.calls[1])
         self.assertEqual(remote.calls[1], remote.calls[2])
         self.assertEqual(self.delays, [5, 5])
@@ -71,7 +71,7 @@ class StreamRetryTests(unittest.TestCase):
         remote = Transport(0)
         remote.call = lambda *args: {'sha256': 'wrong', 'size': 1}
         with self.assertRaises(IOError):
-            self.terminal.store_stream(str(self.path), remote)
+            self.terminal.store_stream(str(self.path), remote, retry=True)
         self.assertEqual(self.delays, [])
 
     def test_interrupt_preserves_original_output(self):
@@ -80,7 +80,7 @@ class StreamRetryTests(unittest.TestCase):
             raise KeyboardInterrupt()
         remote.call = interrupted
         with self.assertRaises(KeyboardInterrupt):
-            self.terminal.store_stream(str(self.path), remote)
+            self.terminal.store_stream(str(self.path), remote, retry=True)
         self.assertEqual(read_bytes(self.path), b'exact retained output\n')
 
     @unittest.skipUnless(sys.platform == 'darwin', 'native Mac adapter qualification')
