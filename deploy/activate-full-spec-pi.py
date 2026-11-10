@@ -7,6 +7,7 @@ import argparse
 import io
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -48,7 +49,7 @@ def main():
     args=parser.parse_args()
     if not re.match(r'^[a-f0-9]{40}$',args.commit):
         raise ValueError('Full source commit required')
-    if os.path.expanduser('~')!='/home/pi':
+    if pwd.getpwuid(os.getuid()).pw_dir!='/home/pi':
         raise ValueError('Run as pi, without sudo around Python')
     current=subprocess.check_output(['systemctl','show','biomerte.service','-p','WorkingDirectory']).decode().strip().split('=',1)[1]
     target=HOME+'/biomerte-releases/full-spec-'+args.commit[:12]
