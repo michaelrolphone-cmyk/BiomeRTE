@@ -21,7 +21,7 @@ class Remote:
         self.heartbeats = 0
     def call(self, name, args, rid=None):
         if name == 'provider.claim':
-            return dict(state='claimed', output_schema={'ok': 'bool'})
+            return dict(state='claimed', output_schema={'ok': {'type':'bool','required':True}})
         if name == 'cap.command.state':
             return {'state': 'claimed', 'kill_requested': False}
         if name == 'cap.heartbeat':
@@ -127,7 +127,7 @@ class RunnerTests(unittest.TestCase):
                           ('command', signature, 'uncertain', '{}', 'slot'))
         worker.db.execute('INSERT INTO result_retention_eligible VALUES(?,?)', ('command', signature))
         worker.db.execute('INSERT INTO supervised_pending VALUES(?,?,?,?,?)',
-                          ('command', signature, encode(action), encode(offer), encode({'ok':'bool'})))
+                          ('command', signature, encode(action), encode(offer), encode({'ok':{'type':'bool','required':True}})))
         root = os.path.join(self.root, 'command-runners')
         directory = runner.location(root, 'command')
         request = dict(operation='command', inputs={}, progress_path=os.path.join(directory,'progress.json'))

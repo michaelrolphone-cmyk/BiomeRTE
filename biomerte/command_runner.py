@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -83,9 +84,12 @@ def ensure(root, operation, signature, argv, request, timeout=None):
             # Several launch attempts are harmless: custody.lock and the durable
             # marker below permit exactly one adapter launch, including after restart.
             with open(os.path.join(directory, 'runner.log'), 'ab') as log:
-                subprocess.Popen([sys.executable, '-S', os.path.abspath(__file__), directory],
+                child = subprocess.Popen([sys.executable, '-S', os.path.abspath(__file__), directory],
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)
+                reaper = threading.Thread(target=child.wait)
+                reaper.daemon = True
+                reaper.start()
     return inspect(directory)
 
 
