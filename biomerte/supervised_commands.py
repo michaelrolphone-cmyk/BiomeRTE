@@ -113,7 +113,8 @@ def finish(worker, action, adapter, schema, signature):
                     out = json.load(source)
                 from .api import validate
                 validate(schema, out)
-                state = 'failed' if out.get('evidence', {}).get('reason') == 'stop_requested' else 'succeeded'
+                state = 'failed' if (out.get('evidence', {}).get('reason') == 'stop_requested' or
+                                     os.path.exists(request['progress_path'] + '.stop')) else 'succeeded'
             except (OSError, ValueError, Fault) as error:
                 out = {'reason': str(error), 'runner': observation}
         else:

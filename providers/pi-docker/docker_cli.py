@@ -90,7 +90,9 @@ def prepare_input(args, target, remote):
     target.seek(0)
 
 
-def capture(proc, directory, deadline, limit):
+def capture(proc, directory, deadline, limit, progress_path=None):
+    from biomerte.command_watch import OutputProgress
+    progress = OutputProgress(progress_path)
     paths = {}
     counts = {'stdout': 0, 'stderr': 0}
     timed_out = False
@@ -101,6 +103,9 @@ def capture(proc, directory, deadline, limit):
                 paths[name] = dest.name
                 sel.register(pipe, selectors.EVENT_READ, (name, dest))
             while sel.get_map():
+                progress.report(paths)
+                if progress.stopped():
+                    break
                 left = deadline - time.monotonic()
                 if left <= 0:
                     timed_out = True
@@ -131,7 +136,7 @@ def capture(proc, directory, deadline, limit):
     return paths, counts, timed_out
 
 
-def execute(cfg, args, remote):
+def execute(cfg, args, remote, progress_path=None):
     argv = args['argv']
     if not isinstance(argv, list) or any(not isinstance(a, str) or '\0' in a for a in argv):
         return rejected('argv must be a list of strings without NUL')
@@ -150,7 +155,7 @@ def execute(cfg, args, remote):
                                              DOCKER_CONFIG=cfg['client_config']))
         except (ValueError, OSError) as exc:
             return rejected(exc)
-        paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024)
+        paths, counts, expired = capture(proc, directory, time.monotonic() + timeout, 16 * 1024 * 1024, progress_path)
         result = {'executed': True, 'exit_code': proc.returncode, 'timed_out': expired, 'streams': {}}
         for name, path in paths.items():
             result[name], meta = store_stream(path, remote, cfg.get('chunk_bytes', 256 * 1024))
@@ -171,4 +176,5 @@ if __name__ == '__main__':
         remote.call('cap.offer', {'provider': node['node'], 'contract': CONTRACT, 'resource': offer['resource'],
                                   'service': offer['service'], 'state': 'offline', 'capacity': offer['capacity']})
     else:
-        json.dump(execute(cfg, json.load(sys.stdin)['inputs'], remote), sys.stdout)
+        request = json.load(sys.stdin)
+        json.dump(execute(cfg, request['inputs'], remote, request.get('progress_path')), sys.stdout)

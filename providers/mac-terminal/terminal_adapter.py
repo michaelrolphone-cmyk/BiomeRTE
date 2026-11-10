@@ -36,6 +36,7 @@ def save_receipt(path, value):
 
 def execute(request, cfg, remote):
     profile = cfg['terminal_profile']
+    sys.path.insert(0, str(ROOT / 'runtime'))
     from biomerte.command_watch import OutputProgress, capture
     progress = OutputProgress(request.get('progress_path'))
     try:

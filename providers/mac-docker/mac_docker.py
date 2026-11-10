@@ -165,7 +165,8 @@ if __name__ == '__main__':
     else:
         cfg = json.loads((STATE / 'manifest.json').read_text())
         if sys.argv[1] == 'execute':
-            json.dump(execute(cfg, json.load(sys.stdin)['inputs'], Remote(cfg)), sys.stdout)
+            request = json.load(sys.stdin)
+            json.dump(execute(cfg, request['inputs'], Remote(cfg), request.get('progress_path')), sys.stdout)
         elif sys.argv[1] == 'serve':
             serve(cfg)
         else:
