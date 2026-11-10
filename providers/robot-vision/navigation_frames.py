@@ -6,7 +6,9 @@ change maps, infer traversability or command motion. T_A_B maps B into A.
 from __future__ import annotations
 
 import copy
+import json
 import math
+from pathlib import Path
 
 BINDING = ("snapshot_id", "frame_id", "map_id", "map_revision", "calibration_id")
 
@@ -66,6 +68,53 @@ def _attachment(record, kind, from_frame, to_frame):
     return rigid_transform(record.get("transform"))
 
 
+def _empty_pose(snapshot):
+    result = {"availability": "unavailable", "valid": False, "T_floor_robot": None,
+              "coordinate_frame": "floor", "robot_axes": "x_forward_y_left_z_up",
+              "units": "m", "pose_origin": "qualified_robot_origin",
+              "navigation_available": False, "source_exposure_time_qualified": False,
+              "covariance": None, "velocity": None, "occupancy": None}
+    if isinstance(snapshot, dict):
+        result.update({key: copy.deepcopy(snapshot.get(key))
+                       for key in (*BINDING, "session_id")})
+    return result
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_navigation_configuration_key")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value):
+    raise ValueError("nonfinite_navigation_configuration")
+
+
+def read_robot_pose(snapshot, path, *, delivery_elapsed_s):
+    """Read one bounded attachment document; failures never replace visual data."""
+    result = _empty_pose(snapshot)
+    try:
+        with Path(path).open("rb") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            raise ValueError("navigation_configuration_too_large")
+        document = json.loads(raw, object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
+        if (not isinstance(document, dict) or type(document.get("schema_version")) is not int
+                or document["schema_version"] != 1):
+            raise ValueError("navigation_configuration_schema")
+    except FileNotFoundError:
+        return {**result, "reason": "navigation_frames_not_configured"}
+    except (OSError, ValueError, UnicodeError):
+        return {**result, "reason": "navigation_frames_configuration_invalid"}
+    return derive_robot_pose(snapshot, document.get("floor_alignment"),
+                             document.get("camera_robot_extrinsics"),
+                             delivery_elapsed_s=delivery_elapsed_s)
+
+
 def derive_robot_pose(snapshot, floor_alignment, camera_robot_extrinsics, *,
                       delivery_elapsed_s):
     """Return an unavailable reason or the camera-derived robot pose at a frame.
@@ -75,14 +124,9 @@ def derive_robot_pose(snapshot, floor_alignment, camera_robot_extrinsics, *,
     Floor alignment is accepted only at its explicitly qualified map revision
     and scale solution. A caller must revalidate after geometry corrections.
     """
-    result = {"availability": "unavailable", "valid": False, "T_floor_robot": None,
-              "coordinate_frame": "floor", "robot_axes": "x_forward_y_left_z_up",
-              "units": "m", "pose_origin": "qualified_robot_origin",
-              "navigation_available": False, "source_exposure_time_qualified": False,
-              "covariance": None, "velocity": None, "occupancy": None}
+    result = _empty_pose(snapshot)
     if not isinstance(snapshot, dict):
         return {**result, "reason": "snapshot_missing"}
-    result.update({key: copy.deepcopy(snapshot.get(key)) for key in (*BINDING, "session_id")})
     try:
         if (not all(identity(snapshot.get(k)) for k in
                     ("snapshot_id", "frame_id", "map_id", "calibration_id", "session_id"))
