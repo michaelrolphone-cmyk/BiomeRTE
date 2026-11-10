@@ -1,5 +1,8 @@
 """Activate the already-staged Mac runner without interrupting claimed commands."""
 import json
+import hashlib
+import re
+import signal
 import os
 from pathlib import Path
 import plistlib
@@ -59,7 +62,7 @@ def main():
         for entry in record['files']:
             import hashlib
             live=Path(record['live'])/entry['path']
-            if entry['live_sha256'] is not None and hashlib.sha256(live.read_bytes()).hexdigest()!=entry['live_sha256']:
+            if entry['live_sha256'] is not None and hashlib.sha256(live.read_bytes()).hexdigest() not in (entry['live_sha256'],entry['staged_sha256']):
                 raise RuntimeError('Live source changed since staging: '+str(live))
     controller_domain=domain('org.biomerte.controller')
     terminal_domain=domain('org.biomerte.mac-terminal')
@@ -89,33 +92,27 @@ def main():
     atomic(TERMINAL/'terminal_adapter.py',(CHECKOUT/'providers/mac-terminal/terminal_adapter.py').read_bytes())
     docker_config=STATE/'biome-mac-docker/stdlib-launcher.json'
     atomic(docker_config,json.dumps({'source':str(STAGE/'providers/mac-docker/mac_docker.py')}).encode())
-    config['WorkingDirectory']=str(STAGE)
-    atomic(plist,plistlib.dumps(config))
-    subprocess.call(['/bin/launchctl','bootout',controller_domain+'/org.biomerte.controller'],
-                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    result=subprocess.call(['/bin/launchctl','bootstrap',controller_domain,str(plist)])
-    if result:
-        loaded=subprocess.check_output(['/bin/launchctl','print',controller_domain+'/org.biomerte.controller']).decode()
-        if str(STAGE) not in loaded:raise RuntimeError('Controller bootstrap did not adopt staged source')
-    for attempt in range(40):
-        try:
-            remote.call('cap.recovery.list',{'limit':1})
-            break
-        except Exception:
-            time.sleep(.5)
+    # Preserve the existing launchd job, service path and concurrent source overlays.
+    live=Path(manifest['live'])
+    for entry in sorted(manifest['files'],key=lambda e:e['path'] in
+                        ('biomerte/providers.py','biomerte/lifecycle.py','biomerte/worker.py')):
+        target=live/entry['path'];data=(STAGE/entry['path']).read_bytes()
+        compile(data,str(target),'exec');atomic(target,data)
+    def restart(parent,label):
+        status=subprocess.check_output(['/bin/launchctl','print',parent+'/'+label]).decode()
+        match=re.search(r'\bpid = (\d+)',status)
+        if not match:raise RuntimeError('Service PID unavailable: '+label)
+        pid=int(match.group(1))
+        owner=int(subprocess.check_output(['/bin/ps','-o','uid=','-p',str(pid)]).decode().strip())
+        if owner!=os.getuid():raise RuntimeError('Service belongs to another account: '+label)
+        os.kill(pid,signal.SIGTERM)
+    restart(controller_domain,'org.biomerte.controller')
+    for attempt in range(50):
+        try:remote.call('cap.recovery.list',{'limit':1});break
+        except Exception:time.sleep(.3)
     else:raise RuntimeError('New controller recovery interface unavailable; maintenance remains online')
-    for parent,label in ((terminal_domain,'org.biomerte.mac-terminal'),(docker_domain,'org.biomerte.mac-docker')):
-        if parent == 'system':
-            import re,signal
-            status=subprocess.check_output(['/bin/launchctl','print',parent+'/'+label]).decode()
-            match=re.search(r'\\bpid = (\\d+)',status)
-            if not match:raise RuntimeError('System provider PID unavailable')
-            pid=int(match.group(1))
-            owner=int(subprocess.check_output(['/bin/ps','-o','uid=','-p',str(pid)]).decode().strip())
-            if owner!=os.getuid():raise RuntimeError('Provider process belongs to another account')
-            os.kill(pid,signal.SIGTERM)  # Existing KeepAlive service restarts this account-owned worker.
-        else:
-            subprocess.check_call(['/bin/launchctl','kickstart','-k',parent+'/'+label])
+    restart(terminal_domain,'org.biomerte.mac-terminal')
+    restart(docker_domain,'org.biomerte.mac-docker')
     print(json.dumps({'activated':True,'stage':str(STAGE),'controller':'restarted','terminal':'restarted',
                       'docker':'restarted','gateway':'preserved','stream_router':'preserved'}),flush=True)
 
