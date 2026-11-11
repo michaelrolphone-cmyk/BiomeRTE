@@ -98,6 +98,9 @@ class RadioTracking:
         self._estimate_generation = self._estimate_anchor_version = -1
         self._sample_time = self._newest_sample_time = self._receive_time = None
         self._received_at = None
+        self._frame_radio = None
+        self._capture_mode = False
+        self._clock_qualification = "approximate_host_receive_alignment"
         self._last_training = {}
         self._model_status = {}
         self._error = self._initialization_error
@@ -164,11 +167,21 @@ class RadioTracking:
             self._map_revision = revision
             self._condition.notify_all()
 
+    def record_frame(self,frame):
+        envelope=None
+        if frame.get('sensor_packet') is not None:
+            from capture_packet import frame_radio_snapshot
+            envelope=frame_radio_snapshot(frame)
+        with self._condition:
+            self._frame_radio=envelope
+            self._capture_mode=frame.get("sensor_packet") is not None
+            self._condition.notify_all()
+
     def record_pose(self, frame, localization):
         """Record only a successfully published, independently verified visual pose."""
         if not self.enabled:
             return
-        tick = frame.get("receive_decode_monotonic_s")
+        tick = frame.get("measurement_monotonic_s",frame.get("receive_decode_monotonic_s"))
         if not _number(tick):
             return
         with self._condition:
@@ -199,7 +212,7 @@ class RadioTracking:
                 "map_id": self._map_id, "calibration_id": self._calibration_id,
                 "timestamp_s": float(tick), "source_frame_id": frame["frame_id"],
                 "T_map_camera": transform.tolist(),
-                "clock_qualification": "host_decode_time_not_camera_capture_time",
+                "clock_qualification": "device_capture_clock" if frame.get("sensor_packet") is not None else "host_decode_time_not_camera_capture_time",
             }
             anchor = {
                 "keyframe_id": identifier, "T_keyframe_camera": relative.tolist(),
@@ -256,7 +269,11 @@ class RadioTracking:
             return
         now_s = time.monotonic() if now_s is None else now_s
         now_utc_s = time.time() if now_utc_s is None else now_utc_s
-        envelope = self.source.snapshot()
+        with self._condition:
+            frame_radio=copy.deepcopy(self._frame_radio)
+            capture_mode=self._capture_mode
+        envelope = frame_radio if capture_mode else self.source.snapshot()
+        if frame_radio is not None:now_s=max(now_s,frame_radio['received_monotonic'])
         with self._condition:
             context = (self._map_id, self._calibration_id, self._generation, self._anchor_version)
             anchors, poses = copy.deepcopy(self._anchors), list(self._poses)
@@ -322,11 +339,12 @@ class RadioTracking:
             self._sample_time, self._newest_sample_time = sample_time, newest_sample_time
             self._receive_time = envelope.get("received_monotonic")
             self._received_at = envelope.get("received_at")
+            self._clock_qualification = "device_capture_clock" if envelope.get('device_frame_aligned') else "approximate_host_receive_alignment"
             self._model_status = model_status
             if training:
                 self._last_training = {
                     "groups": len(training), "accepted": sum(x.get("accepted") is True for x in training),
-                    "results": training[-8:], "clock_qualification": "approximate_host_receive_alignment",
+                    "results": training[-8:], "clock_qualification": self._clock_qualification,
                     "physical_capture_time_uncertainty_s": None,
                 }
             self._error = None
@@ -360,7 +378,7 @@ class RadioTracking:
                 value = _unavailable("radio_observations_stale", self._map_id, self._calibration_id)
             value.update(map_id=self._map_id, calibration_id=self._calibration_id,
                          map_revision=self._map_revision, units="arbitrary",
-                         clock_qualification="approximate_host_receive_alignment",
+                         clock_qualification=self._clock_qualification,
                          physical_capture_time_uncertainty_s=None,
                          source_received_at=self._received_at,
                          observation_age_s=None if sample is None else max(0.0, now_s - sample),
@@ -448,3 +466,4 @@ class RadioTracking:
         if self.model is not None:
             with self._model_lock:
                 self.model.close()
+

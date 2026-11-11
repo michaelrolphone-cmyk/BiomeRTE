@@ -406,6 +406,9 @@ class VisionService:
                  "encoding_origin": "jpeg_reencoded_from_this_decoded_frame",
                  "receive_decode_monotonic_s": captured.decoded_monotonic}
         frame_id = frame["frame_id"]
+        ahrs_evidence=self.ahrs.evidence(frame)
+        if hasattr(self.radio,'record_frame'):self.radio.record_frame(frame)
+        measurement_time=frame.get('measurement_monotonic_s',captured.decoded_monotonic)
         gray = cv2.cvtColor(captured.image, cv2.COLOR_BGR2GRAY)
         mean_luma = float(gray.mean())
         frame["lighting"] = {"mean_luma_0_255": mean_luma, "low_light_observed": mean_luma < 35.0,
@@ -430,8 +433,8 @@ class VisionService:
             try:
                 if hasattr(self.backend, "set_relocalization_prior"):
                     self.backend.set_relocalization_prior(
-                        self.radio.prior(now_s=captured.decoded_monotonic), map_id=self.map_id)
-                result = self.backend.track(captured.image, frame_id, captured.decoded_monotonic)
+                        self.radio.prior(now_s=measurement_time), map_id=self.map_id)
+                result = self.backend.track(captured.image, frame_id, measurement_time)
             except Exception as exc:
                 diagnostic = f"{type(exc).__name__}: {exc}"[:512]
                 now = time.monotonic()
@@ -482,8 +485,8 @@ class VisionService:
             "dropoffs": {"availability": "unavailable", "reason": "not_estimated"},
             "metric_depth": {"availability": "unavailable", "reason": "no_metric_depth_sensor_or_qualified_scale"},
             "robot_velocity": {"availability": "unavailable", "reason": "no_continuous_metric_odometry"},
-            "radio": self.radio.evidence(localization, now_s=captured.decoded_monotonic),
-            "ahrs": self.ahrs.evidence(frame, localization),
+            "radio": self.radio.evidence(localization, now_s=measurement_time),
+            "ahrs": ahrs_evidence,
         }
         frame["processing_complete_time"] = utc_now()
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
@@ -513,8 +516,8 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
-            "radio": self.radio.status(include_observations=True),
-            "ahrs": self._stream_ahrs(),
+            "radio": self._stream_radio(frame),
+            "ahrs": self._stream_ahrs(frame),
             "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
         }, encoded.tobytes())
@@ -530,9 +533,35 @@ class VisionService:
         return ({**status, **cached["telemetry"], "snapshot": cached}
                 if isinstance(cached, dict) else status)
 
-    def _stream_ahrs(self):
+    def _capture_sensor_stream(self,frame,name):
+        packet=frame.get('sensor_packet')
+        if not isinstance(packet,dict):return None
+        raw=packet.get(name)
+        if not isinstance(raw,dict):return {'state':'unavailable','reason':'no_causal_sample_for_capture','frame_id':frame['frame_id']}
+        age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
+        return {**copy.deepcopy(raw),'frame_id':frame['frame_id'],
+                'capture_monotonic_us':packet['capture_monotonic_us'],
+                'sample_reference':'camera_capture','timing_qualified':True,
+                'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
+
+    def _stream_radio(self,frame):
+        if frame.get('sensor_packet') is None:return self.radio.status(include_observations=True)
+        from capture_packet import frame_radio_snapshot
+        captured=frame_radio_snapshot(frame)
+        if captured is None:return {'state':'unavailable','reason':'no_radio_sample_for_capture','frame_id':frame['frame_id']}
+        age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
+        captured.update(elapsed_since_receive_s=age,received_at=frame.get('receive_decode_time'),
+                        frame_id=frame['frame_id'],sample_reference='camera_capture')
+        for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
+        return {**self.radio.status(include_observations=False),'telemetry':captured,
+                'frame_id':frame['frame_id'],'sample_reference':'camera_capture'}
+
+    def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
         status = self.ahrs.status()
+        if frame is not None:
+            captured=self._capture_sensor_stream(frame,'ahrs')
+            if captured is not None:return {**status,**captured}
         snapshot = self.ahrs.snapshot()
         if not isinstance(snapshot, dict):
             return status
@@ -870,15 +899,15 @@ class VisionService:
                     "imu": "native MPU axes; camera and robot mounting transforms unqualified",
                     "ahrs_reference": "gravity-aligned initial-yaw reference; relative yaw can drift",
                     "magnetometer": "native AK8963 axes; distinct from IMU axes; not calibrated compass"},
-                "time": {"capture": "unknown", "source_media": "relative clock",
+                "time": {"capture": ("ESP32 first-DMA capture event" if self.config["camera"].get("synchronized_capture") else "unknown"), "source_media": "relative clock",
                          "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations",
-                         "ahrs": "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified"},
+                         "ahrs": ("same ESP32 capture clock with per-sensor observed uptimes" if self.config["camera"].get("synchronized_capture") else "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified")},
                 "map_layers": ["keyframe", "sparse_point", "semantic_observation", "radio_fingerprint"],
                 "map_layer_readers": {"radio_fingerprint": "robot.map.radio.read"},
                 "radio_model": {"learning": "time_aligned_independently_verified_visual_poses",
                                 "inference": "adaptive_source_distributions_and_competing_spatial_modes",
                                 "visual_relocalization": "candidate_prior_with_unchanged_geometry_and_visual_fallback",
-                                "clock_qualification": "approximate_host_receive_alignment",
+                                "clock_qualification": ("device_capture_clock" if self.config["camera"].get("synchronized_capture") else "approximate_host_receive_alignment"),
                                 "navigation_usable": False, "heading_available": False,
                                 "storage": "bounded_radio_sqlite_outside_vision_checkpoint_packages"},
                 "ahrs_evidence": {
@@ -1196,3 +1225,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
