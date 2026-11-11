@@ -57,7 +57,7 @@ def main():
                               'usage': guide})
     admin.call('peer.trust', {'public_key': node['public_key'], 'label': os.uname()[1] + ' Docker CLI',
                               'scopes': ['cap.offer', 'cap.fenced', 'provider.poll', 'provider.claim', 'provider.result',
-                                         'cap.status', 'artifact.get', 'artifact.put', 'offer:' + CONTRACT, 'resource:' + resource]})
+                                         'cap.status', 'provider.reconcile', 'provider.custody', 'cap.heartbeat', 'cap.command.state', 'agent.progress', 'artifact.get', 'artifact.put', 'offer:' + CONTRACT, 'resource:' + resource]})
     manifest = os.path.join(home, 'manifest.json')
     adapter = os.path.join(here, 'docker_cli.py')
     offer = {'contract': CONTRACT, 'resource': resource, 'service': 'docker-cli', 'capacity': args.slots,
@@ -71,7 +71,7 @@ def main():
     unit = 'biomerte-docker.service'
     boot = [os.path.join(checkout, 'biome'), '--home', home, 'worker', manifest]
     body = ['[Unit]', 'Description=BiomeRTE Docker CLI provider', 'Requires=' + args.daemon_unit,
-            'Wants=biomerte.service', 'After=biomerte.service ' + args.daemon_unit, '[Service]',
+            'Wants=biomerte.service', 'After=biomerte.service ' + args.daemon_unit, '[Service]', 'KillMode=process',
             'User=' + user.pw_name, 'SupplementaryGroups=' + group, 'UMask=0077',
             'ExecStartPre=/usr/bin/env ' + ' '.join(quote(x) for x in [exe, '-H', 'unix://' + sock, 'version']),
             'ExecStart=/usr/bin/env ' + ' '.join(quote(x) for x in boot),

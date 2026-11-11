@@ -14,7 +14,8 @@ from .store import Fault, uid, digest
 from . import authorization, providers, process, assistant_workspaces, assistant_impact
 
 ROOT=Path(__file__).resolve().parent
-CAT=json.loads((ROOT/'assistant_catalog.json').read_text())
+with (ROOT/'assistant_catalog.json').open(encoding='utf-8') as stream:
+    CAT=json.load(stream)
 DISPOSITIONS={'completed','rejected','deferred','pending','unresolved','faulted'}
 
 def outcome(frame, disposition='completed', code='ok', data=None, continuation=None):
@@ -570,8 +571,7 @@ def install_hooks():
 def pump(tx,ctx):
     """Nonblocking durable protocol delivery; runs in the normal controller tick transaction."""
     if not tx.get('assistant_config','current'):return
-    for row in tx.rows('assistant_start_outbox'):
-        if row['state']!='pending':continue
+    for row in tx.matching('assistant_start_outbox', states=('pending',)):
         cfg=configuration(tx);r=tx.need('assistant_responsibilities',row['frame']['responsibility_id'])
         if r['desired']!='run':continue
         receipt=tx.get('assistant_materialized',row['id'])
@@ -597,7 +597,7 @@ def cli_action(tx,cfg,operation,arguments):
     if len(chunks)>28:raise Fault('Controller command exceeds terminal argument capacity; decompose its context',413)
     code='import json,sys; from biomerte.app import Application; print(json.dumps(Application('+repr(home)+').call('+repr(operation)+',json.loads("".join(sys.argv[1:])),request_id='+repr('assistant-'+digest([operation,arguments]))+',realm="site")))'
     command='cd '+shlex.quote(source)+' && exec '+shlex.quote(cfg['python_executable'])+' -S -c '+shlex.quote(code)+' "$@"'
-    return {'contract':'host.terminal.run:1','resource':resource,'inputs':{'argv':['/bin/bash','-c',command,'biome-assistant',*chunks]}}
+    return {'contract':'host.terminal.run:1','resource':resource,'inputs':{'argv':['/bin/bash','-c',command,'biome-assistant']+chunks}}
 
 def known_action(tx,cfg,f,key):
     action=f.get(key)
@@ -979,13 +979,26 @@ def pump(tx,ctx):
             tx.put('assistant_supervision_receipts',sid,{'id':sid,'run_id':run['id']})
     # Settle independently running reasoning and observation without holding cycles open.
     for kind in ('assistant_background','assistant_episodes'):
-        for row in tx.rows(kind):
+        # Historical outcomes are preserved, but only unsettled work is decoded.
+        pending = {row['id']: row for row in tx.matching(kind, states=('running',))}
+        if kind == 'assistant_background':
+            # Legacy terminal dispatches may still need assignment reconciliation.
+            for row in tx.matching(kind, 'settlement_checked', (False,)):
+                pending[row['id']] = row
+        for key in sorted(pending):
+            row = pending[key]
             run=tx.need('runs',row['run_id'])
             if run['state']=='running':continue
             if kind=='assistant_background' and run['name']=='assistant.dispatch':
                 reconcile_dispatch(tx,ctx,row,run)
-            if row['state']!='running':continue
-            row['state']=run['state'];row['result']=run['result'];tx.put(kind,row['id'],row)
+            if row['state']!='running':
+                if kind == 'assistant_background' and not row.get('settlement_checked'):
+                    row['settlement_checked'] = True
+                    tx.put(kind,row['id'],row)
+                continue
+            row['state']=run['state'];row['result']=run['result']
+            if kind == 'assistant_background':row['settlement_checked'] = True
+            tx.put(kind,row['id'],row)
             if kind=='assistant_episodes' and not tx.get('assistant_learning_outbox',run['id']):
                 learned=run['result']
                 if learned.get('disposition') not in DISPOSITIONS:
@@ -1001,7 +1014,6 @@ def pump(tx,ctx):
             if events:wake['ready']=True;tx.put('assistant_wake_outbox',wake['id'],wake)
     _base_pump(tx,ctx)
     # Every terminal episode, including failures, enters a separate learning run once.
-    for row in tx.rows('assistant_learning_outbox'):
-        if row.get('delivered'):continue
+    for row in tx.matching('assistant_learning_outbox', 'delivered', (False,)):
         f=copy.deepcopy(row['outcome']['frame']);f['learning_input']=row['outcome'];f['procedure_change']=False
         run=process.new_run(tx,'assistant.learning',{'frame':f});row.update(delivered=True,run_id=run['id']);tx.put('assistant_learning_outbox',row['id'],row)

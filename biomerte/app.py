@@ -9,6 +9,8 @@ from .store import Fault, Store, Etcd, uid, encode, mkdir, digest, text
 from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support, discovery
+from . import streams
+from . import retention, session_api
 assistant_support.install_hooks()
 
 
@@ -57,6 +59,8 @@ class Application:
         self.node, self.site = self.config['node'], self.config['site']
         self.key = os.path.join(directory, 'node.key')
         remote = None
+        if self.config.get('gateway_link') and (self.config.get('gateway_journal') or self.config.get('etcd')):
+            raise Fault('Local gateway link cannot use permanent shared storage')
         realm_file = 'site'
         if self.config.get('etcd'):
             remote = Etcd(self.config['etcd'], self.site)
@@ -67,6 +71,7 @@ class Application:
         self.stores = {'local': Store(directory, 'local'),
                        'site': Store(directory, realm_file, remote)}
         self.timer_anchors = {}
+        self.retention_next = {}
         self.health = {}
         for scope, store in self.stores.items():
             try:
@@ -77,12 +82,14 @@ class Application:
                 if scope == 'local' or e.status != 503:
                     raise
 
-    def call(self, name, args=None, request_id=None, realm='site', auth=None, cached=False):
+    def call(self, name, args=None, request_id=None, realm='site', auth=None, cached=False, controller=None):
+        if controller is not None and controller != self.node:
+            raise Fault('Request addressed to a different controller', 403)
         if realm not in self.stores:
             raise Fault('Unknown realm')
         args = {} if args is None else args
 
-        def transaction(tx):
+        def authorize(tx):
             ctx = Context(self, scope=realm)
             if auth is not None:
                 peer = tx.need('peers', auth['actor'])
@@ -90,25 +97,67 @@ class Application:
                     raise Fault('Revoked credential', 403)
                 envelope = {'site': self.site, 'realm': realm,
                             'operation': name, 'arguments': args, 'id': request_id}
+                if controller is not None:
+                    envelope['controller'] = controller
                 verify(peer['key'], auth['signature'], envelope)
                 ctx = Context(self, peer['id'], realm, peer['scopes'])
                 if name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot':
                     raise Fault('Operator action', 403)
+            return ctx
+
+        def transaction(tx):
+            ctx = authorize(tx)
+            if operation is not None and operation[2] and self.config.get('operational_retention', {}).get('enabled', True):
+                with retention.tracking(tx):
+                    return command(tx, ctx, name, args, request_id)
             return command(tx, ctx, name, args, request_id)
-        return self.stores[realm].execute(transaction, cached=cached)
+        operation = OPERATIONS.get(name)
+        if name in session_api.EXTERNAL:
+            if cached and session_api.EXTERNAL[name][1]:
+                raise Fault('Cached site view is read-only', 409)
+            return session_api.dispatch(self, name, args, request_id, realm, authorize)
+        read_only = operation is not None and not operation[2]
+        return self.stores[realm].execute(transaction, cached=cached, read_only=read_only)
 
     def tick(self, realm):
         budget = 64
-        def run(tx):
+        policy = self.config.get('operational_retention', {})
+        enabled = policy.get('enabled', True)
+        now = time.time()
+        due = enabled and now >= self.retention_next.get(realm, 0)
+        def work_tick(tx):
             seed(tx)
             ctx = Context(self, scope=realm)
-            moved = process.tick(tx, ctx, budget=budget)
-            providers.settle_submissions(tx, ctx)
-            assistant_support.pump(tx, ctx)
+            tx.ownership_execution = True
+            try:
+                moved = process.tick(tx, ctx, budget=budget)
+                providers.settle_submissions(tx, ctx)
+                assistant_support.pump(tx, ctx)
+            finally:
+                # Retention and canonical dependency reads must see every row,
+                # including the temporarily fenced responsibility.
+                tx.ownership_execution = False
+            # Disposable local projection catches up every tick, including while
+            # payload retention is disabled for a staged rollout. No journal
+            # changes are emitted by advance itself.
+            from .retention_index import advance
+            index_ready = advance(tx.db, max_rows=policy.get('index_rows', 64),
+                                  max_chars=policy.get('index_chars', 131072))
+            if due and index_ready:
+                retention.sweep(tx, now=now, seconds=policy.get('seconds', 86400),
+                                keep=policy.get('keep', 1024), batch=policy.get('batch', 128), index_ready=True)
             return moved
+        def run(tx):
+            if enabled:
+                with retention.tracking(tx, now):
+                    return work_tick(tx)
+            return work_tick(tx)
         while True:
             try:
-                return self.stores[realm].execute(run)
+                result = self.stores[realm].execute(run)
+                if due:
+                    self.retention_next[realm] = now + policy.get('interval', 60)
+                return result
             except Fault as exc:
                 # A rolled-back batch has dispatched no durable effects.
                 # Reduce the batch, preserving each activity's atomic commit.

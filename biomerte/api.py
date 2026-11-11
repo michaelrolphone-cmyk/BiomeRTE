@@ -1,20 +1,25 @@
 """Runtime service directory and transaction-bound command dispatch."""
 import json
 import re
-from .store import Fault, digest, text, uid
+import time
+from .store import Fault, digest, encode, text, uid
 
 OPERATIONS = {}
+RECEIPT_POLICIES = {}
 TYPES = {'str': str, 'obj': dict, 'list': list, 'int': int, 'bool': bool,
          'num': (int, float), 'any': object}
 
 
-def op(name, fields='', write=True):
+def op(name, fields='', write=True, receipt='replay'):
+    if receipt not in ('replay', 'refresh') or (receipt == 'refresh' and not write):
+        raise ValueError('Invalid operation receipt policy')
     def register(fn):
         schema = {}
         for field in fields.split():
             key, typ = field.split(':')
             schema[key.rstrip('?')] = {'type': typ, 'required': not key.endswith('?')}
         OPERATIONS[name] = (fn, schema, write)
+        RECEIPT_POLICIES[name] = receipt
         return fn
     return register
 
@@ -82,6 +87,8 @@ def command(tx, ctx, name, args, request_id):
         raise Fault('Permission denied', 403)
     if not OPERATIONS[name][2]:
         return invoke(tx, ctx, name, args)
+    if isinstance(request_id, dict):
+        return stream_command(tx, ctx, name, args, request_id)
     ident(text(request_id, 'request_id'))
     key = digest([ctx.actor, request_id])
     signature = digest([name, args])
@@ -89,16 +96,75 @@ def command(tx, ctx, name, args, request_id):
     if old:
         if old['signature'] != signature:
             raise Fault('Request ID reused with different arguments', 409)
+        if old.get('ownership_owner'):
+            raise Fault('Request responsibility moved to controller ' + old['ownership_owner'], 409)
+        if old.get('result_expired') is True:
+            raise Fault('Receipt result retired; request will not execute again', 410)
+        if old.get('external_pending'):
+            raise Fault('Session request outcome requires explicit reconciliation', 409)
+        if old.get('external_error'):
+            raise Fault(old['external_error']['message'], old['external_error']['status'])
         return old['result']
+    if RECEIPT_POLICIES.get(name) == 'refresh':
+        # Refresh operations promise current state, not historical responses.
+        # Keep the normal transaction: refreshing may update liveness state.
+        return invoke(tx, ctx, name, args)
     result = invoke(tx, ctx, name, args)
-    tx.put('_receipt', key, {'signature': signature, 'result': result})
+    receipt = {'signature': signature, 'result': result,
+               'format': 2, 'operation': name, 'created_at': time.time()}
+    if name == 'agent.progress' or (name == 'artifact.put' and args.get('ttl_seconds')) or name.startswith(('cap.', 'provider.', 'destination.', 'inbox.', 'stream.')):
+        receipt['expires_at'] = time.time() + 900
+    tx.put('_receipt', key, receipt)
+    return result
+
+
+# Fixed slots avoid unbounded client-created stream identities. The floor and
+# current receipt commit atomically with domain changes, including remote CAS.
+RECEIPT_STREAM_SLOTS = 16
+RECEIPT_RESULT_BYTES = 65536
+RECEIPT_SEQUENCE_MAX = 9223372036854775807
+
+
+def stream_command(tx, ctx, name, args, request_id):
+    """Opt-in ordered requests: advancing a slot acknowledges its prior result."""
+    if set(request_id) != {'stream', 'sequence'}:
+        raise Fault('Stream request ID requires exactly stream and sequence')
+    slot, sequence = request_id['stream'], request_id['sequence']
+    if type(slot) is not int or not 0 <= slot < RECEIPT_STREAM_SLOTS:
+        raise Fault('Invalid receipt stream slot')
+    if type(sequence) is not int or not 1 <= sequence <= RECEIPT_SEQUENCE_MAX:
+        raise Fault('Invalid receipt stream sequence')
+    key = digest([ctx.actor, slot])
+    old = tx.get('_receipt_stream', key)
+    if old and old.get('ownership_owner'):
+        raise Fault('Receipt stream moved to controller ' + old['ownership_owner'], 409)
+    previous = old['sequence'] if old else 0
+    signature = digest([name, args])
+    if sequence < previous:
+        raise Fault('Receipt retired; request will not execute again', 410)
+    if sequence == previous:
+        if old['signature'] != signature:
+            raise Fault('Request ID reused with different arguments', 409)
+        if 'result' not in old:
+            raise Fault('Request committed; result exceeds replay byte limit', 410)
+        return old['result']
+    if sequence != previous + 1:
+        raise Fault('Receipt stream requires the next consecutive sequence', 409)
+    result = invoke(tx, ctx, name, args)
+    receipt = {'sequence': sequence, 'signature': signature}
+    # The original caller still receives the complete result. Oversized results
+    # retain only their deduplication state, never an unbounded response copy.
+    if len(encode(result).encode('utf-8')) <= RECEIPT_RESULT_BYTES:
+        receipt['result'] = result
+    tx.put('_receipt_stream', key, receipt)
     return result
 
 
 @op('bus.discover', write=False)
 def discover(tx, ctx):
     """List operations and their argument contracts for this caller."""
-    return [{'name': name, 'description': fn.__doc__ or '', 'inputs': fields, 'write': write}
+    return [{'name': name, 'description': fn.__doc__ or '', 'inputs': fields, 'write': write,
+             'receipt': RECEIPT_POLICIES.get(name, 'replay') if write else 'none'}
             for name, (fn, fields, write) in sorted(OPERATIONS.items()) if ctx.allowed(name)]
 
 
@@ -125,12 +191,24 @@ def send(tx, ctx, to, body, correlation=''):
     return msg
 
 
+def send_operational(tx, ctx, to, body, correlation='', ttl_seconds=900):
+    # Capability notifications are operational inbox entries, not user knowledge.
+    from time import time
+    msg = {'id': uid(), 'from': ctx.actor, 'to': text(to), 'body': body,
+           'correlation': correlation, 'read': False, 'expires_at': time() + ttl_seconds}
+    tx.put('messages', msg['id'], msg)
+    tx.emit('message.received', {'message': msg['id'], 'to': to})
+    return msg
+
+
 @op('bus.inbox', 'address?:str', False)
 def inbox(tx, ctx, address=''):
     address = address or ctx.actor
     if ctx.permissions is not None and address != ctx.actor:
         raise Fault('Other inbox', 403)
-    return [r for r in tx.rows('messages') if r['to'] == address]
+    from time import time
+    now = time()
+    return [r for r in tx.rows('messages') if r['to'] == address and r.get('expires_at', now + 1) > now]
 
 
 @op('bus.ack_message', 'message:str')
@@ -148,6 +226,8 @@ def event_page(tx, ctx, topic, after=0, limit=32):
     ident(topic)
     if after < 0 or limit < 0:
         raise Fault('Invalid event cursor')
+    from .retention import check_event_cursor
+    check_event_cursor(tx, after)
     high = tx.get('_meta', 'events', 0)
     page = {'high': high, 'scanned': after, 'events': []}
     for row in tx.db.execute("SELECT value FROM records WHERE kind='events' AND id>? ORDER BY id LIMIT ?",
@@ -168,12 +248,18 @@ def event_page(tx, ctx, topic, after=0, limit=32):
 @op('bus.event_get', 'sequence:int', False)
 def event_get(tx, ctx, sequence):
     """Read the original controller event by its sequence in this realm."""
+    value = tx.get('events', '%020d' % sequence)
+    if value is None:
+        from .retention import check_event_cursor
+        check_event_cursor(tx, sequence - 1)
     return tx.need('events', '%020d' % sequence)
 
 
 @op('bus.subscribe', 'name:str topic:str process?:str from_seq?:int')
 def subscribe(tx, ctx, name, topic, process='', from_seq=0):
     """Subscribe to one exact topic or *; an optional process starts for each event."""
+    from .retention import check_event_cursor
+    check_event_cursor(tx, from_seq)
     if process:
         tx.need('definitions', process)
     if process and topic == '*':
@@ -189,6 +275,8 @@ def subscribe(tx, ctx, name, topic, process='', from_seq=0):
 
 def events_after(tx, cursor, topic, limit=100):
     import json
+    from .retention import check_event_cursor
+    check_event_cursor(tx, cursor)
     sql = "SELECT value FROM records WHERE kind='events' AND id>? ORDER BY id"
     result = []
     for row in tx.db.execute(sql, ('%020d' % cursor,)):

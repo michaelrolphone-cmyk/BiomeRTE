@@ -4,6 +4,7 @@ import time
 from .api import op, ident, validate, schema
 from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
+from . import lifecycle
 
 
 def owner(ctx, provider):
@@ -20,6 +21,9 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
     record = {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
               'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
     prior = tx.get('contracts', key) or tx.get('_retired_contracts', key)
+    if prior:
+        from .retention import require_payload
+        require_payload(prior)
     if prior and prior != record:
         raise Fault('Contract version is immutable', 409)
     if usage is not None:
@@ -27,8 +31,8 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
     return tx.put('contracts', key, record)
 
 
-@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj')
-def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None, usage=None):
+@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj lease_class?:str')
+def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None, usage=None, lease_class=''):
     """Publish or revise an offer. Shared physical resources use the same resource ID."""
     owner(ctx, provider)
     if ctx.permissions is not None and provider in ('builtin', 'routine'):
@@ -36,7 +40,13 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     if ctx.permissions is not None and ('offer:' + contract not in ctx.permissions or 'resource:' + resource not in ctx.permissions):
         raise Fault('Offer or resource outside provider grant', 403)
     definition = tx.need('contracts', contract)
-    policy = (configuration or {}).get('reservation_policy', {})
+    key = digest([provider, contract, resource])
+    previous = tx.get('offers', key, {})
+    configuration = dict(previous.get('configuration', {}) if configuration is None else configuration)
+    if lease_class:
+        configuration['lease_class'] = lease_class
+    configuration = lifecycle.configuration(configuration, provider in ('builtin', 'routine'))
+    policy = configuration.get('reservation_policy', {})
     if not isinstance(policy, dict):
         raise Fault('Invalid reservation policy')
     idle = policy.get('idle_seconds', 0)
@@ -138,12 +148,11 @@ def capacity_of(tx, offer):
 
 
 def active_on(tx, resource):
-    return [l for l in tx.rows('leases') if l['resource'] == resource and l['state'] in ('fencing', 'bound')]
+    return [l for l in tx.matching('leases', ('fencing', 'bound')) if l['resource'] == resource]
 
 
 def reservation_policy(tx, lease):
-    offer = tx.get('offers', lease.get('offer', ''), {})
-    return offer.get('configuration', {}).get('reservation_policy', {})
+    return lifecycle.policy(tx, lease)['reservation_policy']
 
 
 def touch_reservation(tx, lease):
@@ -155,25 +164,24 @@ def touch_reservation(tx, lease):
 
 def recover_reservations(tx, ctx):
     now = time.time()
-    actions = {}
-    for action in tx.rows('actions'):
-        actions.setdefault(action['lease'], []).append(action)
     recovered = 0
-    for lease in tx.rows('leases'):
-        if lease['state'] not in ('bound', 'fencing'):
+    for lease in tx.matching('leases', ('bound', 'fencing')):
+        lease_actions = tx.matching('actions', lease=lease['id'])
+        if lifecycle.recover(tx, ctx, lease, lease_actions, now):
+            recovered += 1
             continue
         policy = reservation_policy(tx, lease)
         if not policy:
             continue
-        work = [a for a in actions.get(lease['id'], []) if a['generation'] == lease['generation']]
-        if any(a['state'] not in ('succeeded', 'failed') for a in work):
+        work = [a for a in lease_actions if a['generation'] == lease['generation']]
+        if any(a['state'] not in lifecycle.TERMINAL for a in work):
             continue
         # Combined submissions retain enough information to repair dispatch.
         if tx.get('_submission_leases', lease['id']) and not work:
             start_submission(tx, ctx, lease)
             continue
         reason = None
-        if work and policy.get('release_after_result'):
+        if work and (any(a.get('release_after_result', policy.get('release_after_result', False)) for a in work)):
             reason = 'settled_exchange'
         elif not work and policy.get('idle_seconds', 0) > 0:
             activity = tx.get('_reservation_activity', lease['id'])
@@ -185,15 +193,16 @@ def recover_reservations(tx, ctx):
         if reason and release(tx, lease):
             recovered += 1
             tx.emit('lease.recovered', {'lease': lease['id'], 'generation': lease['generation'], 'reason': reason})
+    lifecycle.sweep(tx, ctx, now)
     return recovered
 
 
 def notify_bound(tx, ctx, lease):
     if lease.get('reply_to') and not lease.get('notified'):
-        from .api import send, Context
+        from .api import send_operational, Context
         body = {k: lease[k] for k in ('id', 'task', 'contract', 'resource', 'generation', 'reply_to')}
         body.update(type='lease.available', state='bound')
-        send(tx, Context(ctx.app, actor='controller', scope=ctx.scope), lease['reply_to'], body, lease['id'])
+        send_operational(tx, Context(ctx.app, actor='controller', scope=ctx.scope), lease['reply_to'], body, lease['id'])
         tx.emit('lease.available', body)
         lease['notified'] = True
 
@@ -220,14 +229,17 @@ def bind(tx, ctx, request):
                     break
         else:
             guard_key = '!shared:' + digest([resource, request['id']])
-        guard = tx.get('guards', guard_key, {'generation': 0, 'holder': ''})
+        guard = tx.get('guards', guard_key, {'generation': tx.get('_fence_generations', resource, 0), 'holder': ''})
         if guard['holder']:
             continue
         generation = max(guard['generation'], request.get('generation', 0)) + 1
+        lease_policy = lifecycle.policy(tx, {'offer': of['id'], 'provider': of['provider']})
         lease = dict(request, offer=of['id'], provider=of['provider'], resource=resource,
                      generation=generation, guard=guard_key,
-                     state='bound' if of['provider'] in ('builtin', 'routine') else 'fencing')
-        tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id']})
+                     state='bound' if of['provider'] in ('builtin', 'routine') else 'fencing',
+                     lease_class=lease_policy['lease_class'], lease_policy=lease_policy,
+                     fencing_since=time.time(), last_progress_at=time.time(), missed_heartbeats=0)
+        tx.put('guards', guard_key, {'generation': generation, 'holder': lease['id'], 'resource': resource})
         if lease.get('queue_key'):
             tx.drop('_lease_queue', lease.pop('queue_key'))
         tx.emit('lease.acquired', {'lease': lease['id'], 'generation': generation})
@@ -261,6 +273,8 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     key = digest([task, contract, resource])
     batch_full = promote(tx, ctx)
     old = tx.get('leases', key, {})
+    if old.get('state') in ('queued', 'bound', 'fencing') and ctx.permissions is not None and old.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     if old.get('state') == 'queued':
         return old
     if old.get('state') in ('bound', 'fencing'):
@@ -268,7 +282,7 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
             return old
         batch_full = promote(tx, ctx)
     req = {'id': key, 'task': task, 'contract': contract, 'resource': resource,
-           'requested_resource': resource, 'generation': old.get('generation', 0),
+           'requested_resource': resource, 'generation': old.get('generation', 0), 'owner': ctx.actor,
            'provider': '', 'reply_to': reply_to}
     lease = None if batch_full else bind(tx, ctx, req)
     if lease:
@@ -282,10 +296,12 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     return tx.put('leases', key, req)
 
 
-@op('cap.lease', 'lease:str')
+@op('cap.lease', 'lease:str', receipt='refresh')
 def lease_status(tx, ctx, lease):
-    """Read the current lease, including queued requests, independently of its original receipt."""
+    """Read current lease and refresh its reservation heartbeat; new request IDs retain no receipt."""
     value = tx.need('leases', lease)
+    if ctx.permissions is not None and value.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     touch_reservation(tx, value)
     return value
 
@@ -301,8 +317,8 @@ def fenced(tx, ctx, provider, lease, generation):
     """Acknowledge durable installation of the fence at the actual enforcement point."""
     executor(tx, ctx, provider)
     l = tx.need('leases', lease)
-    guard = tx.need('guards', l['guard'])
-    if (l['provider'], guard['holder'], guard['generation']) != (provider, lease, generation):
+    guard = tx.get('guards', l['guard'], {'holder':'','generation':0})
+    if l['state'] not in ('bound', 'fencing') or (l['provider'], guard['holder'], guard['generation']) != (provider, lease, generation):
         raise Fault('Superseded fence', 409)
     l['state'] = 'bound'
     notify_bound(tx, ctx, l)
@@ -314,24 +330,25 @@ def release(tx, l):
         return True
     if l['state'] == 'queued':
         tx.drop('_lease_queue', l.pop('queue_key'))
-        l['state'] = 'released'
+        l.update(state='released', released_at=time.time(), expires_at=time.time() + 300)
         tx.put('leases', l['id'], l)
         return True
-    if any(a['lease'] == l['id'] and a['state'] in ('queued', 'claimed', 'uncertain')
-           for a in tx.rows('actions')):
+    if any(a['state'] in ('queued', 'claimed', 'uncertain')
+           for a in tx.matching('actions', 'lease', (l['id'],))):
         return False
     guard = tx.need('guards', l['guard'])
     if guard['holder'] == l['id'] and guard['generation'] == l['generation']:
-        guard['holder'] = ''
+        guard.update(holder='', released_at=time.time())
         tx.put('guards', l['guard'], guard)
-    l['state'] = 'released'
+        tx.put('_fence_generations', l['resource'], max(guard['generation'], tx.get('_fence_generations', l['resource'], 0)))
+    l.update(state='released', released_at=time.time(), expires_at=time.time() + 300)
     tx.put('leases', l['id'], l)
     return True
 
 
 def release_task(tx, task):
-    for l in tx.rows('leases'):
-        if l['task'] == task and l['state'] != 'released':
+    for l in tx.matching('leases', 'task', (task,)):
+        if l['state'] != 'released':
             release(tx, l)
 
 
@@ -339,7 +356,7 @@ def release_task(tx, task):
 def release_lease(tx, ctx, lease):
     """Release a held lease after work settles, or cancel a queued request. Results remain available via cap.status."""
     l = tx.need('leases', lease)
-    if ctx.permissions is not None:
+    if ctx.permissions is not None and l.get('owner') != ctx.actor:
         raise Fault('Lease release is controlled by the task owner', 403)
     if not release(tx, l):
         raise Fault('Reconcile outstanding operation before release', 409)
@@ -347,16 +364,25 @@ def release_lease(tx, ctx, lease):
     return l
 
 
-@op('cap.invoke', 'lease:str inputs:obj operation:str')
-def dispatch(tx, ctx, lease, inputs, operation):
+@op('cap.invoke', 'lease:str inputs:obj operation:str destination?:str release_after_result?:bool')
+def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_result=None):
     """Submit once with a unique operation ID. Read cap.status with that ID for the result; the lease remains held until released."""
     l = tx.need('leases', lease)
+    if ctx.permissions is not None and l.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
     key = ident(operation)
     prev = tx.get('actions', key)
     if prev:
-        if prev['lease'] != lease or prev['inputs'] != inputs:
+        from .retention import require_payload
+        require_payload(prev)
+        if (prev['lease'] != lease or prev['inputs'] != inputs or prev.get('destination', '') != destination or
+                release_after_result is not None and prev.get('release_after_result') != release_after_result):
             raise Fault('Operation identity conflict', 409)
         return prev
+    if destination:
+        lifecycle.destination(tx, ctx, destination)
+    if tx.need('offers', l['offer']).get('configuration', {}).get('stream_only'):
+        raise Fault('Use stream.open for this streaming interface', 409)
     contract = tx.need('contracts', l['contract'])
     validate(contract['inputs'], inputs)
     if l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer'])):
@@ -365,6 +391,7 @@ def dispatch(tx, ctx, lease, inputs, operation):
     guard(tx, key, l['contract'], l['resource'], inputs, ctx)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l['provider'],
          'resource': l['resource'], 'generation': l['generation'], 'state': 'queued', 'inputs': inputs, 'guard': l['guard'],
+         'destination': destination, 'release_after_result': (reservation_policy(tx, l).get('release_after_result', False) if release_after_result is None else release_after_result), 'created_at': time.time(), 'expires_at': None,
          'status_query': {'operation': 'cap.status', 'arguments': {'operation': key}}}
     if l['provider'] == 'builtin' and l['contract'] == 'core.echo:1':
         a.update(state='succeeded', result={'value': inputs['value']})
@@ -377,34 +404,41 @@ def dispatch(tx, ctx, lease, inputs, operation):
         child = new_run(tx, spec['process'], inputs, parent='action:' + key, pin=spec['revision'])
         a.update(state='claimed', child=child['id'])
     tx.put('actions', key, a)
+    lifecycle.settled(tx, a)
     observe(tx, key, a['state'], a.get('result'))
     tx.emit('operation.' + a['state'], {'id': key})
     return a
 
 
-@op('provider.poll', 'provider:str', False)
-def pending(tx, ctx, provider):
+@op('provider.poll', 'provider:str limit?:int', False)
+def pending(tx, ctx, provider, limit=64):
     """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
     owner(ctx, provider)
-    leases = [l for l in tx.rows('leases') if l['provider'] == provider and l['state'] == 'fencing']
-    actions = [a for a in tx.rows('actions') if a['provider'] == provider and a['state'] in
-               ('queued', 'claimed') and tx.need('leases', a['lease'])['state'] == 'bound']
-    activations = [a for a in tx.rows('activations') if a['provider']
-                   == provider and a['state'] == 'pending']
+    if limit < 1:
+        raise Fault('Provider inbox page size must be positive')
+    leases = [l for l in tx.matching('leases', ('fencing',)) if l['provider'] == provider]
+    actions = [a for a in tx.matching('actions', ('queued', 'claimed')) if a['provider'] == provider and tx.need('leases', a['lease'])['state'] == 'bound']
+    activations = [a for a in tx.matching('activations', ('pending',)) if a['provider'] == provider]
     first, rest, seen = [], [], set()
     for a in actions:
         guard = a.get('guard', a['resource'])
         (rest if guard in seen else first).append(a)
         seen.add(guard)
-    return {'fences': leases, 'actions': (first + rest)[:64], 'activations': activations}
+    streams = [g for g in tx.matching('_stream_grants', ('open',)) if g['provider'] == provider and g['expires_at'] > time.time()]
+    return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations, 'streams': streams}
 
 
 @op('provider.claim', 'provider:str operation:str generation:int')
 def claim(tx, ctx, provider, operation, generation):
     executor(tx, ctx, provider)
     a = tx.need('actions', operation)
+    from .retention import require_payload
+    require_payload(a)
+    if a['state'] in lifecycle.TERMINAL:
+        raise Fault('Superseded generation', 409)
     l = tx.need('leases', a['lease'])
-    g = tx.need('guards', l['guard'])
+    a['lease_policy'] = lifecycle.policy(tx, l)
+    g = tx.get('guards', l['guard'], {'holder':'','generation':0})
     if (a['provider'], l['state'], a['generation'], g['holder'], g['generation']) != (
             provider, 'bound', generation, a['lease'], generation):
         raise Fault('Stale resource generation', 409)
@@ -416,11 +450,21 @@ def claim(tx, ctx, provider, operation, generation):
             a.update(state='failed', result={'authorization_blocked': True, 'reason': str(error)})
             tx.put('actions', operation, a)
             observe(tx, operation, 'failed', a['result'])
+            lifecycle.settled(tx, a)
             finish_submission(tx, ctx, operation)
+            if a.get('release_after_result', reservation_policy(tx, l).get('release_after_result')):
+                release(tx, l)
+                promote(tx, ctx)
             return a
         if not admitted(tx, tx.need('offers', l['offer'])):
             raise Fault('Dispatch paused by availability or mission', 409)
-        a['state'] = 'claimed'
+        now = time.time()
+        cfg = lifecycle.policy(tx, l)
+        a.update(state='claimed', claimed_at=now, last_progress_at=now, watch_until=now + cfg['watch_ttl_seconds'])
+        from .resource_recovery import protected
+        l.update(watch_until=a['watch_until'], last_progress_at=now, missed_heartbeats=0,
+                 execution_custody=protected(tx,l))
+        tx.put('leases', l['id'], l)
         tx.put('actions', operation, a)
         observe(tx, operation, 'claimed')
     return dict(a, output_schema=tx.need('contracts', a['contract'])['outputs'])
@@ -434,31 +478,79 @@ def result(tx, ctx, provider, operation, generation, state, result):
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
         raise Fault('Unknown outcome')
+    if a['state'] == 'abandoned':
+        # A signed completion is still evidence after its lease was superseded.
+        # Preserve abandonment and never rebind a guard, release a newer lease,
+        # or emit the success event used by ordinary workflow continuations.
+        if a['contract'] not in ('host.terminal.run:1', 'docker.cli:1') or state not in ('succeeded', 'failed'):
+            raise Fault('Superseded generation', 409)
+        if a.get('execution_state'):
+            if a['execution_state'] == state and (
+                    a.get('result') == result or
+                    (a.get('result_expired') and a.get('result_digest') == digest(result))):
+                return a
+            raise Fault('Conflicting late execution outcome', 409)
+        if state == 'succeeded':
+            validate(tx.need('contracts', a['contract'])['outputs'], result)
+        a.update(execution_state=state, reconciled_at=time.time(),
+                 abandonment_result=a.get('result', {}))
+        if a.get('result_expired'):
+            # Preserve the established output-expiry boundary: retain the new
+            # receipt digest without restoring discarded bulk result payloads.
+            a['result_digest'] = digest(result)
+        else:
+            a['result'] = result
+        tx.put('actions', operation, a)
+        tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
+                                       'state': 'abandoned'})
+        return a
+    if a.get('result_expired'):
+        if a['state'] == state and a.get('result_digest') == digest(result):
+            return a  # exact lost-ACK redelivery, no effects or payload restoration
+        raise Fault('Conflicting expired outcome', 409)
     if a['state'] in ('succeeded', 'failed'):
         if a['state'] == state and a['result'] == result:
             return a
         raise Fault('Conflicting outcome', 409)
+    lifecycle.current(tx, a)
     if a['state'] not in ('claimed', 'uncertain'):
         raise Fault('Operation has not been claimed', 409)
+    if state in ('succeeded', 'failed'):
+        from .resource_recovery import protected
+        held = tx.need('leases', a['lease'])
+        proof = a.get('execution_reconciliation', {})
+        if protected(tx, held) and not (
+                a.get('custody', {}).get('state') in ('finished', 'not_started') or
+                result.get('evidence', {}).get('quiescent') is True or
+                (proof.get('quiescent') is True and proof.get('result_digest') == digest(result))):
+            raise Fault('Executor settlement proof required before resource release', 409)
     if state == 'succeeded':
         validate(tx.need('contracts', a['contract'])['outputs'], result)
     a.update(state=state, result=result)
+    a.pop('recovery', None)
+    lease = tx.get('leases', a['lease'])
+    if lease and lease.pop('recovery_required', None):
+        tx.put('leases', lease['id'], lease)
     tx.put('actions', operation, a)
     from .authorization import observe
     observe(tx, operation, state, result)
     tx.emit('operation.' + state, {'id': operation})
+    lifecycle.settled(tx, a)
     finish_submission(tx, ctx, operation)
-    if state in ('succeeded', 'failed') and reservation_policy(tx, tx.need('leases', a['lease'])).get('release_after_result'):
+    if state in ('succeeded', 'failed') and a.get('release_after_result', reservation_policy(tx, tx.need('leases', a['lease'])).get('release_after_result')):
         if release(tx, tx.need('leases', a['lease'])):
             promote(tx, ctx)
     return a
 
 
-@op('cap.status', 'operation:str', False)
-def status(tx, ctx, operation):
+@op('cap.status', 'operation:str recovery?:bool', False)
+def status(tx, ctx, operation, recovery=False):
     """Read action state and the provider result, including after the lease is released."""
     a = tx.need('actions', operation)
+    from .retention import require_payload
     owner(ctx, a['provider'])
+    if not recovery:
+        require_payload(a)
     return a
 
 
@@ -472,21 +564,23 @@ def start_submission(tx, ctx, lease):
     if not operation or lease['state'] not in ('bound', 'fencing'):
         return
     submission = tx.need('_submissions', operation)
-    dispatch(tx, ctx, lease['id'], submission['inputs'], operation)
+    dispatch(tx, ctx, lease['id'], submission['inputs'], operation, submission.get('destination', ''))
     finish_submission(tx, ctx, operation)
 
 
 def finish_submission(tx, ctx, operation):
     submission = tx.get('_submissions', operation)
     action = tx.get('actions', operation)
-    if submission and action and action['state'] in ('succeeded', 'failed'):
-        release(tx, tx.need('leases', submission['lease']))
+    if submission and action and action['state'] in lifecycle.TERMINAL:
+        held = tx.get('leases', submission['lease'])
+        if held:
+            release(tx, held)
         if tx.get('_submission_active', operation):
             tx.drop('_submission_active', operation)
 
 
-@op('cap.submit', 'contract:str resource:str inputs:obj operation:str')
-def submit(tx, ctx, contract, resource, inputs, operation):
+@op('cap.submit', 'contract:str resource:str inputs:obj operation:str destination?:str')
+def submit(tx, ctx, contract, resource, inputs, operation, destination=''):
     """Durably acquire, fence, dispatch and release one command; safe across disconnects."""
     if ctx.permissions is not None:
         raise Fault('Submission requires task owner access', 403)
@@ -495,12 +589,20 @@ def submit(tx, ctx, contract, resource, inputs, operation):
     lease_id = digest([operation, contract, resource])
     record = dict(id=operation, lease=lease_id, contract=contract, resource=resource,
                   inputs=inputs, owner=ctx.actor)
+    if destination:
+        lifecycle.destination(tx, ctx, destination)
+        record['destination'] = destination
     prior = tx.get('_submissions', operation)
+    if prior:
+        from .retention import require_payload
+        require_payload(prior)
     if prior and prior != record:
         raise Fault('Submission identity conflict', 409)
     action = tx.get('actions', operation)
     if action:
-        if (action['lease'], action['contract'], action['inputs']) != (lease_id, contract, inputs):
+        from .retention import require_payload
+        require_payload(action)
+        if (action['lease'], action['contract'], action['inputs'], action.get('destination', '')) != (lease_id, contract, inputs, destination):
             raise Fault('Operation identity conflict', 409)
         # Adopt an existing Android operation without replaying it or re-leasing.
         tx.put('_submissions', operation, record)
@@ -520,9 +622,11 @@ def submission_status(tx, ctx, operation):
     submission = tx.need('_submissions', operation)
     if ctx.permissions is not None and submission['owner'] != ctx.actor:
         raise Fault('Other submission', 403)
+    from .retention import require_payload
+    require_payload(submission)
     action = tx.get('actions', operation)
     if action:
-        return action
+        return require_payload(action)
     lease = tx.need('leases', submission['lease'])
     return dict(id=operation, lease=lease['id'], state=lease['state'])
 
@@ -535,3 +639,7 @@ def settle_submissions(tx, ctx):
     if recover_reservations(tx, ctx):
         promote(tx, ctx)
 
+
+
+# Register explicit ownership and proof-backed execution reconciliation APIs.
+from . import resource_recovery

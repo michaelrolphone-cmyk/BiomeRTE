@@ -8,7 +8,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 const epoch = () => Math.floor(Date.now()/1000);
 export const hexHash = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), b => b.toString(16).padStart(2,'0')).join('');
 
-export async function limitedJSON(req, max) {
+export async function limitedText(req, max) {
  const reader = req.body?.getReader();
  if (!reader || Number(req.headers.get('content-length') || 0) > max) throw Error('Invalid request size');
  const chunks = []; let size = 0;
@@ -20,8 +20,10 @@ export async function limitedJSON(req, max) {
  }
  const data = new Uint8Array(size); let offset = 0;
  for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.length; }
- return JSON.parse(new TextDecoder().decode(data));
+ return new TextDecoder().decode(data);
 }
+
+export async function limitedJSON(req,max){return JSON.parse(await limitedText(req,max));}
 
 export async function device(req, env, path) {
  const token = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.get('Authorization')||'')?.[1];

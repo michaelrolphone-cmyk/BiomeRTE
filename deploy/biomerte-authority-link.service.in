@@ -1,0 +1,16 @@
+[Unit]
+Description=BiomeRTE read-only stream authority inspection link
+After=network-online.target biomerte.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@RELEASE@
+Environment=PYTHONPATH=@VENDOR@
+ExecStart=@PYTHON@ -S @RELEASE@/deploy/authority_link.py --home @CONTROLLER_HOME@
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

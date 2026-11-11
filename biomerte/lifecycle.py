@@ -1,0 +1,319 @@
+"""Bounded discrete capability lifetimes. No stream messages enter this store."""
+import math
+import time
+from .api import op, ident
+from .store import Fault, digest
+
+TERMINAL = ('succeeded', 'failed', 'abandoned')
+RETENTION = 900
+
+
+def configuration(value, builtin=False):
+    value = dict(value or {})
+    if 'execution_custody' in value and type(value['execution_custody']) is not bool:
+        raise Fault('Execution custody must be boolean')
+    cls = value.setdefault('lease_class', 'persistent' if builtin else 'command')
+    if cls not in ('persistent', 'command', 'long_command'):
+        raise Fault('Invalid lease class')
+    for name, default, maximum in (
+            ('fence_ttl_seconds', 120, 900), ('watch_ttl_seconds', 120, 900),
+            ('heartbeat_interval_seconds', 60, 300), ('missed_heartbeats_limit', 3, 10)):
+        n = value.setdefault(name, default)
+        if isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) or not 0 < n <= maximum:
+            raise Fault('Invalid ' + name)
+    if type(value['missed_heartbeats_limit']) is not int:
+        raise Fault('Missed heartbeats limit must be integer')
+    policy = dict(value.get('reservation_policy', {}))
+    policy.setdefault('release_after_result', cls != 'persistent')
+    value['reservation_policy'] = policy
+    return value
+
+
+def policy(tx, lease):
+    value = lease.get('lease_policy')
+    if value is None:
+        value = dict(tx.get('offers', lease.get('offer', ''), {}).get('configuration') or {})
+        # Old leases already record their class. A later offer edit cannot
+        # retroactively turn a persistent resource into a watched command.
+        previous = lease.get('lease_class')
+        if previous and previous != value.get('lease_class', 'command'):
+            value['reservation_policy'] = dict(value.get('reservation_policy', {}),
+                                                release_after_result=previous != 'persistent')
+        if previous:
+            value['lease_class'] = previous
+    cfg = configuration(value, lease.get('provider') in ('builtin', 'routine'))
+    return {name: cfg[name] for name in ('lease_class', 'fence_ttl_seconds',
+        'watch_ttl_seconds', 'heartbeat_interval_seconds', 'missed_heartbeats_limit',
+        'reservation_policy')}
+
+
+def current(tx, action):
+    lease = tx.need('leases', action['lease'])
+    guard = tx.get('guards', lease['guard'], {'holder':'','generation':0})
+    if (action['state'] == 'abandoned' or
+            (guard['holder'], guard['generation']) != (lease['id'], action['generation'])):
+        raise Fault('Superseded generation', 409)
+    return lease
+
+
+def destination(tx, ctx, id):
+    row = tx.need('destinations', id)
+    if row['state'] != 'active' or row['expires_at'] <= time.time():
+        raise Fault('Destination expired', 403)
+    if ctx.permissions is not None and row['owner'] != ctx.actor:
+        raise Fault('Other destination', 403)
+    return row
+
+
+@op('destination.register', 'id:str kind:str inbox:str ttl_seconds:int retention_seconds?:int')
+def register(tx, ctx, id, kind, inbox, ttl_seconds, retention_seconds=3600):
+    ident(id)
+    ident(inbox)
+    if not 0 < ttl_seconds <= 86400 or not 0 < retention_seconds <= 21600:
+        raise Fault('Invalid destination lifetime')
+    if ctx.permissions is not None:
+        peer = tx.need('peers', ctx.actor)
+        if not peer['enabled'] or 'destination.register' not in peer['scopes']:
+            raise Fault('Enrolled controller required', 403)
+    old = tx.get('destinations', id)
+    if old and old['owner'] != ctx.actor:
+        raise Fault('Destination belongs to another identity', 403)
+    return tx.put('destinations', id, dict(id=id, kind=ident(kind), inbox=inbox,
+        owner=ctx.actor, ttl_seconds=ttl_seconds, retention_seconds=retention_seconds,
+        expires_at=time.time() + ttl_seconds, state='active'))
+
+
+@op('destination.revoke', 'id:str')
+def revoke(tx, ctx, id):
+    row = destination(tx, ctx, id)
+    row.update(state='revoked', expires_at=time.time())
+    tx.put('destinations', id, row)
+    for entry in tx.matching('result_inbox', lease=id):
+        if entry['destination'] == id:
+            tx.drop('result_inbox', entry['id'])
+    return row
+
+
+@op('destination.list', write=False)
+def registrations(tx, ctx):
+    return [r for r in tx.rows('destinations') if
+            (ctx.permissions is None or r['owner'] == ctx.actor) and
+            r['state'] == 'active' and r['expires_at'] > time.time()]
+
+
+@op('inbox.list', 'destination:str', False)
+def inbox(tx, ctx, destination):
+    globals()['destination'](tx, ctx, destination)
+    return [r for r in tx.rows('result_inbox') if
+            r['destination'] == destination and r['expires_at'] > time.time()]
+
+
+@op('inbox.ack', 'destination:str operation:str')
+def ack(tx, ctx, destination, operation):
+    globals()['destination'](tx, ctx, destination)
+    tx.drop('result_inbox', digest([destination, operation]))
+    return {'acknowledged': operation}
+
+
+def deliver(tx, action):
+    if not action.get('destination') or action['state'] not in TERMINAL:
+        return
+    row = tx.get('destinations', action['destination'])
+    now = time.time()
+    if not row or row['state'] != 'active' or row['expires_at'] <= now:
+        action['destination_delivered'] = 'skipped_expired'
+        tx.put('actions', action['id'], action)
+        return
+    key = digest([row['id'], action['id']])
+    # ACK deletes the inbox entry, not this marker, so recovery cannot redeliver it.
+    if action.get('destination_delivered'):
+        return
+    tx.put('result_inbox', key, dict(id=key, destination=row['id'], operation=action['id'],
+        state=action['state'], result=action.get('result', {}), delivered_at=now,
+        expires_at=min(now + row['retention_seconds'], row['expires_at'])))
+    action['destination_delivered'] = True
+    tx.put('actions', action['id'], action)
+
+
+def settled(tx, action, now=None):
+    if action['state'] not in TERMINAL:
+        return
+    if not action.get('expires_at'):
+        action['expires_at'] = (time.time() if now is None else now) + RETENTION
+        tx.put('actions', action['id'], action)
+    deliver(tx, action)
+
+
+def abandon(tx, ctx, lease, reason, now):
+    if lease['state'] == 'released':
+        return False
+    from .resource_recovery import protected, hold
+    if protected(tx, lease):
+        held = hold(tx, lease, reason, now)
+        if held is not None:
+            return held
+    guard = tx.need('guards', lease['guard'])
+    if (guard['holder'], guard['generation']) != (lease['id'], lease['generation']):
+        return False
+    guard.update(generation=guard['generation'] + 1, holder='', released_at=now)
+    tx.put('guards', lease['guard'], guard)
+    # A compact watermark prevents a swept guard resetting physical fence numbers.
+    tx.put('_fence_generations', lease['resource'], max(guard['generation'], tx.get('_fence_generations', lease['resource'], 0)))
+    for action in tx.matching('actions', ('queued','claimed','uncertain'), lease=lease['id']):
+        if action['lease'] != lease['id'] or action['generation'] != lease['generation'] or action['state'] in TERMINAL:
+            continue
+        action.update(state='abandoned', abandoned_generation=lease['generation'],
+                      result={'reason': reason, 'effects': 'unknown_reconcile_before_replay'})
+        tx.put('actions', action['id'], action)
+        from .authorization import observe
+        observe(tx, action['id'], 'abandoned', action['result'])
+        tx.emit('operation.abandoned', {'id': action['id'], 'reason': reason})
+        settled(tx, action, now)
+    lease.update(state='released', released_at=now, expires_at=now + 300)
+    tx.put('leases', lease['id'], lease)
+    operation = tx.get('_submission_leases', lease['id'])
+    if operation:
+        tx.drop('_submission_active', operation)
+    tx.emit('lease.abandoned', {'lease': lease['id'], 'generation': lease['generation'], 'reason': reason})
+    return True
+
+
+@op('cap.heartbeat', 'provider:str operation:str generation:int')
+def heartbeat(tx, ctx, provider, operation, generation):
+    from .providers import executor
+    executor(tx, ctx, provider)
+    action = tx.need('actions', operation)
+    if (action['provider'], action['generation']) != (provider, generation):
+        raise Fault('Progress binding mismatch', 409)
+    lease = current(tx, action)
+    if action['state'] not in ('claimed', 'uncertain'):
+        raise Fault('Progress requires claimed work', 409)
+    now = time.time()
+    cfg = policy(tx, lease)
+    action['last_progress_at'] = now
+    if cfg['lease_class'] == 'command':
+        action['watch_until'] = now + cfg['watch_ttl_seconds']
+        lease['watch_until'] = action['watch_until']
+    lease.update(last_progress_at=now, missed_heartbeats=0)
+    tx.put('actions', operation, action)
+    tx.put('leases', lease['id'], lease)
+    return {'operation': operation, 'last_progress_at': now}
+
+
+def recover(tx, ctx, lease, actions, now):
+    cfg = policy(tx, lease)
+    if tx.get('offers', lease.get('offer', ''), {}).get('state') == 'offline':
+        return abandon(tx, ctx, lease, 'provider_offline', now)
+    changed = False
+    if 'lease_policy' not in lease:
+        lease['lease_policy'] = cfg
+        changed = True
+    if 'lease_class' not in lease:
+        lease.update(lease_class=cfg['lease_class'], fencing_since=now,
+                     last_progress_at=now, missed_heartbeats=0)
+        changed = True
+    if lease['state'] == 'fencing':
+        # Only cap.fenced establishes custody. An unrelated heartbeat cannot
+        # indefinitely extend an unacknowledged fence.
+        if now >= lease.get('fencing_since', now) + cfg['fence_ttl_seconds']:
+            return abandon(tx, ctx, lease, 'fence_timeout', now)
+    elif cfg['lease_class'] != 'persistent':
+        for action in actions:
+            if action['state'] not in ('claimed', 'uncertain'):
+                continue
+            if 'last_progress_at' not in action:
+                action.update(last_progress_at=now, watch_until=now + cfg['watch_ttl_seconds'])
+                tx.put('actions', action['id'], action)
+            if cfg['lease_class'] == 'command':
+                if now >= action['watch_until']:
+                    return abandon(tx, ctx, lease, 'command_watch_timeout', now)
+            else:
+                missed = int(max(0, now - action['last_progress_at']) // cfg['heartbeat_interval_seconds'])
+                if missed >= cfg['missed_heartbeats_limit']:
+                    return abandon(tx, ctx, lease, 'missed_heartbeats', now)
+                if lease.get('missed_heartbeats') != missed:
+                    lease['missed_heartbeats'] = missed
+                    changed = True
+    if changed:
+        tx.put('leases', lease['id'], lease)
+    return False
+
+
+def drop_expired(tx, kind, key):
+    tx.drop(kind, key)
+    marker_key = kind + ':' + key
+    marker = tx.get('_retention', marker_key)
+    if marker and (marker.get('id'), marker.get('kind'), marker.get('key')) == (marker_key, kind, key):
+        tx.drop('_retention', marker_key)
+
+
+def sweep(tx, ctx, now):
+    # Index-only expiry selection; historical result bodies never enter the
+    # ordinary recovery path. Deletion batches catch up after missed ticks.
+    for action in tx.matching('actions', TERMINAL, delivery=True)[:64]:
+        settled(tx, action, now)
+    referenced = {t.get('action') for run in tx.matching('runs', ('running',))
+                  for t in run.get('tokens', [])}
+    protected_leases = {a['lease'] for key in referenced if key
+                        for a in [tx.get('actions', key)] if a}
+    for key in tx.expired_keys('destinations', now):
+        for entry in tx.matching('result_inbox', lease=key):
+            tx.drop('result_inbox', entry['id'])
+        tx.drop('destinations', key)
+    for kind in ('result_inbox', 'messages', '_stream_grants', 'artifacts', '_receipt'):
+        for key in tx.expired_keys(kind, now):
+            drop_expired(tx, kind, key)
+    for key in tx.expired_keys('actions', now, 64):
+        if key not in referenced:
+            drop_expired(tx, 'actions', key)
+            for kind in ('_submissions', '_submission_active'):
+                drop_expired(tx, kind, key)
+    for key in tx.expired_keys('leases', now):
+        if key not in protected_leases:
+            for kind in ('leases', '_reservation_activity', '_submission_leases'):
+                drop_expired(tx, kind, key)
+    for key in tx.expired_keys('guards', now):
+        guard = tx.need('guards', key)
+        if not guard['holder']:
+            resource = guard.get('resource', key.split(':')[1] if key.startswith('!slot:') else key)
+            if not resource.startswith('!shared:'):
+                tx.put('_fence_generations', resource, max(guard['generation'], tx.get('_fence_generations', resource, 0)))
+            tx.drop('guards', key)
+    for key in tx.expired_keys('events', now):
+        drop_expired(tx, 'events', key)
+
+
+@op('cap.command.state', 'provider:str operation:str generation:int', False)
+def command_state(tx, ctx, provider, operation, generation):
+    from .providers import executor
+    executor(tx, ctx, provider)
+    action = tx.need('actions', operation)
+    if (action['provider'], action['generation']) != (provider, generation):
+        raise Fault('Command identity mismatch', 409)
+    return {'state': action['state'], 'kill_requested': action.get('kill_requested', False)}
+
+
+@op('output.tail', 'operation:str lines?:int', False)
+def output_tail(tx, ctx, operation, lines=40):
+    from .providers import owner
+    action = tx.need('actions', operation)
+    owner(ctx, action['provider'])
+    if not 1 <= lines <= 1000:
+        raise Fault('Invalid line count')
+    output = action.get('checkpoint', {}).get('output', {})
+    return {'operation': operation, 'state': action['state'],
+            'output': {key: '\n'.join(value.splitlines()[-lines:]) for key, value in output.items()},
+            'last_progress_at': action.get('last_progress_at')}
+
+
+@op('cap.kill', 'operation:str')
+def kill(tx, ctx, operation):
+    if ctx.permissions is not None:
+        raise Fault('Task owner access required', 403)
+    action = tx.need('actions', operation)
+    if action['state'] not in TERMINAL:
+        action['kill_requested'] = True
+        tx.put('actions', operation, action)
+        if action['state'] == 'queued':
+            abandon(tx, ctx, tx.need('leases', action['lease']), 'explicit_kill', time.time())
+    return {'operation': operation, 'state': action['state'], 'kill_requested': True}

@@ -2,8 +2,10 @@
 import base64
 import hashlib
 import json
+import uuid
 import os
 import socket
+import time
 import sys
 
 CONTRACT = 'host.terminal.run:1'
@@ -31,7 +33,9 @@ def terminal_pool(resource, profile, adapter_argv, slots=DEFAULT_SLOTS):
     if type(slots) is not int or slots < 1:
         raise ValueError('Terminal slots must be a positive integer')
     offer = {'contract': CONTRACT, 'resource': resource, 'service': 'terminal',
-             'capacity': slots, 'argv': adapter_argv, 'usage': terminal_usage(profile)}
+             'capacity': slots, 'argv': adapter_argv, 'usage': terminal_usage(profile),
+             'configuration': {'lease_class': 'long_command', 'heartbeat_interval_seconds': 60,
+                               'missed_heartbeats_limit': 3, 'reservation_policy': {'release_after_result': True}}}
     return {'offers': [offer], 'parallelism': slots}
 
 
@@ -54,7 +58,7 @@ def check_argv(argv, profile):
     return [exe] + argv[1:]
 
 
-def store_stream(path, remote, chunk_bytes=256 * 1024):
+def store_stream(path, remote, chunk_bytes=256 * 1024, retry=False):
     """Keep small replies readable and make every original byte retrievable."""
     whole = hashlib.sha256()
     chunks = []
@@ -70,8 +74,20 @@ def store_stream(path, remote, chunk_bytes=256 * 1024):
             if not chunks:
                 preview = block[:4096]
             sha = hashlib.sha256(block).hexdigest()
-            receipt = remote.call('artifact.put', {'data': base64.b64encode(block).decode('ascii')},
-                                  'terminal-chunk-' + sha)
+            arguments = {'data': base64.b64encode(block).decode('ascii'), 'transient': True}
+            request_id = 'terminal-transient-chunk-' + str(uuid.uuid4())
+            while True:
+                try:
+                    receipt = remote.call('artifact.put', arguments, request_id)
+                    break
+                except Exception:
+                    if not retry:
+                        raise
+                    # The command has already settled. Keep its custodian alive
+                    # and retry this exact immutable upload, never the argv.
+                    # The supervising runner continues custody heartbeats while
+                    # transport/remote storage is unavailable.
+                    time.sleep(5)
             if receipt != {'sha256': sha, 'size': len(block)}:
                 raise IOError('Artifact receipt mismatch')
             chunks.append(receipt)
@@ -117,7 +133,7 @@ def execute(cfg, home, request):
         recorded = json.loads(existing[0])
         if recorded['argv'] != argv or recorded['workspace'] != work:
             raise RuntimeError('Terminal operation identity conflict')
-        supervise(path, op)
+        supervise(path, op, request.get('progress_path'))
         row = journal.db.execute('SELECT body,state,result FROM jobs WHERE id=?', (op,)).fetchone()
         if row[1] != 'finished':
             raise RuntimeError('Unresolved terminal operation; inspect the supervisor journal')
@@ -130,7 +146,7 @@ def execute(cfg, home, request):
     remote = Remote(cfg['url'], cfg['site'], node['node'], os.path.join(home, 'node.key'))
     out = {'exit_code': result['exit_code'], 'streams': {}}
     for name in ('stdout', 'stderr'):
-        out[name], out['streams'][name] = store_stream(result[name], remote)
+        out[name], out['streams'][name] = store_stream(result[name], remote, retry=True)
     out['evidence'] = {k: result[k] for k in ('exit_code', 'duration_seconds', 'reason',
                                               'process_identity', 'quiescent')}
     out['evidence'].update(executed=True, host=socket.gethostname(), executor_identity=inventory())

@@ -69,7 +69,8 @@ def expose(tx, ctx, name, capability, version):
 @op('agent.progress', 'provider:str operation:str generation:int checkpoint:obj')
 def progress(tx, ctx, provider, operation, generation, checkpoint):
     """Persist the executor's intermediate context without completing its assignment."""
-    providers.owner(ctx, provider)
+    from .lifecycle import heartbeat
+    heartbeat(tx, ctx, provider, operation, generation)
     a = tx.need('actions', operation)
     if a['state'] != 'claimed' or (a['provider'], a['generation']) != (provider, generation):
         raise Fault('Assignment is not held by caller', 409)
