@@ -1,0 +1,743 @@
+{
+  "schema": 1,
+  "model_status": "evidence_ledger_not_fitted_controller",
+  "coordinate_semantics": "signed rotation about stationary measured up; body left/right unqualified",
+  "groups": [
+    {
+      "direction": "forward",
+      "steer": "right",
+      "cases": [
+        {
+          "reference": "resume-trial-11.json",
+          "duration_requested_s": 1.5,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "c2e8382e39dd0468",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 13,
+            "duplicate_samples": 2,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps",
+              "rejected_samples"
+            ],
+            "observed_span_s": 4.278999999999996,
+            "integrated_duration_s": 3.0989999999999327,
+            "unobserved_gaps": [
+              {
+                "from_s": 1607.331,
+                "to_s": 1608.511,
+                "duration_s": 1.1800000000000637
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.05024193797754329,
+              -0.980629438630235,
+              -0.18931891548392824
+            ],
+            "observed_yaw_delta_deg": -24.60935127874525,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": true,
+            "rotation_sign": -1,
+            "peak_corrected_yaw_rate_rad_s": 0.6112198462675187,
+            "peak_accel_change_rate_m_s3": 16.84536269851529,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial",
+              "direction": "forward",
+              "steer": "right",
+              "duration": 1.5,
+              "lead": 0.25
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": true,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.2511460781097412,
+            0.4040982723236084,
+            0.34521055221557617,
+            0.22705912590026855,
+            0.4954836368560791,
+            0.5876789093017578,
+            0.452984094619751
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        },
+        {
+          "reference": "resume-trial-28.json",
+          "duration_requested_s": 0.6,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 14,
+            "duplicate_samples": 1,
+            "rejected_samples": {},
+            "quality_reasons": [
+              "stationary_baseline_unverified"
+            ],
+            "observed_span_s": 3.339999999999918,
+            "integrated_duration_s": 3.339999999999918,
+            "unobserved_gaps": [],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.039726180588044724,
+              -0.9843943825714466,
+              -0.17143374853763915
+            ],
+            "observed_yaw_delta_deg": -10.442453826019216,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": true,
+            "rotation_sign": -1,
+            "peak_corrected_yaw_rate_rad_s": 0.44844623929410216,
+            "peak_accel_change_rate_m_s3": 23.320116852189074,
+            "jolt_candidates": [
+              {
+                "time_s": 690.198,
+                "magnitude_departure_m_s2": 2.4557158330693163
+              },
+              {
+                "time_s": 690.918,
+                "magnitude_departure_m_s2": 2.598033607847734
+              }
+            ],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "forward",
+              "steer": "right",
+              "duration": 0.6,
+              "lead": 0.3
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.5000138282775879,
+            0.4894404411315918,
+            0.7287218570709229
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        }
+      ]
+    },
+    {
+      "direction": "forward",
+      "steer": "left",
+      "cases": [
+        {
+          "reference": "resume-trial-12.json",
+          "duration_requested_s": 1.1,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "c2e8382e39dd0468",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 5,
+            "duplicate_samples": 1,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "rejected_samples"
+            ],
+            "observed_span_s": 0.95900000000006,
+            "integrated_duration_s": 0.95900000000006,
+            "unobserved_gaps": [],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.04278221420708201,
+              -0.9846006495306832,
+              -0.1695029294475363
+            ],
+            "observed_yaw_delta_deg": 0.24652368537167788,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.0260706074018286,
+            "peak_accel_change_rate_m_s3": 5.291568826490414,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial",
+              "direction": "forward",
+              "steer": "left",
+              "duration": 1.1,
+              "lead": 0.25
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": true,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.2716801166534424,
+            0.5392053127288818,
+            0.6768484115600586
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        },
+        {
+          "reference": "resume-trial-13.json",
+          "duration_requested_s": 1.5,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "c2e8382e39dd0468",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 16,
+            "duplicate_samples": 2,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps",
+              "rejected_samples"
+            ],
+            "observed_span_s": 4.7409999999999854,
+            "integrated_duration_s": 3.8609999999998763,
+            "unobserved_gaps": [
+              {
+                "from_s": 1802.551,
+                "to_s": 1803.431,
+                "duration_s": 0.8800000000001091
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.03520004959130333,
+              -0.9815437459523085,
+              -0.1879702936388619
+            ],
+            "observed_yaw_delta_deg": -2.3341688658083313,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.11939428740075349,
+            "peak_accel_change_rate_m_s3": 11.199823907339052,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial",
+              "direction": "forward",
+              "steer": "left",
+              "duration": 1.5,
+              "lead": 0.25
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": true,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.71042799949646,
+            0.2751607894897461,
+            0.6462883949279785,
+            0.28877997398376465
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        },
+        {
+          "reference": "resume-trial-24.json",
+          "duration_requested_s": 0.9,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 14,
+            "duplicate_samples": 4,
+            "rejected_samples": {},
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps"
+            ],
+            "observed_span_s": 3.919999999999959,
+            "integrated_duration_s": 2.8389999999999986,
+            "unobserved_gaps": [
+              {
+                "from_s": 342.338,
+                "to_s": 342.858,
+                "duration_s": 0.5199999999999818
+              },
+              {
+                "from_s": 342.858,
+                "to_s": 343.419,
+                "duration_s": 0.5609999999999786
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.030682840479177832,
+              -0.9830700810480951,
+              -0.18064268335092115
+            ],
+            "observed_yaw_delta_deg": -2.490906358519083,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.11907167119849787,
+            "peak_accel_change_rate_m_s3": 18.705750000112314,
+            "jolt_candidates": [
+              {
+                "time_s": 344.098,
+                "magnitude_departure_m_s2": 3.2236547816911347
+              }
+            ],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "forward",
+              "steer": "left",
+              "duration": 0.9,
+              "lead": 0.3
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.44685912132263184,
+            0.30846285820007324,
+            0.38398003578186035,
+            0.2836723327636719,
+            0.49553966522216797
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        }
+      ]
+    },
+    {
+      "direction": "reverse",
+      "steer": null,
+      "cases": [
+        {
+          "reference": "resume-trial-17.json",
+          "duration_requested_s": 1.0,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "c2e8382e39dd0468",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 13,
+            "duplicate_samples": 3,
+            "rejected_samples": {},
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps"
+            ],
+            "observed_span_s": 3.9400000000000546,
+            "integrated_duration_s": 3.2200000000000273,
+            "unobserved_gaps": [
+              {
+                "from_s": 1913.132,
+                "to_s": 1913.852,
+                "duration_s": 0.7200000000000273
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.04321543589209125,
+              -0.9841934211754146,
+              -0.17174322640409911
+            ],
+            "observed_yaw_delta_deg": 5.275148961389169,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": true,
+            "rotation_sign": 1,
+            "peak_corrected_yaw_rate_rad_s": 0.2521310651682266,
+            "peak_accel_change_rate_m_s3": 10.31264562186708,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial",
+              "direction": "reverse",
+              "duration": 1.0,
+              "lead": 0
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": true,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.43216466903686523,
+            0.3064768314361572,
+            0.5876486301422119,
+            0.7385380268096924
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        }
+      ]
+    },
+    {
+      "direction": "reverse",
+      "steer": "right",
+      "cases": [
+        {
+          "reference": "resume-trial-22.json",
+          "duration_requested_s": 0.8,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 14,
+            "duplicate_samples": 2,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "rejected_samples"
+            ],
+            "observed_span_s": 3.740000000000009,
+            "integrated_duration_s": 3.740000000000009,
+            "unobserved_gaps": [],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.03334350151833437,
+              -0.981251616110983,
+              -0.18982485818796438
+            ],
+            "observed_yaw_delta_deg": 0.562469334983906,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.027179372511503912,
+            "peak_accel_change_rate_m_s3": 18.523028185674768,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "reverse",
+              "steer": "right",
+              "duration": 0.8,
+              "lead": 0.25
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.7584710121154785
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        },
+        {
+          "reference": "resume-trial-26.json",
+          "duration_requested_s": 1.1,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 10,
+            "duplicate_samples": 2,
+            "rejected_samples": {},
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps"
+            ],
+            "observed_span_s": 3.240000000000009,
+            "integrated_duration_s": 2.6999999999999886,
+            "unobserved_gaps": [
+              {
+                "from_s": 483.678,
+                "to_s": 484.218,
+                "duration_s": 0.5400000000000205
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.02791173481072195,
+              -0.9820870764674383,
+              -0.18634889131812907
+            ],
+            "observed_yaw_delta_deg": 8.085749065829015,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": true,
+            "rotation_sign": 1,
+            "peak_corrected_yaw_rate_rad_s": 0.29048047924142983,
+            "peak_accel_change_rate_m_s3": 8.112689391728347,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "reverse",
+              "steer": "right",
+              "duration": 1.1,
+              "lead": 0.3
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.5199494361877441,
+            0.43424224853515625
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        },
+        {
+          "reference": "resume-trial-27.json",
+          "duration_requested_s": 1.1,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 13,
+            "duplicate_samples": 2,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps",
+              "rejected_samples"
+            ],
+            "observed_span_s": 4.100999999999999,
+            "integrated_duration_s": 3.0009999999999764,
+            "unobserved_gaps": [
+              {
+                "from_s": 592.358,
+                "to_s": 593.458,
+                "duration_s": 1.1000000000000227
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.03652818046974912,
+              -0.9843329964917675,
+              -0.1724941855515931
+            ],
+            "observed_yaw_delta_deg": 0.18707356028954564,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.0025440355689660696,
+            "peak_accel_change_rate_m_s3": 0.44159910057079993,
+            "jolt_candidates": [],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "reverse",
+              "steer": "right",
+              "duration": 1.1,
+              "lead": 0.3
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            0.45959019660949707,
+            0.3193511962890625,
+            0.25928235054016113,
+            0.38813328742980957,
+            0.27011752128601074,
+            0.3300173282623291,
+            0.2477433681488037,
+            0.267352819442749,
+            0.2632565498352051,
+            0.47173213958740234,
+            0.6521382331848145
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        }
+      ]
+    },
+    {
+      "direction": "reverse",
+      "steer": "left",
+      "cases": [
+        {
+          "reference": "resume-trial-25.json",
+          "duration_requested_s": 0.8,
+          "signals": {
+            "schema": 2,
+            "baseline_boot_id": "7907e187a930cb46",
+            "sensor_frame": "mpu9250_native_xyz",
+            "unique_samples": 12,
+            "duplicate_samples": 3,
+            "rejected_samples": {
+              "stale_or_unbounded_age": 1
+            },
+            "quality_reasons": [
+              "stationary_baseline_unverified",
+              "unobserved_time_gaps",
+              "rejected_samples"
+            ],
+            "observed_span_s": 4.020000000000039,
+            "integrated_duration_s": 3.0400000000000205,
+            "unobserved_gaps": [
+              {
+                "from_s": 423.258,
+                "to_s": 424.238,
+                "duration_s": 0.9800000000000182
+              }
+            ],
+            "quality": "partial_or_provisional",
+            "relative_up_imu": [
+              0.0392609744623714,
+              -0.9868271425256313,
+              -0.15694192129244047
+            ],
+            "observed_yaw_delta_deg": -2.9482274458538145,
+            "window_yaw_delta_deg": null,
+            "rotation_candidate": false,
+            "rotation_sign": 0,
+            "peak_corrected_yaw_rate_rad_s": 0.20565731571861195,
+            "peak_accel_change_rate_m_s3": 9.782941786600333,
+            "jolt_candidates": [
+              {
+                "time_s": 425.198,
+                "magnitude_departure_m_s2": 2.066052494591055
+              }
+            ],
+            "contact_confirmed": false,
+            "clearance_verified": false,
+            "metric_distance_available": false,
+            "threshold_status": "provisional_not_hardware_qualified",
+            "command": {
+              "action": "trial_when_fresh",
+              "direction": "reverse",
+              "steer": "left",
+              "duration": 0.8,
+              "lead": 0.3
+            },
+            "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
+            "gyro_bias_applied_in_firmware": false,
+            "timing_qualified": false,
+            "body_mounting_alignment_applied": false,
+            "response_delay_s": null,
+            "response_delay_reason": "command_to_sensor_clock_alignment_unqualified"
+          },
+          "accepted_to_applied_ack_arrival_s": [
+            1.2450995445251465
+          ],
+          "physical_response_delay_s": null,
+          "commanded_input_is_observed_motion": false
+        }
+      ]
+    }
+  ],
+  "predictive_steering_model": null,
+  "limits": [
+    "No qualified command-to-sensor clock mapping",
+    "Insufficient repeated complete stationary-baselined cases",
+    "No metric travel or turn-radius qualification",
+    "Absence of impact candidate does not establish clearance"
+  ],
+  "evidence_sources": [
+    {
+      "file": "resume-trial-11.json",
+      "sha256": "9f62ed73ca1e536c9d0bfffece68f0666dc19b699560895eb1e6c5e3e7fb3fd5"
+    },
+    {
+      "file": "resume-trial-12.json",
+      "sha256": "824fb928b137b0f00832af6539484e86ab0bd7006d76f969ef5c16cbf87f6730"
+    },
+    {
+      "file": "resume-trial-13.json",
+      "sha256": "58fccd86fe7411771bc053b13e5324da25d481644d9512c1f2c01493e54fcaa3"
+    },
+    {
+      "file": "resume-trial-17.json",
+      "sha256": "1b1acfed9a990ca2e6b644305ba97552c4c8b45504251aaa984ced2256db72fa"
+    },
+    {
+      "file": "resume-trial-22.json",
+      "sha256": "f36e9583f987d627bb9533b9b518fc0feb878aa4f3d8b5a1a76720b1ad3a1022"
+    },
+    {
+      "file": "resume-trial-24.json",
+      "sha256": "286ec20960b4a29491cddd928f262857318de0a57822475c4519ddd6aa5218a5"
+    },
+    {
+      "file": "resume-trial-25.json",
+      "sha256": "b962e644167bc3a3ab0ea8a0c4cc36101cc044b4c0bc927320b1bfad1612f03d"
+    },
+    {
+      "file": "resume-trial-26.json",
+      "sha256": "72cb12f7370f249c927cd80400afaecd0c2129090a51b13121764eca972e86c0"
+    },
+    {
+      "file": "resume-trial-27.json",
+      "sha256": "b251139cacfd61712ec32d4933a486fa6f5785133bb9e2f2cb333720c0ef69d8"
+    },
+    {
+      "file": "resume-trial-28.json",
+      "sha256": "a81ab4f9f26e44aa306ef9e1c1fc600bdebf9e18a6d814c1061ca798d04cacaf"
+    }
+  ],
+  "observations_date": "2026-11-11",
+  "fixed_mount": "AHRS glued behind camera; no qualified body rotation transform",
+  "prior_knowledge": [
+    "Wheels change gradually during rolling; standing steering does not qualify body turning",
+    "Raw camera image is mirrored; GUI display correction does not alter sensor axes"
+  ]
+}
