@@ -173,10 +173,12 @@ class Rover:
                                     raise ValueError('Mismatched router peer status')
                                 if any(type(metadata.get(k)) is not bool for k in ('provider_connected','server_connected')):
                                     raise ValueError('Invalid router peer status')
-                                self.discard_intent()
                                 available=metadata.get('authority_available',True)
                                 if type(available) is not bool:raise ValueError('Invalid authority availability')
-                                self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                if not ready or not self.control_ready:
+                                    self.discard_intent()
+                                self.control_ready=ready
                             continue
                     if lane=='map':
                         metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
