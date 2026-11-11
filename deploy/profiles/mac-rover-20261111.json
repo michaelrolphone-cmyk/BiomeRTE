@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "21b40b7a5cb760b22528483f9d0f2141766558f5",
+  "source_commit": "9fe7f25a14d565c13fb84668ed728588910c790b",
   "reason": "Preserve the audited Mac production storage/assistant versions while upgrading only Rover control UTC and router behavior.",
   "overrides": [
     {
