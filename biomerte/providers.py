@@ -379,6 +379,9 @@ def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_re
                 release_after_result is not None and prev.get('release_after_result') != release_after_result):
             raise Fault('Operation identity conflict', 409)
         return prev
+    from .completion_receipts import find
+    if find(tx, key):
+        raise Fault('Operation result expired; inspect the retained completion receipt, do not replay', 410)
     if destination:
         lifecycle.destination(tx, ctx, destination)
     if tx.need('offers', l['offer']).get('configuration', {}).get('stream_only'):
@@ -473,7 +476,10 @@ def claim(tx, ctx, provider, operation, generation):
 @op('provider.result', 'provider:str operation:str generation:int state:str result:obj')
 def result(tx, ctx, provider, operation, generation, state, result):
     executor(tx, ctx, provider)
-    a = tx.need('actions', operation)
+    a = tx.get('actions', operation)
+    if not a:
+        from .completion_receipts import acknowledge
+        return acknowledge(tx, provider, operation, generation, state, result)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
@@ -501,6 +507,8 @@ def result(tx, ctx, provider, operation, generation, state, result):
         else:
             a['result'] = result
         tx.put('actions', operation, a)
+        from .completion_receipts import remember
+        remember(tx, a)
         tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
                                        'state': 'abandoned'})
         return a
@@ -546,7 +554,16 @@ def result(tx, ctx, provider, operation, generation, state, result):
 @op('cap.status', 'operation:str recovery?:bool', False)
 def status(tx, ctx, operation, recovery=False):
     """Read action state and the provider result, including after the lease is released."""
-    a = tx.need('actions', operation)
+    a = tx.get('actions', operation)
+    if not a and recovery:
+        from .completion_receipts import find
+        a = find(tx, operation)
+        if not a:
+            return dict(id=operation, state='missing_unknown', acknowledged=False,
+                        result_expired=True, replay_allowed=False,
+                        reason='No retained authoritative completion; reconcile original executor evidence')
+    if not a:
+        a = tx.need('actions', operation)
     from .retention import require_payload
     owner(ctx, a['provider'])
     if not recovery:
@@ -608,6 +625,9 @@ def submit(tx, ctx, contract, resource, inputs, operation, destination=''):
         tx.put('_submissions', operation, record)
         finish_submission(tx, ctx, operation)
         return action
+    from .completion_receipts import find
+    if find(tx, operation):
+        raise Fault('Operation result expired; inspect the retained completion receipt, do not replay', 410)
     tx.put('_submissions', operation, record)
     tx.put('_submission_leases', lease_id, operation)
     tx.put('_submission_active', operation, {'id': operation})
@@ -643,3 +663,4 @@ def settle_submissions(tx, ctx):
 
 # Register explicit ownership and proof-backed execution reconciliation APIs.
 from . import resource_recovery
+
