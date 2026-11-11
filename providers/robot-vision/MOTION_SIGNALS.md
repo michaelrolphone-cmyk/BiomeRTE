@@ -46,3 +46,13 @@ Camera boot changed between case11 (`c2e8382e39dd0468`, firmware bias applied) a
 ## Qualification still required
 
 Collect repeated independently stationary-baselined windows with stable sample delivery, synchronized command/sensor time bounds, known body-axis alignment, and observed chassis movement. Label real contacts and non-contact transients to qualify thresholds. Until then this is a reusable evidence processor and ledger, not an automatic collision detector or steering controller.
+
+## Steering-state hypothesis (unproven)
+
+A steering request is not a measurement of wheel angle. The user reports gradual wheel response while rolling, and the recorded robot configuration describes rear steering. A short maneuver's body-yaw sign may therefore reflect previous wheel state or a transition rather than the newly requested direction. Repeatedly switching steering from each transient observation could prevent the wheel state from settling.
+
+Preserve wheel angle, previous steering request, transition direction and accumulated rolling exposure as **latent state candidates**, not fitted values. Do not assume that neutral recenters the wheels or that stationary steering lead reaches a known wheel angle. A rear-steering wheel label also does not by itself establish body-yaw sign.
+
+A useful comparison, subject to independent clearance checks, holds one steering request through successive bounded rolling segments, inspects each stopped image/gyro window, then compares a stopped throttle reversal while keeping steering unchanged. Segment count or image displacement can be a labeled rolling-exposure proxy until metric travel is qualified. Compare repeatability and whether response settles with exposure; provider interruptions, blockages, capture-time uncertainty and contacts remain competing explanations. This is a proposed measurement sequence, not an autonomous maneuver or qualified control policy.
+
+The parent reported that last steering-left followed by forward-only (trial41) moved body right/grid out raw right, which is consistent with rear-left steering but does not prove it. Initial right-after-left behavior and reverse+right cases26/27 remain ambiguous. The evidence ledger stores this hypothesis with no fitted parameters or control changes.
