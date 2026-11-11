@@ -4,6 +4,7 @@ from importlib.machinery import SourceFileLoader
 import os
 import pathlib
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -75,6 +76,40 @@ class AuthorityLinkTests(unittest.TestCase):
             with patch.object(link.urllib.request,'urlopen',
                               return_value=Response(json.dumps(value).encode())):
                 self.assertEqual(link.inspect(self.config(),self.request())['status'],503)
+
+    def test_stop_interrupts_receive_without_entering_close_handshake(self):
+        entered=threading.Event()
+        released=threading.Event()
+        read_lock=threading.Lock()
+        class Raw:
+            def shutdown(self,how):released.set()
+        class Wire:
+            sock=Raw()
+            def recv(self):
+                with read_lock:
+                    entered.set()
+                    released.wait(3)
+                    return ''
+            def shutdown(self):self.sock=None
+            def close(self):
+                with read_lock:pass
+        service=link.Link(self.config())
+        service.socket=Wire()
+        receiver=threading.Thread(target=service.connected,args=(service.socket,))
+        closer=threading.Thread(target=service.close)
+        receiver.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            closer.start()
+            closer.join(1)
+            self.assertFalse(closer.is_alive(),'Stop blocked behind the receive lock')
+            receiver.join(1)
+            self.assertFalse(receiver.is_alive())
+            self.assertTrue(service.stop.is_set())
+        finally:
+            released.set()
+            receiver.join(2)
+            if closer.ident is not None:closer.join(2)
 
     def test_only_tls_outbound_url_and_private_existing_config_are_accepted(self):
         with tempfile.TemporaryDirectory() as directory:

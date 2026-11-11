@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import socket as network_socket
 import sys
 import threading
 import time
@@ -79,9 +80,17 @@ class Link:
 
     def close(self):
         self.stop.set()
-        socket = self.socket
-        if socket is not None:
-            socket.close()
+        connection = self.socket
+        if connection is not None:
+            # A signal may interrupt recv while its non-reentrant read lock is
+            # held. Never start the WebSocket close/receive handshake here.
+            raw = connection.sock
+            if raw is not None:
+                try:
+                    raw.shutdown(network_socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            connection.shutdown()
 
     def connected(self, socket):
         lock = threading.Lock()
