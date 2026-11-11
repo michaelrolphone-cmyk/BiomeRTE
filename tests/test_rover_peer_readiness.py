@@ -53,6 +53,19 @@ class PeerReadinessTests(unittest.IsolatedAsyncioTestCase):
                     value=json.loads(await asyncio.wait_for(peer.recv(),1))
                     self.assertEqual(value['outputs'],{'mask':0})
                     first=value['sequence']
+                    # Refreshing unchanged peer presence must not discard fresh input.
+                    discarded=[]
+                    original_discard=rover.discard_intent
+                    def observe_discard():
+                        discarded.append(True)
+                        original_discard()
+                    rover.discard_intent=observe_discard
+                    session=next(iter(router.sessions.values()))
+                    for unused in range(3):
+                        session.notify_control_status()
+                        await asyncio.sleep(.03)
+                    self.assertEqual(discarded,[], 'Unchanged ready status discarded input')
+                    rover.discard_intent=original_discard
                 await until(lambda:not rover.control_ready)
                 self.assertFalse(lane.done())
                 self.assertTrue(rover.intent.empty())
