@@ -231,12 +231,14 @@ class SpecAcceptanceGaps(unittest.TestCase):
         action = self.call('cap.invoke', lease=lease['id'], inputs={'argv':[]}, operation='custody')
         app = self.app
         no_heartbeat = threading.Event()
+        transport = threading.Lock()
         class Remote:
             node, site, realm = 'test', 'site', 'site'
             def call(inner, name, args, rid=None):
-                if name == 'cap.heartbeat' and no_heartbeat.is_set():
-                    raise ConnectionError('lost custody heartbeat')
-                return app.call(name, args, rid or uid())
+                with transport:
+                    if name in ('cap.heartbeat', 'provider.custody') and no_heartbeat.is_set():
+                        raise ConnectionError('lost custody heartbeat')
+                    return app.call(name, args, rid or uid())
         worker = Worker(str(root/'worker.sqlite'), Remote(), [{'contract':'host.terminal.run:1',
             'resource':'slot','argv':[sys.executable,str(adapter)]}])
         errors = []
@@ -252,10 +254,12 @@ class SpecAcceptanceGaps(unittest.TestCase):
             while not started.exists() and time.monotonic()<deadline:time.sleep(.02)
             self.assertTrue(started.exists(), repr(errors))
             waiting = self.call('cap.acquire', task='replacement', contract='host.terminal.run:1', resource='slot')
-            no_heartbeat.set()
-            time.sleep(.1)
-            self.now += 2
-            self.app.tick('site')
+            # Drain in-flight custody updates before advancing the virtual clock.
+            # Both custody observations and fallback heartbeats refresh liveness.
+            with transport:
+                no_heartbeat.set()
+                self.now += 2
+                self.app.tick('site')
             self.assertEqual('abandoned', self.call('cap.status', operation='custody')['state'])
             thread.join(5)
             self.assertFalse(thread.is_alive())
