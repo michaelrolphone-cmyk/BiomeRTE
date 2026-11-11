@@ -151,6 +151,13 @@ def _saved_entities(document, source_frames):
     return result
 
 
+def native_frame_feature_count(frame):
+    # pySLAM stores detected keypoints in kps; num_kps is a local variable,
+    # not a Frame attribute. A missing attribute silently disabled recovery.
+    keypoints=getattr(frame,'kps',None)
+    return 0 if keypoints is None else len(keypoints)
+
+
 class SlamBackend:
     def __init__(self, config, state_dir):
         self.config = copy.deepcopy(config)
@@ -250,7 +257,7 @@ class SlamBackend:
             with self._slam.map.update_lock:
                 frame = self._slam.tracking.f_cur
                 return {"state": self._state, "frame_index": self._next_frame_index,
-                        "features": int(getattr(frame, "num_kps", 0) or 0),
+                        "features": native_frame_feature_count(frame),
                         "keyframes": self._slam.map.num_keyframes(),
                         "points": self._slam.map.num_points()}
 
@@ -620,6 +627,8 @@ class SlamBackend:
         with self._lock:
             return {"backend": "pyslam", "pyslam_commit": PYSLAM_COMMIT, "runtime_loaded": self._slam is not None,
                     "status": self._state, "reason": self._reason, "map_id": self._map_id,
+                    "tracking_quality": {"features": native_frame_feature_count(getattr(getattr(self._slam,'tracking',None),'f_cur',None)),
+                                         "feature_count_basis": "native_frame.kps"},
                     "localization": copy.deepcopy(self._localization), "geometry": copy.deepcopy(self._geometry),
                     "calibration": copy.deepcopy(self.config.get("calibration")),
                     "mounting": copy.deepcopy(self.config.get("mounting")),
@@ -649,3 +658,4 @@ class SlamBackend:
             self._state = "closed"
             self._reason = None
             self._localization = self._empty_localization()
+

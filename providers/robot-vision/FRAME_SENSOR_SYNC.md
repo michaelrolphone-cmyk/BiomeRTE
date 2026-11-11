@@ -25,3 +25,8 @@ mid-exposure. Packet age and host-clock bounds are reported separately. The
 camera-to-IMU transform and inertial position/metric scale are not established
 by temporal association; the native estimator remains monocular. No map reset,
 pose fabrication, gyro calibration or motor action is part of enabling this.
+
+The unknown-area recovery gate also counts actual native frame keypoints
+(`len(frame.kps)`), rather than a nonexistent `num_kps` attribute. Native status
+reports this count so a textured scene cannot silently appear featureless to
+the recovery policy. The map/checkpoint retention policy is unchanged.
