@@ -88,7 +88,11 @@ class ControlClock:
         return self.bound(True)
 
     def status(self):
-        return dict(ready=self.ready, sample_age_seconds=None if self.sampled_at is None else
+        ready = self.ready
+        return dict(ready=ready, host_wall_utc=time.time(),
+                    utc_lower=self.lower() if ready else None,
+                    utc_upper=self.upper() if ready else None,
+                    sample_age_seconds=None if self.sampled_at is None else
                     self.monotonic()-self.sampled_at, uncertainty_ms=None if self.interval is None else
                     (self.interval[1]-self.interval[0])*500)
 

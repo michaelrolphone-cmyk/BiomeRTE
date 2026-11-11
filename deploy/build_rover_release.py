@@ -18,7 +18,8 @@ def assemble(repository, release_commit, target, profile='deploy/profiles/mac-ro
         if p.is_absolute() or '..' in p.parts:
             raise ValueError('Release source path must stay inside the repository')
         return subprocess.check_output(['git', '-C', str(repository), 'show', sha(commit)+':'+path])
-    manifest = json.loads(read(release_commit, profile))
+    profile_bytes = read(release_commit, profile)
+    manifest = json.loads(profile_bytes)
     if manifest.get('schema_version') != 1:
         raise ValueError('Unknown release profile')
     base = sha(manifest['source_commit'])
@@ -39,6 +40,9 @@ def assemble(repository, release_commit, target, profile='deploy/profiles/mac-ro
         raise RuntimeError('Committed release archive failed')
     for path, data in overrides:
         (target/path).write_bytes(data)
+    profile_path = target/profile
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_bytes(profile_bytes)
     hashes = {str(p.relative_to(target)):hashlib.sha256(p.read_bytes()).hexdigest()
               for p in target.rglob('*.py')}
     provenance = dict(release_commit=release_commit, profile=profile,
