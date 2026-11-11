@@ -79,6 +79,8 @@ def run_job(jobs, identifier, *, backend_factory=None, source_factory=RecordedVi
         while True:
             if cancelled():
                 with jobs.edit(identifier) as current: current['state'] = 'cancelled'
+                shutil.rmtree(folder / 'native', ignore_errors=True)
+                (folder / 'video.bin').unlink(missing_ok=True)
                 return
             try:
                 global_lock = (jobs.root / 'native-worker.lock').open('a+b')

@@ -48,6 +48,12 @@ class Tests(unittest.TestCase):
         with locked(self.jobs.folder(self.i)/'run.lock'):
             self.assertEqual(self.jobs.get(self.i)['state'],'reconstructing')
         self.assertEqual(self.jobs.get(self.i)['state'],'interrupted')
+    def test_queued_cancellation_removes_private_upload_without_shared_map(self):
+        self.upload();self.jobs.start(dict(id=self.i));self.jobs.cancel(self.i)
+        run_job(self.jobs,self.i)
+        self.assertEqual(self.jobs.get(self.i)['state'],'cancelled')
+        self.assertFalse((self.jobs.folder(self.i)/'video.bin').exists())
+        self.assertFalse((self.state/'observations').exists())
     def test_failed_reconstruction_never_creates_shared_map(self):
         self.upload();self.jobs.start(dict(id=self.i))
         class Backend:
