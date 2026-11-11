@@ -66,6 +66,9 @@ def contract_definitions():
                            "bounds": field("obj"), "kinds": field("list"),
                            "cursor": field("str"), "limit": field("int")},
          "A bounded map page; bounds uses min_x,min_y,max_x,max_y and optional min_z,max_z in map units."),
+        ("robot.world.read", {"cursor": field("str"), "limit": field("int")},
+         "Persistent world geometry; unaligned local submaps remain explicitly separate."),
+        ("robot.world.status", {}, "Persistent world identity, submap transforms and alignment evidence."),
         ("robot.map.changes", {"map_id": field("str"), "since_revision": field("int", True),
                               "to_revision": field("int"), "cursor": field("str"),
                               "limit": field("int")},
@@ -428,7 +431,7 @@ def load_config(state):
 
 
 def worker_offers(cfg):
-    base = [cfg["python"], str(Path(cfg["repo"]) / "providers/robot-vision/biome_provider.py"),
+    base = [cfg["python"], str(cfg.get("adapter_path") or (Path(cfg["repo"]) / "providers/robot-vision/biome_provider.py")),
             "execute", "--state", cfg["state"]]
     return [dict(offer(cfg, contract, "ready"), argv=base + ["--contract", contract])
             for contract in CONTRACTS]

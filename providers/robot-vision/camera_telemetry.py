@@ -296,6 +296,10 @@ class CameraHTTPClient:
         except (ValueError, UnicodeError):
             raise CameraHTTPError("camera_telemetry_invalid_response", http_status=200) from None
 
+    def get_ultrasonic(self):
+        """Read the four-channel firmware envelope; no sensor triggering occurs here."""
+        return self._request("/api/ultrasonic")
+
     def get_ahrs(self):
         """Read full AHRS JSON; the AHRS source validates each sensor separately."""
         return self._request("/api/ahrs")
@@ -385,6 +389,18 @@ class CameraTelemetrySource:
             self.poll_once()
             self._stop.wait(self.poll_interval_s)
 
+    def _read_snapshot(self):
+        return validate_telemetry_snapshot(self.client.get_telemetry())
+
+    def _observations(self, value, elapsed):
+        return [
+            {"radio": radio, "index": index,
+             "source_observation_id": observation_id(self.source_id, value["telemetry"], radio, row),
+             "effective_age_ms": row["age_ms"] + elapsed * 1000.0}
+            for radio in ("wifi", "ble")
+            for index, row in enumerate(value["telemetry"][radio])
+        ]
+
     def poll_once(self):
         """Perform one polling attempt; intended for the poller or diagnostics."""
         if not self.enabled or self._stop.is_set():
@@ -392,8 +408,7 @@ class CameraTelemetrySource:
         started = self._monotonic()
         attempted_at = self._utc_clock()
         try:
-            telemetry = self.client.get_telemetry()
-            validate_telemetry_snapshot(telemetry)
+            telemetry = self._read_snapshot()
             received = self._monotonic()
             if self._stop.is_set():
                 return False
@@ -459,13 +474,7 @@ class CameraTelemetrySource:
         value["elapsed_since_receive_s"] = elapsed
         value["fresh"] = elapsed <= self.freshness_threshold_s
         value["age_clock"] = "firmware_age_plus_host_monotonic_since_receive"
-        value["observations"] = [
-            {"radio": radio, "index": index,
-             "source_observation_id": observation_id(self.source_id, value["telemetry"], radio, row),
-             "effective_age_ms": row["age_ms"] + elapsed * 1000.0}
-            for radio in ("wifi", "ble")
-            for index, row in enumerate(value["telemetry"][radio])
-        ]
+        value["observations"] = self._observations(value, elapsed)
         return value
 
     def status(self):

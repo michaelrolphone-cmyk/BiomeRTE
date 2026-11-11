@@ -1,0 +1,22 @@
+{
+  "completed_at_unix_s": 1794385279.603085,
+  "historical_world": {
+    "aligned": 1,
+    "root_map_id": "ba695923-4db4-4109-8d95-a3a1d299aeb9",
+    "submaps": 6,
+    "unlocalized": 5,
+    "world_entities": 1382,
+    "world_id": "449b08aa-01bc-4ea6-8cfb-ebc9635ee9c4"
+  },
+  "native_recovery": {
+    "baseline_points": 46,
+    "checkpoint_restore_exact_point_ids": true,
+    "map_id_unchanged": true,
+    "new_tracking_loss_preserved_new_point": true,
+    "old_tracking_loss_reset_removed_new_point": true,
+    "with_new_point": 47
+  },
+  "production_database_read_only": true,
+  "production_map_id": "a3e47d45-4466-4551-b993-9c54c600f2a8",
+  "world_identity_restart": "passed"
+}

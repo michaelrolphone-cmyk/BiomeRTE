@@ -27,11 +27,13 @@ from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from radio_tracking import RadioTracking
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
+from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
     "robot.vision.geometry", "robot.vision.metadata", "robot.vision.status",
+    "robot.world.read", "robot.world.status",
     "robot.map.read", "robot.map.changes", "robot.map.checkpoint",
     "robot.map.create", "robot.map.open", "robot.vision.calibration",
     "robot.vision.project_ground",
@@ -67,6 +69,7 @@ class VisionService:
         self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
                                    source=radio_source, model=radio_model)
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
+        self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -118,6 +121,10 @@ class VisionService:
         self.session_id = None
         self._start_backend_and_session()
         self.metric = MetricCalibration(self.store)
+        from world_atlas import WorldAtlas
+        self.atlas = WorldAtlas(self.state_dir / "world.sqlite3", self.store)
+        self.atlas.register(self.map_id)
+        self._world_lost_frames = set()
 
     def _map_metadata(self, extra=None):
         return {
@@ -156,7 +163,7 @@ class VisionService:
             recovery_error = f"backend_initialization_failed:{type(exc).__name__}"
         return backend, artifact, recovery_error
 
-    def _activate_map(self, map_id, revision, calibration):
+    def _activate_map(self, map_id, revision, calibration, *, prepared=None):
         # pySLAM has process-global feature settings and ID counters. Never keep
         # two native engines alive; on failure reload the saved previous map.
         previous = self.backend
@@ -171,8 +178,8 @@ class VisionService:
         backend = None
         session = None
         try:
-            backend, artifact, recovery_error = self._prepare_backend(
-                map_id, calibration, allow_load_failure=previous is None and self.session_id is None)
+            backend, artifact, recovery_error = (prepared if prepared is not None else self._prepare_backend(
+                map_id, calibration, allow_load_failure=previous is None and self.session_id is None))
             session = self.store.start_session(
                 map_id, camera=self.config["camera"], calibration=calibration["calibration_id"])
             atomic_json(self.state_dir / "runtime.json",
@@ -213,6 +220,78 @@ class VisionService:
         self._lifecycle_state = "running"
         self._reset_tracking_context()
 
+    def _recover_world_submap(self):
+        # Native startup/shutdown belongs to the atlas worker, outside the
+        # pipeline lock. Fresh camera packets continue with explicitly unknown pose.
+        if self._stop.is_set() or not hasattr(self.backend, "continuity_state"):
+            return
+        quality = self.backend.continuity_state()
+        if (quality.get("state") not in ("lost", "relocalizing")
+                or quality.get("features", 0) < 200
+                or quality.get("keyframes", 0) < 2 or quality.get("points", 0) < 1):
+            self._world_lost_frames.clear()
+            return
+        self._world_lost_frames.add((self.map_id, quality["frame_index"]))
+        if len(self._world_lost_frames) < 5:
+            return
+        with self._pipeline_lock:
+            fresh = self.backend.continuity_state()
+            if fresh.get("state") not in ("lost", "relocalizing") or fresh.get("features", 0) < 200:
+                self._world_lost_frames.clear()
+                return
+            previous = self.map_id
+            pending = (self._schedule_checkpoint(origin="recovery")
+                       if hasattr(self.backend, "capture_checkpoint") else self._checkpoint(origin="recovery"))
+        saved = pending.result() if hasattr(pending, "result") else pending
+        if saved.get("backend_artifact", {}).get("availability") != "available":
+            return
+        with self._pipeline_lock:
+            if self._stop.is_set() or self.map_id != previous:
+                return
+            fresh = self.backend.continuity_state()
+            if fresh.get("state") not in ("lost", "relocalizing"):
+                self._world_lost_frames.clear()
+                return
+            old_backend = self.backend
+            previous_revision = self.revision
+            calibration = copy.deepcopy(self.calibration)
+            self.backend = None
+            self._recovery_error = "world_submap_transition"
+            self._lifecycle_state = "switching_submap"
+        prepared = None
+        try:
+            old_backend.close()
+            if self._stop.is_set():
+                return
+            info = self.store.create_map(self._map_metadata({
+                "world_id": self.atlas.world_id, "prior_map_id": previous,
+                "prior_checkpoint_id": saved["checkpoint_id"],
+                "prior_map_preserved": True, "alignment": "unlocalized",
+                "reason": "unknown_area_local_submap_after_visual_relocalization_attempts"}))
+            self.atlas.register(info["map_id"])
+            prepared = self._prepare_backend(info["map_id"], calibration)
+            if prepared[2] is not None:
+                raise RuntimeError(prepared[2])
+            with self._pipeline_lock:
+                self.backend = old_backend  # closed; retained for existing rollback semantics
+                self._activate_map(info["map_id"], info["revision"], calibration, prepared=prepared)
+                prepared = None
+                self._world_lost_frames.clear()
+            LOG.info("Retained world %s; initialized unlocalized submap %s from %s",
+                     self.atlas.world_id, self.map_id, previous)
+        except Exception:
+            if prepared is not None:
+                prepared[0].close()
+            # Reopen the saved previous map rather than abandoning it or inventing a pose.
+            restored = self._prepare_backend(previous, calibration, allow_load_failure=True)
+            with self._pipeline_lock:
+                self.backend = old_backend
+                self._activate_map(previous, previous_revision, calibration, prepared=restored)
+            raise
+        finally:
+            if self.backend is None:
+                self.backend = old_backend
+
     def _radio_keyframes(self, map_id, revision=None):
         keyframes, cursor = {}, None
         while True:
@@ -243,8 +322,10 @@ class VisionService:
 
     def start(self):
         self.metric.start_worker()
+        self.atlas.start(self)
         self.radio.start()
         self.ahrs.start()
+        self.ultrasonic.start()
         self.camera.start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
@@ -352,7 +433,14 @@ class VisionService:
                         self.radio.prior(now_s=captured.decoded_monotonic), map_id=self.map_id)
                 result = self.backend.track(captured.image, frame_id, captured.decoded_monotonic)
             except Exception as exc:
-                self.backend.invalidate_tracking("backend_track_error")
+                diagnostic = f"{type(exc).__name__}: {exc}"[:512]
+                now = time.monotonic()
+                if (diagnostic != getattr(self, "_tracking_error_signature", None) or
+                        now - getattr(self, "_tracking_error_logged_at", 0) >= 30):
+                    LOG.exception("SLAM tracking failed: %s", diagnostic)
+                    self._tracking_error_signature = diagnostic
+                    self._tracking_error_logged_at = now
+                self.backend.invalidate_tracking("backend_track_error:" + diagnostic)
                 result = {"localization": unknown_localization("error"),
                           "geometry": {"available": False, "reason": f"slam_failed:{type(exc).__name__}"},
                           "map_changes": []}
@@ -427,9 +515,20 @@ class VisionService:
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
             "radio": self.radio.status(include_observations=True),
             "ahrs": self._stream_ahrs(),
+            "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
         }, encoded.tobytes())
         return snapshot
+
+    def _stream_ultrasonic(self):
+        """Latest sensor cache only; never issue HTTP from frame delivery."""
+        source = getattr(self, "ultrasonic", None)
+        if source is None:
+            return {"state": "unavailable"}
+        cached = source.snapshot()
+        status = source.status()
+        return ({**status, **cached["telemetry"], "snapshot": cached}
+                if isinstance(cached, dict) else status)
 
     def _stream_ahrs(self):
         """Publish cached sensor values with original source identity and timing."""
@@ -493,6 +592,8 @@ class VisionService:
                  "map_id", "map_revision", "published_at", "freshness")}
 
     def _maybe_checkpoint(self):
+        if self.backend is None or self._lifecycle_state == "switching_submap":
+            return None
         interval = float(self.config.get("checkpoint_interval_s", 60))
         if time.monotonic() - self._last_checkpoint_tick < interval:
             return None
@@ -729,6 +830,7 @@ class VisionService:
                 "streaming": {"available": not self._stop.is_set(), "lanes": ["vision", "map"],
                               "transport": "native_leased_stream", "per_message_actions": False},
                 "map_id": self.map_id,
+                "world": self.atlas.status(),
                 "map_revision": self.revision, "session_id": self.session_id,
                 "uptime_s": time.monotonic()-self._started, "processed_frames": self._frames,
                 "skipped_camera_frames": self._skipped, "last_process_ms": self._last_process_ms,
@@ -747,6 +849,7 @@ class VisionService:
                 "metric_calibration": self.metric.status(map_id=self.map_id),
                 "radio": self.radio.status(),
                 "ahrs": self.ahrs.status(),
+                "ultrasonic": self._stream_ultrasonic(),
                 "control": {"motion_commands": False, "brain": "external",
                             "camera_light": "explicit_authenticated_camera_api",
                             "gyro_calibration": "explicit_authenticated_camera_api"},
@@ -822,6 +925,10 @@ class VisionService:
                     "metric_localization": snapshot["metric_localization"],
                     "robot_localization": snapshot["robot_localization"],
                     "spatial_evidence": snapshot["spatial_evidence"]}
+        if operation == "robot.world.read":
+            return self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+        if operation == "robot.world.status":
+            return self.atlas.status()
         if operation == "robot.map.read":
             return self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),
                                        bounds=inputs.get("bounds"), kinds=inputs.get("kinds"),
@@ -853,7 +960,12 @@ class VisionService:
                     raise ValueError("only_active_map_can_be_checkpointed")
                 return self._checkpoint(origin="explicit")
             if operation == "robot.map.create":
-                return self.store.create_map(self._map_metadata(inputs.get("metadata")))
+                metadata = {**(inputs.get("metadata") or {}),
+                            "world_id": self.atlas.world_id, "prior_map_id": self.map_id,
+                            "alignment": "unlocalized"}
+                info = self.store.create_map(self._map_metadata(metadata))
+                self.atlas.register(info["map_id"])
+                return {**info, "world_id": self.atlas.world_id}
             if operation == "robot.map.open":
                 return self._open_map(inputs["map_id"])
             if operation == "robot.vision.calibration":
@@ -902,6 +1014,9 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        self._stop.set()
+        if getattr(self, "atlas", None) is not None:
+            self.atlas.close()
         self.live_frames.close()
         self.live_maps.close()
         self._stop.set()
@@ -916,6 +1031,8 @@ class VisionService:
             self.ahrs.close()
         except Exception:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
+        if getattr(self, "ultrasonic", None) is not None:
+            self.ultrasonic.close()
         self.metric.close()
         self._wait_checkpoint()
         with self._pipeline_lock:

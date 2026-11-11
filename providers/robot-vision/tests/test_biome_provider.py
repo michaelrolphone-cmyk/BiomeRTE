@@ -157,6 +157,7 @@ class ScaleContractTests(unittest.TestCase):
 
     def test_original_thirteen_v1_contracts_are_immutable(self):
         extensions = self.NEW_CONTRACTS | {
+            "robot.world.read:1", "robot.world.status:1",
             "robot.radio.status:1", "robot.radio.localize:1", "robot.map.radio.read:1",
             "robot.camera.light.status:1", "robot.camera.light.set:1",
             "robot.ahrs.status:1", "robot.ahrs.snapshot:1", "robot.ahrs.calibrate:1",
@@ -454,7 +455,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 29)
+        self.assertEqual(len(offers), 31)
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])
