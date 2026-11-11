@@ -13,18 +13,19 @@ def size(value):
 
 
 def bounded_metadata(metadata, maximum=15872):
-    if size(metadata) <= maximum or not any(key in metadata for key in ("ahrs", "radio")):
+    if size(metadata) <= maximum or not any(key in metadata for key in ("ahrs", "radio", "ultrasonic")):
         return metadata
     value = copy.deepcopy(metadata)
     ahrs = value.get("ahrs")
     radio = value.get("radio")
-    if isinstance(ahrs, dict):
-        snapshot = ahrs.pop("snapshot", None)
-        if isinstance(snapshot, dict):
-            ahrs["cache_timing"] = {key: snapshot[key] for key in (
-                "received_at", "received_monotonic", "request_started_monotonic",
-                "request_duration_s", "elapsed_since_receive_s", "age_clock", "timing")
-                if key in snapshot}
+    for sensor in (ahrs, value.get("ultrasonic")):
+        if isinstance(sensor, dict):
+            snapshot = sensor.pop("snapshot", None)
+            if isinstance(snapshot, dict):
+                sensor["cache_timing"] = {key: snapshot[key] for key in (
+                    "received_at", "received_monotonic", "request_started_monotonic",
+                    "request_duration_s", "elapsed_since_receive_s", "age_clock", "timing", "observations")
+                    if key in snapshot}
     if isinstance(radio, dict):
         cache = radio.get("telemetry")
         if isinstance(cache, dict):
@@ -32,6 +33,8 @@ def bounded_metadata(metadata, maximum=15872):
             if isinstance(firmware, dict):
                 # The RF endpoint repeats the AHRS envelope already carried above.
                 firmware.pop("ahrs", None)
+                if "ultrasonic" in value:
+                    firmware.pop("ultrasonic", None)
             if size(value) > maximum:
                 # Retain RF age/index bindings but omit repeated long source IDs.
                 refs = cache.get("observations")

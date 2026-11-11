@@ -25,6 +25,21 @@ PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
 
+def next_native_frame_index(runtime, fallback):
+    """Continue native image IDs after restore or a rejected attempt."""
+    with runtime.map.update_lock:
+        previous = runtime.map.get_frame(-1)
+        if previous is None:
+            # A reset may retain keyframes while clearing temporal history.
+            # This seeds a historical reference, never a current tracked pose.
+            for reference in reversed(list(runtime.map.get_keyframes())):
+                if not reference.is_bad():
+                    runtime.map.add_frame(reference)
+                    previous = reference
+                    break
+        return int(previous.img_id) + 1 if previous is not None else fallback
+
+
 
 class BackendNotReady(RuntimeError):
     pass
@@ -223,8 +238,21 @@ class SlamBackend:
         tracker["num_features"] = int(self.config.get("num_features", 2000))
         loop = copy.deepcopy(LoopDetectorConfigs.DBOW3)
         self._states = SlamState
-        return Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
-                    environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
+        runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
+                       environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
+        runtime.preserve_map_on_tracking_loss = True
+        return runtime
+
+    def continuity_state(self):
+        with self._lock:
+            if self._slam is None:
+                return {}
+            with self._slam.map.update_lock:
+                frame = self._slam.tracking.f_cur
+                return {"state": self._state, "frame_index": self._next_frame_index,
+                        "features": int(getattr(frame, "num_kps", 0) or 0),
+                        "keyframes": self._slam.map.num_keyframes(),
+                        "points": self._slam.map.num_points()}
 
     def _checkpoint_path(self, checkpoint):
         if isinstance(checkpoint, dict):
@@ -307,6 +335,7 @@ class SlamBackend:
                 self._slam = self._new_runtime()
                 if manifest is not None:
                     self._slam.load_system_state(str(path))
+                    self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])
                     self._slam.set_tracking_state(self._states.INIT_RELOCALIZE)
@@ -415,8 +444,8 @@ class SlamBackend:
             if image.shape != (calibration["height"], calibration["width"], 3) or image.dtype != np.uint8:
                 self.invalidate_tracking("Image dimensions or dtype do not match calibration")
                 raise ValueError("Expected calibrated-size uint8 BGR image")
-            index = self._next_frame_index
-            self._next_frame_index += 1
+            index = next_native_frame_index(self._slam, self._next_frame_index)
+            self._next_frame_index = index + 1
             self._source_frames[str(index)] = frame_id
             self._last_timestamp = timestamp_s
             try:
