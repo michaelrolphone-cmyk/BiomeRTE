@@ -53,6 +53,8 @@ DEFAULT_CONFIG = {
         "history_capacity": 256,
         "history_retention_s": 30.0,
     },
+    "ultrasonic": {"enabled": True, "poll_interval_s": 0.26,
+                   "network_timeout_s": 1.0, "freshness_threshold_s": 1.0},
     "max_observations": 300,
     "checkpoint_interval_s": 60.0,
     "freshness_threshold_s": 2.0,
@@ -91,3 +93,4 @@ def load_config(state_dir, config_path=None):
         if float(value["camera"].get(key, 1)) <= 0:
             raise ValueError(f"camera.{key} must be positive")
     return value
+

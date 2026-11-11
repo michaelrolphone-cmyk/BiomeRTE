@@ -27,6 +27,7 @@ from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from radio_tracking import RadioTracking
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
+from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
 
 CAPABILITIES = [
@@ -67,6 +68,7 @@ class VisionService:
         self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
                                    source=radio_source, model=radio_model)
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
+        self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -245,6 +247,7 @@ class VisionService:
         self.metric.start_worker()
         self.radio.start()
         self.ahrs.start()
+        self.ultrasonic.start()
         self.camera.start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
@@ -427,9 +430,20 @@ class VisionService:
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
             "radio": self.radio.status(include_observations=True),
             "ahrs": self._stream_ahrs(),
+            "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
         }, encoded.tobytes())
         return snapshot
+
+    def _stream_ultrasonic(self):
+        """Latest sensor cache only; never issue HTTP from frame delivery."""
+        source = getattr(self, "ultrasonic", None)
+        if source is None:
+            return {"state": "unavailable"}
+        cached = source.snapshot()
+        status = source.status()
+        return ({**status, **cached["telemetry"], "snapshot": cached}
+                if isinstance(cached, dict) else status)
 
     def _stream_ahrs(self):
         """Publish cached sensor values with original source identity and timing."""
@@ -747,6 +761,7 @@ class VisionService:
                 "metric_calibration": self.metric.status(map_id=self.map_id),
                 "radio": self.radio.status(),
                 "ahrs": self.ahrs.status(),
+                "ultrasonic": self._stream_ultrasonic(),
                 "control": {"motion_commands": False, "brain": "external",
                             "camera_light": "explicit_authenticated_camera_api",
                             "gyro_calibration": "explicit_authenticated_camera_api"},
@@ -916,6 +931,8 @@ class VisionService:
             self.ahrs.close()
         except Exception:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
+        if getattr(self, "ultrasonic", None) is not None:
+            self.ultrasonic.close()
         self.metric.close()
         self._wait_checkpoint()
         with self._pipeline_lock:
@@ -1079,3 +1096,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
