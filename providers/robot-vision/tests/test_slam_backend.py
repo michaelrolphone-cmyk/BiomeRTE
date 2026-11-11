@@ -243,7 +243,7 @@ class BackendContractTests(unittest.TestCase):
     def test_first_export_of_old_keyframe_is_not_current_image_evidence(self):
         entities = _saved_entities(document(), {"0": "historical"})
         native_map = SimpleNamespace(
-            update_lock=threading.RLock(), get_frame=lambda index: None,
+            update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=-1),
             get_keyframes=lambda: [SimpleNamespace(id=10), SimpleNamespace(id=11)])
         self.backend._slam = SimpleNamespace(
             map=native_map, track=lambda *args: None,
@@ -261,7 +261,7 @@ class BackendContractTests(unittest.TestCase):
     def test_genuinely_created_native_keyframe_can_anchor_exact_input(self):
         entities = _saved_entities(document(), {})
         entities[("keyframe", "11")]["backend_frame_index"] = 0
-        native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: None,
+        native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=-1),
                                      get_keyframes=lambda: [SimpleNamespace(id=10)])
         self.backend._slam = SimpleNamespace(
             map=native_map, track=lambda *args: None,
@@ -299,7 +299,7 @@ class BackendContractTests(unittest.TestCase):
         policy = {"mode":"percentile_gray","version":1,"low_percentile":1.0,"high_percentile":99.0}
         backend = SlamBackend({"calibration":copy.deepcopy(CALIBRATION),"preprocessing":policy},self.root)
         backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
-        native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: None,
+        native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=1),
             get_keyframes=lambda:[SimpleNamespace(id=10),SimpleNamespace(id=11)],
             num_keyframes=lambda:3,num_points=lambda:1)
         received=[]
