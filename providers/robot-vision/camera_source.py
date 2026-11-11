@@ -19,6 +19,7 @@ class CapturedFrame:
     metadata: dict
     decoded_monotonic: float
     sequence: int
+    jpeg_bytes: bytes | None = None
 
 
 class CameraSource:
@@ -158,7 +159,7 @@ class CameraSource:
                         measurement_monotonic_s=tracking_time,
                         measurement_clock='device_capture_intervals_host_epoch_anchor',
                         source_media_seconds=packet['capture_monotonic_us']/1e6,sensor_packet=packet)
-                    self._latest=CapturedFrame(image,metadata,tick,self._sequence);self._condition.notify_all()
+                    self._latest=CapturedFrame(image,metadata,tick,self._sequence,jpeg);self._condition.notify_all()
             except Exception as exc:
                 with self._condition:
                     self._connected=False;self._error='synchronized_capture_failed:'+type(exc).__name__

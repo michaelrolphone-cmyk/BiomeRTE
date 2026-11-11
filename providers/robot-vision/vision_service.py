@@ -79,6 +79,7 @@ class VisionService:
         self._pipeline_lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
+        self._live_camera = None
         self._started = time.monotonic()
         self._frames = 0
         self._skipped = 0
@@ -327,6 +328,8 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        from live_camera import LiveCamera
+        self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
         return self
@@ -508,7 +511,7 @@ class VisionService:
         except Exception as exc:
             self.metric.record_error("capture_offer:" + type(exc).__name__ + ":" + str(exc))
             LOG.exception("Metric capture enqueue failed; coherent observation remains available")
-        self.live_frames.publish({
+        live_metadata = {
             "frame_id": frame_id, "source_timestamp": frame.get("source_timestamp", frame.get("capture_time")),
             "source_timestamp_status": frame.get("capture_time_status", "unknown"),
             "receive_decode_timestamp": frame.get("receive_decode_time"),
@@ -520,8 +523,40 @@ class VisionService:
             "ahrs": self._stream_ahrs(frame),
             "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
-        }, encoded.tobytes())
+        }
+        if self._live_camera is None:
+            self.live_frames.publish(live_metadata, encoded.tobytes())
+        else:
+            self._live_camera.record_processed(captured, live_metadata)
         return snapshot
+
+    def _raw_live_metadata(self, captured, previous):
+        """Live pixels and sensors; older analysis keeps its own frame identity."""
+        frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
+        binding = {key: previous.get(key, fallback) for key, fallback in (
+            ('map_id', self.map_id), ('map_revision', self.revision),
+            ('session_id', self.session_id),
+            ('calibration_revision', self.calibration['calibration_id']))}
+        same_frame = previous.get('frame_id') == frame['frame_id']
+        pose = previous.get('pose') if same_frame else None
+        pose = pose or dict(unknown_localization('frame_processing_pending'),
+                    frame_id=frame['frame_id'], map_id=binding['map_id'])
+        return dict(binding, frame_id=frame['frame_id'],
+                    source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
+                    source_timestamp_status=frame.get('capture_time_status', 'unknown'),
+                    receive_decode_timestamp=frame.get('receive_decode_time'),
+                    processing_timestamp=previous.get('processing_timestamp') if same_frame else None,
+                    processed_monotonic=previous.get('processed_monotonic') if same_frame else None,
+                    processing_state='complete' if same_frame else 'pending',
+                    camera_delivery='independent_capture',
+                    last_processed_frame_id=previous.get('frame_id'),
+                    analysis={key: previous.get(key) for key in (
+                        'frame_id', 'receive_decode_timestamp', 'processing_timestamp',
+                        'map_id', 'map_revision', 'pose')},
+                    detections=previous.get('detections', []) if same_frame else [], pose=pose,
+                    radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
+                    ultrasonic=self._stream_ultrasonic(),
+                    map_snapshot_required_on_revision_gap=True)
 
     def _stream_ultrasonic(self):
         """Latest sensor cache only; never issue HTTP from frame delivery."""
@@ -857,7 +892,8 @@ class VisionService:
                 "availability": "available", "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
                 "capabilities": CAPABILITIES,
                 "streaming": {"available": not self._stop.is_set(), "lanes": ["vision", "map"],
-                              "transport": "native_leased_stream", "per_message_actions": False},
+                              "transport": "native_leased_stream", "per_message_actions": False,
+                              "camera_delivery": self._live_camera.status() if self._live_camera else None},
                 "map_id": self.map_id,
                 "world": self.atlas.status(),
                 "map_revision": self.revision, "session_id": self.session_id,
@@ -1046,6 +1082,8 @@ class VisionService:
         self._stop.set()
         if getattr(self, "atlas", None) is not None:
             self.atlas.close()
+        if self._live_camera is not None:
+            self._live_camera.close()
         self.live_frames.close()
         self.live_maps.close()
         self._stop.set()
