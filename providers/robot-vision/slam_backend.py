@@ -29,6 +29,14 @@ def next_native_frame_index(runtime, fallback):
     """Continue native image IDs after restore or a rejected attempt."""
     with runtime.map.update_lock:
         previous = runtime.map.get_frame(-1)
+        if previous is None:
+            # A reset may retain keyframes while clearing temporal history.
+            # This seeds a historical reference, never a current tracked pose.
+            for reference in reversed(list(runtime.map.get_keyframes())):
+                if not reference.is_bad():
+                    runtime.map.add_frame(reference)
+                    previous = reference
+                    break
         return int(previous.img_id) + 1 if previous is not None else fallback
 
 
