@@ -142,6 +142,8 @@ def settled(tx, action, now=None):
         action['expires_at'] = (time.time() if now is None else now) + RETENTION
         tx.put('actions', action['id'], action)
     deliver(tx, action)
+    from .completion_receipts import remember
+    remember(tx, action)
 
 
 def abandon(tx, ctx, lease, reason, now):
@@ -260,11 +262,13 @@ def sweep(tx, ctx, now):
         for entry in tx.matching('result_inbox', lease=key):
             tx.drop('result_inbox', entry['id'])
         tx.drop('destinations', key)
-    for kind in ('result_inbox', 'messages', '_stream_grants', 'artifacts', '_receipt'):
+    for kind in ('result_inbox', 'messages', '_stream_grants', 'artifacts', '_receipt', '_completion_receipts'):
         for key in tx.expired_keys(kind, now):
             drop_expired(tx, kind, key)
     for key in tx.expired_keys('actions', now, 64):
         if key not in referenced:
+            from .completion_receipts import remember
+            remember(tx, tx.need('actions', key))
             drop_expired(tx, 'actions', key)
             for kind in ('_submissions', '_submission_active'):
                 drop_expired(tx, kind, key)
@@ -317,3 +321,4 @@ def kill(tx, ctx, operation):
         if action['state'] == 'queued':
             abandon(tx, ctx, tx.need('leases', action['lease']), 'explicit_kill', time.time())
     return {'operation': operation, 'state': action['state'], 'kill_requested': True}
+

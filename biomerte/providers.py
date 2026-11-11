@@ -473,7 +473,10 @@ def claim(tx, ctx, provider, operation, generation):
 @op('provider.result', 'provider:str operation:str generation:int state:str result:obj')
 def result(tx, ctx, provider, operation, generation, state, result):
     executor(tx, ctx, provider)
-    a = tx.need('actions', operation)
+    a = tx.get('actions', operation)
+    if not a:
+        from .completion_receipts import acknowledge
+        return acknowledge(tx, provider, operation, generation, state, result)
     if a['provider'] != provider or a['generation'] != generation:
         raise Fault('Result binding mismatch', 409)
     if state not in ('succeeded', 'failed', 'uncertain'):
@@ -501,6 +504,8 @@ def result(tx, ctx, provider, operation, generation, state, result):
         else:
             a['result'] = result
         tx.put('actions', operation, a)
+        from .completion_receipts import remember
+        remember(tx, a)
         tx.emit('operation.reconciled', {'id': operation, 'execution_state': state,
                                        'state': 'abandoned'})
         return a
@@ -546,7 +551,16 @@ def result(tx, ctx, provider, operation, generation, state, result):
 @op('cap.status', 'operation:str recovery?:bool', False)
 def status(tx, ctx, operation, recovery=False):
     """Read action state and the provider result, including after the lease is released."""
-    a = tx.need('actions', operation)
+    a = tx.get('actions', operation)
+    if not a and recovery:
+        from .completion_receipts import find
+        a = find(tx, operation)
+        if not a:
+            return dict(id=operation, state='missing_unknown', acknowledged=False,
+                        result_expired=True, replay_allowed=False,
+                        reason='No retained authoritative completion; reconcile original executor evidence')
+    if not a:
+        a = tx.need('actions', operation)
     from .retention import require_payload
     owner(ctx, a['provider'])
     if not recovery:
@@ -643,3 +657,4 @@ def settle_submissions(tx, ctx):
 
 # Register explicit ownership and proof-backed execution reconciliation APIs.
 from . import resource_recovery
+
