@@ -355,7 +355,14 @@ class VisionService:
                         self.radio.prior(now_s=captured.decoded_monotonic), map_id=self.map_id)
                 result = self.backend.track(captured.image, frame_id, captured.decoded_monotonic)
             except Exception as exc:
-                self.backend.invalidate_tracking("backend_track_error")
+                diagnostic = f"{type(exc).__name__}: {exc}"[:512]
+                now = time.monotonic()
+                if (diagnostic != getattr(self, "_tracking_error_signature", None) or
+                        now - getattr(self, "_tracking_error_logged_at", 0) >= 30):
+                    LOG.exception("SLAM tracking failed: %s", diagnostic)
+                    self._tracking_error_signature = diagnostic
+                    self._tracking_error_logged_at = now
+                self.backend.invalidate_tracking("backend_track_error:" + diagnostic)
                 result = {"localization": unknown_localization("error"),
                           "geometry": {"available": False, "reason": f"slam_failed:{type(exc).__name__}"},
                           "map_changes": []}
