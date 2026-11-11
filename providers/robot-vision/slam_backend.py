@@ -25,6 +25,21 @@ PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
 
+def next_native_frame_index(runtime, fallback):
+    """Continue native image IDs after restore or a rejected attempt."""
+    with runtime.map.update_lock:
+        previous = runtime.map.get_frame(-1)
+        if previous is None:
+            # A reset may retain keyframes while clearing temporal history.
+            # This seeds a historical reference, never a current tracked pose.
+            for reference in reversed(list(runtime.map.get_keyframes())):
+                if not reference.is_bad():
+                    runtime.map.add_frame(reference)
+                    previous = reference
+                    break
+        return int(previous.img_id) + 1 if previous is not None else fallback
+
+
 
 class BackendNotReady(RuntimeError):
     pass
@@ -415,8 +430,8 @@ class SlamBackend:
             if image.shape != (calibration["height"], calibration["width"], 3) or image.dtype != np.uint8:
                 self.invalidate_tracking("Image dimensions or dtype do not match calibration")
                 raise ValueError("Expected calibrated-size uint8 BGR image")
-            index = self._next_frame_index
-            self._next_frame_index += 1
+            index = next_native_frame_index(self._slam, self._next_frame_index)
+            self._next_frame_index = index + 1
             self._source_frames[str(index)] = frame_id
             self._last_timestamp = timestamp_s
             try:

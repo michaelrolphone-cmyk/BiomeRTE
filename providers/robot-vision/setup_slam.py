@@ -349,7 +349,22 @@ def patch_empty_frame_arrays(source):
     source = replace_once(source, '                self.points = np.full(num_kps, None, dtype=object)  # init map points\n                self.outliers = np.full(num_kps, False, dtype=bool)\n\n            if self.kps_r is not None:\n', '                self.points = np.full(num_kps, None, dtype=object)  # init map points\n                self.outliers = np.full(num_kps, False, dtype=bool)\n            elif self.kps is not None:\n                # A real zero-feature observation remains serializable and reloadable.\n                self.kps = np.empty((0, 2), dtype=np.float32)\n                self.kpsu = np.empty((0, 2), dtype=np.float32)\n                self.kpsn = np.empty((0, 2), dtype=np.float32)\n                self.octaves = np.empty(0, dtype=np.uint8)\n                self.sizes = np.empty(0, dtype=np.float32)\n                self.angles = np.empty(0, dtype=np.float32)\n                self.points = np.empty(0, dtype=object)\n                self.outliers = np.empty(0, dtype=bool)\n\n            if self.kps_r is not None:\n')
     return replace_once(source, '        frame_data_dict["kpsn"] = deserialize_array_flexible(json_str["kpsn"], dtype=np.float32)\n        frame_data_dict["kps_sem"] = deserialize_array_flexible(\n', '        frame_data_dict["kpsn"] = deserialize_array_flexible(json_str["kpsn"], dtype=np.float32)\n        # JSON [] loses the second dimension of an empty XY array.\n        for name in ("kps", "kps_r", "kpsu", "kpsn"):\n            value = frame_data_dict[name]\n            if value is not None and value.size == 0:\n                frame_data_dict[name] = value.reshape(0, 2)\n        frame_data_dict["kps_sem"] = deserialize_array_flexible(\n')
 
+def patch_keyframe_graph_restore(source):
+    # Culled keyframes may be absent from a saved map. A missing graph edge
+    # must stay absent instead of becoming a None neighbor with a weight.
+    for field in ("children", "loop_edges"):
+        old = "{get_object_with_id(id, keyframes_dict) for id in self." + field + "}"
+        new = "{get_object_with_id(id, keyframes_dict) for id in self." + field + " if id in keyframes_dict}"
+        source = replace_once(source, old, new)
+    for field in ("connected_keyframes_weights", "ordered_keyframes_weights"):
+        old = "                    for id, weight in self." + field + "\n"
+        new = old + "                    if id in keyframes_dict\n"
+        source = replace_once(source, old, new)
+    return source
+
+
 PATCHES = {
+    "pyslam/slam/keyframe.py": patch_keyframe_graph_restore,
     "pyslam/slam/frame.py": patch_empty_frame_arrays,
     "pyslam/slam/optimizer_gtsam.py": patch_gtsam_factor_imports,
     "thirdparty/g2opy/python/CMakeLists.txt": patch_g2o_link,
@@ -645,3 +660,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
