@@ -7,8 +7,9 @@ from .stream_router import decode
 
 
 class Rover:
-    def __init__(self, remote, resources, task='rover-server', require_provider_ready=False):
+    def __init__(self, remote, resources, task='rover-server', require_provider_ready=False, clock=None):
         self.remote, self.resources, self.task = remote, resources, task
+        self.clock = clock
         self.require_provider_ready = require_provider_ready
         self.descriptors = {}
         self.browsers = set()
@@ -18,6 +19,14 @@ class Rover:
         self.closed = False
         self.tasks = []
         self.map_head = None
+
+    @property
+    def control_ready(self):
+        return self._control_ready and (self.clock is None or self.clock.ready)
+
+    @control_ready.setter
+    def control_ready(self, value):
+        self._control_ready = value
 
     async def call(self, operation, **args):
         return await asyncio.to_thread(self.remote.call, operation, args)
@@ -66,7 +75,7 @@ class Rover:
         if not self.control_ready:
             raise RuntimeError('Control stream unavailable')
         self.sequence += 1
-        now = time.time()
+        now = self.clock.lower() if self.clock else time.time()
         value = dict(type='desired', sequence=self.sequence, outputs={'mask':mask},
                      issued_at=now, expires_at=now + ttl_ms/1000)
         if self.intent.full():self.intent.get_nowait()
@@ -156,7 +165,8 @@ class Rover:
                 async def send():
                     while True:
                         intent=await self.intent.get()
-                        if not self.control_ready or intent['expires_at']<=time.time():continue
+                        now = self.clock.upper() if self.clock else time.time()
+                        if not self.control_ready or intent['expires_at']<=now:continue
                         intent.update(authority=descriptor['authority'],generation=descriptor['generation'],epoch=descriptor['epoch'])
                         await asyncio.wait_for(socket.send(json.dumps(intent)),.1)
                 task=asyncio.create_task(send())
@@ -173,10 +183,12 @@ class Rover:
                                     raise ValueError('Mismatched router peer status')
                                 if any(type(metadata.get(k)) is not bool for k in ('provider_connected','server_connected')):
                                     raise ValueError('Invalid router peer status')
-                                self.discard_intent()
                                 available=metadata.get('authority_available',True)
                                 if type(available) is not bool:raise ValueError('Invalid authority availability')
-                                self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                if not ready or not self.control_ready:
+                                    self.discard_intent()
+                                self.control_ready=ready
                             continue
                     if lane=='map':
                         metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
