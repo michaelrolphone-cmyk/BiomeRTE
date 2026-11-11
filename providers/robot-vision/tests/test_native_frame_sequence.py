@@ -4,7 +4,12 @@ source=(root/'slam_backend.py' if (root/'slam_backend.py').exists() else root.pa
 fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='next_native_frame_index');scope={};exec(compile(ast.Module(body=[fn],type_ignores=[]),'<adapter helper>','exec'),scope);next_index=scope['next_native_frame_index']
 class NativeFrameSequence(unittest.TestCase):
  def runtime(self,previous):
-  m=types.SimpleNamespace(update_lock=threading.RLock(),previous=previous);m.get_frame=lambda i:m.previous;return types.SimpleNamespace(map=m)
+  m=types.SimpleNamespace(update_lock=threading.RLock(),previous=previous);m.get_frame=lambda i:m.previous;m.get_keyframes=lambda:[];return types.SimpleNamespace(map=m)
+ def test_empty_temporal_history_seeds_existing_keyframe_without_current_pose(self):
+  r=self.runtime(None);reference=types.SimpleNamespace(img_id=72,is_bad=lambda:False);r.map.get_keyframes=lambda:[reference];added=[]
+  def append(frame):added.append(frame);r.map.previous=frame
+  r.map.add_frame=append
+  self.assertEqual(next_index(r,500),73);self.assertEqual(added,[reference]);self.assertFalse(hasattr(r,'current_pose'))
  def test_restored_chain_uses_last_accepted_not_burned_counter(self):
   r=self.runtime(types.SimpleNamespace(img_id=108));self.assertEqual(next_index(r,401),109)
  def test_rejected_before_append_retries_same_native_successor(self):
