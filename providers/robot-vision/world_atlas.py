@@ -134,6 +134,8 @@ def checkpoint_landmarks(checkpoint):
 class WorldAtlas:
     def __init__(self, path, store):
         self.store = store
+        from world_import import WorldImportQueue
+        self.imports = WorldImportQueue(Path(path).parent)
         self.lock = threading.RLock()
         self.db = sqlite3.connect(str(path),check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -315,6 +317,7 @@ class WorldAtlas:
                         cp=self.store.latest_backend_checkpoint(service.map_id)
                         if cp.get("availability")=="available":
                             self.update(cp)
+                        self.imports.drain_one(self.store, self, service.map_id)
                         service._recover_world_submap()
                         self.error=None
                     except Exception as exc:
