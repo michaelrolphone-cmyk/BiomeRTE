@@ -379,6 +379,9 @@ def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_re
                 release_after_result is not None and prev.get('release_after_result') != release_after_result):
             raise Fault('Operation identity conflict', 409)
         return prev
+    from .completion_receipts import find
+    if find(tx, key):
+        raise Fault('Operation result expired; inspect the retained completion receipt, do not replay', 410)
     if destination:
         lifecycle.destination(tx, ctx, destination)
     if tx.need('offers', l['offer']).get('configuration', {}).get('stream_only'):
@@ -622,6 +625,9 @@ def submit(tx, ctx, contract, resource, inputs, operation, destination=''):
         tx.put('_submissions', operation, record)
         finish_submission(tx, ctx, operation)
         return action
+    from .completion_receipts import find
+    if find(tx, operation):
+        raise Fault('Operation result expired; inspect the retained completion receipt, do not replay', 410)
     tx.put('_submissions', operation, record)
     tx.put('_submission_leases', lease_id, operation)
     tx.put('_submission_active', operation, {'id': operation})

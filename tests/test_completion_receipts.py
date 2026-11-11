@@ -78,6 +78,14 @@ class CompletionReceipts(unittest.TestCase):
         with self.assertRaises(Fault):
             self.call('provider.result', **self.args)
 
+    def test_expired_completion_cannot_be_submitted_as_a_new_effect(self):
+        self.expire_action()
+        with self.assertRaises(Fault) as error:
+            self.call('cap.submit', contract='host.terminal.run:1', resource='slot', inputs={}, operation='one')
+        self.assertEqual(error.exception.status, 410)
+        with self.app.stores['site'].connect() as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM records WHERE kind='actions'").fetchone()[0])
+
 
 if __name__ == '__main__':
     unittest.main()
