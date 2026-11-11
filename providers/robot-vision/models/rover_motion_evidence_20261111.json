@@ -352,7 +352,7 @@
       "cases": [
         {
           "reference": "resume-trial-17.json",
-          "duration_requested_s": 1.0,
+          "duration_requested_s": 1,
           "signals": {
             "schema": 2,
             "baseline_boot_id": "c2e8382e39dd0468",
@@ -393,7 +393,7 @@
             "command": {
               "action": "trial",
               "direction": "reverse",
-              "duration": 1.0,
+              "duration": 1,
               "lead": 0
             },
             "baseline_provenance": "pre-command firmware sample; stationarity must be independently verified",
@@ -739,5 +739,54 @@
   "prior_knowledge": [
     "Wheels change gradually during rolling; standing steering does not qualify body turning",
     "Raw camera image is mirrored; GUI display correction does not alter sensor axes"
+  ],
+  "hypotheses": [
+    {
+      "id": "steering_state_hysteresis_requires_rolling",
+      "status": "unproven",
+      "statement": "Requested steering direction may differ from current wheel angle and transient body-yaw response because steering changes gradually while rolling; alternating commands from short body-yaw observations may repeatedly reverse the transition before settling.",
+      "source_basis": [
+        {
+          "kind": "user_report",
+          "statement": "Wheels respond gradually and vehicle must drive to turn; very large turning radius."
+        },
+        {
+          "kind": "recorded_configuration_report",
+          "statement": "Native robot model describes rear steering; body-versus-wheel command sign remains unqualified."
+        },
+        {
+          "kind": "parent_observation",
+          "reference": "trial41",
+          "statement": "Last steering-left followed by forward-only moved body right/grid out raw right; consistent with rear-left steering but not proof."
+        },
+        {
+          "kind": "recorded_evidence",
+          "references": [
+            "resume-trial-26.json",
+            "resume-trial-27.json",
+            "resume-trial-28.json"
+          ],
+          "statement": "Different signed or negligible responses under repeated requested inputs can also be explained by interruptions, blockage, sensor gaps or delayed application."
+        }
+      ],
+      "latent_state_candidates": [
+        "wheel_angle",
+        "steering_transition_direction",
+        "rolling_exposure_since_request",
+        "previous_steering_request"
+      ],
+      "confounds": [
+        "rear steering body-yaw sign may oppose wheel label",
+        "unknown wheel recentering on neutral",
+        "sensor/camera timing bounds",
+        "provider readiness interruption",
+        "unknown rolling distance",
+        "possible fan/door contact or blocked travel"
+      ],
+      "testable_comparison": "With independently checked clearance, retain one steering request across successive bounded rolling segments; inspect each stopped view and local bias-subtracted gyro window. A stopped throttle reversal while steering remains unchanged tests direction-reversal response without also changing steering state. Use segment count or image displacement as a labeled exposure proxy until metric travel exists.",
+      "disconfirming_observation": "Repeatable settled signed response independent of prior command and accumulated rolling exposure would weaken the state-memory explanation; alternative provider timing/blockage explanations remain open.",
+      "fitted_parameters": null,
+      "control_changes_applied": false
+    }
   ]
 }
