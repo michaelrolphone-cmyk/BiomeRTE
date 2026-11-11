@@ -59,8 +59,9 @@ def frame(metadata, data):
 
 
 class Session:
-    def __init__(self, grant, peer_status=False):
+    def __init__(self, grant, peer_status=False, control_clock=None):
         self.peer_status = peer_status
+        self.control_clock = control_clock
         self.quarantined = False
         self.grant = grant
         self.peers = {}
@@ -104,7 +105,8 @@ class Session:
         if not ack and ((direction == 'provider_to_server' and role != 'provider') or
                         (direction == 'server_to_provider' and role != 'server')):
             raise Fault('Wrong stream direction', 403)
-        now = time.time() if now is None else now
+        now = (self.control_clock.upper() if self.control_clock and lane == 'control' and not ack
+               else time.time()) if now is None else now
         if lane == 'control' and not ack:
             # Credentials, pings and socket traffic never renew driving intent.
             if role != 'server' or meta.get('type') != 'desired' or not isinstance(meta.get('outputs'), dict):
@@ -162,8 +164,9 @@ class Peer:
 
 
 class Router:
-    def __init__(self, secrets, validators, peer_status=False):
+    def __init__(self, secrets, validators, peer_status=False, control_clock=None):
         self.peer_status = peer_status
+        self.control_clock = control_clock
         self.secrets = secrets
         self.validators = validators
         self.sessions = {}
@@ -256,7 +259,7 @@ class Router:
         await self.validate(grant)
         session = self.sessions.get(session_id)
         if not session:
-            session = self.sessions[session_id] = Session(grant, self.peer_status)
+            session = self.sessions[session_id] = Session(grant, self.peer_status, self.control_clock)
             self.tasks[session_id] = asyncio.create_task(self.watch(session))
         if session.closed or session.grant['epoch'] != grant['epoch']:
             raise Fault('Superseded stream epoch', 409)
@@ -324,7 +327,11 @@ async def serve(config):
         validators[app.node] = lambda id, app=app: app.call('stream.inspect', {'session': id}, realm='site')
     from .stream_inspection import add_remote
     add_remote(config, secrets, validators)
-    router = Router(secrets, validators, peer_status=config.get('peer_status', False))
+    clock = None
+    if config.get('control_ntp'):
+        from .control_clock import ControlClock
+        clock = await ControlClock().start()
+    router = Router(secrets, validators, peer_status=config.get('peer_status', False), control_clock=clock)
     if config.get('diagnostic_log'):
         from logging.handlers import RotatingFileHandler
         logger = logging.getLogger(__name__)
@@ -334,7 +341,8 @@ async def serve(config):
     async def health(connection, request):
         if request.path == '/health':
             response = connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
-                **router.health(), 'transport': config.get('transport', 'tls')}))
+                **router.health(), 'transport': config.get('transport', 'tls'),
+                'control_clock': clock.status() if clock else None}))
             del response.headers['Content-Type']
             response.headers['Content-Type'] = 'application/json'
             return response
@@ -345,9 +353,13 @@ async def serve(config):
         except Exception as error:
             router.report('attachment', None, error)
             await socket.close(1008, 'Stream rejected')
-    async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
-                                ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
-        await asyncio.Future()
+    try:
+        async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
+                                    ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
+            await asyncio.Future()
+    finally:
+        if clock:
+            await clock.close()
 
 
 if __name__ == '__main__':
