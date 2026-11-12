@@ -25,13 +25,13 @@
       ],
       [
         0,
-        0,
-        -1
+        1,
+        0
       ],
       [
         0,
-        -1,
-        0
+        0,
+        -1
       ]
     ],
     "axis_evidence": {
@@ -41,5 +41,23 @@
     },
     "automatic_gyro_calibration": "two distinct fresh stationary captures plus quiet IMU; background two-second firmware window; does not block SLAM or video",
     "native_activation": "blocked: native terminal provider is not acknowledging fences; Pi SSH to Mac lacks authentication"
-  }
+  },
+  "R_camera_imu": [
+    [
+      -1,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      -1
+    ]
+  ],
+  "axis_model_evidence": "IMU board vertical behind camera, live roll near-90deg; Euler yaw is world-up rotation; tests use vertical baseline"
 }

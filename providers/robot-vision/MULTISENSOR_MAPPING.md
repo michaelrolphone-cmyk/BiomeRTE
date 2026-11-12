@@ -9,7 +9,7 @@ innovations re-anchor the filter, preserving relocalization and loop closure.
 The rover's configured IMU-to-camera rotation uses the owner's three observed
 motions: left turn increases yaw (-105 to -60 is +45 degrees), front-up decreases
 roll, and right-side-up increases pitch. In camera right/down/forward axes this
-is `R_camera_imu = [[-1,0,0],[0,0,-1],[0,-1,0]]`. The approximately 4mm centered
+is `R_camera_imu = [[-1,0,0],[0,1,0],[0,0,-1]]`. The approximately 4mm centered
 rearward AHRS position is recorded separately from this axis transform. The
 default service uses this rotation at startup; passive axis learning is a fallback
 for an explicitly unconfigured replacement mount, not a required manual step.

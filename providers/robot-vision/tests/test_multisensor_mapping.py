@@ -36,18 +36,29 @@ def frame(t, angle=0, boot='boot', valid=True):
 class AttitudeTests(unittest.TestCase):
     def test_owner_observed_yaw_roll_and_pitch_axis_mapping(self):
         mount=np.asarray(ROVER_R_CAMERA_IMU)
-        def camera_rotation(axis,angle):
+        # AHRS world has Z up; the camera has Y down and optical Z forward.
+        world_camera=np.array([[0.,0.,1.],[-1.,0.,0.],[0.,-1.,0.]])
+        rest=world_camera@mount
+        def euler(r):
+            return np.degrees([math.atan2(r[2,1],r[2,2]),math.asin(-r[2,0]),math.atan2(r[1,0],r[0,0])])
+        def moved(axis,angle):
             q=[math.cos(angle/2),0,0,0];q[axis+1]=math.sin(angle/2)
-            return mount@quaternion_rotation(q)@mount.T
-        # Heading -105 -> -60 is +45 degrees about native IMU Z.
-        left=camera_rotation(2,math.radians(-60-(-105)))@np.array([0,0,1.])
-        self.assertLess(left[0],0)
-        # Front raised: negative raw roll (native X) lifts optical forward.
-        front_up=camera_rotation(0,math.radians(-30))@np.array([0,0,1.])
-        self.assertLess(front_up[1],0)
-        # Right raised: positive raw pitch (native Y) lifts camera right.
-        right_up=camera_rotation(1,math.radians(30))@np.array([1.,0,0])
-        self.assertLess(right_up[1],0)
+            camera=quaternion_rotation(q)
+            reading=world_camera@camera@mount
+            recovered=mount@rest.T@reading@mount.T
+            np.testing.assert_allclose(recovered,camera,atol=1e-8)
+            return reading,recovered
+        np.testing.assert_allclose(euler(rest)[:2],[-90,0],atol=1e-8)
+        # Positive Euler yaw represents a left turn from the vertical IMU pose.
+        left,camera=moved(1,math.radians(-45))
+        self.assertAlmostEqual(euler(left)[2]-euler(rest)[2],45.)
+        self.assertLess((camera@np.array([0,0,1.]))[0],0)
+        front_up,camera=moved(0,math.radians(30))
+        self.assertAlmostEqual(euler(front_up)[0]-euler(rest)[0],-30.)
+        self.assertLess((camera@np.array([0,0,1.]))[1],0)
+        right_up,camera=moved(2,math.radians(-30))
+        self.assertAlmostEqual(euler(right_up)[1]-euler(rest)[1],30.)
+        self.assertLess((camera@np.array([1.,0,0]))[1],0)
         np.testing.assert_allclose(mount.T@mount,np.eye(3))
         self.assertAlmostEqual(np.linalg.det(mount),1.)
 

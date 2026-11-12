@@ -19,9 +19,12 @@ from pathlib import Path
 
 import numpy as np
 
-# Owner-observed axis mapping: positive sensor yaw turns left; negative sensor
-# roll raises the front. Columns are native IMU X,Y,Z expressed in camera axes.
-ROVER_R_CAMERA_IMU = [[-1.,0.,0.],[0.,0.,-1.],[0.,-1.,0.]]
+# The IMU board is vertical behind the camera. Live resting attitude has roll
+# near -90deg, so Euler yaw is about world up, NOT the native body-Z axis.
+# Native body X points camera-left, Y camera-down, Z camera-backward.
+# This matches left-positive yaw, front-up negative roll, right-up positive pitch
+# when evaluated from the actual vertical resting orientation.
+ROVER_R_CAMERA_IMU = [[-1.,0.,0.],[0.,1.,0.],[0.,0.,-1.]]
 ROVER_T_CAMERA_IMU_M = [0.,0.,-.004]
 
 
