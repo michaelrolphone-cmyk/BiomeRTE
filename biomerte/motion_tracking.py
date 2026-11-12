@@ -93,6 +93,7 @@ class MotionRecorder:
             identity=None
             last_sequence=None
             last_ack=None
+            last_transitions=None
             while True:
                 event=self.events.get()
                 if event is None:
@@ -121,11 +122,19 @@ class MotionRecorder:
                         previous=None
                         timeline=[]
                         last_sequence=None
+                        last_transitions=None
                         model.state["steering_known"]=False
                     if type(seq) is not int or last_sequence is not None and seq<=last_sequence:
                         model.reject("duplicate_or_reordered_ack")
                     else:
                         last_sequence=seq
+                        transitions=value.get("output_transitions")
+                        if type(transitions) is int and last_transitions is not None and transitions>last_transitions+1:
+                            model.reject("missed_output_transitions")
+                            previous=None
+                            timeline=[]
+                            model.state["steering_known"]=False
+                        if type(transitions) is int:last_transitions=transitions
                         last_ack=received
                         if not timeline or timeline[-1]["mask"]!=mask:
                             # The actual application is bracketed between issue
@@ -180,6 +189,9 @@ class MotionRecorder:
                                 dt=sample["t"]-previous["t"]
                                 if sample["boot"]!=previous["boot"] or generation!=previous.get("generation") or not 0<dt<=1.:
                                     model.reject("sensor_clock_gap")
+                                    model.state["steering_known"]=False
+                                    model.state["speed_m_s"]=None
+                                    model.state["yaw_rate_deg_s"]=None
                                 else:
                                     # Require one definitely applied state throughout
                                     # both capture intervals. Ambiguous transitions stay
