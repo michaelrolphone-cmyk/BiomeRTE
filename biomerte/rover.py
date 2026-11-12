@@ -93,10 +93,9 @@ class Rover:
                         raise ConnectionError('Lease unavailable')
                     await asyncio.sleep(.5)
                     lease = await self.call('cap.lease', lease=lease['id'])
-                sessions = await self.call('stream.list', lease=lease['id'])
-                for old in sessions:
-                    await self.call('stream.close', session=old['id'])
+                # stream.open reattaches this subscription to the shared session.
                 descriptor = await self.call('stream.open', lease=lease['id'])
+                descriptor['subscription_lease'] = lease['id']
                 self.descriptors[contract] = descriptor
                 lanes = [asyncio.create_task(self.maintain_lane(descriptor, lane))
                          for lane in descriptor['lanes']]
@@ -116,7 +115,7 @@ class Rover:
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
                 if descriptor is not None:
                     try:
-                        await self.call('stream.close', session=descriptor['id'])
+                        await self.call('stream.close', session=descriptor['id'], lease=lease['id'])
                     except Exception:
                         pass
                 # Also release queued/fencing leases on shutdown or failed startup.
@@ -211,9 +210,9 @@ class Rover:
         for task in self.tasks:task.cancel()
         await asyncio.gather(*self.tasks,return_exceptions=True)
         for descriptor in self.descriptors.values():
-            try:await self.call('stream.close',session=descriptor['id'])
+            try:await self.call('stream.close',session=descriptor['id'], lease=descriptor.get('subscription_lease', descriptor['lease']))
             except Exception:pass
-            try:await self.call('cap.release',lease=descriptor['lease'])
+            try:await self.call('cap.release',lease=descriptor.get('subscription_lease', descriptor['lease']))
             except Exception:pass
 
 

@@ -15,8 +15,7 @@ class StreamGrants(BoundedLifecycle):
         self.assertEqual('bound',self.call('cap.lease',lease=lease['id'])['state'])
         self.assertEqual('vision',stream['lanes'][0])
         self.assertTrue(self.call('stream.attach',session=stream['id'],role='provider')['attachment_credential'])
-        with self.assertRaises(Fault):
-            self.call('stream.open',lease=lease['id'])
+        self.assertEqual(stream['id'], self.call('stream.open',lease=lease['id'])['id'])
         self.call('cap.release',lease=lease['id'])
         with self.assertRaises(Fault):
             self.call('stream.inspect',session=stream['id'])

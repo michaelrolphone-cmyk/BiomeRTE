@@ -13,6 +13,7 @@ from collections import deque
 import ssl
 import struct
 import time
+import uuid
 
 from .store import Fault, encode
 
@@ -59,8 +60,9 @@ def frame(metadata, data):
 
 
 class Session:
-    def __init__(self, grant, peer_status=False):
+    def __init__(self, grant, peer_status=False, control_clock=None):
         self.peer_status = peer_status
+        self.control_clock = control_clock
         self.quarantined = False
         self.grant = grant
         self.peers = {}
@@ -68,14 +70,30 @@ class Session:
         self.closed = False
         self.revisions = {}
 
+    def peers_on(self, role, lane):
+        return [p for (r, l, identity), p in list(self.peers.items())
+                if r == role and l == lane]
+
     def notify_control_status(self):
-        target = self.peers.get(('server', 'control'))
-        if self.peer_status and target is not None:
-            g = self.grant
-            target.put(json.dumps({'type': 'stream_status', 'lane': 'control',
-                'authority': g['authority'], 'generation': g['generation'],
-                'epoch': g['epoch'], 'provider_connected': ('provider', 'control') in self.peers,
-                'server_connected': True, 'authority_available': not self.quarantined}))
+        if not self.peer_status:
+            return
+        g = self.grant
+        message = json.dumps({'type': 'stream_status', 'lane': 'control',
+            'authority': g['authority'], 'generation': g['generation'], 'epoch': g['epoch'],
+            'provider_connected': bool(self.peers_on('provider', 'control')),
+            'server_connected': True, 'authority_available': not self.quarantined})
+        for target in self.peers_on('server', 'control'):
+            target.put(message)
+
+    def forward(self, role, lane, message, sender):
+        meta, payload = decode(message, self.grant['limits']['max_message_bytes'])
+        key = ('forward', role, lane)
+        sequence = max(meta['sequence'], self.sequences.get(key, -1) + 1)
+        self.sequences[key] = sequence
+        if sequence == meta['sequence'] and len(self.peers_on(role, lane)) == 1:
+            return message
+        meta.update(source_sequence=meta['sequence'], source_attachment=sender, sequence=sequence)
+        return json.dumps(meta) if payload is None else frame(meta, payload)
 
     def quarantine(self, value):
         if self.quarantined == value:
@@ -88,7 +106,7 @@ class Session:
                 peer.queue.get_nowait()
         self.notify_control_status()
 
-    def check(self, role, lane, message, now=None):
+    def check(self, role, lane, message, now=None, sender=None):
         g = self.grant
         meta, payload = decode(message, g['limits']['max_message_bytes'])
         if lane not in g.get('lanes', ['data']):
@@ -97,14 +115,15 @@ class Session:
                 g['authority'], g['generation'], g['epoch']):
             raise Fault('Superseded stream epoch', 409)
         seq = meta.get('sequence')
-        if type(seq) is not int or seq <= self.sequences.get((role, lane), -1):
+        if type(seq) is not int or seq <= self.sequences.get((role, lane, sender), -1):
             raise Fault('Old or duplicate sequence', 409)
         ack = meta.get('type') == 'ack'
         direction = g['direction']
         if not ack and ((direction == 'provider_to_server' and role != 'provider') or
                         (direction == 'server_to_provider' and role != 'server')):
             raise Fault('Wrong stream direction', 403)
-        now = time.time() if now is None else now
+        now = (self.control_clock.upper() if self.control_clock and lane == 'control' and not ack
+               else time.time()) if now is None else now
         if lane == 'control' and not ack:
             # Credentials, pings and socket traffic never renew driving intent.
             if role != 'server' or meta.get('type') != 'desired' or not isinstance(meta.get('outputs'), dict):
@@ -121,7 +140,7 @@ class Session:
                     raise Fault('Missing vision metadata: ' + field)
             if payload is None:
                 raise Fault('Vision requires frame bytes')
-        self.sequences[(role, lane)] = seq
+        self.sequences[(role, lane, sender)] = seq
         return meta, payload
 
     async def close(self, reason='Stream revoked'):
@@ -162,8 +181,9 @@ class Peer:
 
 
 class Router:
-    def __init__(self, secrets, validators, peer_status=False):
+    def __init__(self, secrets, validators, peer_status=False, control_clock=None):
         self.peer_status = peer_status
+        self.control_clock = control_clock
         self.secrets = secrets
         self.validators = validators
         self.sessions = {}
@@ -200,7 +220,7 @@ class Router:
         peers = {node: {'provider': {}, 'server': {}} for node in self.secrets}
         for session in self.sessions.values():
             roles = peers[session.grant['authority']]
-            for role, lane in session.peers:
+            for role, lane, identity in session.peers:
                 roles[role][lane] = roles[role].get(lane, 0) + 1
         return {'sessions': len(self.sessions), 'stream_peers': peers,
                 'recent_errors': list(self.diagnostics),
@@ -231,7 +251,7 @@ class Router:
         try:
             while not session.closed:
                 try:
-                    await self.validate(session.grant)
+                    current = await self.validate(session.grant)
                 except Exception as error:
                     self.report('authority_validation', session.grant, error)
                     if not self.can_quarantine(session, error):
@@ -243,6 +263,12 @@ class Router:
                     session.quarantine(True)
                 else:
                     session.quarantine(False)
+                    allowed = current.get('consumers')
+                    if allowed is not None:
+                        for key, peer in list(session.peers.items()):
+                            if key[0] == 'server' and peer.consumer and peer.consumer not in allowed:
+                                session.peers.pop(key, None)
+                                await peer.close(1008, 'Subscription released')
                 await asyncio.sleep(1)
         finally:
             self.sessions.pop(session.grant['id'], None)
@@ -256,17 +282,24 @@ class Router:
         await self.validate(grant)
         session = self.sessions.get(session_id)
         if not session:
-            session = self.sessions[session_id] = Session(grant, self.peer_status)
+            session = self.sessions[session_id] = Session(grant, self.peer_status, self.control_clock)
             self.tasks[session_id] = asyncio.create_task(self.watch(session))
         if session.closed or session.grant['epoch'] != grant['epoch']:
             raise Fault('Superseded stream epoch', 409)
         role = grant['role']
-        key = (role, lane)
-        previous = session.peers.get(key)
-        if previous:
-            await previous.close(1000, 'Reattached')
+        identity = grant.get('attachment_id') or uuid.uuid4().hex
+        key = (role, lane, identity)
+        # Credentials may be reused by independent connections; each is separate.
+        if key in session.peers:
+            identity += '-' + uuid.uuid4().hex
+            key = (role, lane, identity)
+        if role == 'server' and grant.get('consumer'):
+            current = await self.validate(grant)
+            if grant['consumer'] not in current.get('consumers', []):
+                raise Fault('Stream subscription released', 403)
         delivery=grant.get('policies', {}).get(lane, grant['delivery'])
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
+        peer.consumer = grant.get('consumer') or (grant['lease'] if role == 'server' else '')
         session.peers[key] = peer
         if lane == 'control':session.notify_control_status()
         pump = asyncio.create_task(peer.pump())
@@ -283,24 +316,49 @@ class Router:
                     count += 1
                     if count > grant['limits']['messages_per_second']:
                         raise Fault('Stream rate exceeded', 429)
-                    session.check(role, lane, message)
+                    session.check(role, lane, message, sender=identity)
                     if session.quarantined:continue
-                    other = session.peers.get(('provider' if role == 'server' else 'server', lane))
-                    if other:
-                        other.put(message)
+                    forwarded = session.forward(role, lane, message, identity)
+                    for other in session.peers_on('provider' if role == 'server' else 'server', lane):
+                        try:
+                            other.put(forwarded)
+                        except Fault:
+                            # A lagging subscriber cannot break the source or other subscribers.
+                            asyncio.create_task(other.close(1008, 'Consumer too slow'))
         reader=asyncio.create_task(receive())
+        close_code, close_reason = 1000, 'Detached'
         try:
             done,pending=await asyncio.wait((reader,pump),return_when=asyncio.FIRST_COMPLETED)
             for task in done:task.result()
+        except Exception as error:
+            self.report('payload', grant, error)
+            if isinstance(error, Fault):
+                status = getattr(error, 'status', 400)
+                close_code = 1009 if status == 413 else 1008
+                close_reason = str(error)
+            elif isinstance(error, (ValueError, UnicodeError)):
+                status, close_code, close_reason = 400, 1007, 'Invalid stream JSON metadata'
+            else:
+                status, close_code, close_reason = 500, 1011, 'Stream transport failed'
+            # Report to this attachment only. Invalid intent is never forwarded
+            # and cannot evict another subscription or release its reservation.
+            try:
+                await asyncio.wait_for(socket.send(json.dumps({
+                    'type': 'error', 'code': 'STREAM_REJECTED',
+                    'status': status, 'reason': close_reason,
+                    'lane': lane, 'applied': False if close_code != 1011 else None})), timeout=1)
+            except Exception:
+                pass
         finally:
             if session.peers.get(key) is peer:
                 session.peers.pop(key, None)
                 if lane == 'control':session.notify_control_status()
+            session.sequences.pop((role, lane, identity), None)
             reader.cancel()
             pump.cancel()
             await asyncio.gather(reader, pump, return_exceptions=True)
             # Disconnect discards queued payloads. Providers enforce intent expiry.
-            await peer.close(1000, 'Detached')
+            await peer.close(close_code, close_reason[:100])
 
 
 def listener_tls(config):
@@ -324,7 +382,11 @@ async def serve(config):
         validators[app.node] = lambda id, app=app: app.call('stream.inspect', {'session': id}, realm='site')
     from .stream_inspection import add_remote
     add_remote(config, secrets, validators)
-    router = Router(secrets, validators, peer_status=config.get('peer_status', False))
+    clock = None
+    if config.get('control_ntp'):
+        from .control_clock import ControlClock
+        clock = await ControlClock().start()
+    router = Router(secrets, validators, peer_status=config.get('peer_status', False), control_clock=clock)
     if config.get('diagnostic_log'):
         from logging.handlers import RotatingFileHandler
         logger = logging.getLogger(__name__)
@@ -334,7 +396,8 @@ async def serve(config):
     async def health(connection, request):
         if request.path == '/health':
             response = connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
-                **router.health(), 'transport': config.get('transport', 'tls')}))
+                **router.health(), 'transport': config.get('transport', 'tls'),
+                'control_clock': clock.status() if clock else None}))
             del response.headers['Content-Type']
             response.headers['Content-Type'] = 'application/json'
             return response
@@ -345,12 +408,17 @@ async def serve(config):
         except Exception as error:
             router.report('attachment', None, error)
             await socket.close(1008, 'Stream rejected')
-    async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
-                                ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
-        await asyncio.Future()
+    try:
+        async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
+                                    ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
+            await asyncio.Future()
+    finally:
+        if clock:
+            await clock.close()
 
 
 if __name__ == '__main__':
     import sys
     with open(sys.argv[1]) as source:
         asyncio.run(serve(json.load(source)))
+
