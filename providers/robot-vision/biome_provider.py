@@ -510,7 +510,20 @@ def serve(cfg):
             while not stopping.is_set():
                 try:
                     try:
-                        status = client.query("robot.vision.status", {})
+                        # Keep capability readiness independent of SLAM/map diagnostics.
+                        status = client.query("robot.vision.metadata", {})
+                        lanes = []
+                        for lane, path in (("vision", "/v1/live"), ("map", "/v1/live/map")):
+                            connection = UnixHTTPConnection(cfg["socket"], cfg.get("health_timeout_seconds", 5))
+                            try:
+                                connection.request("GET", path)
+                                response = connection.getresponse()
+                                if response.status == 200:
+                                    lanes.append(lane)
+                            finally:
+                                connection.close()
+                        status["state"] = "running" if len(lanes) == 2 else "unavailable"
+                        status["streaming"] = {"available": len(lanes) == 2, "lanes": lanes}
                         ready = supported_contracts(status)
                     except ServiceError as error:
                         # A busy/late health reply is unknown, not provider loss.
