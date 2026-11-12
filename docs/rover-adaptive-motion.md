@@ -6,10 +6,9 @@ calibration maneuver. Normal driving supplies the experiments.
 ## State and model
 
 The state contains signed speed, yaw rate, prior drive direction, continuous
-on/idle times and four latent steering-memory traces (0.15, 0.5, 1.5 and 5 second
+on/idle times, a persistent steering latch and four latent steering-memory traces (0.15, 0.5, 1.5 and 5 second
 basis time scales). These traces are features, not measured steering angles or
-calibrated settling constants. Neutral at rest preserves them. Straight rolling
-allows gradual recentering; reversing retains the physical steering history.
+calibrated settling constants. Neutral at rest preserves them. The steering latch remains turned through straight drive until corrective steering is applied; the model does not assume that removing steering power centers the wheels. Transient basis features may relax while rolling, allowing observations to distinguish persistent steering from dynamic settling. Reversing retains steering history.
 An adaptive autoregressive regression learns signed speed and yaw response from
 those features. Time-based forgetting and residual-triggered covariance inflation
 allow the observed response to change as power, payload or traction changes.
@@ -123,3 +122,8 @@ owners; transfer learned state explicitly before switching owners.
 Remote public delivery is a separate qualification. A Heroku route allowance
 does not by itself redirect the older Mac bridge to the observer port; either
 enable the in-process attachment on port8093 or update the Mac bridge routing.
+
+Raw fast-stream headers and coherent cached snapshots have different envelopes.
+Both are logged. Fitting uses snapshots with explicit capture-host clock bounds,
+while original fast-stream AHRS/sonar headers remain available for later replay.
+The cache readers run independently from control/video delivery.
