@@ -101,3 +101,25 @@ recentring, history-dependent predictions, read-only estimation, missing metric
 data, adaptation after a response shift, restart continuity and ambiguous windows.
 Software tests do not qualify physical prediction accuracy. This starts with no
 fabricated calibration coefficients; ordinary qualified observations build support.
+
+## Independent observer deployment
+
+When another worker owns the paired Rover service, run the read-only observer
+entry point `deploy/rover-motion-observer.py` as its own service. It subscribes to
+the existing multiplexed vision/control WebSockets, queries the local sonar cache
+independently, and acquires no physical leases. It never sends a control intent.
+Its authenticated API listens at `http://127.0.0.1:8094`; credentials use the
+existing private Rover bearer derivation. Its database is
+`~/.local/share/biome-rover-motion/motion/observations.sqlite`.
+
+This subscriber mode receives actual provider ACKs but cannot see another
+client's rejected desired requests. The primary in-process attachment additionally
+records requested commands and their immediate receipts/errors. Latest-value
+stream delivery can skip ACKs: output-transition counter gaps are recorded and
+cannot train as if the omitted states were known. Do not run two recorders against
+the same database. Subscriber and primary databases have deliberately distinct
+owners; transfer learned state explicitly before switching owners.
+
+Remote public delivery is a separate qualification. A Heroku route allowance
+does not by itself redirect the older Mac bridge to the observer port; either
+enable the in-process attachment on port8093 or update the Mac bridge routing.
