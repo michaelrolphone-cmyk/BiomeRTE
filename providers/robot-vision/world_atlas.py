@@ -256,17 +256,27 @@ class WorldAtlas:
         else:
             status=self.status()
             state={"world_id":self.world_id,"revision":status["revision"],"submaps":status["submaps"],
-                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None}
+                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None,"sonar_offset":0}
         entities=[]
         while state["index"] < len(state["submaps"]) and len(entities)<limit:
             item=state["submaps"][state["index"]]
             if item["T_world_map"] is None or item["revision"] is None:
                 state["index"]+=1
                 continue
-            page=self.store.read_map(item["map_id"],revision=item["revision"],
-                kinds=["keyframe","sparse_point"],cursor=state["local_cursor"],limit=limit-len(entities))
+            page = ({"entities": [], "next_cursor": None} if state["local_cursor"] == "sonar_only" else
+                self.store.read_map(item["map_id"],revision=item["revision"],
+                kinds=["keyframe","sparse_point"],cursor=state["local_cursor"],limit=limit-len(entities)))
             t=np.asarray(item["T_world_map"])
-            for entity in page["entities"]:
+            local_entities = list(page["entities"])
+            if not page.get("next_cursor") and getattr(self, "sonar_entities", None):
+                sonar = self.sonar_entities(item["map_id"], item["revision"])
+                offset = state.get("sonar_offset", 0)
+                room = limit-len(entities)-len(local_entities)
+                local_entities.extend(sonar[offset:offset+room])
+                state["sonar_offset"] = offset+max(0,room)
+                if offset+room < len(sonar):
+                    page["next_cursor"] = "sonar_only"
+            for entity in local_entities:
                 entity=copy.deepcopy(entity)
                 entity["entity_id"]=item["map_id"]+":"+entity["entity_id"]
                 data=entity["data"]
@@ -287,6 +297,7 @@ class WorldAtlas:
             state["local_cursor"]=page.get("next_cursor")
             if not state["local_cursor"]:
                 state["index"]+=1
+                state["sonar_offset"] = 0
         next_cursor=None
         if state["index"]<len(state["submaps"]):
             encoded=base64.urlsafe_b64encode(json.dumps(state,separators=(",",":")).encode()).decode()

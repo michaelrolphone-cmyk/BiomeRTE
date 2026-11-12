@@ -46,7 +46,7 @@ def calibration_errors(calibration, image_size=None, require_mounting=False):
     return errors
 
 
-def project_ground(pixel, calibration, image_size, *, confirmed_floor_contact=False):
+def project_ground(pixel, calibration, image_size, *, confirmed_floor_contact=True):
     """Return coordinates relative to the ground below the camera, never robot center."""
     base = {
         "availability": "unavailable",
@@ -58,8 +58,6 @@ def project_ground(pixel, calibration, image_size, *, confirmed_floor_contact=Fa
         "calibration_id": (calibration or {}).get("calibration_id"),
         "robot_center_transform": None,
     }
-    if confirmed_floor_contact is not True:
-        return {**base, "reason": "floor_contact_not_confirmed"}
     errors = calibration_errors(calibration, image_size, require_mounting=True)
     if errors:
         return {**base, "reason": "calibration_unavailable", "details": errors}
@@ -103,7 +101,8 @@ def project_ground(pixel, calibration, image_size, *, confirmed_floor_contact=Fa
     return {
         **base, "availability": "available", "position": position.tolist(),
         "quality": "estimated_from_calibrated_ray_and_supplied_plane",
-        "ground_contact": "asserted_by_caller",
+        "ground_contact": "robot_body_floor_contact_invariant",
+        "pixel_interpretation": "floor_plane_intersection_not_object_contact_confirmation",
         "ground_plane": "locally_flat_at_supplied_camera_height",
         "mounting_provenance": mounting.get("provenance"),
         "mounting_validated": mounting.get("validated") is True,
