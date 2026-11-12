@@ -50,8 +50,8 @@ async def run():
                             heartbeat=20,max_msg_size=0) as socket:
                         async for message in socket:
                             received=time.monotonic()
-                            if lane=="control" and message.type==WSMsgType.TEXT:
-                                value=json.loads(message.data)
+                            if lane=="control" and message.type in (WSMsgType.TEXT,WSMsgType.BINARY):
+                                value,unused=decode(message.data,4194304)
                                 if value.get("type")=="state" and not value.get("ready"):
                                     recorder.offer("gap",dict(reason="control_not_ready"),received)
                                 issued=value.get("issued_utc_ms")
