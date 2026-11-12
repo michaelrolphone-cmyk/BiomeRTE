@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS observations (
  persistent_object_id TEXT, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS observations_keyframe ON observations(map_id,keyframe_id);
 CREATE INDEX IF NOT EXISTS snapshots_session ON snapshots(session_id,serial);
+CREATE INDEX IF NOT EXISTS snapshots_retention ON snapshots(durable,serial,frame_id);
+CREATE INDEX IF NOT EXISTS snapshots_retention_frame ON snapshots(frame_id,serial,durable);
+CREATE INDEX IF NOT EXISTS frames_retention ON frames(blob,id) WHERE blob IS NOT NULL;
 CREATE TABLE IF NOT EXISTS observation_retention (
  snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
  reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(snapshot_id,reason));
@@ -467,16 +470,25 @@ PRAGMA user_version=1;
                 raise
 
     def _prune_locked(self):
-        recent = {row[0] for row in self._db.execute(
-            "SELECT frame_id FROM snapshots ORDER BY serial DESC LIMIT ?",
-            (self.max_observations,))}
+        cutoff = self._db.execute(
+            "SELECT serial FROM snapshots ORDER BY serial DESC LIMIT 1 OFFSET ?",
+            (self.max_observations-1,)).fetchone()
+        if cutoff is None:
+            return []
+        # Covering indexes avoid visiting large JSON payload pages. Durable
+        # records whose image was already evicted need no further work.
         rows = self._db.execute(
-            "SELECT f.id,f.blob,s.durable FROM frames f JOIN snapshots s ON s.frame_id=f.id "
-            "WHERE NOT EXISTS(SELECT 1 FROM frame_pins p WHERE p.frame_id=f.id)").fetchall()
+            "SELECT f.id,f.blob,s.durable FROM snapshots s INDEXED BY snapshots_retention "
+            "JOIN frames f ON f.id=s.frame_id WHERE s.durable=0 AND s.serial<? "
+            "AND NOT EXISTS(SELECT 1 FROM frame_pins p WHERE p.frame_id=f.id) "
+            "UNION ALL "
+            "SELECT f.id,f.blob,s.durable FROM frames f INDEXED BY frames_retention "
+            "JOIN snapshots s INDEXED BY snapshots_retention_frame ON s.frame_id=f.id "
+            "WHERE f.blob IS NOT NULL AND s.durable<>0 AND s.serial<? "
+            "AND NOT EXISTS(SELECT 1 FROM frame_pins p WHERE p.frame_id=f.id)",
+            (cutoff[0], cutoff[0])).fetchall()
         expired = []
         for row in rows:
-            if row["id"] in recent:
-                continue
             if row["blob"] is not None:
                 expired.append(row["blob"])
             if row["durable"]:

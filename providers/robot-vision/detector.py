@@ -124,9 +124,14 @@ class ObjectDetector:
         return {"availability": "unavailable", "frame_id": frame_id, "reason": reason,
                 "items": [], "tracker_epoch": self.tracker_epoch}
 
+    def execution_device(self):
+        device = getattr(getattr(self.model, "predictor", None), "device", None)
+        return None if device is None else str(device)
+
     def status(self):
         return {"state": "ready" if self.model is not None and self._error is None else "unavailable",
                 "error": self._error, "model": self.config.get("model", "yolo11n.pt"),
                 "model_sha256": self._model_hash, "device": self.device,
+                "execution_device": self.execution_device(),
                 "tracker": "BoT-SORT", "tracker_epoch": self.tracker_epoch,
                 "processed_frames": self._frames, "last_inference_ms": self._last_ms}

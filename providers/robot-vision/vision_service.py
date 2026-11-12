@@ -388,18 +388,22 @@ class VisionService:
             started = time.monotonic()
             try:
                 with self._pipeline_lock:
+                    lock_wait_ms = (time.monotonic()-started)*1000
                     if epoch is not None and epoch != captured.metadata["stream_epoch"]:
                         self.detector.reset_tracking()
                         if not self._recovery_error:
                             self.backend.invalidate_tracking("camera_stream_reconnected")
                     epoch = captured.metadata["stream_epoch"]
                     self.process_frame(captured)
+                    self._performance_stages["pipeline_lock_wait"] = lock_wait_ms
                     self._frames += 1
                     self._last_process_ms = (time.monotonic()-started)*1000
                     self._error = None
                     valid = getattr(self, "_last_tracking_valid", False)
                     report = self.performance.record(self._last_process_ms, self._performance_stages,
                         captured, self._skipped, valid)
+                    report["camera"] = self.camera.status()
+                    report["detector"] = self.detector.status()
                     if time.monotonic()-self.performance.last_write >= 1:
                         atomic_json(self.state_dir / "processing-performance.json", report)
                         self.performance.last_write = time.monotonic()
@@ -631,11 +635,14 @@ class VisionService:
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
                    "motion_class": d["motion_class"], "image_motion": d["image_motion"]}
                   for d in detections.get("items", []) if d.get("track_id")]
+        stage_started = time.monotonic()
         snapshot = self.store.publish_observation(
             self.session_id, frame, detections.get("items", []), localization,
             tracks=tracks, spatial_evidence=spatial,
             keyframe_id=anchor["keyframe_id"] if exact_anchor else None,
             durable=exact_anchor, image_bytes=encoded.tobytes())
+        self._performance_stages["observation_store"] = (time.monotonic()-stage_started)*1000
+        stage_started = time.monotonic()
         if exact_anchor:
             self.store.pin_frame(frame_id, f"keyframe:{self.map_id}:{anchor['keyframe_id']}")
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
@@ -647,6 +654,8 @@ class VisionService:
         except Exception as exc:
             self.metric.record_error("capture_offer:" + type(exc).__name__ + ":" + str(exc))
             LOG.exception("Metric capture enqueue failed; coherent observation remains available")
+        self._performance_stages["post_store_evidence"] = (time.monotonic()-stage_started)*1000
+        stage_started = time.monotonic()
         live_metadata = {
             "frame_id": frame_id, "source_timestamp": frame.get("source_timestamp", frame.get("capture_time")),
             "source_timestamp_status": frame.get("capture_time_status", "unknown"),
@@ -664,6 +673,7 @@ class VisionService:
             self.live_frames.publish(live_metadata, encoded.tobytes())
         else:
             self._live_camera.record_processed(captured, live_metadata)
+        self._performance_stages["live_publication"] = (time.monotonic()-stage_started)*1000
         return snapshot
 
     def _raw_live_metadata(self, captured, previous):
