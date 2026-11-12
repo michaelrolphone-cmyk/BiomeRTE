@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+from concurrent.futures import ThreadPoolExecutor
+from processing_performance import ProcessingPerformance
 import fcntl
 import json
 import logging
@@ -101,6 +103,9 @@ class VisionService:
         self._skipped = 0
         self._error = None
         self._last_process_ms = None
+        self._performance_stages = {}
+        self.performance = ProcessingPerformance(config["camera"].get("expected_fps", 5.0))
+        self._detection_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision-detection") if config.get("parallel_detection", True) else None
         self._last_checkpoint_tick = time.monotonic()
         self._last_checkpoint_revision = None
         self._checkpoint_error = None
@@ -383,15 +388,25 @@ class VisionService:
             started = time.monotonic()
             try:
                 with self._pipeline_lock:
+                    lock_wait_ms = (time.monotonic()-started)*1000
                     if epoch is not None and epoch != captured.metadata["stream_epoch"]:
                         self.detector.reset_tracking()
                         if not self._recovery_error:
                             self.backend.invalidate_tracking("camera_stream_reconnected")
                     epoch = captured.metadata["stream_epoch"]
                     self.process_frame(captured)
+                    self._performance_stages["pipeline_lock_wait"] = lock_wait_ms
                     self._frames += 1
                     self._last_process_ms = (time.monotonic()-started)*1000
                     self._error = None
+                    valid = getattr(self, "_last_tracking_valid", False)
+                    report = self.performance.record(self._last_process_ms, self._performance_stages,
+                        captured, self._skipped, valid)
+                    report["camera"] = self.camera.status()
+                    report["detector"] = self.detector.status()
+                    if time.monotonic()-self.performance.last_write >= 1:
+                        atomic_json(self.state_dir / "processing-performance.json", report)
+                        self.performance.last_write = time.monotonic()
                     self._maybe_checkpoint()
             except Exception as exc:
                 self._error = f"processing_failed:{type(exc).__name__}"
@@ -437,6 +452,8 @@ class VisionService:
         """One coherent observation; callers hold the pipeline lock around backend state."""
         import cv2
 
+        stage_started = time.monotonic()
+        self._performance_stages = {}
         frame = {**captured.metadata, "calibration_id": self.calibration["calibration_id"],
                  "encoding_origin": "jpeg_reencoded_from_this_decoded_frame",
                  "receive_decode_monotonic_s": captured.decoded_monotonic}
@@ -450,11 +467,21 @@ class VisionService:
         frame["lighting"] = {"mean_luma_0_255": mean_luma, "low_light_observed": mean_luma < 35.0,
                              "assessment": "image_brightness_not_measured_illumination",
                              "light_control_operation": "robot.camera.light.set"}
-        ok, encoded = cv2.imencode(".jpg", captured.image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        if not ok:
-            raise RuntimeError("frame_encoding_failed")
-        detections = self.detector.detect(captured.image, frame_id, captured.decoded_monotonic)
-        frame["detection_metadata"] = {key: value for key, value in detections.items() if key != "items"}
+        source_jpeg = getattr(captured, "jpeg_bytes", None)
+        if source_jpeg:
+            encoded = np.frombuffer(source_jpeg, dtype=np.uint8)
+            frame["encoding_origin"] = "source_jpeg_for_this_decoded_frame"
+        else:
+            ok, encoded = cv2.imencode(".jpg", captured.image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                raise RuntimeError("frame_encoding_failed")
+        self._performance_stages["preprocessing"] = (time.monotonic()-stage_started)*1000
+        detection_future = self._detection_executor.submit(
+            self.detector.detect, captured.image, frame_id, captured.decoded_monotonic
+        ) if self._detection_executor else None
+        detections = None if detection_future else self.detector.detect(
+            captured.image, frame_id, captured.decoded_monotonic)
+        tracking_started = time.monotonic()
         size = [frame["width"], frame["height"]]
         errors = calibration_errors(self.calibration, size)
         if self._recovery_error:
@@ -488,6 +515,14 @@ class VisionService:
                 result = {"localization": unknown_localization("error"),
                           "geometry": {"available": False, "reason": f"slam_failed:{type(exc).__name__}"},
                           "map_changes": []}
+        self._performance_stages["slam_tracking"] = (time.monotonic()-tracking_started)*1000
+        wait_started = time.monotonic()
+        if detection_future is not None:
+            detections = detection_future.result()
+        self._performance_stages["detection_wait"] = (time.monotonic()-wait_started)*1000
+        self._performance_stages["detection_inference"] = detections.get("inference_ms")
+        frame["detection_metadata"] = {key: value for key, value in detections.items() if key != "items"}
+        stage_started = time.monotonic()
         geometry = result.get("geometry", {})
         changes = self._reconcile_changes(result.get("map_changes", []), geometry)
         anchor = result.get("observation_anchor")
@@ -503,6 +538,8 @@ class VisionService:
                          "geometry_rule": "resolve_anchor_at_requested_map_revision"},
             }
         self._commit_changes(changes, result.get("map_change_reason", "mapping"))
+        self._performance_stages["map_commit"] = (time.monotonic()-stage_started)*1000
+        stage_started = time.monotonic()
         localization = copy.deepcopy(result.get("localization") or unknown_localization("unavailable"))
         localization.update(map_id=self.map_id, map_revision=self.revision, frame_id=frame_id)
         localization.setdefault("covariance", None)
@@ -563,6 +600,9 @@ class VisionService:
                         keyframe,self.revision)
             obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
             obstacle_status["metric_odometry"] = metric_pose
+        self._last_tracking_valid = bool(localization.get("valid"))
+        self._performance_stages["sensor_fusion"] = (time.monotonic()-stage_started)*1000
+        frame["processing_performance"] = dict(self._performance_stages)
         self._last_geometry = copy.deepcopy(geometry)
         spatial = {
             "sparse_geometry": geometry,
@@ -595,11 +635,14 @@ class VisionService:
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
                    "motion_class": d["motion_class"], "image_motion": d["image_motion"]}
                   for d in detections.get("items", []) if d.get("track_id")]
+        stage_started = time.monotonic()
         snapshot = self.store.publish_observation(
             self.session_id, frame, detections.get("items", []), localization,
             tracks=tracks, spatial_evidence=spatial,
             keyframe_id=anchor["keyframe_id"] if exact_anchor else None,
             durable=exact_anchor, image_bytes=encoded.tobytes())
+        self._performance_stages["observation_store"] = (time.monotonic()-stage_started)*1000
+        stage_started = time.monotonic()
         if exact_anchor:
             self.store.pin_frame(frame_id, f"keyframe:{self.map_id}:{anchor['keyframe_id']}")
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
@@ -611,6 +654,8 @@ class VisionService:
         except Exception as exc:
             self.metric.record_error("capture_offer:" + type(exc).__name__ + ":" + str(exc))
             LOG.exception("Metric capture enqueue failed; coherent observation remains available")
+        self._performance_stages["post_store_evidence"] = (time.monotonic()-stage_started)*1000
+        stage_started = time.monotonic()
         live_metadata = {
             "frame_id": frame_id, "source_timestamp": frame.get("source_timestamp", frame.get("capture_time")),
             "source_timestamp_status": frame.get("capture_time_status", "unknown"),
@@ -628,6 +673,7 @@ class VisionService:
             self.live_frames.publish(live_metadata, encoded.tobytes())
         else:
             self._live_camera.record_processed(captured, live_metadata)
+        self._performance_stages["live_publication"] = (time.monotonic()-stage_started)*1000
         return snapshot
 
     def _raw_live_metadata(self, captured, previous):
@@ -688,15 +734,9 @@ class VisionService:
     def _sonar_anchor(self, map_id, identifier, revision=None):
         if identifier is None:
             return None
-        cursor = None
-        while True:
-            page = self.store.read_map(map_id, revision=revision, kinds=["keyframe"], cursor=cursor)
-            for entity in page["entities"]:
-                if str(entity["entity_id"]) == str(identifier):
-                    return {"id": str(identifier), "T_map_keyframe": entity["data"]["T_map_camera"]}
-            cursor = page.get("next_cursor")
-            if not cursor:
-                return None
+        entity = self.store.read_entity(map_id, "keyframe", str(identifier), revision)
+        return None if entity is None else {"id": str(identifier),
+                                           "T_map_keyframe": entity["data"]["T_map_camera"]}
 
     def _read_obstacles(self, map_id, revision=None, include_rays=True):
         scale = self.metric.attachment_status(map_id, revision=revision)
@@ -1099,6 +1139,7 @@ class VisionService:
                 "map_revision": self.revision, "session_id": self.session_id,
                 "uptime_s": time.monotonic()-self._started, "processed_frames": self._frames,
                 "skipped_camera_frames": self._skipped, "last_process_ms": self._last_process_ms,
+                "processing_performance": self.performance.summary,
                 "processing_fps_since_start": self._frames/max(time.monotonic()-self._started, 1e-6),
                 "error": self._error, "camera": self.camera.status(), "detector": self.detector.status(),
                 "localization": self._backend_status(), "persistence": self.store.status(),
@@ -1293,6 +1334,8 @@ class VisionService:
         self.camera.close()
         if self._thread:
             self._thread.join()
+        if self._detection_executor is not None:
+            self._detection_executor.shutdown(wait=True)
         try:
             self.radio.close()
         except Exception:
@@ -1398,6 +1441,8 @@ def watch_parent(parent_pid, stop):
 
 
 def main(argv=None):
+    import faulthandler
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--config", type=Path)
