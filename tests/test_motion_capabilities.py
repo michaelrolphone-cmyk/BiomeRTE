@@ -32,7 +32,7 @@ class NativeMotionTests(unittest.TestCase):
         self.db.commit()
 
     def test_generic_contracts_have_no_host_placement_requirement(self):
-        self.assertEqual(set(provider.CONTRACTS),{"robot.motion.model:1","robot.motion.predict:1"})
+        self.assertEqual(set(provider.CONTRACTS),{"robot.motion.model:1","robot.motion.predict:1","robot.motion.plan:1"})
         self.assertEqual(provider.CONTRACTS["robot.motion.predict:1"]["inputs"]["pulses"],"list")
         for contract in provider.CONTRACTS.values():
             self.assertNotIn("provider",contract["inputs"])
@@ -80,6 +80,30 @@ class NativeMotionTests(unittest.TestCase):
             provider.ModelBackend(Path(self.directory.name)/"missing.sqlite").query("robot.motion.model:1",{})
         self.assertEqual(error.exception.code,"model_unavailable")
 
+    def test_native_inverse_has_revision_guard_and_no_invented_timings(self):
+        before=self.db.execute("SELECT payload FROM model").fetchone()[0]
+        result=self.backend.query("robot.motion.plan:1",{"target":{"distance_m":.3,"yaw_deg":20}})
+        self.assertEqual(result["status"],"insufficient_calibration")
+        self.assertIsNone(result["pulses"])
+        self.assertFalse(result["executes_motion"])
+        self.assertEqual(before,self.db.execute("SELECT payload FROM model").fetchone()[0])
+        with self.assertRaises(provider.QueryError):
+            self.backend.query("robot.motion.plan:1",{"target":{"distance_m":.3,"yaw_deg":20},"model_revision":99})
+
+    def test_native_inverse_returns_forward_checked_plan_from_same_snapshot(self):
+        for regression in (self.model.angular,self.model.metric):
+            regression.count=100
+            regression.domains={str(mask):100 for mask in (1,2,5,6,9,10)}
+        self.model.angular.weights[2]=30.
+        self.model.metric.weights[1]=.2
+        self.model.state["steering_known"]=True
+        self.save()
+        result=self.backend.query("robot.motion.plan:1",{"target":{"distance_m":.2,"yaw_deg":30},"model_revision":self.model.revision})
+        self.assertTrue(result["within_tolerance"])
+        self.assertEqual(result["prediction"]["model_revision"],result["model_revision"])
+        self.assertFalse(result["executes_motion"])
+        self.assertIn("model_snapshot_sha256",result)
+
 class RunnerRegistrationTests(unittest.TestCase):
     def test_motion_handlers_use_existing_durable_runner(self):
         from biomerte import supervised_commands
@@ -88,6 +112,7 @@ class RunnerRegistrationTests(unittest.TestCase):
             provider.register_runner_contracts()
             self.assertTrue(supervised_commands.supported({"contract":"robot.motion.model:1"}))
             self.assertTrue(supervised_commands.supported({"contract":"robot.motion.predict:1"}))
+            self.assertTrue(supervised_commands.supported({"contract":"robot.motion.plan:1"}))
             for name in previous:self.assertIn(name,supervised_commands.CONTRACTS)
             once=supervised_commands.CONTRACTS
             provider.register_runner_contracts()
