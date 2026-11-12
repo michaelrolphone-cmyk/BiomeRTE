@@ -18,7 +18,7 @@ class NativeMotionTests(unittest.TestCase):
         self.database=Path(self.directory.name)/"model.sqlite"
         self.model=MotionModel()
         self.db=sqlite3.connect(self.database)
-        self.db.executescript("CREATE TABLE model(id INTEGER PRIMARY KEY,payload TEXT,updated_utc REAL); CREATE TABLE events(id INTEGER PRIMARY KEY,kind TEXT,payload TEXT,received_monotonic REAL);")
+        self.db.executescript("CREATE TABLE model(id INTEGER PRIMARY KEY,payload TEXT,updated_utc REAL); CREATE TABLE events(id INTEGER PRIMARY KEY,kind TEXT,payload TEXT,received_monotonic REAL,recorded_utc REAL DEFAULT 0);")
         self.save()
         self.backend=provider.ModelBackend(self.database)
 
@@ -32,7 +32,7 @@ class NativeMotionTests(unittest.TestCase):
         self.db.commit()
 
     def test_generic_contracts_have_no_host_placement_requirement(self):
-        self.assertEqual(set(provider.CONTRACTS),{"robot.motion.model:1","robot.motion.predict:1","robot.motion.plan:1"})
+        self.assertEqual(set(provider.CONTRACTS),{"robot.motion.model:1","robot.motion.predict:1","robot.motion.plan:1",*["robot.motion.training."+action+":1" for action in ("start","stop","status","read")]})
         self.assertEqual(provider.CONTRACTS["robot.motion.predict:1"]["inputs"]["pulses"],"list")
         for contract in provider.CONTRACTS.values():
             self.assertNotIn("provider",contract["inputs"])
@@ -89,6 +89,17 @@ class NativeMotionTests(unittest.TestCase):
         self.assertEqual(before,self.db.execute("SELECT payload FROM model").fetchone()[0])
         with self.assertRaises(provider.QueryError):
             self.backend.query("robot.motion.plan:1",{"target":{"distance_m":.3,"yaw_deg":20},"model_revision":99})
+
+    def test_native_training_start_status_stop_share_durable_session(self):
+        start=self.backend.query("robot.motion.training.start:1",{"session_id":"native-test","label":"Manual room drive"})
+        self.assertFalse(start["executes_motion"])
+        self.assertFalse(start["recording"])
+        status=self.backend.query("robot.motion.training.status:1",{})
+        self.assertEqual(status["session"]["id"],"native-test")
+        stop=self.backend.query("robot.motion.training.stop:1",{"session_id":"native-test"})
+        self.assertIsNotNone(stop["session"]["stopped_utc"])
+        page=self.backend.query("robot.motion.training.read:1",{"session_id":"native-test"})
+        self.assertEqual(page["events"],[])
 
     def test_native_inverse_returns_forward_checked_plan_from_same_snapshot(self):
         for regression in (self.model.angular,self.model.metric):
