@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Upgrade only the dedicated motion worker, retaining its identity and ledger."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -8,6 +9,21 @@ from pathlib import Path
 import plistlib
 import sqlite3
 import subprocess
+import time
+
+
+def bootstrap(domain, plist):
+    # launchd can acknowledge bootout before allowing the same label back in.
+    deadline=time.monotonic()+15.
+    while True:
+        result=subprocess.run(["launchctl","bootstrap",domain,str(plist)],capture_output=True,text=True)
+        if result.returncode==0:return
+        observed=subprocess.run(["launchctl","print",domain+"/org.biomerte.rover-motion-provider"],capture_output=True,text=True)
+        expected=plistlib.loads(plist.read_bytes())["ProgramArguments"][1]
+        if observed.returncode==0 and expected in observed.stdout:return
+        if result.returncode!=5 or observed.returncode==0 or time.monotonic()>=deadline:
+            raise subprocess.CalledProcessError(result.returncode,result.args,output=result.stdout,stderr=result.stderr)
+        time.sleep(.25)
 
 
 def upgrade(source_root, state):
@@ -48,6 +64,15 @@ def upgrade(source_root, state):
     domain="gui/"+str(os.getuid())
     subprocess.run(["launchctl","bootout",service],check=True)
     try:
+        deadline=time.monotonic()+30.
+        with (state/"worker.lock").open("a") as lock:
+            while True:
+                try:
+                    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic()>=deadline:raise RuntimeError("Old motion worker is still shutting down")
+                    time.sleep(.25)
         idle()
         cfg.update(runtime=str(runtime),base_model_runtime=base_runtime,adapter_path=str(adapter),
                    motion_source_sha256=identity)
@@ -56,10 +81,10 @@ def upgrade(source_root, state):
         launch.setdefault("EnvironmentVariables",{})["PYTHONPATH"]=str(runtime)
         config_file.write_text(json.dumps(cfg,indent=2))
         plist.write_bytes(plistlib.dumps(launch))
-        subprocess.run(["launchctl","bootstrap",domain,str(plist)],check=True)
+        bootstrap(domain,plist)
     except Exception:
         config_file.write_bytes(original_config);plist.write_bytes(original_plist)
-        subprocess.run(["launchctl","bootstrap",domain,str(plist)],check=False)
+        bootstrap(domain,plist)
         raise
     print(json.dumps(dict(upgraded=True,provider=cfg["provider"],resource=cfg["resource"],source_sha256=identity)))
 
