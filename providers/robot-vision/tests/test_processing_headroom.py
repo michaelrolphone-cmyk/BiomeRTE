@@ -42,6 +42,19 @@ class HeadroomTests(unittest.TestCase):
             snapshot = self.process(service, captured)
         self.assertEqual(snapshot["localization"]["frame_id"], captured.metadata["frame_id"])
 
+    def test_anchor_lookup_is_exact_and_retains_historical_tombstones(self):
+        service = self.make_service()
+        self.process(service, self.frame(service, "anchor"))
+        original = service.revision
+        with patch.object(service.store, "read_map", side_effect=AssertionError("whole-map scan")):
+            self.assertEqual(service._sonar_anchor(service.map_id, "kf-0")["id"],"kf-0")
+        result = service.store.apply_map_update(service.map_id, original,
+            [{"op":"delete","kind":"keyframe","entity_id":"kf-0"}],reason="test")
+        service.revision = result["revision"] if isinstance(result,dict) else int(result)
+        self.assertIsNone(service.store.read_entity(service.map_id,"keyframe","kf-0"))
+        self.assertIsNotNone(service.store.read_entity(service.map_id,"keyframe","kf-0",original))
+        self.assertIsNone(service.store.read_entity(service.map_id,"keyframe","missing"))
+
     def test_serial_mode_remains_available_for_comparison(self):
         self.config["parallel_detection"] = False
         service = self.make_service()

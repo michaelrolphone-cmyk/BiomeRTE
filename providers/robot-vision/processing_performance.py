@@ -1,5 +1,6 @@
 """Bounded rolling measurements of the live frame-processing budget."""
 import math
+import os
 import time
 from collections import deque
 
@@ -25,7 +26,7 @@ class ProcessingPerformance:
         p95 = percentile([r["total_ms"] for r in rows], .95)
         elapsed = now-rows[0]["at"]
         self.summary = {
-            "window_frames": len(rows), "expected_frame_period_ms": self.period_ms,
+            "process_id": os.getpid(), "window_frames": len(rows), "expected_frame_period_ms": self.period_ms,
             "processing_ms_p50": percentile([r["total_ms"] for r in rows], .50),
             "processing_ms_p95": p95,
             "frame_budget_headroom_fraction_p95": 1-p95/self.period_ms,

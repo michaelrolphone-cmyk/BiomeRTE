@@ -724,15 +724,9 @@ class VisionService:
     def _sonar_anchor(self, map_id, identifier, revision=None):
         if identifier is None:
             return None
-        cursor = None
-        while True:
-            page = self.store.read_map(map_id, revision=revision, kinds=["keyframe"], cursor=cursor)
-            for entity in page["entities"]:
-                if str(entity["entity_id"]) == str(identifier):
-                    return {"id": str(identifier), "T_map_keyframe": entity["data"]["T_map_camera"]}
-            cursor = page.get("next_cursor")
-            if not cursor:
-                return None
+        entity = self.store.read_entity(map_id, "keyframe", str(identifier), revision)
+        return None if entity is None else {"id": str(identifier),
+                                           "T_map_keyframe": entity["data"]["T_map_camera"]}
 
     def _read_obstacles(self, map_id, revision=None, include_rays=True):
         scale = self.metric.attachment_status(map_id, revision=revision)
@@ -1437,6 +1431,8 @@ def watch_parent(parent_pid, stop):
 
 
 def main(argv=None):
+    import faulthandler
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--config", type=Path)

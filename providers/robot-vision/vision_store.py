@@ -681,6 +681,18 @@ PRAGMA user_version=1;
             raise ValueError("cursor does not match the pinned query")
         return _integer(cursor.get("offset"), "cursor offset")
 
+    def read_entity(self, map_id, kind, entity_id, revision=None):
+        """Read one versioned identity, including historical deletion semantics."""
+        kind, entity_id = _id(kind, "kind"), _id(str(entity_id), "entity_id")
+        with self._lock:
+            self._open()
+            info = self._map_locked(map_id, revision)
+            row = self._db.execute(
+                "SELECT * FROM entity_versions WHERE map_id=? AND kind=? AND entity_id=? "
+                "AND revision<=? ORDER BY revision DESC LIMIT 1",
+                (map_id, kind, entity_id, info["revision"])).fetchone()
+            return None if row is None or row["deleted"] else self._entity(row)
+
     def read_map(self, map_id, revision=None, bounds=None, kinds=None, cursor=None, limit=500):
         _integer(limit, "limit", 1)
         if isinstance(cursor, str):

@@ -523,6 +523,22 @@ class SonarObstacleMap:
         self.db.execute('CREATE TABLE IF NOT EXISTS alignment_pairs (id TEXT PRIMARY KEY,map_id TEXT NOT NULL,data TEXT NOT NULL)')
         self.db.execute('CREATE INDEX IF NOT EXISTS alignment_map ON alignment_pairs(map_id)')
         self.db.commit()
+        # Maintain exact counts transactionally instead of rescanning all ray JSON
+        # on every sensor frame. Triggers also cover independent SQLite writers.
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            exists = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ray_summary'").fetchone()
+            self.db.execute('CREATE TABLE IF NOT EXISTS ray_summary (map_id TEXT PRIMARY KEY,total INTEGER NOT NULL,posed INTEGER NOT NULL,metric INTEGER NOT NULL)')
+            if not exists:
+                self.db.execute('INSERT INTO ray_summary SELECT map_id,count(*),sum(resolved),sum(metric_resolved) FROM rays GROUP BY map_id')
+            self.db.execute('CREATE TRIGGER IF NOT EXISTS ray_summary_insert AFTER INSERT ON rays BEGIN INSERT INTO ray_summary VALUES(NEW.map_id,1,NEW.resolved,NEW.metric_resolved) ON CONFLICT(map_id) DO UPDATE SET total=total+1,posed=posed+NEW.resolved,metric=metric+NEW.metric_resolved; END')
+            self.db.execute('CREATE TRIGGER IF NOT EXISTS ray_summary_delete AFTER DELETE ON rays BEGIN UPDATE ray_summary SET total=total-1,posed=posed-OLD.resolved,metric=metric-OLD.metric_resolved WHERE map_id=OLD.map_id; END')
+            self.db.execute('CREATE TRIGGER IF NOT EXISTS ray_summary_update AFTER UPDATE OF map_id,resolved,metric_resolved ON rays BEGIN UPDATE ray_summary SET total=total-1,posed=posed-OLD.resolved,metric=metric-OLD.metric_resolved WHERE map_id=OLD.map_id; INSERT INTO ray_summary VALUES(NEW.map_id,1,NEW.resolved,NEW.metric_resolved) ON CONFLICT(map_id) DO UPDATE SET total=total+1,posed=posed+NEW.resolved,metric=metric+NEW.metric_resolved; END')
+            self.db.execute('CREATE INDEX IF NOT EXISTS rays_pending_clock ON rays(map_id,observed_s) WHERE resolved=0 OR metric_resolved=0')
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     @staticmethod
     def _mount(mount):
@@ -597,8 +613,9 @@ class SonarObstacleMap:
 
     def summary(self, map_id, scale=None):
         with self.lock:
-            counts = dict(self.db.execute('SELECT resolved,count(*) FROM rays WHERE map_id=? GROUP BY resolved', (map_id,)))
-            metric_count=self.db.execute('SELECT count(*) FROM rays WHERE map_id=? AND metric_resolved=1',(map_id,)).fetchone()[0]
+            row = self.db.execute('SELECT total,posed,metric FROM ray_summary WHERE map_id=?', (map_id,)).fetchone()
+            total, posed, metric_count = row or (0, 0, 0)
+            counts = {0: total-posed, 1: posed}
         return {'map_id': map_id, 'ray_count': sum(counts.values()),
                 'posed_observations': counts.get(1,0), 'unposed_observations': counts.get(0,0),
                 'metric_observations':metric_count,
