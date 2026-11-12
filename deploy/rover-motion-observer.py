@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import signal
 import time
-from aiohttp import web,ClientSession,WSMsgType
+from aiohttp import ClientSession,WSMsgType
 from biomerte.app import Application
 from biomerte.motion_tracking import MotionRecorder,cached_query,observation_payload
 from biomerte.stream_router import decode
@@ -39,27 +39,6 @@ async def run():
     token=hmac.new(secret.encode(),b"rover-site",hashlib.sha256).hexdigest()
     recorder=MotionRecorder(Path.home()/".local/share/biome-rover-motion/motion/observations.sqlite")
     recorder.offer("gap",dict(reason="observer_started",source_mode="read_only_multiplexed_subscriber"))
-    @web.middleware
-    async def authenticate(request,handler):
-        if not hmac.compare_digest(request.headers.get("Authorization",""),"Bearer "+token):
-            raise web.HTTPUnauthorized()
-        return await handler(request)
-    app=web.Application(middlewares=[authenticate],client_max_size=0)
-    async def status(request):
-        return web.json_response(dict(recorder.status(),observer_mode="read_only_subscriber"))
-    async def predict(request):
-        try:
-            body=await request.json()
-            if not isinstance(body,dict) or set(body)-{"pulses","initial_state","step_s"}:
-                raise ValueError("Expected pulses, optional initial_state and step_s")
-            result=await asyncio.to_thread(recorder.predict,body.get("pulses"),body.get("initial_state"),body.get("step_s",.05))
-            return web.json_response(result)
-        except (ValueError,TypeError,OverflowError) as error:
-            raise web.HTTPBadRequest(text=str(error))
-        except RuntimeError as error:
-            raise web.HTTPServiceUnavailable(text=str(error))
-    app.router.add_get("/api/motion/model",status)
-    app.router.add_post("/api/motion/predict",predict)
     stopped=asyncio.Event()
     for sig in (signal.SIGTERM,signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig,stopped.set)
@@ -109,15 +88,12 @@ async def run():
             except Exception as error:
                 recorder.offer("sensor_error",dict(sensor="coherent_snapshot",error=type(error).__name__))
             await asyncio.sleep(.25)
-    runner=web.AppRunner(app);await runner.setup()
-    await web.TCPSite(runner,"127.0.0.1",8094).start()
     tasks=[asyncio.create_task(observe("control")),asyncio.create_task(observe("vision")),
            asyncio.create_task(sonar()),asyncio.create_task(snapshots())]
     try:await stopped.wait()
     finally:
         for task in tasks:task.cancel()
         await asyncio.gather(*tasks,return_exceptions=True)
-        await runner.cleanup()
         recorder.offer("gap",dict(reason="observer_shutdown"))
         await asyncio.to_thread(recorder.close)
 
