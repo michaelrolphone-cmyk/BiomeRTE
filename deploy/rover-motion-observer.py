@@ -88,8 +88,17 @@ async def run():
             except Exception as error:
                 recorder.offer("sensor_error",dict(sensor="coherent_snapshot",error=type(error).__name__))
             await asyncio.sleep(.25)
+    async def heartbeat():
+        while True:
+            if recorder.error or not recorder.thread.is_alive():
+                # Fail visibly so launchd can restart the recorder; never leave
+                # a live service silently collecting into a dead writer.
+                stopped.set()
+                raise RuntimeError("Motion recorder failed: "+str(recorder.error))
+            recorder.offer("heartbeat",{})
+            await asyncio.sleep(.5)
     tasks=[asyncio.create_task(observe("control")),asyncio.create_task(observe("vision")),
-           asyncio.create_task(sonar()),asyncio.create_task(snapshots())]
+           asyncio.create_task(sonar()),asyncio.create_task(snapshots()),asyncio.create_task(heartbeat())]
     try:await stopped.wait()
     finally:
         for task in tasks:task.cancel()
