@@ -184,6 +184,7 @@ class SlamBackend:
         self._localization = self._empty_localization()
         self._radio_prior = ()
         self._last_radio_prior = ()
+        self._orientation_prior = None
 
     def _empty_localization(self, frame_id=None, timestamp_s=None):
         return {
@@ -432,6 +433,10 @@ class SlamBackend:
                         break
             self._radio_prior = tuple(selected)
 
+    def set_orientation_prior(self, T_map_camera):
+        with self._lock:
+            self._orientation_prior = None if T_map_camera is None else np.asarray(T_map_camera, float).copy()
+
     def track(self, image_bgr, frame_id, timestamp_s):
         with self._lock:
             if self._slam is None:
@@ -469,7 +474,28 @@ class SlamBackend:
                 if getattr(loop, "radio_relocalization_prior_version", 0) >= 1:
                     loop.relocalization_prior_frame_ids = self._last_radio_prior
                 self._radio_prior = ()
-                self._slam.track(image, None, None, index, timestamp_s)
+                # The mounted capture-clock AHRS estimate seeds native feature tracking.
+                # Preserve the native translation prediction; AHRS supplies rotation.
+                prior = self._orientation_prior
+                self._orientation_prior = None
+                motion = None
+                if prior is not None:
+                    motion = self._slam.tracking.motion_model
+                    predict = motion.predict_pose
+                    from pyslam.slam.motion_model import Isometry3d
+                    def predict_with_attitude(*args, **kwargs):
+                        predicted, covariance = predict(*args, **kwargs)
+                        matrix = predicted.matrix().copy()
+                        center = -matrix[:3, :3].T @ matrix[:3, 3]
+                        matrix[:3, :3] = prior[:3, :3].T
+                        matrix[:3, 3] = -matrix[:3, :3] @ center
+                        return Isometry3d(matrix), covariance
+                    motion.predict_pose = predict_with_attitude
+                try:
+                    self._slam.track(image, None, None, index, timestamp_s)
+                finally:
+                    if motion is not None:
+                        motion.predict_pose = predict
                 native_state = self._slam.tracking.state.name
                 self._state = {"OK": "tracking", "LOST": "lost", "RELOCALIZE": "relocalizing",
                                "INIT_RELOCALIZE": "relocalizing"}.get(native_state, "initializing")

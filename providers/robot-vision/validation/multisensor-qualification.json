@@ -1,0 +1,14 @@
+{
+  "host_test_summary": ": synthetic_enqueue_failure\n..............................................................2026-11-11 21:41:21,854 INFO Retained world d1313707-8b6e-4402-9102-7efc85a9e1c0; initialized unlocalized submap fd7ef26d-0819-4c17-b0dc-184e8897d8ea from cbd1f970-19f9-47c7-afef-b2b0703b33a0\n.....\n----------------------------------------------------------------------\nRan 518 tests in 7.074s\n\nOK (skipped=26)\n",
+  "firmware_version": "1.0-radio.10-sonar-mapping",
+  "firmware_size": 1545584,
+  "firmware_sha256": "86975d457474fd7f8980df61ac22bdfa4ece192700670d1e9efadccbff6e6ec2",
+  "firmware_build": "passed",
+  "firmware_receiver_tests": 26,
+  "firmware_models": "five model binaries passed",
+  "local_metric_mapping": "does not require visual scale; sonar range-change odometry estimates origins in metres",
+  "deployment": "not activated: preserve independent driving experiment",
+  "physical_mapping_qualification": "not performed",
+  "front_sonar_height_above_floor_m": 0.0254,
+  "front_sonar_below_camera_m": 0.0381
+}

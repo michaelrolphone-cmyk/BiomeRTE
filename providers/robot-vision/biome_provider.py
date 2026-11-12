@@ -69,6 +69,8 @@ def contract_definitions():
         ("robot.world.read", {"cursor": field("str"), "limit": field("int")},
          "Persistent world geometry; unaligned local submaps remain explicitly separate."),
         ("robot.world.status", {}, "Persistent world identity, submap transforms and alignment evidence."),
+        ("robot.map.obstacles", {"map_id": field("str"), "revision": field("int")},
+         "Accumulated mounted sonar rays, obstacle voxels, clearing evidence and uncertainty at a map revision."),
         ("robot.map.changes", {"map_id": field("str"), "since_revision": field("int", True),
                               "to_revision": field("int"), "cursor": field("str"),
                               "limit": field("int")},

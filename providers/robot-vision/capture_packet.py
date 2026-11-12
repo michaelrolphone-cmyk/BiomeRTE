@@ -20,11 +20,14 @@ def validate_packet(packet):
     for name in ('width','height'):
         if type(packet.get(name)) is not int or not 1<=packet[name]<=16384:
             raise ValueError('Invalid frame dimensions')
-    for name in ('ahrs','radio'):
+    for name in ('ahrs','radio','ultrasonic'):
         data=packet.get(name)
         if data is None:continue
         if not isinstance(data,dict) or any(data.get(k)!=packet[k] for k in ('receiver_id','boot_id')):
             raise ValueError('Sensor and camera belong to different devices or boots')
+    if packet.get("ultrasonic") is not None:
+        from ultrasonic_source import validate_ultrasonic
+        validate_ultrasonic(packet["ultrasonic"])
     return packet
 
 
