@@ -58,8 +58,6 @@ def body_definition(previous=None, mounts=None):
         position_reference="camera_optical_center", position_offset_camera_m=[0,0,-.004],
         position_body_m=[.043625,0,.0635],
         position_offset_description="4_mm_directly_behind_camera",
-        R_camera_imu=[[-1,0,0],[0,0,-1],[0,-1,0]],
-        orientation_status="owner_axis_checks",
         axis_checks={"left_turn":"positive_yaw","front_up":"negative_roll","right_side_up":"positive_pitch"})
     model.setdefault("control",{}).update(copy.deepcopy(DRIVE))
     model["relay_mapping"] = {key: {"function": value, "provenance":"deployed_dashboard_motion_mapping"}
@@ -69,7 +67,10 @@ def body_definition(previous=None, mounts=None):
         o=mount["origin_camera_m"]; d=mount["direction_camera"]
         sonar[name]={**mount, "position_body_m":[.047625+o[2],-o[0],.0635-o[1]],
                      "direction_body":[d[2],-d[0],-d[1]]}
-    model["sonar_poses"] = sonar
+    if mounts is not None:
+        model["sonar_poses"] = sonar
+    else:
+        model.setdefault("sonar_poses", {})
     return model
 
 def metric_status(service, snapshot=None):

@@ -42,6 +42,13 @@ class PortableTest(unittest.TestCase):
         self.assertFalse(s["right"]["valid"]);self.assertIsNone(s["right"]["range_m"])
         self.assertEqual(s["rear"]["range_m"],1.2)
         self.assertAlmostEqual(result["update_rate"]["host_poll_hz"],1/.26)
+    def test_existing_alignment_and_sonar_mounts_survive_refresh(self):
+        prior={"ahrs_mounting":{"R_camera_imu":[[-1,0,0],[0,1,0],[0,0,-1]],"orientation_status":"measured"},"sonar_poses":{"front":{"origin_camera_m":[.005,.0381,.044]}}}
+        model=body_definition(prior)
+        self.assertEqual(model["ahrs_mounting"]["R_camera_imu"],prior["ahrs_mounting"]["R_camera_imu"])
+        self.assertEqual(model["ahrs_mounting"]["orientation_status"],"measured")
+        self.assertEqual(model["sonar_poses"],prior["sonar_poses"])
+
     def test_no_fabricated_monocular_scale(self):
         result=enrich(self.service(),"robot.vision.snapshot",{"snapshot":{"map_id":"map-1","map_revision":4}})
         self.assertFalse(result["snapshot"]["metric_scale_available"])
