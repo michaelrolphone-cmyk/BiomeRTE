@@ -9,6 +9,10 @@ bearer token or a Heroku deployment.
 | `robot.motion.model:1` | Optional `include_parameters: bool` | Model revision, retained steering/motion state, training support, residuals, freshness and optional portable parameter snapshot |
 | `robot.motion.predict:1` | Required `pulses: list`; optional `initial_state: object`, `step_s: number`, `model_revision: integer` | Per-step trajectory/state estimates, support, uncertainty and explicit `executes_motion:false` |
 | `robot.motion.plan:1` | Required `target: {distance_m, yaw_deg}`; optional `initial_state`, `constraints`, `model_revision` | Inverse pulse estimate, forward prediction, residual and support; never executes |
+| `robot.motion.training.start:1` | Required `session_id`; optional `label`, `metadata` | Request a named manual-driving recording session |
+| `robot.motion.training.status:1` | Optional `session_id` | Recorder health, captured events, accepted samples, rejection reasons and source freshness |
+| `robot.motion.training.stop:1` | Required `session_id` | Stop the session and report whether queued observations have drained |
+| `robot.motion.training.read:1` | Required `session_id`; optional `after_id`, `limit` | Page through retained controls/sensor evidence and sample qualification |
 
 Discover or acquire the generic contract without specifying a controller or host.
 The gateway selects an eligible implementation. A resource constraint is optional
@@ -158,3 +162,39 @@ plan = plan_motion(model, {"distance_m": 0.4, "yaw_deg": 30}, initial_state=stat
 
 Run inverse and regression coverage with:
 `python -m unittest discover -s tests -p 'test_motion*.py' -v`.
+
+## Manual driving training
+
+Start `robot.motion.training.start:1` with
+`{"session_id":"room-drive-001","label":"Manual room navigation","metadata":{"battery":"fresh"}}`.
+Drive normally with the existing manual controls, then call
+`robot.motion.training.stop:1` with that session ID. The session does not acquire
+physical control, send driving commands, or change who can view/control streams.
+Stopping recording does not stop the rover; its normal stop control still applies.
+
+Inspect `robot.motion.training.status:1` before and during driving. `recording`
+means the passive writer acknowledged the session and has a recent heartbeat.
+`recorder.learning_inputs_ready` separately checks recent applied controls and
+AHRS capture receipts. Idle sessions can be waiting for controls. Event counts,
+accepted angular/metric samples and rejection reasons distinguish a retained
+recording from usable model training. Stale/missing sensors, ambiguous control
+application, source/reference gaps and unqualified sonar geometry remain explicit.
+Qualified intervals update the existing online learner; this is motion-response
+training, not a claim that the rover has learned a navigation policy.
+
+Session IDs are stable idempotency keys. Repeating start with identical metadata
+returns the existing session, including one already stopped; it never reopens it.
+Different metadata for the same ID and simultaneous distinct active sessions are
+rejected. Repeating stop is safe. A session survives observer restart, with a
+recorded continuity gap; first-frame association never crosses a session boundary.
+After stop, wait for `session.drained` before treating the dataset as complete.
+`training.read` returns initial model/state, event metadata and per-event learning
+acceptance. Follow `next_after_id`; active/draining sessions can still grow.
+
+Only controls, AHRS/sonar, pose/context metadata and qualification are retained;
+video image bytes are not recorded. Named-session records and all legacy driving
+evidence are preserved. New unlabelled telemetry uses a rolling 120-second raw
+buffer with bounded pruning work, so leaving the observer on does not retain
+an endless raw sensor history. Training sessions are not automatically deleted.
+The AHRS null-reference failure is handled and a writer heartbeat/watchdog prevents
+a dead recorder from continuing to advertise a live recording.
