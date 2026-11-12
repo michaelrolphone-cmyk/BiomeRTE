@@ -26,6 +26,16 @@ def bootstrap(domain, plist):
         time.sleep(.25)
 
 
+def wait_unloaded(domain,label):
+    deadline=time.monotonic()+30.
+    while True:
+        result=subprocess.run(["launchctl","print",domain+"/"+label],capture_output=True,text=True)
+        if result.returncode in (3,113):return
+        if result.returncode or time.monotonic()>=deadline:
+            raise RuntimeError("launchd has not completed removal of "+label)
+        time.sleep(.25)
+
+
 def upgrade(source_root, state):
     state=Path(state).resolve();source_root=Path(source_root).resolve()
     config_file=state/"provider.json"
