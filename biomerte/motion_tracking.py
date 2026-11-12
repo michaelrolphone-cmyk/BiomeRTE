@@ -134,10 +134,15 @@ class MotionRecorder:
                 self.pending-=1
                 received_utc=time.time()-(time.monotonic()-received)
                 now=time.time()
-                if kind in ('control','vision','sonar','sensor_error','gap'):
+                if kind in ('control','vision','sonar','ahrs','sensor_error','gap'):
                     health[kind+'_received_utc']=received_utc
                 if kind=='control' and value.get('stage')=='applied':health['applied_control_received_utc']=received_utc
-                if kind=='vision' and attitude(value) is not None:health['ahrs_capture_received_utc']=received_utc
+                if kind=='vision':
+                    interval=(value.get('frame') or {}).get('capture_host_monotonic_interval_s')
+                    if isinstance(interval,list) and len(interval)==2 and all(number(v) for v in interval):
+                        health['capture_host_lower_s']=interval[0]
+                        if 0<=received-interval[0]<=2. and attitude(value) is not None:
+                            health['ahrs_capture_received_utc']=received_utc
                 if kind=='sensor_error':health['last_sensor_error']=value
                 if kind=='gap':health['last_gap']=value
                 db.execute("INSERT OR REPLACE INTO training_health VALUES(1,?,?)",(json.dumps(health),now))
