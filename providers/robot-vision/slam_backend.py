@@ -25,6 +25,21 @@ PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
 
+def next_native_frame_index(runtime, fallback):
+    """Continue native image IDs after restore or a rejected attempt."""
+    with runtime.map.update_lock:
+        previous = runtime.map.get_frame(-1)
+        if previous is None:
+            # A reset may retain keyframes while clearing temporal history.
+            # This seeds a historical reference, never a current tracked pose.
+            for reference in reversed(list(runtime.map.get_keyframes())):
+                if not reference.is_bad():
+                    runtime.map.add_frame(reference)
+                    previous = reference
+                    break
+        return int(previous.img_id) + 1 if previous is not None else fallback
+
+
 
 class BackendNotReady(RuntimeError):
     pass
@@ -136,6 +151,13 @@ def _saved_entities(document, source_frames):
     return result
 
 
+def native_frame_feature_count(frame):
+    # pySLAM stores detected keypoints in kps; num_kps is a local variable,
+    # not a Frame attribute. A missing attribute silently disabled recovery.
+    keypoints=getattr(frame,'kps',None)
+    return 0 if keypoints is None else len(keypoints)
+
+
 class SlamBackend:
     def __init__(self, config, state_dir):
         self.config = copy.deepcopy(config)
@@ -162,6 +184,7 @@ class SlamBackend:
         self._localization = self._empty_localization()
         self._radio_prior = ()
         self._last_radio_prior = ()
+        self._orientation_prior = None
 
     def _empty_localization(self, frame_id=None, timestamp_s=None):
         return {
@@ -223,8 +246,21 @@ class SlamBackend:
         tracker["num_features"] = int(self.config.get("num_features", 2000))
         loop = copy.deepcopy(LoopDetectorConfigs.DBOW3)
         self._states = SlamState
-        return Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
-                    environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
+        runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
+                       environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
+        runtime.preserve_map_on_tracking_loss = True
+        return runtime
+
+    def continuity_state(self):
+        with self._lock:
+            if self._slam is None:
+                return {}
+            with self._slam.map.update_lock:
+                frame = self._slam.tracking.f_cur
+                return {"state": self._state, "frame_index": self._next_frame_index,
+                        "features": native_frame_feature_count(frame),
+                        "keyframes": self._slam.map.num_keyframes(),
+                        "points": self._slam.map.num_points()}
 
     def _checkpoint_path(self, checkpoint):
         if isinstance(checkpoint, dict):
@@ -307,6 +343,7 @@ class SlamBackend:
                 self._slam = self._new_runtime()
                 if manifest is not None:
                     self._slam.load_system_state(str(path))
+                    self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])
                     self._slam.set_tracking_state(self._states.INIT_RELOCALIZE)
@@ -396,6 +433,10 @@ class SlamBackend:
                         break
             self._radio_prior = tuple(selected)
 
+    def set_orientation_prior(self, T_map_camera):
+        with self._lock:
+            self._orientation_prior = None if T_map_camera is None else np.asarray(T_map_camera, float).copy()
+
     def track(self, image_bgr, frame_id, timestamp_s):
         with self._lock:
             if self._slam is None:
@@ -415,8 +456,8 @@ class SlamBackend:
             if image.shape != (calibration["height"], calibration["width"], 3) or image.dtype != np.uint8:
                 self.invalidate_tracking("Image dimensions or dtype do not match calibration")
                 raise ValueError("Expected calibrated-size uint8 BGR image")
-            index = self._next_frame_index
-            self._next_frame_index += 1
+            index = next_native_frame_index(self._slam, self._next_frame_index)
+            self._next_frame_index = index + 1
             self._source_frames[str(index)] = frame_id
             self._last_timestamp = timestamp_s
             try:
@@ -433,7 +474,28 @@ class SlamBackend:
                 if getattr(loop, "radio_relocalization_prior_version", 0) >= 1:
                     loop.relocalization_prior_frame_ids = self._last_radio_prior
                 self._radio_prior = ()
-                self._slam.track(image, None, None, index, timestamp_s)
+                # The mounted capture-clock AHRS estimate seeds native feature tracking.
+                # Preserve the native translation prediction; AHRS supplies rotation.
+                prior = self._orientation_prior
+                self._orientation_prior = None
+                motion = None
+                if prior is not None:
+                    motion = self._slam.tracking.motion_model
+                    predict = motion.predict_pose
+                    from pyslam.slam.motion_model import Isometry3d
+                    def predict_with_attitude(*args, **kwargs):
+                        predicted, covariance = predict(*args, **kwargs)
+                        matrix = predicted.matrix().copy()
+                        center = -matrix[:3, :3].T @ matrix[:3, 3]
+                        matrix[:3, :3] = prior[:3, :3].T
+                        matrix[:3, 3] = -matrix[:3, :3] @ center
+                        return Isometry3d(matrix), covariance
+                    motion.predict_pose = predict_with_attitude
+                try:
+                    self._slam.track(image, None, None, index, timestamp_s)
+                finally:
+                    if motion is not None:
+                        motion.predict_pose = predict
                 native_state = self._slam.tracking.state.name
                 self._state = {"OK": "tracking", "LOST": "lost", "RELOCALIZE": "relocalizing",
                                "INIT_RELOCALIZE": "relocalizing"}.get(native_state, "initializing")
@@ -591,6 +653,8 @@ class SlamBackend:
         with self._lock:
             return {"backend": "pyslam", "pyslam_commit": PYSLAM_COMMIT, "runtime_loaded": self._slam is not None,
                     "status": self._state, "reason": self._reason, "map_id": self._map_id,
+                    "tracking_quality": {"features": native_frame_feature_count(getattr(getattr(self._slam,'tracking',None),'f_cur',None)),
+                                         "feature_count_basis": "native_frame.kps"},
                     "localization": copy.deepcopy(self._localization), "geometry": copy.deepcopy(self._geometry),
                     "calibration": copy.deepcopy(self.config.get("calibration")),
                     "mounting": copy.deepcopy(self.config.get("mounting")),
@@ -620,3 +684,4 @@ class SlamBackend:
             self._state = "closed"
             self._reason = None
             self._localization = self._empty_localization()
+

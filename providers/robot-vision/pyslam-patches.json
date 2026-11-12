@@ -53,6 +53,18 @@
       "patched_sha256": "95045f7d2c17277e3d0c6097eda8b0e0da0303a355c739605e00d15eb4a0bd85",
       "path": "pyslam/slam/relocalizer.py",
       "reason": "Recheck live candidate membership without a check-then-lookup race after loop detection."
+    },
+    {
+      "original_sha256": "88bb7df68d64dce851d3dd3c3520a8f918627d01f7ac0660d48031938429d1aa",
+      "patched_sha256": "a3864e366cd789cba1490e99150f316d702de1f280fafbd2de46eeabe65cff4d",
+      "path": "pyslam/slam/tracking.py",
+      "reason": "Preserve initialized submap geometry through tracking loss; explicit reset stays available."
+    },
+    {
+      "original_sha256": "bc8ae78b6db8d5121478ffb52a26fb83b592fa0a10bf62c9a813fb247aa1efe7",
+      "patched_sha256": "26a3700e0294aee2ee8223913358a10e9bab5e54bae8dadae6421cff6bf38b71",
+      "path": "pyslam/slam/keyframe.py",
+      "reason": "Preserve deployed filtering of missing culled keyframe edges during restore."
     }
   ],
   "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"

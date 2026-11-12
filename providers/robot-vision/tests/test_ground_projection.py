@@ -32,9 +32,12 @@ class GroundProjectionTests(unittest.TestCase):
         self.assertAlmostEqual(p["position"][1], -.03175)
         self.assertIsNone(p["global_map_position"])
 
-    def test_unconfirmed_contact_is_never_projected(self):
-        self.assertEqual(project_ground([320, 400], calibration(), [640, 480])["reason"], "floor_contact_not_confirmed")
-        self.assertEqual(project_ground([320, 400], calibration(), [640, 480], confirmed_floor_contact=1)["reason"], "floor_contact_not_confirmed")
+    def test_floor_invariant_requires_no_caller_contact_assertion(self):
+        result=project_ground([320,400],calibration(),[640,480])
+        self.assertEqual(result["availability"],"available")
+        self.assertEqual(result["ground_contact"],"robot_body_floor_contact_invariant")
+        legacy=project_ground([320,400],calibration(),[640,480],confirmed_floor_contact=False)
+        self.assertEqual(result["position"],legacy["position"])
 
     def test_unknown_or_mismatched_calibration_is_unavailable(self):
         c = calibration()

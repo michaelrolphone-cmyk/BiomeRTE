@@ -53,6 +53,8 @@ DEFAULT_CONFIG = {
         "history_capacity": 256,
         "history_retention_s": 30.0,
     },
+    "ultrasonic": {"enabled": True, "poll_interval_s": 0.26,
+                   "network_timeout_s": 1.0, "freshness_threshold_s": 1.0},
     "max_observations": 300,
     "checkpoint_interval_s": 60.0,
     "freshness_threshold_s": 2.0,

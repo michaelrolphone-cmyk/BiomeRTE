@@ -1,0 +1,383 @@
+{
+  "camera": {
+    "T_robot_camera": [
+      [
+        0,
+        0,
+        1,
+        0.047625
+      ],
+      [
+        -1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        -1,
+        0,
+        0.0635
+      ],
+      [
+        0,
+        0,
+        0,
+        1
+      ]
+    ],
+    "calibration_id": "camera-e1e5428592d1430a917e3c11f2f73ea9",
+    "mounting_validated": false,
+    "reported_optical_height_m": 0.0635,
+    "reported_pitch_down_deg": 0,
+    "robot_pose_available": false,
+    "source_id": "esp32-98574b858428",
+    "position_body_m": [
+      0.047625,
+      0,
+      0.0635
+    ],
+    "setback_from_front_m": 0.04445,
+    "optical_axis_body": [
+      1,
+      0,
+      0
+    ],
+    "axes": "camera_optical_x_right_y_down_z_forward",
+    "mounting_qualification": "owner_reported_dimensions",
+    "exposure_timestamps": {
+      "capture_clock": "ESP32 esp_timer, scoped by boot_id",
+      "capture_event": "camera_driver_first_DMA_buffer",
+      "exposure_start_time_known": false,
+      "exposure_end_time_known": false,
+      "exposure_midpoint_time_known": false,
+      "rolling_shutter_row_timing_known": false,
+      "physical_exposure_time_uncertainty_s": null,
+      "qualification": "DMA capture timestamp is not calibrated photon exposure time",
+      "host_receive_decode_time": "Mac UTC after receipt/decode, not exposure time"
+    },
+    "driving_light": {
+      "contract": "robot.camera.light.set:1",
+      "purpose": "illuminate_camera_view_for_driving"
+    }
+  },
+  "command_timing": {
+    "qualification": "not_a_measured_settling_time",
+    "source": "user_requested_starting_setting",
+    "steering_held_during_drive": true,
+    "steering_lead_ms": 250
+  },
+  "control": {
+    "contract": "device.outputs.batch:1",
+    "exclusive_pairs": [
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ]
+    ],
+    "owner": "independent_control_brain",
+    "resource": "relay6ch.30eda0d95f24",
+    "used_channels": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "actuation": "binary_on_off_relays",
+    "pwm_available": false,
+    "speed_model": {
+      "independent_variable": "continuous_channel_on_duration_s",
+      "relationship": "speed_follows_duration_dependent_curve",
+      "calibrated": false,
+      "curve": null,
+      "qualification": "not_yet_calibrated"
+    },
+    "channel_motion": {
+      "1": "forward",
+      "2": "back",
+      "3": "left",
+      "4": "right",
+      "5": "unassigned",
+      "6": "unassigned"
+    },
+    "steering_axle": "rear",
+    "steering_requires_rolling": true,
+    "steering_and_throttle_may_be_held_together": true,
+    "contracts": [
+      "relay.bank:1",
+      "device.outputs.batch:1",
+      "device.outputs.stream:1"
+    ]
+  },
+  "evidence": {
+    "forward": "rc-drive-board-forward350-20261109-01",
+    "post_outage_motion_baseline": "required",
+    "reverse": "rc-drive-board-reverse350-20261109-01",
+    "steering_forward": "rc-drive-board-channel3-forward500-20261109-01",
+    "steering_reverse": "rc-drive-board-channel3-reverse500-20261109-01",
+    "stream_recovery_PR": "https://github.com/michaelrolphone-cmyk/BiomeRTE/pull/71"
+  },
+  "geometry": {
+    "body_length_m": 0.18415,
+    "body_width_m": 0.1397,
+    "body_height_m": 0.0635,
+    "overall_height_with_vertical_module_m": 0.127,
+    "wheelbase_m": 0.127,
+    "wheel_diameter_m": 0.05715,
+    "wheel_width_m": 0.0254,
+    "track_width_m": 0.1143,
+    "track_width_qualification": "derived_outer_width_minus_tire_width",
+    "reference_origin": "body_envelope_center_projected_on_floor",
+    "provenance": "owner_dimensions_inches_converted_at_0.0254_m_per_inch"
+  },
+  "mechanics": {
+    "provenance": "user_observations_in_calibration_session",
+    "stationary_steering_resistance": "high_user_reported",
+    "steering_alone_drives_vehicle": false,
+    "steering_axle": "rear",
+    "steering_response": "rolling_dependent_not_instant_full_lock",
+    "turning_radius": "wide_user_reported"
+  },
+  "metric_reference": {
+    "inner_corners": [
+      9,
+      6
+    ],
+    "nominal_square_size_m": 0.02,
+    "qualification": "user_physically_measured_20mm",
+    "size_verified": true,
+    "measurement_source": "user_confirmation_2026-11-10_America_Denver"
+  },
+  "model_id": "rc-car-rear-steering-20261109",
+  "motion_parameters": {
+    "forward_speed_m_s": null,
+    "left_turn_radius_m": null,
+    "max_steering_angle_rad": null,
+    "reverse_speed_m_s": null,
+    "right_turn_radius_m": null,
+    "steering_response_time_s": null,
+    "stopping_distance_m": null
+  },
+  "next_measurements": [
+    "align_permanently_mounted_AHRS_to_vehicle_from_measured_motion",
+    "fresh_camera_and_stationary_board_baseline",
+    "confirm_steering_channel_yaw_signs_while_rolling",
+    "independent_metric_scale_validation",
+    "wheelbase_body_envelope_and_camera_to_body_transform",
+    "pulse_duration_vs_displacement_and_yaw_with_steering_transient"
+  ],
+  "qualification_status": "partial_unqualified",
+  "relay_mapping": {
+    "1": {
+      "function": "forward",
+      "provenance": "deployed_dashboard_motion_mapping"
+    },
+    "2": {
+      "function": "back",
+      "provenance": "deployed_dashboard_motion_mapping"
+    },
+    "3": {
+      "function": "left",
+      "provenance": "deployed_dashboard_motion_mapping"
+    },
+    "4": {
+      "function": "right",
+      "provenance": "deployed_dashboard_motion_mapping"
+    },
+    "5": {
+      "function": "unassigned",
+      "provenance": "deployed_dashboard_motion_mapping"
+    },
+    "6": {
+      "function": "unassigned",
+      "provenance": "deployed_dashboard_motion_mapping"
+    }
+  },
+  "revision": 3,
+  "schema_version": 1,
+  "updated_at": "2026-11-12T06:04:48.289509+00:00",
+  "ahrs_mounting": {
+    "attachment": "glued_in_place",
+    "rigid": true,
+    "provenance": "user_confirmed_2026-11-10",
+    "position_reference": "camera_optical_center",
+    "position_offset_description": "4_mm_directly_behind_camera",
+    "T_camera_imu": null,
+    "R_body_from_imu": null,
+    "orientation_status": "owner_axis_checks",
+    "stationary_up_in_imu": [
+      0.038193767,
+      -0.983895818,
+      -0.174614589
+    ],
+    "gyro_calibration_evidence": {
+      "boot_id": "4320e2f9ec92b628",
+      "status": "succeeded",
+      "samples": 101,
+      "window_ms": 2000,
+      "bias_rad_s": [
+        -0.02937,
+        0.00699,
+        -0.04268
+      ],
+      "persistent": false,
+      "valid_only_for_reported_boot": true
+    },
+    "applied_to_estimator": false,
+    "position_offset_camera_m": [
+      0,
+      0,
+      -0.004
+    ],
+    "position_body_m": [
+      0.043625,
+      0,
+      0.0635
+    ],
+    "R_camera_imu": [
+      [
+        -1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        -1
+      ],
+      [
+        0,
+        -1,
+        0
+      ]
+    ],
+    "axis_checks": {
+      "left_turn": "positive_yaw",
+      "front_up": "negative_roll",
+      "right_side_up": "positive_pitch"
+    }
+  },
+  "coordinate_frame": {
+    "name": "robot_body",
+    "axes": [
+      "forward",
+      "left",
+      "up"
+    ],
+    "origin": "body_envelope_center_projected_on_floor",
+    "units": "m"
+  },
+  "floor_contact": {
+    "always_on_floor": true,
+    "source": "owner_operating_invariant",
+    "plane": "locally_planar_floor",
+    "caller_confirmation_required": false,
+    "pixel_interpretation": "ray intersection with floor, not proof pixel belongs to floor"
+  },
+  "sonar_poses": {
+    "front": {
+      "origin_camera_m": [
+        0.005,
+        0.0381,
+        0.044
+      ],
+      "direction_camera": [
+        0,
+        0,
+        1
+      ],
+      "height_above_floor_m": 0.0254,
+      "qualification": "photo_measured_with_height_parallax_model",
+      "source_measurements": "rover-mount-measurements.json",
+      "position_body_m": [
+        0.091625,
+        -0.005,
+        0.0254
+      ],
+      "direction_body": [
+        1,
+        0,
+        0
+      ]
+    },
+    "left": {
+      "origin_camera_m": [
+        -0.043,
+        0.0381,
+        -0.049
+      ],
+      "direction_camera": [
+        -1,
+        0,
+        0
+      ],
+      "height_above_floor_m": 0.0254,
+      "qualification": "photo_measured_with_height_parallax_model",
+      "source_measurements": "rover-mount-measurements.json",
+      "position_body_m": [
+        -0.0013750000000000012,
+        0.043,
+        0.0254
+      ],
+      "direction_body": [
+        0,
+        1,
+        0
+      ]
+    },
+    "right": {
+      "origin_camera_m": [
+        0.043,
+        0.0381,
+        -0.046
+      ],
+      "direction_camera": [
+        1,
+        0,
+        0
+      ],
+      "height_above_floor_m": 0.0254,
+      "qualification": "photo_measured_with_height_parallax_model",
+      "source_measurements": "rover-mount-measurements.json",
+      "position_body_m": [
+        0.0016250000000000014,
+        -0.043,
+        0.0254
+      ],
+      "direction_body": [
+        0,
+        -1,
+        0
+      ]
+    },
+    "rear": {
+      "origin_camera_m": [
+        0.002,
+        0.0127,
+        -0.15235
+      ],
+      "direction_camera": [
+        0,
+        0,
+        -1
+      ],
+      "height_above_floor_m": 0.0508,
+      "qualification": "photo_measured_with_height_parallax_model",
+      "source_measurements": "rover-mount-measurements.json",
+      "position_body_m": [
+        -0.10472500000000001,
+        -0.002,
+        0.0508
+      ],
+      "direction_body": [
+        -1,
+        0,
+        0
+      ]
+    }
+  }
+}

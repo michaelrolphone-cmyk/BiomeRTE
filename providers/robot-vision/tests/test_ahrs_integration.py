@@ -284,7 +284,7 @@ class AHRSProviderTests(unittest.TestCase):
     def test_additive_contracts_and_guidance_preserve_mutation_distinction(self):
         import biome_provider as provider
         expected = {"robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate"}
-        self.assertEqual(len(CAPABILITIES), 29)
+        self.assertEqual(len(CAPABILITIES), 38)
         self.assertEqual(set(CAPABILITIES), {spec["name"] for spec in provider.CONTRACTS.values()})
         self.assertTrue(expected.issubset(CAPABILITIES))
         for name in expected:

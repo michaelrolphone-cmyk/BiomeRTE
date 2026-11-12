@@ -247,6 +247,13 @@ PRAGMA user_version=1;
                 "created_at": row["created_at"], "revision_created_at": item["created_at"],
                 "reason": item["reason"], "metadata": json.loads(item["metadata"])}
 
+    def list_maps(self):
+        """Compact metadata only; atlas bootstrap must not scan frame/blob history."""
+        with self._lock:
+            self._open()
+            return [self._map_locked(row[0]) for row in
+                    self._db.execute("SELECT id FROM maps ORDER BY created_at,id")]
+
     def create_map(self, metadata=None, map_id=None):
         map_id = _id(map_id or str(uuid.uuid4()), "map_id")
         values = {"coordinate_frame": "map", "units": "arbitrary",
