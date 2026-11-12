@@ -58,10 +58,14 @@ class ObjectDetector:
             items = []
             current = {}
             boxes = result.boxes
-            for index, box in enumerate(boxes if boxes is not None else []):
-                bounds = [float(v) for v in box.xyxy[0].detach().cpu().tolist()]
-                class_id = int(box.cls[0])
-                local_id = int(box.id[0]) if box.id is not None else None
+            # Transfer each output array once; scalar GPU reads synchronize MPS.
+            bounds_rows = boxes.xyxy.detach().cpu().tolist() if boxes is not None else []
+            classes = boxes.cls.detach().cpu().tolist() if boxes is not None else []
+            confidences = boxes.conf.detach().cpu().tolist() if boxes is not None else []
+            ids = boxes.id.detach().cpu().tolist() if boxes is not None and boxes.id is not None else None
+            for index, bounds in enumerate(bounds_rows):
+                class_id = int(classes[index])
+                local_id = int(ids[index]) if ids is not None else None
                 track_id = f"{self.tracker_epoch}:{local_id}" if local_id is not None else None
                 center = ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)
                 velocity = None
@@ -79,7 +83,7 @@ class ObjectDetector:
                     "persistent_object_id": None,
                     "class_id": class_id,
                     "label": str(result.names[class_id]),
-                    "confidence": float(box.conf[0]),
+                    "confidence": float(confidences[index]),
                     "bbox_xyxy_px": bounds,
                     "coordinate_frame": "image_pixels",
                     "image_motion": {
