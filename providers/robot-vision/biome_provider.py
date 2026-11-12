@@ -35,6 +35,8 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.camera.exposure.status", {}, "Read camera exposure and gain controls; capture DMA time is not calibrated exposure time."),
+        ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure and gain update; inspect unknown outcomes before retry."),
         ("robot.vision.snapshot", {"snapshot_id": field("str"), "include_frame": field("bool")},
          "One coherent retained frame, pose and map revision; image bytes are opt-in."),
         ("robot.vision.frame", {"snapshot_id": field("str"), "frame_id": field("str")},
@@ -69,6 +71,13 @@ def contract_definitions():
         ("robot.world.read", {"cursor": field("str"), "limit": field("int")},
          "Persistent world geometry; unaligned local submaps remain explicitly separate."),
         ("robot.world.status", {}, "Persistent world identity, submap transforms and alignment evidence."),
+        ("robot.body.model", {}, "Rigid rover body geometry, measured sonar mounting and camera/IMU axes."),
+        ("robot.control.model", {}, "Binary relay motion mapping and duration-dependent uncalibrated drive curve."),
+        ("robot.sonar.snapshot", {}, "Cached four-direction sonar measurements in metres and rigid-body mounting."),
+        ("robot.metric.status", {}, "Metric model and native map scale with explicit availability."),
+
+        ("robot.map.obstacles", {"map_id": field("str"), "revision": field("int")},
+         "Accumulated mounted sonar rays, obstacle voxels, clearing evidence and uncertainty at a map revision."),
         ("robot.map.changes", {"map_id": field("str"), "since_revision": field("int", True),
                               "to_revision": field("int"), "cursor": field("str"),
                               "limit": field("int")},
@@ -121,6 +130,7 @@ CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
 
 
 MUTATING_CONTRACTS = frozenset({
+    "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
     "robot.camera.light.set:1", "robot.ahrs.calibrate:1",
     "robot.vision.calibration:1",

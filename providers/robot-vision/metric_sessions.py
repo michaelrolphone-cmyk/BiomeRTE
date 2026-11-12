@@ -613,6 +613,8 @@ class MetricCalibration:
                 data["covariance"] = None
                 data["uncertainty_status"] = "metric_uncertainty_not_estimated"
             data.update(units="m", scale_status="qualified", coordinate_frame="map_metric")
+        elif item["kind"] == "sonar_state":
+            data["coordinate_frame"] = "sensor_ledger_metadata"
         elif item["kind"] == "semantic_observation":
             # Image boxes and tracking pixels remain image quantities. Exact
             # keyframe anchors have identity local transforms, not global points.
