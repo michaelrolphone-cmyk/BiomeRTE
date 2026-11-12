@@ -166,6 +166,8 @@ class MotionModel:
             for k in state:
                 if k in initial_state:
                     state[k] = copy.deepcopy(initial_state[k])
+            if type(state["steering_known"]) is not bool:
+                raise ValueError("steering_known must be Boolean")
             z = state["steering_memory"]
             if not number(state["steering_latch"]) or not -1<=state["steering_latch"]<=1:
                 raise ValueError("invalid initial steering_latch")
@@ -180,6 +182,7 @@ class MotionModel:
             for k in ("drive","steer","previous_drive"):
                 if type(state[k]) is not int or state[k] not in (-1,0,1):
                     raise ValueError("invalid initial "+k)
+        initial_state_uncertain=not state["steering_known"]
         x_pos=y_pos=theta=distance=elapsed=0.
         yaw_error=distance_error=0.
         results=[]
@@ -227,7 +230,7 @@ class MotionModel:
         return dict(schema="rover.motion.prediction/1",model_revision=self.revision,
             qualification="observational_estimate_not_calibrated_probability",
             angular_available=bool(self.angular.count) and not unsupported,metric_available=bool(self.metric.count) and not metric_unsupported,
-            initial_state_uncertain=not self.state["steering_known"],
+            initial_state_uncertain=initial_state_uncertain,
             unsupported_pulse_indices=unsupported,metric_unsupported_pulse_indices=metric_unsupported,steps=results,
             uncertainty_proxy=dict(yaw_deg=yaw_error if self.angular.count else None,
                 distance_m=distance_error if self.metric.count else None,
