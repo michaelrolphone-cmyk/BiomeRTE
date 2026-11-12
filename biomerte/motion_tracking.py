@@ -21,6 +21,33 @@ def objects(value):
         for child in value:
             yield from objects(child)
 
+
+def cached_query(operation):
+    """Read existing cached vision/sonar state through its Unix HTTP contract."""
+    import http.client
+    import socket
+    class UnixHTTP(http.client.HTTPConnection):
+        def connect(self):
+            self.sock=socket.socket(socket.AF_UNIX)
+            self.sock.settimeout(5.)
+            self.sock.connect(str(pathlib.Path.home()/".local/share/biome-robot-vision/vision.sock"))
+    connection=UnixHTTP("localhost")
+    try:
+        inputs={"include_frame":False} if operation=="robot.vision.snapshot" else {}
+        connection.request("POST","/v1/query",json.dumps(dict(operation=operation,inputs=inputs)),
+                           {"Content-Type":"application/json"})
+        response=connection.getresponse()
+        value=json.load(response)
+        if response.status!=200:raise ConnectionError("Cached sensor query unavailable")
+        return value
+    finally:connection.close()
+
+def observation_payload(metadata):
+    metadata=metadata.get("snapshot",metadata)
+    return {k:metadata[k] for k in
+        ("frame","frame_id","spatial_evidence","ultrasonic","localization","robot_pose","power")
+        if k in metadata}
+
 def attitude(meta):
     evidence=meta.get("spatial_evidence",{})
     for obj in objects(evidence.get("ahrs",{})):
@@ -68,6 +95,7 @@ class MotionRecorder:
         self.events=queue.SimpleQueue()
         self.error=None
         self.pending=0
+        self.event_counts={}
         self.snapshot=None
         self.latest_model=None
         self.thread=threading.Thread(target=self.run,name="rover-motion-recorder",daemon=True)
@@ -100,6 +128,7 @@ class MotionRecorder:
                     break
                 kind,value,received=event
                 self.pending-=1
+                self.event_counts[kind]=self.event_counts.get(kind,0)+1
                 db.execute("INSERT INTO events(kind,received_monotonic,recorded_utc,payload) VALUES (?,?,?,?)",
                            (kind,received,time.time(),json.dumps(value,separators=(",",":"),allow_nan=False)))
                 if kind=="gap":
@@ -236,8 +265,10 @@ class MotionRecorder:
                            (json.dumps(exported,allow_nan=False),time.time()))
                 db.commit()
                 self.latest_model=exported
-                self.snapshot=dict(model.status(),recorder=dict(
-                    path=str(self.path),pending=self.pending,error=None,
+                self.snapshot=dict(model.status(),sensor_support=None if previous is None else dict(
+                    frame_id=previous["frame_id"],capture_host_mid_s=previous["t"],boot_id=previous["boot"],
+                    yaw_deg=previous["yaw"],sonar_ids=list(previous["ranges"])),recorder=dict(
+                    path=str(self.path),pending=self.pending,error=None,event_counts=dict(self.event_counts),
                     source="passive_applied_control_and_capture_associated_sensor_events"))
             db.commit()
             db.close()
@@ -248,6 +279,8 @@ class MotionRecorder:
     def status(self):
         result=copy.deepcopy(self.snapshot) if self.snapshot else dict(ready=False)
         result["recorder_health"]=dict(pending=self.pending,error=self.error,alive=self.thread.is_alive())
+        if result.get("sensor_support"):
+            result["sensor_support"]["capture_age_s"]=time.monotonic()-result["sensor_support"]["capture_host_mid_s"]
         return result
 
     def predict(self,pulses,initial_state=None,step_s=.05):
@@ -288,9 +321,8 @@ def install_motion(rover,app,home):
             elif lane=="vision":
                 metadata,unused=decode(message,4194304)
                 metadata=metadata.get("snapshot",metadata)
-                recorder.offer("vision",{k:metadata[k] for k in
-                    ("frame","frame_id","spatial_evidence","ultrasonic","localization","robot_pose","power")
-                    if k in metadata},received)
+                recorder.offer("vision" if "frame" in metadata else "vision_raw",
+                    observation_payload(metadata) if "frame" in metadata else metadata,received)
         except Exception:
             logging.exception("Invalid motion observation")
         return broadcast(lane,message)
@@ -358,16 +390,27 @@ def install_motion(rover,app,home):
                 recorder.offer("sensor_error",dict(sensor="sonar",error=type(error).__name__))
                 interval=1.
             await asyncio.sleep(interval)
+    async def snapshots():
+        while True:
+            try:
+                value=await asyncio.to_thread(cached_query,"robot.vision.snapshot")
+                recorder.offer("vision",observation_payload(value))
+            except asyncio.CancelledError:raise
+            except Exception as error:
+                recorder.offer("sensor_error",dict(sensor="coherent_snapshot",error=type(error).__name__))
+            await asyncio.sleep(.25)
     monitor_task=None
     sonar_task=None
+    snapshot_task=None
     async def start(app):
-        nonlocal monitor_task,sonar_task
+        nonlocal monitor_task,sonar_task,snapshot_task
         monitor_task=asyncio.create_task(monitor())
         sonar_task=asyncio.create_task(sonar_reader())
+        snapshot_task=asyncio.create_task(snapshots())
     async def stop(app):
-        for task in (monitor_task,sonar_task):
+        for task in (monitor_task,sonar_task,snapshot_task):
             if task:task.cancel()
-        await asyncio.gather(*[t for t in (monitor_task,sonar_task) if t],return_exceptions=True)
+        await asyncio.gather(*[t for t in (monitor_task,sonar_task,snapshot_task) if t],return_exceptions=True)
         recorder.offer("gap",dict(reason="server_shutdown"))
         await asyncio.to_thread(recorder.close)
     app.on_startup.append(start)
