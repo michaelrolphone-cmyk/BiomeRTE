@@ -90,5 +90,52 @@ class MetricWorkerTests(unittest.TestCase):
             worker._stationary(room_frame(2),image)
             self.assertFalse(worker._stationary(room_frame(2.2),255-image))
 
+    def test_mapping_consumes_capture_without_any_visual_processing(self):
+        from multisensor_mapping import SonarObstacleMap
+        from types import SimpleNamespace
+        import importlib.util
+        if importlib.util.find_spec('cv2') is None:
+            self.skipTest('native vision-service dependencies required')
+        from vision_service import VisionService
+        with tempfile.TemporaryDirectory() as d:
+            model=SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts())
+            ledger=SonarObstacleMap(Path(d)/'rays',estimated_rover_mounts())
+            service=SimpleNamespace(map_id='map',revision=0,metric_odometry=model,obstacle_map=ledger)
+            record=lambda f,o:VisionService._record_metric_sensor_frame(service,f,o)
+            worker=MetricSensorWorker(model,np.eye(3),record)
+            for i in range(12):worker.observe(room_frame(1+i*.2))
+            status=ledger.summary('map')
+            self.assertEqual(status['ray_count'],48)
+            self.assertGreater(status['metric_observations'],30)
+            self.assertFalse(worker.status()['mapping_write']['visual_processing_required'])
+            ledger.close()
+
+    def test_sonar_is_retained_when_capture_attitude_is_unavailable(self):
+        recorded=[]
+        with tempfile.TemporaryDirectory() as d:
+            worker=MetricSensorWorker(SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts()),np.eye(3),
+                                     lambda f,o:recorded.extend(o))
+            f=room_frame(1);f['sensor_packet']['ahrs']['ahrs']['attitude']['valid']=False
+            result=worker.observe(f)
+            self.assertFalse(result['valid'])
+            self.assertEqual(len(recorded),4)
+
+    def test_inconsistent_ranges_wait_for_relocalization_without_resetting_origin(self):
+        with tempfile.TemporaryDirectory() as d:
+            worker=MetricSensorWorker(SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts()),np.eye(3))
+            for i in range(5):worker.observe(room_frame(1+i*.2))
+            identity=worker.odometry.local_frame_id
+            for i in range(5,20):
+                f=room_frame(1+i*.2)
+                # Only parallel left/right beams: no observed forward position.
+                sensors=f['sensor_packet']['ultrasonic']['ultrasonic']['sensors']
+                for row in sensors:
+                    if row['id'] in ('front','rear'):row['valid']=False
+                worker.observe(f)
+                self.assertEqual(worker.odometry.local_frame_id,identity)
+            result=worker.observe(room_frame(5))
+            self.assertTrue(result['valid'])
+            self.assertEqual(result['local_frame_id'],identity)
+
 
 if __name__=='__main__':unittest.main()

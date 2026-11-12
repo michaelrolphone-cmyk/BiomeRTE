@@ -6,8 +6,9 @@ from multisensor_mapping import attitude_sample, sonar_observations
 
 
 class MetricSensorWorker:
-    def __init__(self, odometry, mount):
+    def __init__(self, odometry, mount, record=None):
         self.odometry, self.mount = odometry, mount
+        self.record = record
         self.lock = threading.RLock()
         self.condition = threading.Condition()
         self.pending = None
@@ -70,16 +71,19 @@ class MetricSensorWorker:
                 return copy.deepcopy(self.result)
             sample = attitude_sample(frame)
             observations = sonar_observations(frame)
-            if sample is None or self.mount is None:
-                return copy.deepcopy(self.result)
             self.last = key
             stationary = self._stationary(frame,image)
             calibration = ((packet.get('ahrs') or {}).get('ahrs') or {}).get('calibration') or {}
-            self.result = self.odometry.update(observations,
-                self.mount @ sample['R'] @ self.mount.T, ('ahrs', sample['epoch']), sample['time_s'],
-                stationary_reference_reset=bool(calibration.get('gyro_bias_valid') and
-                                                calibration.get('status') == 'succeeded'),
-                stationary_observed=stationary)
+            if sample is None or self.mount is None:
+                self.result = {'valid':False,'reason':'awaiting_capture_attitude'}
+            else:
+                self.result = self.odometry.update(observations,
+                    self.mount @ sample['R'] @ self.mount.T, ('ahrs', sample['epoch']), sample['time_s'],
+                    stationary_reference_reset=bool(calibration.get('gyro_bias_valid') and
+                                                    calibration.get('status') == 'succeeded'),
+                    stationary_observed=stationary)
+            if self.record is not None:
+                self.result['mapping_write'] = self.record(frame,observations)
             return copy.deepcopy(self.result)
 
     def _run(self):

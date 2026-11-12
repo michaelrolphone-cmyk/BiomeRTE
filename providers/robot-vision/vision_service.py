@@ -84,7 +84,8 @@ class VisionService:
         self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
             mapping.get("sonar_mounts", rover_sensor_mounts()), mapping.get("resolution_m", .05))
         self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
-        self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount)
+        self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount,
+                                                self._record_metric_sensor_frame)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -545,10 +546,14 @@ class VisionService:
                 earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
                     for t,_ in list(timeline.poses)[:1]],default=None),
                 metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
-            if added or resolved:
+            ledger_count = self.obstacle_map.summary(self.map_id)['ray_count']
+            committed_counts = getattr(self, '_sonar_committed_counts', {})
+            if added or resolved or ledger_count != committed_counts.get(self.map_id,0):
                 self._commit_changes([{"op": "upsert", "kind": "sonar_state", "entity_id": "ledger",
                     "data": {"frame_id": frame_id, "added": added, "resolved": resolved}}], "sonar_observations")
                 localization["map_revision"] = self.revision
+                committed_counts[self.map_id] = ledger_count
+                self._sonar_committed_counts = committed_counts
             if metric_pose.get("valid"):
                 paired_visual = self.pose_timeline.at(metric_pose["time_s"],packet.get("boot_id"))
                 if paired_visual is not None:
@@ -662,6 +667,23 @@ class VisionService:
     def _automatic_gyro_calibration(self,frame,image):
         automatic = getattr(self,"auto_gyro",None)
         return automatic.observe(frame,image) if automatic is not None else {"enabled":False,"calibration_blocking":False}
+
+    def _record_metric_sensor_frame(self, frame, observations):
+        # This ledger is independent of native SLAM readiness. The next visual
+        # commit publishes a sonar-state change for revision-pinned world reads.
+        map_id, revision = self.map_id, self.revision+1
+        timeline = self.metric_odometry.timeline
+        added = self.obstacle_map.record(map_id, frame.get('frame_id') or
+            (frame.get('sensor_packet') or {}).get('frame_id'), observations,
+            lambda *_:None, revision=revision, metric_pose_at=timeline.at,
+            local_frame_id=self.metric_odometry.local_frame_id)
+        resolved = self.obstacle_map.resolve_pending(map_id,lambda *_:None,revision=revision,
+            earliest_time=timeline.poses[0][0] if timeline.poses else
+                min((o['time_s'] for o in observations),default=0)-.5,
+            metric_pose_at=timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+        return {'map_id':map_id, 'added':added, 'resolved':resolved,
+                'ray_count':self.obstacle_map.summary(map_id)['ray_count'],
+                'visual_processing_required':False}
 
     def _sonar_anchor(self, map_id, identifier, revision=None):
         if identifier is None:

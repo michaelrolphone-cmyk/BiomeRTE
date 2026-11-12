@@ -341,7 +341,7 @@ class SonarMetricOdometry:
 
     def update(self, observations, absolute_rotation, epoch, rotation_time_s, stationary_reference_reset=False,
                stationary_observed=False):
-        if absolute_rotation is None or len(observations) < 3:
+        if absolute_rotation is None or not observations:
             return {'valid': False, 'reason':'insufficient_rotation_or_ranges', 'local_frame_id':self.local_frame_id}
         epoch = json.dumps(epoch,sort_keys=True)
         if epoch != self.epoch:
@@ -386,11 +386,8 @@ class SonarMetricOdometry:
             common = sorted(set(old['scan']) & set(scan))
             if len(common) < 3 or any(scan[k]['id']==old['scan'][k]['id'] for k in common):
                 return {'valid':False,'reason':'awaiting_new_transducer_cycle','local_frame_id':self.local_frame_id}
-            if not 0 < t-old['time_s'] <= 1.:
-                self.previous = None
-                self.local_frame_id = str(uuid.uuid4())
-                self.timeline = PoseTimeline()
-                return {'valid':False,'reason':'metric_odometry_gap_new_local_frame','local_frame_id':self.local_frame_id}
+            if t <= old['time_s']:
+                return {'valid':False,'reason':'non_increasing_metric_scan','local_frame_id':self.local_frame_id}
             anchor = np.asarray(old['R_reference'])
             current_r = anchor.T @ at_scan[:3,:3]
             old_pose = transform(old['pose'])
