@@ -12,7 +12,7 @@ import signal
 import time
 from aiohttp import web,ClientSession,WSMsgType
 from biomerte.app import Application
-from biomerte.motion_tracking import MotionRecorder
+from biomerte.motion_tracking import MotionRecorder,cached_query,observation_payload
 from biomerte.stream_router import decode
 
 def sonar_query():
@@ -82,9 +82,8 @@ async def run():
                             elif lane=="vision" and message.type in (WSMsgType.TEXT,WSMsgType.BINARY):
                                 meta,unused=decode(message.data,4194304)
                                 meta=meta.get("snapshot",meta)
-                                recorder.offer("vision",{k:meta[k] for k in
-                                    ("frame","frame_id","spatial_evidence","ultrasonic","localization","robot_pose","power")
-                                    if k in meta},received)
+                                recorder.offer("vision" if "frame" in meta else "vision_raw",
+                                    observation_payload(meta) if "frame" in meta else meta,received)
             except asyncio.CancelledError:raise
             except Exception as error:
                 recorder.offer("gap",dict(reason=lane+"_disconnected",error=type(error).__name__))
@@ -101,10 +100,19 @@ async def run():
                 recorder.offer("sensor_error",dict(sensor="sonar",error=type(error).__name__))
                 interval=1.
             await asyncio.sleep(interval)
+    async def snapshots():
+        while True:
+            try:
+                value=await asyncio.to_thread(cached_query,"robot.vision.snapshot")
+                recorder.offer("vision",observation_payload(value))
+            except asyncio.CancelledError:raise
+            except Exception as error:
+                recorder.offer("sensor_error",dict(sensor="coherent_snapshot",error=type(error).__name__))
+            await asyncio.sleep(.25)
     runner=web.AppRunner(app);await runner.setup()
     await web.TCPSite(runner,"127.0.0.1",8094).start()
     tasks=[asyncio.create_task(observe("control")),asyncio.create_task(observe("vision")),
-           asyncio.create_task(sonar())]
+           asyncio.create_task(sonar()),asyncio.create_task(snapshots())]
     try:await stopped.wait()
     finally:
         for task in tasks:task.cancel()
