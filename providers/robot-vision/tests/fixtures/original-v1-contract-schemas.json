@@ -1,0 +1,156 @@
+{
+  "robot.vision.snapshot:1": {
+    "name": "robot.vision.snapshot",
+    "version": 1,
+    "inputs": {
+      "snapshot_id": "str?",
+      "include_frame": "bool?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "One coherent retained frame, pose and map revision; image bytes are opt-in."
+  },
+  "robot.vision.frame:1": {
+    "name": "robot.vision.frame",
+    "version": 1,
+    "inputs": {
+      "snapshot_id": "str?",
+      "frame_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "An exact retained frame as verified artifact chunks, with capture metadata."
+  },
+  "robot.vision.detections:1": {
+    "name": "robot.vision.detections",
+    "version": 1,
+    "inputs": {
+      "snapshot_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Current-frame detections and tracker-epoch identities with quality and freshness."
+  },
+  "robot.vision.geometry:1": {
+    "name": "robot.vision.geometry",
+    "version": 1,
+    "inputs": {
+      "snapshot_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Localization and spatial evidence with explicit availability, quality and unknown coverage."
+  },
+  "robot.vision.metadata:1": {
+    "name": "robot.vision.metadata",
+    "version": 1,
+    "inputs": {},
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Source, calibration, implementation and coordinate metadata."
+  },
+  "robot.vision.status:1": {
+    "name": "robot.vision.status",
+    "version": 1,
+    "inputs": {},
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Camera, transport, decoding, inference and provider health."
+  },
+  "robot.map.read:1": {
+    "name": "robot.map.read",
+    "version": 1,
+    "inputs": {
+      "map_id": "str?",
+      "revision": "int?",
+      "bounds": "obj?",
+      "kinds": "list?",
+      "cursor": "str?",
+      "limit": "int?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "A bounded map page; bounds uses min_x,min_y,max_x,max_y and optional min_z,max_z in map units."
+  },
+  "robot.map.changes:1": {
+    "name": "robot.map.changes",
+    "version": 1,
+    "inputs": {
+      "map_id": "str?",
+      "since_revision": "int",
+      "to_revision": "int?",
+      "cursor": "str?",
+      "limit": "int?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Persistent changes between explicit map revisions."
+  },
+  "robot.map.checkpoint:1": {
+    "name": "robot.map.checkpoint",
+    "version": 1,
+    "inputs": {
+      "map_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Flush the persistent map and return its durable checkpoint identity."
+  },
+  "robot.map.create:1": {
+    "name": "robot.map.create",
+    "version": 1,
+    "inputs": {
+      "metadata": "obj?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Create a new map identity; this does not establish localization or metric scale."
+  },
+  "robot.map.open:1": {
+    "name": "robot.map.open",
+    "version": 1,
+    "inputs": {
+      "map_id": "str"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Select an existing persistent map; localization must be re-established."
+  },
+  "robot.vision.calibration:1": {
+    "name": "robot.vision.calibration",
+    "version": 1,
+    "inputs": {
+      "action": "str?",
+      "calibration": "obj?",
+      "calibration_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Get or set calibration. action is get or set; unverified geometry remains explicit."
+  },
+  "robot.vision.project_ground:1": {
+    "name": "robot.vision.project_ground",
+    "version": 1,
+    "inputs": {
+      "pixel": "list",
+      "confirmed_floor_contact": "bool",
+      "snapshot_id": "str?"
+    },
+    "outputs": {
+      "result": "obj"
+    },
+    "description": "Intersect an individually confirmed floor pixel with the calibrated ground plane."
+  }
+}

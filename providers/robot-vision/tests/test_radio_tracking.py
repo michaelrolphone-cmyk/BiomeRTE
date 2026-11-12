@@ -519,7 +519,7 @@ class RadioServiceIntegrationTests(unittest.TestCase):
 
     def test_new_contracts_match_service_capabilities_and_light_is_mutating(self):
         from biome_provider import CONTRACTS, MUTATING_CONTRACTS
-        self.assertEqual(len(CAPABILITIES), 29)
+        self.assertEqual(len(CAPABILITIES), 38)
         for name in ("robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
                      "robot.camera.light.status", "robot.camera.light.set"):
             self.assertIn(name, CAPABILITIES)
@@ -537,7 +537,7 @@ class BackendRadioBoundaryTests(unittest.TestCase):
             observed = []
             loop = SimpleNamespace(last_loop_kf_id=0, radio_relocalization_prior_version=1)
             runtime = SimpleNamespace(
-                map=SimpleNamespace(update_lock=threading.RLock(),
+                map=SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=-1),
                                     get_keyframes=lambda: [SimpleNamespace(id=i) for i in range(10, 18)]),
                 loop_closing=loop, tracking=SimpleNamespace(state=SimpleNamespace(name="OK")),
                 track=lambda *args: observed.append(loop.relocalization_prior_frame_ids))

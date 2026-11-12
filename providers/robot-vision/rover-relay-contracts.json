@@ -1,0 +1,63 @@
+[
+  {
+    "name": "device.outputs.batch",
+    "version": 1,
+    "description": "Apply a locally timed sequence of relay, RGB and buzzer frames.",
+    "inputs": {
+      "steps": "list"
+    },
+    "outputs": {
+      "applied_at_ms": "list",
+      "commanded_mask": "int",
+      "contact_feedback": "bool",
+      "elapsed_ms": "int",
+      "relay_masks": "list",
+      "rgb": "list",
+      "steps_completed": "int",
+      "tone_hz": "int"
+    },
+    "usage": {
+      "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {
+        "channel": "1 forward; 2 back/reverse; 3 left; 4 right; 5 and 6 unassigned on rover relay6ch.30eda0d95f24."
+      }
+    }
+  },
+  {
+    "name": "device.outputs.stream",
+    "version": 1,
+    "description": "Persistent fenced desired-output stream; discrete invocation is unsupported.",
+    "inputs": {},
+    "outputs": {},
+    "usage": {
+      "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {
+        "channel": "1 forward; 2 back/reverse; 3 left; 4 right; 5 and 6 unassigned on rover relay6ch.30eda0d95f24."
+      }
+    }
+  },
+  {
+    "name": "relay.bank",
+    "version": 1,
+    "description": "Set one physical relay channel, 1 through 6; reports commanded state.",
+    "inputs": {
+      "channel": "int",
+      "on": "bool"
+    },
+    "outputs": {
+      "channel": "int",
+      "commanded_mask": "int",
+      "contact_feedback": "bool",
+      "on": "bool"
+    },
+    "usage": {
+      "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {
+        "channel": "1 forward; 2 back/reverse; 3 left; 4 right; 5 and 6 unassigned on rover relay6ch.30eda0d95f24."
+      }
+    }
+  }
+]

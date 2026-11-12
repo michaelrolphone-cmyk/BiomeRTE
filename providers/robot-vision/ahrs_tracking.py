@@ -285,7 +285,7 @@ class AHRSTracking:
         return {"identity": identity, "reference": reference,
                 "sample_count": sensor["sample_count"],
                 "observed_uptime_ms": sensor["observed_uptime_ms"],
-                "frame_tick": frame["receive_decode_monotonic_s"],
+                "frame_tick": frame.get("measurement_monotonic_s",frame["receive_decode_monotonic_s"]),
                 "frame_id": frame["frame_id"], "data": copy.deepcopy(sensor)}
 
     def _change(self, name, current, *, pressure=False):
@@ -346,7 +346,7 @@ class AHRSTracking:
             if (key == self._last_frame_key and self._last_evidence is not None
                     and self._context_matches(frame, localization)):
                 return copy.deepcopy(self._last_evidence)
-            tick = frame.get("receive_decode_monotonic_s")
+            tick = frame.get("measurement_monotonic_s",frame.get("receive_decode_monotonic_s"))
             if (not _number(tick) or not isinstance(frame.get("frame_id"), str)
                     or not frame["frame_id"]):
                 self._clear_continuity("invalid_frame")
@@ -370,7 +370,11 @@ class AHRSTracking:
             if reason:
                 self._clear_continuity(reason)
             self._last_frame_key, self._last_frame_tick, self._stream = key, tick, stream
-            envelope = self.snapshot(at_monotonic=float(tick))
+            if frame.get('sensor_packet') is not None:
+                from capture_packet import frame_ahrs_snapshot
+                envelope=frame_ahrs_snapshot(frame)
+            else:
+                envelope = self.snapshot(at_monotonic=float(tick))
             value = self._base(frame, "telemetry_unavailable")
             candidates = {}
             if isinstance(envelope, dict):
@@ -389,6 +393,11 @@ class AHRSTracking:
                     value["timing"].update(received_monotonic_s=float(received),
                                            request_duration_s=float(duration),
                                            source_received_at=envelope.get("received_at"))
+                    if envelope.get('device_frame_aligned'):
+                        value['timing'].update(camera_capture_time_known=True,timing_qualified=True,
+                            clock_qualification='same_device_capture_clock',
+                            capture_monotonic_us=envelope['capture_monotonic_us'],
+                            physical_capture_time_uncertainty_s=None)
                     metadata = envelope.get("sensors")
                     metadata = metadata if isinstance(metadata, dict) else {}
                     for name in ("imu", "mag", "barometer", "attitude"):
@@ -471,3 +480,4 @@ class AHRSTracking:
                 "metric_scale_available": False, "motion_commands": False,
                 "physical_capture_time_uncertainty_s": None,
             }
+

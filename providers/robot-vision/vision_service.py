@@ -14,6 +14,7 @@ import socketserver
 import threading
 import time
 import uuid
+import numpy as np
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -27,18 +28,22 @@ from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from radio_tracking import RadioTracking
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
+from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
+from portable_rover import PORTABLE_OPERATIONS, dispatch
+from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, estimated_rover_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
     "robot.vision.geometry", "robot.vision.metadata", "robot.vision.status",
+    "robot.world.read", "robot.world.status", "robot.map.obstacles",
     "robot.map.read", "robot.map.changes", "robot.map.checkpoint",
     "robot.map.create", "robot.map.open", "robot.vision.calibration",
     "robot.vision.project_ground",
     "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
-] + METRIC_CAPABILITIES
+] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
 LOG = logging.getLogger("robot-vision")
 
 
@@ -52,7 +57,7 @@ def unknown_localization(reason):
 
 class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
-                 radio_source=None, radio_model=None, ahrs_source=None):
+                 radio_source=None, radio_model=None, ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
         self.live_frames = LiveFrames()
         from leased_maps import LiveMap
@@ -67,6 +72,13 @@ class VisionService:
         self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
                                    source=radio_source, model=radio_model)
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
+        self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
+        mapping = config.get("multisensor_mapping", {})
+        self.pose_estimator = AttitudePoseEstimator(mapping.get("ahrs"))
+        self.pose_timeline = PoseTimeline()
+        self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
+            mapping.get("sonar_mounts", estimated_rover_mounts()), mapping.get("resolution_m", .05))
+        self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -76,6 +88,7 @@ class VisionService:
         self._pipeline_lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
+        self._live_camera = None
         self._started = time.monotonic()
         self._frames = 0
         self._skipped = 0
@@ -116,8 +129,15 @@ class VisionService:
         self.map_id = map_id
         self.revision = info["revision"]
         self.session_id = None
-        self._start_backend_and_session()
+        self._backend_start_pending = bool(defer_backend_start)
+        if not self._backend_start_pending:
+            self._start_backend_and_session()
         self.metric = MetricCalibration(self.store)
+        from world_atlas import WorldAtlas
+        self.atlas = WorldAtlas(self.state_dir / "world.sqlite3", self.store)
+        self.atlas.register(self.map_id)
+        self._world_lost_frames = set()
+        self.atlas.sonar_entities = self._sonar_entities
 
     def _map_metadata(self, extra=None):
         return {
@@ -127,7 +147,8 @@ class VisionService:
             "calibration_id": self.calibration["calibration_id"],
             "camera_source_id": self.config["camera"].get("source_id"),
             "origin": "first_localized_camera",
-            "occupancy": "unknown_without_supported_geometric_evidence",
+            "occupancy": "sonar_beam_evidence_query_robot.map.obstacles",
+            "mapping_sources": ["visual_features", "capture_clock_ahrs", "four_mounted_sonars"],
         }
 
     def _prepare_backend(self, map_id, calibration, *, allow_load_failure=False):
@@ -156,7 +177,7 @@ class VisionService:
             recovery_error = f"backend_initialization_failed:{type(exc).__name__}"
         return backend, artifact, recovery_error
 
-    def _activate_map(self, map_id, revision, calibration):
+    def _activate_map(self, map_id, revision, calibration, *, prepared=None):
         # pySLAM has process-global feature settings and ID counters. Never keep
         # two native engines alive; on failure reload the saved previous map.
         previous = self.backend
@@ -171,8 +192,8 @@ class VisionService:
         backend = None
         session = None
         try:
-            backend, artifact, recovery_error = self._prepare_backend(
-                map_id, calibration, allow_load_failure=previous is None and self.session_id is None)
+            backend, artifact, recovery_error = (prepared if prepared is not None else self._prepare_backend(
+                map_id, calibration, allow_load_failure=previous is None and self.session_id is None))
             session = self.store.start_session(
                 map_id, camera=self.config["camera"], calibration=calibration["calibration_id"])
             atomic_json(self.state_dir / "runtime.json",
@@ -213,6 +234,78 @@ class VisionService:
         self._lifecycle_state = "running"
         self._reset_tracking_context()
 
+    def _recover_world_submap(self):
+        # Native startup/shutdown belongs to the atlas worker, outside the
+        # pipeline lock. Fresh camera packets continue with explicitly unknown pose.
+        if self._stop.is_set() or not hasattr(self.backend, "continuity_state"):
+            return
+        quality = self.backend.continuity_state()
+        if (quality.get("state") not in ("lost", "relocalizing")
+                or quality.get("features", 0) < 200
+                or quality.get("keyframes", 0) < 2 or quality.get("points", 0) < 1):
+            self._world_lost_frames.clear()
+            return
+        self._world_lost_frames.add((self.map_id, quality["frame_index"]))
+        if len(self._world_lost_frames) < 5:
+            return
+        with self._pipeline_lock:
+            fresh = self.backend.continuity_state()
+            if fresh.get("state") not in ("lost", "relocalizing") or fresh.get("features", 0) < 200:
+                self._world_lost_frames.clear()
+                return
+            previous = self.map_id
+            pending = (self._schedule_checkpoint(origin="recovery")
+                       if hasattr(self.backend, "capture_checkpoint") else self._checkpoint(origin="recovery"))
+        saved = pending.result() if hasattr(pending, "result") else pending
+        if saved.get("backend_artifact", {}).get("availability") != "available":
+            return
+        with self._pipeline_lock:
+            if self._stop.is_set() or self.map_id != previous:
+                return
+            fresh = self.backend.continuity_state()
+            if fresh.get("state") not in ("lost", "relocalizing"):
+                self._world_lost_frames.clear()
+                return
+            old_backend = self.backend
+            previous_revision = self.revision
+            calibration = copy.deepcopy(self.calibration)
+            self.backend = None
+            self._recovery_error = "world_submap_transition"
+            self._lifecycle_state = "switching_submap"
+        prepared = None
+        try:
+            old_backend.close()
+            if self._stop.is_set():
+                return
+            info = self.store.create_map(self._map_metadata({
+                "world_id": self.atlas.world_id, "prior_map_id": previous,
+                "prior_checkpoint_id": saved["checkpoint_id"],
+                "prior_map_preserved": True, "alignment": "unlocalized",
+                "reason": "unknown_area_local_submap_after_visual_relocalization_attempts"}))
+            self.atlas.register(info["map_id"])
+            prepared = self._prepare_backend(info["map_id"], calibration)
+            if prepared[2] is not None:
+                raise RuntimeError(prepared[2])
+            with self._pipeline_lock:
+                self.backend = old_backend  # closed; retained for existing rollback semantics
+                self._activate_map(info["map_id"], info["revision"], calibration, prepared=prepared)
+                prepared = None
+                self._world_lost_frames.clear()
+            LOG.info("Retained world %s; initialized unlocalized submap %s from %s",
+                     self.atlas.world_id, self.map_id, previous)
+        except Exception:
+            if prepared is not None:
+                prepared[0].close()
+            # Reopen the saved previous map rather than abandoning it or inventing a pose.
+            restored = self._prepare_backend(previous, calibration, allow_load_failure=True)
+            with self._pipeline_lock:
+                self.backend = old_backend
+                self._activate_map(previous, previous_revision, calibration, prepared=restored)
+            raise
+        finally:
+            if self.backend is None:
+                self.backend = old_backend
+
     def _radio_keyframes(self, map_id, revision=None):
         keyframes, cursor = {}, None
         while True:
@@ -243,14 +336,29 @@ class VisionService:
 
     def start(self):
         self.metric.start_worker()
+        self.atlas.start(self)
         self.radio.start()
         self.ahrs.start()
+        self.ultrasonic.start()
         self.camera.start()
+        from live_camera import LiveCamera
+        self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
         self._thread.start()
         return self
 
     def _run(self):
+        if self._backend_start_pending:
+            try:
+                with self._pipeline_lock:
+                    self._start_backend_and_session()
+            except Exception as exc:
+                self._error = 'backend_start_failed:' + type(exc).__name__
+                self._lifecycle_state = 'backend_start_failed'
+                LOG.exception('Backend startup failed; independent camera delivery remains available')
+                return
+            finally:
+                self._backend_start_pending = False
         try:
             self.detector.start()
         except Exception as exc:
@@ -325,6 +433,9 @@ class VisionService:
                  "encoding_origin": "jpeg_reencoded_from_this_decoded_frame",
                  "receive_decode_monotonic_s": captured.decoded_monotonic}
         frame_id = frame["frame_id"]
+        ahrs_evidence=self.ahrs.evidence(frame)
+        if hasattr(self.radio,'record_frame'):self.radio.record_frame(frame)
+        measurement_time=frame.get('measurement_monotonic_s',captured.decoded_monotonic)
         gray = cv2.cvtColor(captured.image, cv2.COLOR_BGR2GRAY)
         mean_luma = float(gray.mean())
         frame["lighting"] = {"mean_luma_0_255": mean_luma, "low_light_observed": mean_luma < 35.0,
@@ -349,10 +460,22 @@ class VisionService:
             try:
                 if hasattr(self.backend, "set_relocalization_prior"):
                     self.backend.set_relocalization_prior(
-                        self.radio.prior(now_s=captured.decoded_monotonic), map_id=self.map_id)
-                result = self.backend.track(captured.image, frame_id, captured.decoded_monotonic)
+                        self.radio.prior(now_s=measurement_time), map_id=self.map_id)
+                attitude_prior = self.pose_estimator.prior(frame, self.map_id)
+                if hasattr(self.backend, "set_orientation_prior"):
+                    self.backend.set_orientation_prior(attitude_prior)
+                result = self.backend.track(captured.image, frame_id, measurement_time)
+                result["localization"] = self.pose_estimator.fuse(
+                    result.get("localization") or unknown_localization("unavailable"), attitude_prior)
             except Exception as exc:
-                self.backend.invalidate_tracking("backend_track_error")
+                diagnostic = f"{type(exc).__name__}: {exc}"[:512]
+                now = time.monotonic()
+                if (diagnostic != getattr(self, "_tracking_error_signature", None) or
+                        now - getattr(self, "_tracking_error_logged_at", 0) >= 30):
+                    LOG.exception("SLAM tracking failed: %s", diagnostic)
+                    self._tracking_error_signature = diagnostic
+                    self._tracking_error_logged_at = now
+                self.backend.invalidate_tracking("backend_track_error:" + diagnostic)
                 result = {"localization": unknown_localization("error"),
                           "geometry": {"available": False, "reason": f"slam_failed:{type(exc).__name__}"},
                           "map_changes": []}
@@ -378,6 +501,51 @@ class VisionService:
         localization.setdefault("robot_pose_status", "camera_to_robot_extrinsics_unavailable")
         if not localization.get("valid"):
             localization["T_map_camera"] = None
+        packet = frame.get("sensor_packet") or {}
+        if localization.get("valid") and packet.get("capture_monotonic_us") is not None:
+            self.pose_timeline.append(self.map_id, packet.get("boot_id"),
+                packet["capture_monotonic_us"] / 1e6, localization["T_map_camera"])
+        reference = localization.get("reference_keyframe_id")
+        keyframe = self._sonar_anchor(self.map_id, reference)
+        observations = sonar_observations(frame)
+        image_constraints = []
+        for observation in observations:
+            projection = sonar_image_constraint(observation,
+                self.obstacle_map.mounts.get(observation["sensor_id"]), self.calibration)
+            if projection is not None:
+                observation["image_constraint"] = projection
+                image_constraints.append(projection)
+        attitude = attitude_sample(frame)
+        absolute_rotation, orientation_epoch, rotation_time = None, None, None
+        if attitude is not None and self.pose_estimator.mount is not None:
+            mount = self.pose_estimator.mount
+            absolute_rotation = mount @ attitude["R"] @ mount.T
+            orientation_epoch, rotation_time = ("ahrs", attitude["epoch"]), attitude["time_s"]
+        elif localization.get("valid") and packet.get("capture_monotonic_us") is not None:
+            absolute_rotation = np.asarray(localization["T_map_camera"])[:3,:3]
+            orientation_epoch, rotation_time = ("visual", self.map_id, packet.get("boot_id")), packet["capture_monotonic_us"]/1e6
+        metric_pose = self.metric_odometry.update(observations, absolute_rotation, orientation_epoch, rotation_time)
+        sonar_revision = self.revision + 1
+        added = self.obstacle_map.record(self.map_id, frame_id, observations,
+            self.pose_timeline.at, keyframe, sonar_revision,
+            metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
+        resolved = self.obstacle_map.resolve_pending(self.map_id, self.pose_timeline.at, keyframe, sonar_revision,
+            earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
+                for t,_ in list(timeline.poses)[:1]],default=None),
+            metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+        if added or resolved:
+            self._commit_changes([{"op": "upsert", "kind": "sonar_state", "entity_id": "ledger",
+                "data": {"frame_id": frame_id, "added": added, "resolved": resolved}}], "sonar_observations")
+            localization["map_revision"] = self.revision
+        if metric_pose.get("valid"):
+            paired_visual = self.pose_timeline.at(metric_pose["time_s"],packet.get("boot_id"))
+            if paired_visual is not None:
+                self.obstacle_map.offer_alignment(self.map_id,
+                    self.metric_odometry.local_frame_id+":"+str(metric_pose["time_s"]),
+                    self.metric_odometry.local_frame_id,paired_visual,metric_pose["T_local_metric_camera"],
+                    keyframe,self.revision)
+        obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
+        obstacle_status["metric_odometry"] = metric_pose
         self._last_geometry = copy.deepcopy(geometry)
         spatial = {
             "sparse_geometry": geometry,
@@ -388,15 +556,21 @@ class VisionService:
                 "pitch_down_deg": self.calibration.get("mounting", {}).get("pitch_down_deg"),
                 "calibration_id": self.calibration["calibration_id"],
             },
-            "occupancy": {"availability": "unavailable", "default_state": "unknown",
-                          "reason": "sparse_features_and_detections_do_not_certify_free_space"},
+            "occupancy": obstacle_status,
+            "sonar_image_constraints": image_constraints,
             "traversability": {"availability": "unavailable", "reason": "not_estimated"},
             "dropoffs": {"availability": "unavailable", "reason": "not_estimated"},
-            "metric_depth": {"availability": "unavailable", "reason": "no_metric_depth_sensor_or_qualified_scale"},
-            "robot_velocity": {"availability": "unavailable", "reason": "no_continuous_metric_odometry"},
-            "radio": self.radio.evidence(localization, now_s=captured.decoded_monotonic),
-            "ahrs": self.ahrs.evidence(frame, localization),
+            "metric_depth": {"availability": "available" if observations else "unavailable",
+                             "source": "directional_sonar_ranges_m", "dense_camera_depth": False},
+            "robot_velocity": {"availability": "available" if metric_pose.get("valid") else "unavailable",
+                               "velocity_m_s": metric_pose.get("velocity_m_s"),
+                               "source": "estimated_planar_sonar_odometry", "coordinate_frame": "local_metric"},
+            "radio": self.radio.evidence(localization, now_s=measurement_time),
+            "ahrs": ahrs_evidence,
         }
+        if isinstance(ahrs_evidence, dict):
+            ahrs_evidence["pose_estimation"] = localization.get("sensor_fusion", {})
+            ahrs_evidence["camera_pose_corrected"] = bool(localization.get("sensor_fusion", {}).get("orientation_fused"))
         frame["processing_complete_time"] = utc_now()
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
                    "motion_class": d["motion_class"], "image_motion": d["image_motion"]}
@@ -417,7 +591,7 @@ class VisionService:
         except Exception as exc:
             self.metric.record_error("capture_offer:" + type(exc).__name__ + ":" + str(exc))
             LOG.exception("Metric capture enqueue failed; coherent observation remains available")
-        self.live_frames.publish({
+        live_metadata = {
             "frame_id": frame_id, "source_timestamp": frame.get("source_timestamp", frame.get("capture_time")),
             "source_timestamp_status": frame.get("capture_time_status", "unknown"),
             "receive_decode_timestamp": frame.get("receive_decode_time"),
@@ -425,15 +599,156 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
-            "radio": self.radio.status(include_observations=True),
-            "ahrs": self._stream_ahrs(),
+            "radio": self._stream_radio(frame),
+            "ahrs": self._stream_ahrs(frame),
+            "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
-        }, encoded.tobytes())
+        }
+        if self._live_camera is None:
+            self.live_frames.publish(live_metadata, encoded.tobytes())
+        else:
+            self._live_camera.record_processed(captured, live_metadata)
         return snapshot
 
-    def _stream_ahrs(self):
+    def _raw_live_metadata(self, captured, previous):
+        """Live pixels and sensors; older analysis keeps its own frame identity."""
+        frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
+        binding = {key: previous.get(key, fallback) for key, fallback in (
+            ('map_id', self.map_id), ('map_revision', self.revision),
+            ('session_id', self.session_id),
+            ('calibration_revision', self.calibration['calibration_id']))}
+        same_frame = previous.get('frame_id') == frame['frame_id']
+        pose = previous.get('pose') if same_frame else None
+        pose = pose or dict(unknown_localization('frame_processing_pending'),
+                    frame_id=frame['frame_id'], map_id=binding['map_id'])
+        return dict(binding, frame_id=frame['frame_id'],
+                    source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
+                    source_timestamp_status=frame.get('capture_time_status', 'unknown'),
+                    receive_decode_timestamp=frame.get('receive_decode_time'),
+                    processing_timestamp=previous.get('processing_timestamp') if same_frame else None,
+                    # The v1 sender uses this field to reject stale images.
+                    # Its camera-lane watermark must never become the time a
+                    # slow estimator eventually finished an older capture.
+                    processed_monotonic=captured.decoded_monotonic,
+                    processed_monotonic_basis='camera_receive_decode_time',
+                    processing_state='complete' if same_frame else 'pending',
+                    camera_delivery='independent_capture',
+                    last_processed_frame_id=previous.get('frame_id'),
+                    analysis={key: previous.get(key) for key in (
+                        'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
+                        'map_id', 'map_revision', 'pose')},
+                    detections=previous.get('detections', []) if same_frame else [], pose=pose,
+                    radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
+                    ultrasonic=self._stream_ultrasonic(),
+                    map_snapshot_required_on_revision_gap=True)
+
+    def _sonar_anchor(self, map_id, identifier, revision=None):
+        if identifier is None:
+            return None
+        cursor = None
+        while True:
+            page = self.store.read_map(map_id, revision=revision, kinds=["keyframe"], cursor=cursor)
+            for entity in page["entities"]:
+                if str(entity["entity_id"]) == str(identifier):
+                    return {"id": str(identifier), "T_map_keyframe": entity["data"]["T_map_camera"]}
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return None
+
+    def _read_obstacles(self, map_id, revision=None, include_rays=True):
+        scale = self.metric.attachment_status(map_id, revision=revision)
+        if not include_rays:
+            return {**self.obstacle_map.summary(map_id,
+                scale.get("scale_m_per_map_unit") if scale.get("availability") == "available" else None),
+                "metric_scale": scale}
+        anchors = {}
+        def resolve(identifier):
+            if identifier in anchors:
+                return anchors[identifier]
+            anchor = self._sonar_anchor(map_id, identifier, revision)
+            anchors[identifier] = None if anchor is None else anchor["T_map_keyframe"]
+            return anchors[identifier]
+        result = self.obstacle_map.read(map_id,
+            scale_m_per_map_unit=scale.get("scale_m_per_map_unit") if scale.get("availability") == "available" else None,
+            resolve_anchor=resolve, revision=revision)
+        result["metric_scale"] = scale
+        if not include_rays:
+            result["ray_count"] = len(result.pop("rays"))
+            result["obstacle_count"] = len(result.pop("obstacles"))
+        return result
+
+    def _sonar_entities(self, map_id, revision):
+        import numpy as np
+        result = self._read_obstacles(map_id, revision)
+        scale = result["metric_scale"].get("scale_m_per_map_unit")
+        alignments = {}
+        anchors = {}
+        def resolve(identifier):
+            if identifier not in anchors:
+                anchor = self._sonar_anchor(map_id,identifier,revision)
+                anchors[identifier] = None if anchor is None else anchor["T_map_keyframe"]
+            return anchors[identifier]
+        entities = []
+        for ray in result["rays"]:
+            if ray["coordinate_frame"] == "map_metric" and scale:
+                position = np.asarray(ray["endpoint_m"])/scale
+                qualification = "qualified_metric_attachment"
+            else:
+                local_frame = ray.get("local_frame_id")
+                if local_frame not in alignments:
+                    alignments[local_frame] = self.obstacle_map.alignment(map_id,local_frame,resolve,revision)
+                alignment = alignments[local_frame]
+                if not alignment.get("valid"):
+                    continue
+                inverse = np.linalg.inv(np.asarray(alignment["T_local_metric_map"]))
+                position = (inverse @ [*ray["endpoint_m"],1])[:3]
+                qualification = alignment["qualification"]
+            entities.append({"kind":"sparse_point","entity_id":"sonar:"+ray["id"],
+                "data":{"xyz":position.tolist(),"rgb":[255,170,30],"source":"sonar",
+                    "sensor_id":ray["sensor_id"],"beam_half_angle_deg":ray["beam_half_angle_deg"],
+                    "lateral_uncertainty_m":ray["lateral_uncertainty_m"],"units":"arbitrary",
+                    "scale_status":qualification}})
+        return entities
+
+    def _stream_ultrasonic(self):
+        """Latest sensor cache only; never issue HTTP from frame delivery."""
+        source = getattr(self, "ultrasonic", None)
+        if source is None:
+            return {"state": "unavailable"}
+        cached = source.snapshot()
+        status = source.status()
+        return ({**status, **cached["telemetry"], "snapshot": cached}
+                if isinstance(cached, dict) else status)
+
+    def _capture_sensor_stream(self,frame,name):
+        packet=frame.get('sensor_packet')
+        if not isinstance(packet,dict):return None
+        raw=packet.get(name)
+        if not isinstance(raw,dict):return {'state':'unavailable','reason':'no_causal_sample_for_capture','frame_id':frame['frame_id']}
+        age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
+        return {**copy.deepcopy(raw),'frame_id':frame['frame_id'],
+                'capture_monotonic_us':packet['capture_monotonic_us'],
+                'sample_reference':'camera_capture','timing_qualified':True,
+                'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
+
+    def _stream_radio(self,frame):
+        if frame.get('sensor_packet') is None:return self.radio.status(include_observations=True)
+        from capture_packet import frame_radio_snapshot
+        captured=frame_radio_snapshot(frame)
+        if captured is None:return {'state':'unavailable','reason':'no_radio_sample_for_capture','frame_id':frame['frame_id']}
+        age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
+        captured.update(elapsed_since_receive_s=age,received_at=frame.get('receive_decode_time'),
+                        frame_id=frame['frame_id'],sample_reference='camera_capture')
+        for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
+        return {**self.radio.status(include_observations=False),'telemetry':captured,
+                'frame_id':frame['frame_id'],'sample_reference':'camera_capture'}
+
+    def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
         status = self.ahrs.status()
+        if frame is not None:
+            captured=self._capture_sensor_stream(frame,'ahrs')
+            if captured is not None:return {**status,**captured}
         snapshot = self.ahrs.snapshot()
         if not isinstance(snapshot, dict):
             return status
@@ -493,6 +808,8 @@ class VisionService:
                  "map_id", "map_revision", "published_at", "freshness")}
 
     def _maybe_checkpoint(self):
+        if self.backend is None or self._lifecycle_state == "switching_submap":
+            return None
         interval = float(self.config.get("checkpoint_interval_s", 60))
         if time.monotonic() - self._last_checkpoint_tick < interval:
             return None
@@ -671,11 +988,14 @@ class VisionService:
 
 
     def query(self, operation, inputs=None):
+        return dispatch(self, operation, inputs or {}, self._query_core)
+
+    def _query_core(self, operation, inputs=None):
         inputs = inputs or {}
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
         if operation == "robot.ahrs.status":
-            return self.ahrs.status()
+            return {**self.ahrs.status(), "pose_estimation": dict(self.pose_estimator.status)}
         if operation == "robot.ahrs.snapshot":
             snapshot = self.ahrs.snapshot()
             if snapshot is None:
@@ -727,8 +1047,10 @@ class VisionService:
                 "availability": "available", "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
                 "capabilities": CAPABILITIES,
                 "streaming": {"available": not self._stop.is_set(), "lanes": ["vision", "map"],
-                              "transport": "native_leased_stream", "per_message_actions": False},
+                              "transport": "native_leased_stream", "per_message_actions": False,
+                              "camera_delivery": self._live_camera.status() if self._live_camera else None},
                 "map_id": self.map_id,
+                "world": self.atlas.status(),
                 "map_revision": self.revision, "session_id": self.session_id,
                 "uptime_s": time.monotonic()-self._started, "processed_frames": self._frames,
                 "skipped_camera_frames": self._skipped, "last_process_ms": self._last_process_ms,
@@ -747,6 +1069,7 @@ class VisionService:
                 "metric_calibration": self.metric.status(map_id=self.map_id),
                 "radio": self.radio.status(),
                 "ahrs": self.ahrs.status(),
+                "ultrasonic": self._stream_ultrasonic(),
                 "control": {"motion_commands": False, "brain": "external",
                             "camera_light": "explicit_authenticated_camera_api",
                             "gyro_calibration": "explicit_authenticated_camera_api"},
@@ -767,15 +1090,15 @@ class VisionService:
                     "imu": "native MPU axes; camera and robot mounting transforms unqualified",
                     "ahrs_reference": "gravity-aligned initial-yaw reference; relative yaw can drift",
                     "magnetometer": "native AK8963 axes; distinct from IMU axes; not calibrated compass"},
-                "time": {"capture": "unknown", "source_media": "relative clock",
+                "time": {"capture": ("ESP32 first-DMA capture event" if self.config["camera"].get("synchronized_capture") else "unknown"), "source_media": "relative clock",
                          "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations",
-                         "ahrs": "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified"},
+                         "ahrs": ("same ESP32 capture clock with per-sensor observed uptimes" if self.config["camera"].get("synchronized_capture") else "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified")},
                 "map_layers": ["keyframe", "sparse_point", "semantic_observation", "radio_fingerprint"],
                 "map_layer_readers": {"radio_fingerprint": "robot.map.radio.read"},
                 "radio_model": {"learning": "time_aligned_independently_verified_visual_poses",
                                 "inference": "adaptive_source_distributions_and_competing_spatial_modes",
                                 "visual_relocalization": "candidate_prior_with_unchanged_geometry_and_visual_fallback",
-                                "clock_qualification": "approximate_host_receive_alignment",
+                                "clock_qualification": ("device_capture_clock" if self.config["camera"].get("synchronized_capture") else "approximate_host_receive_alignment"),
                                 "navigation_usable": False, "heading_available": False,
                                 "storage": "bounded_radio_sqlite_outside_vision_checkpoint_packages"},
                 "ahrs_evidence": {
@@ -784,7 +1107,7 @@ class VisionService:
                     "reset_identity": ["receiver_id", "boot_id", "generation", "yaw_origin_uptime_ms"],
                     "acceleration": "m/s^2 including gravity; no position or velocity integration",
                     "altitude": "standard-pressure reference; not height above floor or map z",
-                    "camera_pose_fusion": "unavailable_until_mounting_and_exposure_timing_are_qualified",
+                    "camera_pose_fusion": "capture_clock_attitude_prior_and_complementary_orientation_estimate",
                     "navigation_usable": False,
                     "storage": "bounded_memory_history_and_existing_retained_observations",
                     "raw_disk_journal": False},
@@ -822,6 +1145,12 @@ class VisionService:
                     "metric_localization": snapshot["metric_localization"],
                     "robot_localization": snapshot["robot_localization"],
                     "spatial_evidence": snapshot["spatial_evidence"]}
+        if operation == "robot.map.obstacles":
+            return self._read_obstacles(inputs.get("map_id", self.map_id), inputs.get("revision"))
+        if operation == "robot.world.read":
+            return self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+        if operation == "robot.world.status":
+            return self.atlas.status()
         if operation == "robot.map.read":
             return self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),
                                        bounds=inputs.get("bounds"), kinds=inputs.get("kinds"),
@@ -840,7 +1169,7 @@ class VisionService:
             calibration["calibration_id"] = record.get("calibration_id")
             result = project_ground(inputs.get("pixel"), calibration,
                                     [frame["width"], frame["height"]],
-                                    confirmed_floor_contact=inputs.get("confirmed_floor_contact", False))
+                                    confirmed_floor_contact=True)
             return {**self._binding(snapshot), "projection": result}
         if operation == "robot.map.checkpoint" and hasattr(self.backend, "capture_checkpoint"):
             if inputs.get("map_id", self.map_id) != self.map_id:
@@ -853,7 +1182,12 @@ class VisionService:
                     raise ValueError("only_active_map_can_be_checkpointed")
                 return self._checkpoint(origin="explicit")
             if operation == "robot.map.create":
-                return self.store.create_map(self._map_metadata(inputs.get("metadata")))
+                metadata = {**(inputs.get("metadata") or {}),
+                            "world_id": self.atlas.world_id, "prior_map_id": self.map_id,
+                            "alignment": "unlocalized"}
+                info = self.store.create_map(self._map_metadata(metadata))
+                self.atlas.register(info["map_id"])
+                return {**info, "world_id": self.atlas.world_id}
             if operation == "robot.map.open":
                 return self._open_map(inputs["map_id"])
             if operation == "robot.vision.calibration":
@@ -902,6 +1236,11 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        self._stop.set()
+        if getattr(self, "atlas", None) is not None:
+            self.atlas.close()
+        if self._live_camera is not None:
+            self._live_camera.close()
         self.live_frames.close()
         self.live_maps.close()
         self._stop.set()
@@ -916,6 +1255,9 @@ class VisionService:
             self.ahrs.close()
         except Exception:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
+        if getattr(self, "ultrasonic", None) is not None:
+            self.ultrasonic.close()
+        self.obstacle_map.close()
         self.metric.close()
         self._wait_checkpoint()
         with self._pipeline_lock:
@@ -1041,7 +1383,8 @@ def main(argv=None):
             try:
                 if stop.is_set():
                     return
-                service = VisionService(load_config(args.state, args.config), args.state)
+                service = VisionService(load_config(args.state, args.config), args.state,
+                                        defer_backend_start=True)
                 if stop.is_set():
                     return
                 socket_path.unlink(missing_ok=True)
@@ -1079,3 +1422,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
