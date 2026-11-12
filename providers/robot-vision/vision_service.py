@@ -30,7 +30,8 @@ from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
 from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
-from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, estimated_rover_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint
+from auto_gyro_calibration import AutoGyroCalibration
+from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
 
 CAPABILITIES = [
     "robot.vision.snapshot", "robot.vision.frame", "robot.vision.detections",
@@ -72,11 +73,14 @@ class VisionService:
                                    source=radio_source, model=radio_model)
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
         self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
-        mapping = config.get("multisensor_mapping", {})
-        self.pose_estimator = AttitudePoseEstimator(mapping.get("ahrs"))
+        mapping = config.get("multisensor_mapping") or {}
+        self.pose_estimator = AttitudePoseEstimator({"R_camera_imu": ROVER_R_CAMERA_IMU, **(mapping.get("ahrs") or {})})
+        ahrs_settings = config.get("ahrs", {})
+        self.auto_gyro = AutoGyroCalibration(self.ahrs.calibrate_gyro, enabled=bool(
+            ahrs_settings.get("enabled",False) and ahrs_settings.get("auto_gyro_calibration",True)))
         self.pose_timeline = PoseTimeline()
         self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
-            mapping.get("sonar_mounts", estimated_rover_mounts()), mapping.get("resolution_m", .05))
+            mapping.get("sonar_mounts", rover_sensor_mounts()), mapping.get("resolution_m", .05))
         self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
@@ -432,6 +436,7 @@ class VisionService:
                  "encoding_origin": "jpeg_reencoded_from_this_decoded_frame",
                  "receive_decode_monotonic_s": captured.decoded_monotonic}
         frame_id = frame["frame_id"]
+        frame["auto_gyro_calibration"] = self._automatic_gyro_calibration(frame,captured.image)
         ahrs_evidence=self.ahrs.evidence(frame)
         if hasattr(self.radio,'record_frame'):self.radio.record_frame(frame)
         measurement_time=frame.get('measurement_monotonic_s',captured.decoded_monotonic)
@@ -523,7 +528,9 @@ class VisionService:
         elif localization.get("valid") and packet.get("capture_monotonic_us") is not None:
             absolute_rotation = np.asarray(localization["T_map_camera"])[:3,:3]
             orientation_epoch, rotation_time = ("visual", self.map_id, packet.get("boot_id")), packet["capture_monotonic_us"]/1e6
-        metric_pose = self.metric_odometry.update(observations, absolute_rotation, orientation_epoch, rotation_time)
+        gyro_calibration = ((packet.get("ahrs") or {}).get("ahrs") or {}).get("calibration") or {}
+        metric_pose = self.metric_odometry.update(observations, absolute_rotation, orientation_epoch, rotation_time,
+            stationary_reference_reset=bool(gyro_calibration.get("gyro_bias_valid") and gyro_calibration.get("status")=="succeeded"))
         sonar_revision = self.revision + 1
         added = self.obstacle_map.record(self.map_id, frame_id, observations,
             self.pose_timeline.at, keyframe, sonar_revision,
@@ -570,6 +577,9 @@ class VisionService:
         if isinstance(ahrs_evidence, dict):
             ahrs_evidence["pose_estimation"] = localization.get("sensor_fusion", {})
             ahrs_evidence["camera_pose_corrected"] = bool(localization.get("sensor_fusion", {}).get("orientation_fused"))
+            ahrs_evidence["heading_available"] = bool(attitude is not None and self.pose_estimator.mount is not None)
+            ahrs_evidence["navigation_usable"] = ahrs_evidence["heading_available"]
+            ahrs_evidence["navigation_role"] = "orientation_prior_and_sonar_metric_pose_not_standalone_position"
         frame["processing_complete_time"] = utc_now()
         tracks = [{"track_id": d["track_id"], "detection_id": d["detection_id"],
                    "motion_class": d["motion_class"], "image_motion": d["image_motion"]}
@@ -612,6 +622,7 @@ class VisionService:
     def _raw_live_metadata(self, captured, previous):
         """Live pixels and sensors; older analysis keeps its own frame identity."""
         frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
+        auto_calibration = self._automatic_gyro_calibration(frame,captured.image)
         binding = {key: previous.get(key, fallback) for key, fallback in (
             ('map_id', self.map_id), ('map_revision', self.revision),
             ('session_id', self.session_id),
@@ -620,7 +631,7 @@ class VisionService:
         pose = previous.get('pose') if same_frame else None
         pose = pose or dict(unknown_localization('frame_processing_pending'),
                     frame_id=frame['frame_id'], map_id=binding['map_id'])
-        return dict(binding, frame_id=frame['frame_id'],
+        return dict(binding, frame_id=frame['frame_id'], auto_gyro_calibration=auto_calibration,
                     source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
                     source_timestamp_status=frame.get('capture_time_status', 'unknown'),
                     receive_decode_timestamp=frame.get('receive_decode_time'),
@@ -640,6 +651,10 @@ class VisionService:
                     radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
                     ultrasonic=self._stream_ultrasonic(),
                     map_snapshot_required_on_revision_gap=True)
+
+    def _automatic_gyro_calibration(self,frame,image):
+        automatic = getattr(self,"auto_gyro",None)
+        return automatic.observe(frame,image) if automatic is not None else {"enabled":False,"calibration_blocking":False}
 
     def _sonar_anchor(self, map_id, identifier, revision=None):
         if identifier is None:
@@ -991,7 +1006,8 @@ class VisionService:
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
         if operation == "robot.ahrs.status":
-            return {**self.ahrs.status(), "pose_estimation": dict(self.pose_estimator.status)}
+            return {**self.ahrs.status(), "pose_estimation": dict(self.pose_estimator.status),
+                    "automatic_calibration": self.auto_gyro.status()}
         if operation == "robot.ahrs.snapshot":
             snapshot = self.ahrs.snapshot()
             if snapshot is None:
@@ -1104,7 +1120,8 @@ class VisionService:
                     "acceleration": "m/s^2 including gravity; no position or velocity integration",
                     "altitude": "standard-pressure reference; not height above floor or map z",
                     "camera_pose_fusion": "capture_clock_attitude_prior_and_complementary_orientation_estimate",
-                    "navigation_usable": False,
+                    "navigation_use": "orientation_prior_and_sonar_metric_pose",
+                    "standalone_position_available": False,
                     "storage": "bounded_memory_history_and_existing_retained_observations",
                     "raw_disk_journal": False},
                 "unknown_space_rule": "No detection or sparse point is not proof of free space.",
@@ -1253,6 +1270,7 @@ class VisionService:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
         if getattr(self, "ultrasonic", None) is not None:
             self.ultrasonic.close()
+        self.auto_gyro.close()
         self.obstacle_map.close()
         self.metric.close()
         self._wait_checkpoint()

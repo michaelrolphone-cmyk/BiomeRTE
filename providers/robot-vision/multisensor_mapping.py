@@ -19,24 +19,38 @@ from pathlib import Path
 
 import numpy as np
 
+# Owner-observed axis mapping: positive sensor yaw turns left; negative sensor
+# roll raises the front. Columns are native IMU X,Y,Z expressed in camera axes.
+ROVER_R_CAMERA_IMU = [[-1.,0.,0.],[0.,0.,-1.],[0.,-1.,0.]]
+ROVER_T_CAMERA_IMU_M = [0.,0.,-.004]
+
+
+def rover_sensor_mounts():
+    """Photo-measured horizontal mounts and owner-supplied acoustic heights.
+
+    Camera axes: right, down, forward. The 20mm-grid measurement procedure,
+    selected image landmarks and parallax model are retained alongside code.
+    Function name is retained for configuration/API compatibility.
+    """
+    rear_tire_plane_camera_z_m = -.146  # grid-measured wheel envelope, rounded to 1mm
+    rear_protrusion_m = .00635  # owner-supplied quarter-inch protrusion
+    return {name: {'origin_camera_m': origin, 'direction_camera': direction,
+                   'beam_half_angle_deg': 7.5, 'qualification': 'photo_measured_mount',
+                   'provenance': '03-1000017388.jpg_20mm_grid_and_user_heights',
+                   'vertical_offset_status': 'user_reported_acoustic_center_height',
+                   'height_above_floor_m':.0508 if name=='rear' else .0254,
+                   'measurement_precision':'grid_reprojection_and_height_parallax_model_recorded',
+                   'rear_tire_protrusion_m':.00635 if name=='rear' else None}
+            for name, origin, direction in (
+                ('front', [.005,.0381,.044], [0,0,1]),
+                ('rear', [.002,.0127,rear_tire_plane_camera_z_m-rear_protrusion_m], [0,0,-1]),
+                ('left', [-.043,.0381,-.049], [-1,0,0]),
+                ('right', [.043,.0381,-.046], [1,0,0]))}
+
 
 def estimated_rover_mounts():
-    """Nominal chassis geometry; explicit estimates until measured mounts replace it.
-
-    User dimensions: width 5.5in, length 7.25in, optical origin 1.75in
-    behind front. Front sonar is user-reported 1in above the floor, 1.5in
-    below the nominal camera optical center; other sensor heights are unknown.
-    """
-    return {name: {'origin_camera_m': origin, 'direction_camera': direction,
-                   'beam_half_angle_deg': 7.5, 'qualification': 'chassis_estimate',
-                   'provenance': 'user_chassis_dimensions_not_measured_sensor_mount',
-                   'vertical_offset_status': 'user_reported_front_height' if name=='front' else 'assumed_zero',
-                   'height_above_floor_m':.0254 if name=='front' else None}
-            for name, origin, direction in (
-                ('front', [0,.0381,.04445], [0,0,1]),
-                ('rear', [0,0,-.1397], [0,0,-1]),
-                ('left', [-.06985,0,-.047625], [-1,0,0]),
-                ('right', [.06985,0,-.047625], [1,0,0]))}
+    """Compatibility entry point for callers predating measured sensor mounts."""
+    return rover_sensor_mounts()
 
 
 def sonar_image_constraint(observation,mount,calibration):
@@ -141,19 +155,36 @@ class AttitudePoseEstimator:
         mount = self.config.get('R_camera_imu')
         self.mount = None if mount is None else rotation(mount)
         self.mount_supplied = mount is not None
+        self.mount_source = 'configured' if mount is not None else 'awaiting_axis_alignment'
         self.mount_rank = 3 if mount is not None else 0
         self.observed_axis = None
         self.previous = None
         self.pending = None
         self.mount_observations = deque(maxlen=100)
         self.visual_anchor = None
-        self.status = {'available': False, 'reason': 'imu_mount_not_configured'}
+        self.status = {'available': False, 'reason': 'awaiting_imu_axis_alignment'}
 
     def prior(self, frame, map_id):
         sample = attitude_sample(frame, self.config.get('max_attitude_age_s', .15))
         self.pending = (sample, map_id)
+        if self.mount is None and sample is not None and self.config.get('level_camera_mount',True):
+            imu=((frame.get('sensor_packet') or {}).get('ahrs') or {}).get('ahrs',{}).get('imu',{})
+            acceleration=np.asarray(imu.get('accel_m_s2',[]),float)
+            # A level, floor-mounted camera has its up axis along -camera Y.
+            # Gravity fixes the one axis needed for planar heading immediately;
+            # paired visual rotations can refine the other axes subsequently.
+            if acceleration.shape==(3,) and np.isfinite(acceleration).all() and abs(np.linalg.norm(acceleration)-9.81)<.6:
+                up=acceleration/np.linalg.norm(acceleration)
+                target=np.array([0.,-1.,0.]);cross=np.cross(up,target);cosine=float(up@target)
+                if cosine>-.999999:
+                    skew=np.array([[0,-cross[2],cross[1]],[cross[2],0,-cross[0]],[-cross[1],cross[0],0]])
+                    self.mount=np.eye(3)+skew+skew@skew/(1+cosine)
+                else:
+                    self.mount=np.diag([-1.,-1.,1.])
+                self.mount_rank=1;self.observed_axis=up
+                self.mount_source='gravity_and_reported_level_camera_mount'
         if self.mount is None or sample is None:
-            self.status = {'available': False, 'reason': 'imu_mount_not_configured' if self.mount is None else 'attitude_unavailable_or_stale'}
+            self.status = {'available': False, 'reason': 'awaiting_imu_axis_alignment' if self.mount is None else 'attitude_unavailable_or_stale'}
             return None
         old = self.previous
         if (old is None or old['map_id'] != map_id or old['sample']['epoch'] != sample['epoch']
@@ -174,8 +205,9 @@ class AttitudePoseEstimator:
         self.status = {'available': True, 'reason': None, 'orientation_source': 'capture_clock_ahrs',
                        'translation_source': 'previous_visual_pose', 'translation_predicted': False,
                        'measurement_age_s': sample['age_s']}
-        self.status.update(mount_source='configured' if self.mount_supplied else 'paired_visual_ahrs_rotations',
-                           mount_observable_rank=self.mount_rank)
+        self.status.update(mount_source=self.mount_source,mount_observable_rank=self.mount_rank,
+                           imu_origin_camera_m=[0.,0.,-.004],yaw_positive_direction='left',
+                           planar_yaw_delta_deg=math.degrees(math.atan2(-delta[0,2],delta[2,2])))
         return prior
 
     def fuse(self, localization, prior=None):
@@ -209,6 +241,7 @@ class AttitudePoseEstimator:
                     errors = np.linalg.norm(aa @ fit.T-bb, axis=1)
                     if np.percentile(errors, 90) < .025:
                         self.mount = fit
+                        self.mount_source='paired_visual_ahrs_rotations'
                         self.mount_rank = int(np.sum(singular > singular[0]*.03))
                         self.observed_axis = vt[0]
                         self.status = {'available': False, 'reason': 'mount_learned_awaiting_next_frame',
@@ -303,14 +336,25 @@ class SonarMetricOdometry:
         temporary.write_text(json.dumps(state,allow_nan=False))
         temporary.replace(self.path)
 
-    def update(self, observations, absolute_rotation, epoch, rotation_time_s):
+    def update(self, observations, absolute_rotation, epoch, rotation_time_s, stationary_reference_reset=False):
         if absolute_rotation is None or len(observations) < 3:
             return {'valid': False, 'reason':'insufficient_rotation_or_ranges', 'local_frame_id':self.local_frame_id}
         epoch = json.dumps(epoch,sort_keys=True)
         if epoch != self.epoch:
-            self.epoch, self.previous = epoch, None
-            self.local_frame_id = str(uuid.uuid4())
-            self.timeline, self.orientations = PoseTimeline(), PoseTimeline()
+            old_boot=None if self.previous is None else next(iter(self.previous['scan'].values()))['boot_id']
+            preserve=(stationary_reference_reset and self.previous is not None and old_boot==observations[0]['boot_id'])
+            self.epoch=epoch
+            if preserve:
+                # Gyro bias calibration can change the relative attitude datum
+                # while firmware has verified stationarity. Keep metric origin,
+                # position and accumulated rays; re-anchor only that datum.
+                old_local=transform(self.previous['pose'])[:3,:3]
+                self.previous['R_reference']=(rotation(absolute_rotation)@old_local.T).tolist()
+                self.orientations=PoseTimeline()
+            else:
+                self.previous=None
+                self.local_frame_id = str(uuid.uuid4())
+                self.timeline, self.orientations = PoseTimeline(), PoseTimeline()
         boot = observations[0]['boot_id']
         orientation = np.eye(4)
         orientation[:3,:3] = rotation(absolute_rotation)
