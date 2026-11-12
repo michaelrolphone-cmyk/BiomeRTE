@@ -32,6 +32,7 @@ from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
 from portable_rover import PORTABLE_OPERATIONS, dispatch
 from auto_gyro_calibration import AutoGyroCalibration
+from metric_sensor_worker import MetricSensorWorker
 from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
 
 CAPABILITIES = [
@@ -83,6 +84,7 @@ class VisionService:
         self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
             mapping.get("sonar_mounts", rover_sensor_mounts()), mapping.get("resolution_m", .05))
         self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
+        self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -345,6 +347,7 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.metric_worker.start()
         from live_camera import LiveCamera
         self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
@@ -512,47 +515,49 @@ class VisionService:
                 packet["capture_monotonic_us"] / 1e6, localization["T_map_camera"])
         reference = localization.get("reference_keyframe_id")
         keyframe = self._sonar_anchor(self.map_id, reference)
-        observations = sonar_observations(frame)
-        image_constraints = []
-        for observation in observations:
-            projection = sonar_image_constraint(observation,
-                self.obstacle_map.mounts.get(observation["sensor_id"]), self.calibration)
-            if projection is not None:
-                observation["image_constraint"] = projection
-                image_constraints.append(projection)
-        attitude = attitude_sample(frame)
-        absolute_rotation, orientation_epoch, rotation_time = None, None, None
-        if attitude is not None and self.pose_estimator.mount is not None:
-            mount = self.pose_estimator.mount
-            absolute_rotation = mount @ attitude["R"] @ mount.T
-            orientation_epoch, rotation_time = ("ahrs", attitude["epoch"]), attitude["time_s"]
-        elif localization.get("valid") and packet.get("capture_monotonic_us") is not None:
-            absolute_rotation = np.asarray(localization["T_map_camera"])[:3,:3]
-            orientation_epoch, rotation_time = ("visual", self.map_id, packet.get("boot_id")), packet["capture_monotonic_us"]/1e6
-        gyro_calibration = ((packet.get("ahrs") or {}).get("ahrs") or {}).get("calibration") or {}
-        metric_pose = self.metric_odometry.update(observations, absolute_rotation, orientation_epoch, rotation_time,
-            stationary_reference_reset=bool(gyro_calibration.get("gyro_bias_valid") and gyro_calibration.get("status")=="succeeded"))
-        sonar_revision = self.revision + 1
-        added = self.obstacle_map.record(self.map_id, frame_id, observations,
-            self.pose_timeline.at, keyframe, sonar_revision,
-            metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
-        resolved = self.obstacle_map.resolve_pending(self.map_id, self.pose_timeline.at, keyframe, sonar_revision,
-            earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
-                for t,_ in list(timeline.poses)[:1]],default=None),
-            metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
-        if added or resolved:
-            self._commit_changes([{"op": "upsert", "kind": "sonar_state", "entity_id": "ledger",
-                "data": {"frame_id": frame_id, "added": added, "resolved": resolved}}], "sonar_observations")
-            localization["map_revision"] = self.revision
-        if metric_pose.get("valid"):
-            paired_visual = self.pose_timeline.at(metric_pose["time_s"],packet.get("boot_id"))
-            if paired_visual is not None:
-                self.obstacle_map.offer_alignment(self.map_id,
-                    self.metric_odometry.local_frame_id+":"+str(metric_pose["time_s"]),
-                    self.metric_odometry.local_frame_id,paired_visual,metric_pose["T_local_metric_camera"],
-                    keyframe,self.revision)
-        obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
-        obstacle_status["metric_odometry"] = metric_pose
+        with self.metric_worker.lock:
+            observations = sonar_observations(frame)
+            image_constraints = []
+            for observation in observations:
+                projection = sonar_image_constraint(observation,
+                    self.obstacle_map.mounts.get(observation["sensor_id"]), self.calibration)
+                if projection is not None:
+                    observation["image_constraint"] = projection
+                    image_constraints.append(projection)
+            attitude = attitude_sample(frame)
+            absolute_rotation, orientation_epoch, rotation_time = None, None, None
+            if attitude is not None and self.pose_estimator.mount is not None:
+                mount = self.pose_estimator.mount
+                absolute_rotation = mount @ attitude["R"] @ mount.T
+                orientation_epoch, rotation_time = ("ahrs", attitude["epoch"]), attitude["time_s"]
+            elif localization.get("valid") and packet.get("capture_monotonic_us") is not None:
+                absolute_rotation = np.asarray(localization["T_map_camera"])[:3,:3]
+                orientation_epoch, rotation_time = ("visual", self.map_id, packet.get("boot_id")), packet["capture_monotonic_us"]/1e6
+            gyro_calibration = ((packet.get("ahrs") or {}).get("ahrs") or {}).get("calibration") or {}
+            metric_pose = self.metric_worker.pose_for(frame) if absolute_rotation is not None and attitude is not None else self.metric_odometry.update(
+                observations, absolute_rotation, orientation_epoch, rotation_time,
+                stationary_reference_reset=bool(gyro_calibration.get("gyro_bias_valid") and gyro_calibration.get("status")=="succeeded"))
+            sonar_revision = self.revision + 1
+            added = self.obstacle_map.record(self.map_id, frame_id, observations,
+                self.pose_timeline.at, keyframe, sonar_revision,
+                metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
+            resolved = self.obstacle_map.resolve_pending(self.map_id, self.pose_timeline.at, keyframe, sonar_revision,
+                earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
+                    for t,_ in list(timeline.poses)[:1]],default=None),
+                metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+            if added or resolved:
+                self._commit_changes([{"op": "upsert", "kind": "sonar_state", "entity_id": "ledger",
+                    "data": {"frame_id": frame_id, "added": added, "resolved": resolved}}], "sonar_observations")
+                localization["map_revision"] = self.revision
+            if metric_pose.get("valid"):
+                paired_visual = self.pose_timeline.at(metric_pose["time_s"],packet.get("boot_id"))
+                if paired_visual is not None:
+                    self.obstacle_map.offer_alignment(self.map_id,
+                        self.metric_odometry.local_frame_id+":"+str(metric_pose["time_s"]),
+                        self.metric_odometry.local_frame_id,paired_visual,metric_pose["T_local_metric_camera"],
+                        keyframe,self.revision)
+            obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
+            obstacle_status["metric_odometry"] = metric_pose
         self._last_geometry = copy.deepcopy(geometry)
         spatial = {
             "sparse_geometry": geometry,
@@ -624,6 +629,7 @@ class VisionService:
         """Live pixels and sensors; older analysis keeps its own frame identity."""
         frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
         auto_calibration = self._automatic_gyro_calibration(frame,captured.image)
+        self.metric_worker.offer(frame)
         binding = {key: previous.get(key, fallback) for key, fallback in (
             ('map_id', self.map_id), ('map_revision', self.revision),
             ('session_id', self.session_id),
@@ -1274,6 +1280,7 @@ class VisionService:
             LOG.exception("AHRS shutdown failed; continuing vision shutdown")
         if getattr(self, "ultrasonic", None) is not None:
             self.ultrasonic.close()
+        self.metric_worker.close()
         self.auto_gyro.close()
         self.obstacle_map.close()
         self.metric.close()
