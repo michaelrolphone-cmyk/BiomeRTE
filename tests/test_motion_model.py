@@ -9,7 +9,7 @@ from biomerte.motion_model import MotionModel, controls
 from biomerte.motion_tracking import MotionRecorder, metric_delta
 
 class MotionTests(unittest.TestCase):
-    def test_neutral_retains_steering_and_straight_roll_recenters_gradually(self):
+    def test_neutral_retains_transient_memory_and_straight_relaxation_is_gradual(self):
         m=MotionModel()
         m.advance(m.state,5,1.)
         turned=list(m.state["steering_memory"])
@@ -193,3 +193,18 @@ class SonarAssociationTests(unittest.TestCase):
             r.close()
             self.assertEqual(r.snapshot["angular_samples"],0)
             self.assertGreater(r.snapshot["rejected"]["sensor_clock_gap"],0)
+
+class SteeringLatchTests(unittest.TestCase):
+    def test_straight_drive_does_not_assume_wheels_center_without_correction(self):
+        m=MotionModel()
+        m.advance(m.state,5,1.)
+        turned=m.state["steering_latch"]
+        self.assertGreater(turned,.5)
+        m.advance(m.state,0,2.)
+        m.advance(m.state,1,3.)
+        self.assertEqual(m.state["steering_latch"],turned)
+        m.advance(m.state,9,.1)
+        self.assertGreater(m.state["steering_latch"],0.)
+        self.assertLess(m.state["steering_latch"],turned)
+        m.advance(m.state,9,.5)
+        self.assertLess(m.state["steering_latch"],0.)
