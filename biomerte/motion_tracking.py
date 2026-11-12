@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import time
 from .motion_model import MotionModel, controls, number, wrap
+from .motion_training import schema as training_schema, record as training_record
 
 def objects(value):
     if isinstance(value,dict):
@@ -48,7 +49,7 @@ def observation_payload(metadata):
         if k in metadata}
 
 def attitude(meta):
-    evidence=meta.get("spatial_evidence",{})
+    evidence=meta.get("spatial_evidence") or {}
     for obj in objects(evidence.get("ahrs",{})):
         candidate=obj.get("attitude")
         if (isinstance(candidate,dict) and number(candidate.get("yaw_deg"))
@@ -59,7 +60,7 @@ def attitude(meta):
 
 def ranges(meta):
     result={}
-    evidence=meta.get("spatial_evidence",{})
+    evidence=meta.get("spatial_evidence") or {}
     for obj in objects(evidence.get("ultrasonic",meta.get("ultrasonic",{}))):
         sensors=obj.get("sensors")
         if isinstance(sensors,list):
@@ -112,6 +113,10 @@ class MotionRecorder:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, kind TEXT, received_monotonic REAL, recorded_utc REAL, payload TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS model (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT, updated_utc REAL)")
+            training_schema(db)
+            health={}
+            active_session=None
+            last_prune=0.
             row=db.execute("SELECT payload FROM model WHERE id=1").fetchone()
             model=MotionModel(json.loads(row[0]) if row else None)
             previous=None
@@ -127,9 +132,32 @@ class MotionRecorder:
                     break
                 kind,value,received=event
                 self.pending-=1
+                received_utc=time.time()-(time.monotonic()-received)
+                now=time.time()
+                if kind in ('control','vision','sonar','sensor_error','gap'):
+                    health[kind+'_received_utc']=received_utc
+                if kind=='control' and value.get('stage')=='applied':health['applied_control_received_utc']=received_utc
+                if kind=='vision' and attitude(value) is not None:health['ahrs_capture_received_utc']=received_utc
+                if kind=='sensor_error':health['last_sensor_error']=value
+                if kind=='gap':health['last_gap']=value
+                db.execute("INSERT OR REPLACE INTO training_health VALUES(1,?,?)",(json.dumps(health),now))
+                db.execute("UPDATE training_sessions SET observed=? WHERE stopped IS NULL",(now,))
+                db.execute("UPDATE training_sessions SET closed_observed=? WHERE stopped IS NOT NULL AND stopped<=? AND closed_observed IS NULL",(now,received_utc))
+                if kind=='heartbeat':
+                    db.commit()
+                    continue
+                angular_before,metric_before=model.angular.count,model.metric.count
+                rejected_before=dict(model.rejected)
+                current_session=db.execute("SELECT id FROM training_sessions WHERE started<=? AND (stopped IS NULL OR stopped>?)",(received_utc,received_utc)).fetchone()
+                current_session=current_session[0] if current_session else None
+                if current_session!=active_session:
+                    previous=None
+                    active_session=current_session
                 self.event_counts[kind]=self.event_counts.get(kind,0)+1
-                db.execute("INSERT INTO events(kind,received_monotonic,recorded_utc,payload) VALUES (?,?,?,?)",
+                inserted=db.execute("INSERT INTO events(kind,received_monotonic,recorded_utc,payload) VALUES (?,?,?,?)",
                            (kind,received,time.time(),json.dumps(value,separators=(",",":"),allow_nan=False)))
+                event_id=inserted.lastrowid
+                training_record(db,event_id,received_utc,0,0,{})
                 if kind=="gap":
                     previous=None
                     timeline=[]
@@ -144,6 +172,8 @@ class MotionRecorder:
                     try:controls(mask)
                     except ValueError:
                         model.reject("invalid_applied_mask")
+                        db.execute("UPDATE training_events SET rejections=? WHERE event_id=?",(json.dumps({"invalid_applied_mask":1}),event_id))
+                        db.commit()
                         continue
                     if current!=identity:
                         identity=current
@@ -180,9 +210,9 @@ class MotionRecorder:
                         # Retain the latest few seconds in RAM; durable raw records remain complete.
                         sonar_history=sonar_history[-32:]
                 elif kind=="vision":
-                    frame=value.get("frame",{})
-                    ahrs=value.get("spatial_evidence",{}).get("ahrs",{})
-                    generation=ahrs.get("attitude_reference",{}).get("generation")
+                    frame=value.get("frame") or {}
+                    ahrs=(value.get("spatial_evidence") or {}).get("ahrs") or {}
+                    generation=(ahrs.get("attitude_reference") or {}).get("generation")
                     interval=frame.get("capture_host_monotonic_interval_s")
                     yaw=attitude(value)
                     if not isinstance(interval,list) or len(interval)!=2 or yaw is None:
@@ -259,9 +289,15 @@ class MotionRecorder:
                             # earliest frame; all original events remain in SQLite.
                             old=[e for e in timeline if e["upper"]<lo-2.]
                             if old:timeline=[old[-1]]+[e for e in timeline if e["upper"]>=lo-2.]
+                rejections={k:v-rejected_before.get(k,0) for k,v in model.rejected.items() if v>rejected_before.get(k,0)}
+                db.execute("UPDATE training_events SET angular=?,metric=?,rejections=? WHERE event_id=?",
+                           (model.angular.count-angular_before,model.metric.count-metric_before,json.dumps(rejections),event_id))
                 exported=model.export()
                 db.execute("INSERT OR REPLACE INTO model VALUES (1,?,?)",
                            (json.dumps(exported,allow_nan=False),time.time()))
+                if time.monotonic()-last_prune>=5.:
+                    db.execute("DELETE FROM events WHERE id IN (SELECT e.id FROM events e WHERE e.id>(SELECT legacy_max_id FROM training_retention WHERE id=1) AND e.recorded_utc<? AND NOT EXISTS(SELECT 1 FROM training_events t WHERE t.event_id=e.id) ORDER BY e.id LIMIT 1000)",(time.time()-120.,))
+                    last_prune=time.monotonic()
                 db.commit()
                 self.latest_model=exported
                 self.snapshot=dict(model.status(),sensor_support=None if previous is None else dict(
