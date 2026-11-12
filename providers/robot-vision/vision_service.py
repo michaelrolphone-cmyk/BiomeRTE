@@ -30,6 +30,7 @@ from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
 from ultrasonic_source import UltrasonicSource
 from navigation_frames import read_robot_pose
+from portable_rover import PORTABLE_OPERATIONS, dispatch
 from auto_gyro_calibration import AutoGyroCalibration
 from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
 
@@ -43,7 +44,7 @@ CAPABILITIES = [
     "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
-] + METRIC_CAPABILITIES
+] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
 LOG = logging.getLogger("robot-vision")
 
 
@@ -1002,6 +1003,9 @@ class VisionService:
 
 
     def query(self, operation, inputs=None):
+        return dispatch(self, operation, inputs or {}, self._query_core)
+
+    def _query_core(self, operation, inputs=None):
         inputs = inputs or {}
         if operation not in CAPABILITIES:
             raise KeyError("unsupported_operation")
@@ -1182,7 +1186,7 @@ class VisionService:
             calibration["calibration_id"] = record.get("calibration_id")
             result = project_ground(inputs.get("pixel"), calibration,
                                     [frame["width"], frame["height"]],
-                                    confirmed_floor_contact=inputs.get("confirmed_floor_contact", False))
+                                    confirmed_floor_contact=True)
             return {**self._binding(snapshot), "projection": result}
         if operation == "robot.map.checkpoint" and hasattr(self.backend, "capture_checkpoint"):
             if inputs.get("map_id", self.map_id) != self.map_id:

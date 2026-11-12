@@ -69,6 +69,11 @@ def contract_definitions():
         ("robot.world.read", {"cursor": field("str"), "limit": field("int")},
          "Persistent world geometry; unaligned local submaps remain explicitly separate."),
         ("robot.world.status", {}, "Persistent world identity, submap transforms and alignment evidence."),
+        ("robot.body.model", {}, "Rigid rover body geometry, measured sonar mounting and camera/IMU axes."),
+        ("robot.control.model", {}, "Binary relay motion mapping and duration-dependent uncalibrated drive curve."),
+        ("robot.sonar.snapshot", {}, "Cached four-direction sonar measurements in metres and rigid-body mounting."),
+        ("robot.metric.status", {}, "Metric model and native map scale with explicit availability."),
+
         ("robot.map.obstacles", {"map_id": field("str"), "revision": field("int")},
          "Accumulated mounted sonar rays, obstacle voxels, clearing evidence and uncertainty at a map revision."),
         ("robot.map.changes", {"map_id": field("str"), "since_revision": field("int", True),
