@@ -84,8 +84,9 @@ class TrainingStore:
             recorder=json.loads(health["payload"]) if health else {}
             recorder["heartbeat_age_s"]=max(0.,time.time()-health["updated"]) if health else None
             recorder["alive"]=health is not None and time.time()-health["updated"]<=3.
+            recorder["capture_age_s"]=time.monotonic()-recorder["capture_host_lower_s"] if "capture_host_lower_s" in recorder else None
             recorder["source_ages_s"]={k.removesuffix('_received_utc'):max(0.,time.time()-v) for k,v in recorder.items() if k.endswith('_received_utc')}
-            recorder["learning_inputs_ready"]=recorder["alive"] and all(recorder["source_ages_s"].get(k,float('inf'))<=2. for k in ('applied_control','ahrs_capture'))
+            recorder["learning_inputs_ready"]=recorder["alive"] and recorder["capture_age_s"] is not None and 0<=recorder["capture_age_s"]<=2. and all(recorder["source_ages_s"].get(k,float('inf'))<=2. for k in ('applied_control','ahrs_capture'))
             if not row:
                 if session:raise ValueError("Unknown session_id")
                 return dict(session=None,recorder=recorder,recording=False,executes_motion=False)
