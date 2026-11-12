@@ -546,12 +546,16 @@ class VisionService:
                     source_timestamp_status=frame.get('capture_time_status', 'unknown'),
                     receive_decode_timestamp=frame.get('receive_decode_time'),
                     processing_timestamp=previous.get('processing_timestamp') if same_frame else None,
-                    processed_monotonic=previous.get('processed_monotonic') if same_frame else None,
+                    # The v1 sender uses this field to reject stale images.
+                    # Its camera-lane watermark must never become the time a
+                    # slow estimator eventually finished an older capture.
+                    processed_monotonic=captured.decoded_monotonic,
+                    processed_monotonic_basis='camera_receive_decode_time',
                     processing_state='complete' if same_frame else 'pending',
                     camera_delivery='independent_capture',
                     last_processed_frame_id=previous.get('frame_id'),
                     analysis={key: previous.get(key) for key in (
-                        'frame_id', 'receive_decode_timestamp', 'processing_timestamp',
+                        'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
                     radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),

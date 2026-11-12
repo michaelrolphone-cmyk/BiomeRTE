@@ -17,6 +17,11 @@ Consumers can show that as the latest processed map observation, but must not
 draw its image geometry over a different live capture. Full processed snapshots
 and detection results remain available through their existing capabilities.
 
+The v1 leased-stream sender checks `processed_monotonic` for image freshness.
+On this camera lane that watermark is the capture's host receive/decode time,
+explicitly labeled by `processed_monotonic_basis`. It is never reset by slow
+SLAM completion. Actual analysis timing remains in `analysis`.
+
 `robot.vision.status.streaming.camera_delivery` reports capture publications,
 processing results, processing age and publisher errors independently.
 

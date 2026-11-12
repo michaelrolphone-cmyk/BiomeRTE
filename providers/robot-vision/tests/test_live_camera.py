@@ -1,5 +1,7 @@
 """The capture lane must advance while real service processing is blocked."""
 import copy
+import asyncio
+import io
 import json
 from pathlib import Path
 import queue
@@ -9,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import cv2
@@ -145,6 +148,8 @@ class LiveCameraTests(unittest.TestCase):
                     self.assertFalse(meta['pose']['valid'])
                     self.assertEqual(meta['detections'], [])
                     self.assertEqual(meta['processing_state'], 'pending')
+                    self.assertEqual(meta['processed_monotonic'], second.decoded_monotonic)
+                    self.assertEqual(meta['processed_monotonic_basis'], 'camera_receive_decode_time')
                     self.assertFalse(release.is_set())
                     release.set()
                     processing.join(1)
@@ -163,6 +168,60 @@ class LiveCameraTests(unittest.TestCase):
                 release.set()
                 if processing.ident is not None:
                     processing.join(2)
+                service.close()
+
+    def test_camera_packet_survives_actual_leased_sender_freshness_and_router_checks(self):
+        from leased_publish import packet
+        from leased_streams import VisionStreams
+        from biomerte.stream_router import Session, decode
+        import test_stream_sequence_recovery as recovery
+        with tempfile.TemporaryDirectory() as directory:
+            config = copy.deepcopy(DEFAULT_CONFIG)
+            config['camera']['url'] = 'fixture://no-network'
+            config['calibration'] = calibration()
+            service = VisionService(config, directory, camera=Camera(), detector=FakeDetector(),
+                                    backend_factory=BackendFactory())
+            try:
+                captured = frame(1)
+                metadata = service._raw_live_metadata(captured, {})
+                class Response(io.BytesIO):
+                    status = 200
+                response = Response(packet(metadata, captured.jpeg_bytes))
+                class Local:
+                    def request(self, *args):
+                        pass
+                    def getresponse(self):
+                        return response
+                    def abort(self):
+                        response.close()
+                binding, stop, received = recovery.grant(), threading.Event(), []
+                router = Session(binding)
+                class Wire:
+                    async def send(self, message):
+                        router.check('provider', 'vision', message)
+                        received.append(decode(message, 4194304))
+                        stop.set()
+                    async def __aenter__(self):
+                        return self
+                    async def __aexit__(self, *args):
+                        return False
+                class Remote:
+                    def call(self, *args):
+                        return {'url': 'ws://127.0.0.1:8751/session-a',
+                                'attachment_credential': 'fixture'}
+                publisher = VisionStreams(Remote(), 'fixture')
+                async def run():
+                    with patch('leased_streams.LocalConnection', return_value=Local()), \
+                         patch('websockets.asyncio.client.connect', return_value=Wire()):
+                        await asyncio.wait_for(publisher.run(binding, stop), 2)
+                asyncio.run(run())
+                self.assertEqual(len(received), 1)
+                meta, jpeg = received[0]
+                self.assertEqual(jpeg, captured.jpeg_bytes)
+                self.assertEqual(meta['frame_id'], captured.metadata['frame_id'])
+                self.assertEqual(meta['processed_monotonic'], captured.decoded_monotonic)
+                self.assertEqual(meta['processing_state'], 'pending')
+            finally:
                 service.close()
 
 
