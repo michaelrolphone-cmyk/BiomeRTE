@@ -132,7 +132,7 @@ def discover(tx, ctx, contract=''):
         if 'parameters' in override:
             guide['parameters'] = dict(guides[key].get('parameters', {}), **override['parameters'])
         offers.append(dict(off, capacity=capacity_of(tx, off),
-                           usage=caller_usage(definitions[key], guide, off['resource'])))
+                           usage=caller_usage(definitions[key], guide, off['resource'], off.get('configuration', {}).get('stream'))))
     by_contract = {item['id']: item for item in contracts}
     for item in offers:
         by_contract[item['contract']]['implementations'].append(dict(
@@ -154,7 +154,7 @@ def capacity_of(tx, offer):
 
 
 def active_on(tx, resource):
-    return [l for l in tx.matching('leases', ('fencing', 'bound')) if l['resource'] == resource]
+    return [l for l in tx.matching('leases', ('fencing', 'bound')) if l['resource'] == resource and not l.get('shared_parent')]
 
 
 def reservation_policy(tx, lease):
@@ -222,6 +222,11 @@ def bind(tx, ctx, request):
             continue
         if any(a['resource'] == resource and a['state'] == 'pending' for a in tx.rows('activations')):
             continue
+        from .shared_streams import join
+        shared = join(tx, ctx, request, of)
+        if shared:
+            notify_bound(tx, ctx, shared)
+            return shared
         capacity = capacity_of(tx, of)
         if capacity:
             active = active_on(tx, resource)
@@ -336,6 +341,9 @@ def fenced(tx, ctx, provider, lease, generation):
 
 def release(tx, l):
     if l['state'] == 'released':
+        return True
+    from .shared_streams import release as release_subscription
+    if release_subscription(tx, l):
         return True
     if l['state'] == 'queued':
         tx.drop('_lease_queue', l.pop('queue_key'))
