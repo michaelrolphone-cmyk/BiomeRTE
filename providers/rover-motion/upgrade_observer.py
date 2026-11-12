@@ -30,8 +30,13 @@ def upgrade(source_root):
     subprocess.run([launch["ProgramArguments"][0],"-c","from biomerte.motion_tracking import MotionRecorder; from biomerte.motion_training import TrainingStore"],
                    env=dict(os.environ,PYTHONPATH=str(release)),check=True)
     domain="gui/"+str(os.getuid())
-    subprocess.run(["launchctl","bootout",domain+"/"+label],check=True)
+    loaded=subprocess.run(["launchctl","print",domain+"/"+label],capture_output=True,text=True)
+    if loaded.returncode==0:
+        subprocess.run(["launchctl","bootout",domain+"/"+label],check=True)
+    elif loaded.returncode not in (3,113):
+        raise RuntimeError("Cannot determine passive observer service state")
     try:
+        helper.wait_unloaded(domain,label)
         environment.update(PYTHONPATH=str(release),BIOME_OBSERVER_BASE_RUNTIME=base)
         launch["ProgramArguments"]=[launch["ProgramArguments"][0],str(script)]
         launch["WorkingDirectory"]=str(release)
