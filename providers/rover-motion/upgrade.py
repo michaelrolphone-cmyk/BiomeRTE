@@ -18,7 +18,7 @@ def bootstrap(domain, plist):
     while True:
         result=subprocess.run(["launchctl","bootstrap",domain,str(plist)],capture_output=True,text=True)
         if result.returncode==0:return
-        observed=subprocess.run(["launchctl","print",domain+"/org.biomerte.rover-motion-provider"],capture_output=True,text=True)
+        observed=subprocess.run(["launchctl","print",domain+"/"+plistlib.loads(plist.read_bytes()).get("Label",plist.stem)],capture_output=True,text=True)
         expected=plistlib.loads(plist.read_bytes())["ProgramArguments"][1]
         if observed.returncode==0 and expected in observed.stdout:return
         if result.returncode!=5 or observed.returncode==0 or time.monotonic()>=deadline:
@@ -35,7 +35,7 @@ def upgrade(source_root, state):
     plist=Path.home()/"Library/LaunchAgents"/(label+".plist")
     original_plist=plist.read_bytes()
     launch=plistlib.loads(original_plist)
-    paths=["biomerte/motion_model.py","biomerte/motion_planning.py",
+    paths=["biomerte/motion_model.py","biomerte/motion_planning.py","biomerte/motion_training.py",
            "providers/rover-motion/biome_provider.py"]
     payload={p:(source_root/p).read_bytes() for p in paths}
     identity=hashlib.sha256(b"".join(p.encode()+payload[p] for p in paths)).hexdigest()
@@ -45,8 +45,8 @@ def upgrade(source_root, state):
     # Only motion modules change. All existing runtime dependencies stay pinned.
     base_runtime=cfg.get("base_model_runtime",cfg["runtime"])
     (package/"__init__.py").write_text("__path__.append("+repr(str(Path(base_runtime)/"biomerte"))+")\n")
-    for path in paths[:2]:(package/Path(path).name).write_bytes(payload[path])
-    adapter=release/"biome_provider.py";adapter.write_bytes(payload[paths[2]])
+    for path in paths[:-1]:(package/Path(path).name).write_bytes(payload[path])
+    adapter=release/"biome_provider.py";adapter.write_bytes(payload[paths[-1]])
     env=dict(os.environ,PYTHONPATH=str(runtime))
     subprocess.run([cfg["python"],"-c",
         "import importlib.util; from biomerte.motion_planning import plan_motion; "
