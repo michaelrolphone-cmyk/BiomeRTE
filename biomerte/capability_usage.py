@@ -27,12 +27,26 @@ def published_usage(contract, usage):
     return usage
 
 
-def caller_usage(contract, guide, resource=None):
+def caller_usage(contract, guide, resource=None, stream=None):
     # Published examples retain native JSON types. For undocumented contracts
     # present explicit typed slots, never fabricated domain-valid values.
     args = {'task': '<unique session ID>', 'contract': contract['id']}
     if resource:
         args['resource'] = resource
+    if stream and stream.get('enabled') is True:
+        return {
+            'calls': [
+                {'operation':'cap.acquire','arguments':args,'request_id':'<acquire request ID>'},
+                {'operation':'cap.lease','arguments':{'lease':'<acquire.id>'},'request_id':'<lease read ID>'},
+                {'operation':'stream.open','arguments':{'lease':'<acquire.id>'},'request_id':'<open request ID>'},
+                {'operation':'stream.attach','arguments':{'session':'<stream.open.id>','role':'server','lease':'<acquire.id>'},'request_id':'<attach read ID>'},
+                {'operation':'cap.release','arguments':{'lease':'<acquire.id>'},'request_id':'<release request ID>'}],
+            'inputs_kind':'stream',
+            'instructions':'Streaming is shared. Acquire your own subscription, wait for the provider reservation to bind, and call stream.open. Existing consumers remain connected. Connect a WebSocket to the returned url plus /<lane>, using Authorization: Stream <attachment_credential>. Use declared lanes and direction; stream.attach refreshes your credential. Release only your own subscription. Do not use cap.invoke for stream payloads.',
+            'lanes':stream.get('lanes',['data']),
+            'direction':stream.get('direction','provider_to_server'),
+            'sharing':'simultaneous_consumers_same_endpoint',
+            'read_result':'Receive messages over the WebSocket. Binary frame payloads and JSON metadata follow the declared stream schema.'}
     inputs = guide.get('example_inputs')
     if inputs is None:
         inputs = {k: '<supply %s: %s>' % (k, v['type'])

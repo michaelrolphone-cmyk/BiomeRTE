@@ -23,7 +23,7 @@ class RouterDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_peer_inventory_distinguishes_server_socket_from_provider_presence(self):
         node='a'*64;router=Router({node:'secret'}, {})
         session=Session({'id':'b'*32,'authority':node})
-        session.peers[('server','control')]=object()
+        session.peers[('server','control','consumer-one')]=object()
         router.sessions[session.grant['id']]=session
         health=router.health()
         self.assertEqual(health['stream_peers'][node]['server'],{'control':1})
