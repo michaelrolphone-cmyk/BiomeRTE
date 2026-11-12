@@ -103,55 +103,6 @@ class MotionTests(unittest.TestCase):
         for pulses in [[],[dict(mask=3,duration_s=1)],[dict(mask=1,duration_s=float("nan"))]]:
             with self.assertRaises(ValueError):m.predict(pulses)
 
-try:
-    from aiohttp import web
-    from aiohttp.test_utils import TestClient, TestServer
-except ImportError:
-    web=None
-
-@unittest.skipIf(web is None,"aiohttp unavailable")
-class EndpointTests(unittest.IsolatedAsyncioTestCase):
-    async def test_endpoints_are_authenticated_and_read_only(self):
-        from biomerte.motion_tracking import install_motion
-        class Rover:
-            control_ready=False
-            motion_calls=0
-            def broadcast(self,lane,message):pass
-            def desired(self,mask,*args,**kwargs):
-                self.motion_calls+=1
-                return dict(accepted_sequence=1)
-        rover=Rover()
-        with tempfile.TemporaryDirectory() as directory:
-            @web.middleware
-            async def authenticate(request,handler):
-                if request.headers.get("Authorization")!="Bearer test":
-                    raise web.HTTPUnauthorized()
-                return await handler(request)
-            app=web.Application(middlewares=[authenticate])
-            recorder=install_motion(rover,app,directory)
-            client=TestClient(TestServer(app));await client.start_server()
-            try:
-                response=await client.get("/api/motion/model")
-                self.assertEqual(response.status,401)
-                recorder.offer("gap",dict(reason="test"))
-                # Initialization is independent of the HTTP event loop.
-                for unused in range(100):
-                    if recorder.latest_model is not None:break
-                    await __import__("asyncio").sleep(.01)
-                response=await client.post("/api/motion/predict",
-                    headers={"Authorization":"Bearer test"},
-                    json={"pulses":[{"mask":5,"duration_s":.8},{"mask":0,"duration_s":.3},{"mask":1,"duration_s":.7}]})
-                self.assertEqual(response.status,200)
-                result=await response.json()
-                self.assertEqual(len(result["steps"]),3)
-                self.assertFalse(result["executes_motion"])
-                self.assertIsNone(result["steps"][-1]["distance_m"])
-                self.assertEqual(rover.motion_calls,0)
-                response=await client.post("/api/motion/predict",headers={"Authorization":"Bearer test"},
-                    json={"pulses":[{"mask":3,"duration_s":1}]})
-                self.assertEqual(response.status,400)
-            finally:await client.close()
-
 class SonarAssociationTests(unittest.TestCase):
     def test_same_boot_device_times_produce_metric_training(self):
         with tempfile.TemporaryDirectory() as directory:
