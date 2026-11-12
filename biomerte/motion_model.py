@@ -9,7 +9,7 @@ import math
 import time
 
 TIMES = (.15, .5, 1.5, 5.)
-N = 17
+N = 18
 
 def number(v):
     return type(v) in (int, float) and math.isfinite(v)
@@ -35,6 +35,11 @@ class Regression:
         self.domains = {}
         if saved:
             self.__dict__.update(copy.deepcopy(saved))
+            old=len(self.weights)
+            if old<N:
+                self.weights += [0.]*(N-old)
+                self.p=[row+[0.]*(N-old) for row in self.p]+[[0.]*N for unused in range(N-old)]
+                for i in range(old,N):self.p[i][i]=100.
 
     def predict(self, x):
         if not self.count:
@@ -74,7 +79,7 @@ class MotionModel:
         saved = saved or {}
         self.angular = Regression(saved.get("angular"))
         self.metric = Regression(saved.get("metric"))
-        self.state = dict(steering_memory=[0.]*4, steering_known=False,
+        self.state = dict(steering_memory=[0.]*4, steering_latch=0.,steering_known=False,
                           speed_m_s=None, yaw_rate_deg_s=None, drive=0,
                           steer=0, on_s=0., idle_s=0., previous_drive=0)
         # Steering memory survives a restart, but motion during the gap is unknown.
@@ -101,6 +106,8 @@ class MotionModel:
         # No instantaneous wheel straightening on release. At rest the traces
         # are held; with drive/coast they approach the requested steering.
         rolling = drive != 0 or abs(state.get("speed_m_s") or 0.) > .01
+        if rolling and steer:
+            state["steering_latch"]=steer+(state.get("steering_latch",0.)-steer)*math.exp(-dt/.5)
         if rolling:
             state["steering_memory"] = [
                 steer+(z-steer)*math.exp(-dt/tau)
@@ -116,7 +123,7 @@ class MotionModel:
         return [1.,float(drive),float(drive*steer),*[drive*a for a in z],
                 v,w,v*z[0],v*z[2],math.log1p(state["on_s"]),
                 float(state["previous_drive"]),float(drive != state["drive"]),
-                math.log1p(state["idle_s"]),dt,float(steer)]
+                math.log1p(state["idle_s"]),dt,float(steer),state.get("steering_latch",0.)]
 
     def reject(self, reason):
         self.rejected[reason] = self.rejected.get(reason,0)+1
@@ -160,6 +167,8 @@ class MotionModel:
                 if k in initial_state:
                     state[k] = copy.deepcopy(initial_state[k])
             z = state["steering_memory"]
+            if not number(state["steering_latch"]) or not -1<=state["steering_latch"]<=1:
+                raise ValueError("invalid initial steering_latch")
             if not isinstance(z,list) or len(z)!=4 or not all(number(a) and -1 <= a <= 1 for a in z):
                 raise ValueError("steering_memory requires four finite values in -1..1")
             for k in ("speed_m_s","yaw_rate_deg_s"):
@@ -237,4 +246,4 @@ class MotionModel:
             drift_events=dict(angular=self.angular.drift_events,metric=self.metric.drift_events),
             residual_rms=dict(angular_deg_s=math.sqrt(self.angular.error2),speed_m_s=math.sqrt(self.metric.error2)),
             domains=dict(angular=self.angular.domains,metric=self.metric.domains),
-            steering_representation="latent_multi_timescale_memory_not_measured_wheel_angle")
+            steering_representation="persistent_steering_latch_and_transient_memory_not_measured_wheel_angle")
