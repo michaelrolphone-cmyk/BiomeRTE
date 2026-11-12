@@ -8,6 +8,7 @@ bearer token or a Heroku deployment.
 |---|---|---|
 | `robot.motion.model:1` | Optional `include_parameters: bool` | Model revision, retained steering/motion state, training support, residuals, freshness and optional portable parameter snapshot |
 | `robot.motion.predict:1` | Required `pulses: list`; optional `initial_state: object`, `step_s: number`, `model_revision: integer` | Per-step trajectory/state estimates, support, uncertainty and explicit `executes_motion:false` |
+| `robot.motion.plan:1` | Required `target: {distance_m, yaw_deg}`; optional `initial_state`, `constraints`, `model_revision` | Inverse pulse estimate, forward prediction, residual and support; never executes |
 
 Discover or acquire the generic contract without specifying a controller or host.
 The gateway selects an eligible implementation. A resource constraint is optional
@@ -16,7 +17,7 @@ part of the contract name.
 
 ## Invocation
 
-1. Discover `robot.motion.model:1` or `robot.motion.predict:1`.
+1. Discover `robot.motion.model:1`, `robot.motion.predict:1` or `robot.motion.plan:1`.
 2. `cap.acquire` with the contract and a unique task identity.
 3. Read `cap.lease` until bound.
 4. `cap.invoke` with the lease, a unique operation identity and inputs.
@@ -68,7 +69,7 @@ source identities, sensor/reference resets and timing uncertainty are distinct.
 A dedicated native capability worker has its own provider identity, work inbox,
 fenced execution ledger and parallel action pool. It reads a consistent,
 read-only SQLite model snapshot and calls the same reusable `MotionModel.predict`
-function. It does not proxy a local or public HTTP prediction API. Both contracts
+function. It does not proxy a local or public HTTP prediction API. All three contracts
 are read-only; their leases protect execution ownership, not physical driving.
 
 The live observer database is
@@ -105,3 +106,55 @@ checks. Ordinary qualified driving observations must establish physical
 predictive accuracy.
 
 Install a new worker with `python providers/rover-motion/install.py --resource ROBOT_MODEL_RESOURCE` after the observer is installed. The installer uses the current native worker runtime (including settlement-proof handling), reuses the existing managed gateway transport, and retains the observer/model runtime separately. An existing provider must be reconciled before replacement; camera and drive services are not restarted.
+
+## Inverse motion estimation
+
+`robot.motion.plan:1` accepts a motion target and returns estimated pulse timings:
+
+```json
+{
+  "target": {"distance_m": 0.4, "yaw_deg": 30},
+  "constraints": {
+    "distance_tolerance_m": 0.02,
+    "yaw_tolerance_deg": 2,
+    "max_pulse_s": 3,
+    "max_total_s": 10,
+    "allow_reverse": true
+  }
+}
+```
+
+`distance_m` is signed travelled distance, not endpoint displacement. `yaw_deg`
+is unwrapped heading change, positive left. Both are required, including zero.
+An in-place turn is not assumed possible. The planner searches drive/steer
+sequences and refines their durations through the same forward model. Every
+candidate starts from the retained or explicitly supplied initial state, then
+carries state continuously through all its pulses; steering is never reset
+between candidate segments. Inversion does not update the learned model.
+
+The result contains `pulses`, the full forward `prediction` (including uncertainty
+proxy and final state), signed `residual`, `within_tolerance`, model identity,
+actual evaluation count and constraints. `insufficient_calibration` yields null
+pulses; `best_effort_outside_tolerance` must not be mistaken for reaching the
+target. `no_supported_plan` describes the searched envelope, not a global proof
+of infeasibility. Initial-state uncertainty remains explicit.
+
+Search defaults are min/max pulse 0.05/3 seconds, total 10 seconds, 4 pulses,
+beam width 8, 600 forward evaluations and integration step 0.1 seconds. All are
+caller-configurable through `constraints` (`min_pulse_s`, `max_pulse_s`,
+`max_total_s`, `max_pulses`, `beam_width`, `max_evaluations`, `step_s`,
+`allow_reverse`, `distance_tolerance_m`, `yaw_tolerance_deg`). Only masks supported
+by both observed distance and yaw models are searched. This is approximate
+bounded optimization, with no global optimum, obstacle clearance or terminal
+stop guarantee. Re-estimate after executing and observing a segment; this
+capability itself never sends control commands.
+
+The same inverse is callable without Biome transport:
+
+```python
+from biomerte.motion_planning import plan_motion
+plan = plan_motion(model, {"distance_m": 0.4, "yaw_deg": 30}, initial_state=state)
+```
+
+Run inverse and regression coverage with:
+`python -m unittest discover -s tests -p 'test_motion*.py' -v`.
