@@ -46,5 +46,7 @@ def capture_on_mapper(mapper, function):
         try:
             return call.future.result(timeout=.1)
         except TimeoutError:
+            if call.future.done():
+                return call.future.result()
             if not mapper.is_running:
                 raise RuntimeError("Local mapper stopped before checkpoint completion")

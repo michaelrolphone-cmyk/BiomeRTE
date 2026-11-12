@@ -153,6 +153,7 @@ class VisionStore:
         self._lock = threading.RLock()
         self._closed = False
         self._checkpoint_integrity = {}
+        self._checkpoint_readers = {}
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False,
                                    isolation_level=None)
         self._db.row_factory = sqlite3.Row
@@ -190,6 +191,10 @@ CREATE TABLE IF NOT EXISTS observations (
  map_id TEXT NOT NULL REFERENCES maps(id), keyframe_id TEXT,
  persistent_object_id TEXT, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS observations_keyframe ON observations(map_id,keyframe_id);
+-- Retention deletes reach observations through both foreign-key paths.
+-- Without these indexes SQLite scans every retained observation twice per frame.
+CREATE INDEX IF NOT EXISTS observations_frame ON observations(frame_id);
+CREATE INDEX IF NOT EXISTS observations_snapshot ON observations(snapshot_id);
 CREATE INDEX IF NOT EXISTS snapshots_session ON snapshots(session_id,serial);
 CREATE INDEX IF NOT EXISTS snapshots_retention ON snapshots(durable,serial,frame_id);
 CREATE INDEX IF NOT EXISTS snapshots_retention_frame ON snapshots(frame_id,serial,durable);
@@ -720,18 +725,18 @@ PRAGMA user_version=1;
             query_key = {"map_id": map_id, "revision": info["revision"],
                          "bounds": list(region) if region is not None else None, "kinds": kinds}
             offset = self._cursor(cursor, query_key)
+            if kinds is not None and not kinds:
+                return {"map": info, "entities": [], "next_cursor": None}
+            kind_filter = (" AND kind IN (" + ",".join("?" for _ in kinds) + ")"
+                           if kinds is not None else "")
             sql = (
                 "SELECT e.* FROM entity_versions e JOIN "
                 "(SELECT kind,entity_id,MAX(revision) revision FROM entity_versions "
-                "WHERE map_id=? AND revision<=? GROUP BY kind,entity_id) v "
+                "WHERE map_id=? AND revision<=?" + kind_filter +
+                " GROUP BY kind,entity_id) v "
                 "ON e.kind=v.kind AND e.entity_id=v.entity_id AND e.revision=v.revision "
                 "WHERE e.map_id=? AND e.deleted=0")
-            args = [map_id, info["revision"], map_id]
-            if kinds is not None:
-                if not kinds:
-                    return {"map": info, "entities": [], "next_cursor": None}
-                sql += " AND e.kind IN (" + ",".join("?" for _ in kinds) + ")"
-                args.extend(kinds)
+            args = [map_id, info["revision"], *(kinds or []), map_id]
             if region is not None:
                 sql += " AND e.min_x IS NOT NULL AND e.max_x>=? AND e.min_x<=? AND e.max_y>=? AND e.min_y<=?"
                 args.extend([region[0], region[3], region[1], region[4]])
@@ -824,15 +829,31 @@ PRAGMA user_version=1;
             checkpoint_id = str(uuid.uuid4())
             staging = self.checkpoint_dir / (checkpoint_id + ".partial")
             staging.mkdir()
+            # Pin an exact WAL read snapshot now; copying it belongs to the
+            # checkpoint worker, not to the tracking/store critical section.
+            reader = sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
+                                     uri=True, check_same_thread=False,
+                                     isolation_level=None)
             try:
-                self._backup_database(staging / "vision.sqlite3")
+                reader.execute("PRAGMA query_only=ON")
+                reader.execute("BEGIN")
+                revision = reader.execute("SELECT revision FROM maps WHERE id=?",
+                                          (map_id,)).fetchone()
+                if revision is None or revision[0] != info["revision"]:
+                    raise RevisionConflict("map changed while pinning checkpoint snapshot")
+                self._checkpoint_readers[checkpoint_id] = reader
             except BaseException:
+                reader.close()
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
             return dict(checkpoint_id=checkpoint_id, map_id=map_id,
                         info=_copy(info), metadata=extra, created_at=_now())
 
     def discard_checkpoint(self, prepared):
+        with self._lock:
+            reader = self._checkpoint_readers.pop(prepared["checkpoint_id"], None)
+        if reader is not None:
+            reader.close()
         staging = self.checkpoint_dir / (prepared["checkpoint_id"] + ".partial")
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -843,6 +864,14 @@ PRAGMA user_version=1;
         staging = self.checkpoint_dir / (checkpoint_id + ".partial")
         published = False
         try:
+            with self._lock:
+                self._open()
+                reader = self._checkpoint_readers.pop(checkpoint_id)
+            try:
+                self._backup_database(staging / "vision.sqlite3", source=reader)
+            finally:
+                # Release the WAL snapshot even when copying fails.
+                reader.close()
             artifact = {"availability": "unavailable", "reason": "backend_artifact_not_supplied"}
             if backend_artifact is not None:
                 source = Path(backend_artifact).expanduser()
@@ -910,10 +939,10 @@ PRAGMA user_version=1;
             raise
 
 
-    def _backup_database(self, destination):
+    def _backup_database(self, destination, source=None):
         backup = sqlite3.connect(str(destination))
         try:
-            self._db.backup(backup)
+            (self._db if source is None else source).backup(backup)
         finally:
             backup.close()
         with destination.open("rb") as stream:
@@ -1178,9 +1207,13 @@ PRAGMA user_version=1;
 
     def close(self):
         with self._lock:
+            readers = list(self._checkpoint_readers.values())
+            self._checkpoint_readers.clear()
             if not self._closed:
                 self._db.close()
                 self._closed = True
+        for reader in readers:
+            reader.close()
 
     def __enter__(self):
         return self
