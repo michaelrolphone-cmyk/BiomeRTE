@@ -9,6 +9,10 @@ The existing sequential vision-processing worker and map persistence continue
 unchanged. Its completed results update an analysis reference; they do not
 publish an older image back onto the live lane.
 
+The daemon also defers native backend/map restoration into the processing
+worker. Its API, capture and live publisher start first. A slow or failed SLAM
+startup leaves video available with explicitly unavailable current-frame pose.
+
 Live metadata identifies the displayed capture with `frame_id`. Pose/detections
 at the top level are usable only when processing completed that exact frame;
 otherwise pose is explicitly unknown and detections are empty. The `analysis`

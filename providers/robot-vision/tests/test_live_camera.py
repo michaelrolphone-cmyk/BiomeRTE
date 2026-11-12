@@ -44,6 +44,9 @@ class Camera:
     def close(self):
         pass
 
+    def start(self):
+        return self
+
     def status(self):
         return {'state': 'fixture'}
 
@@ -66,6 +69,53 @@ def unpack(value):
 
 
 class LiveCameraTests(unittest.TestCase):
+    def test_daemon_capture_and_api_are_available_while_native_startup_is_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = copy.deepcopy(DEFAULT_CONFIG)
+            config['camera']['url'] = 'fixture://no-network'
+            config['calibration'] = calibration()
+            entered, release = threading.Event(), threading.Event()
+            class Factory(BackendFactory):
+                def __call__(self, *args):
+                    backend = super().__call__(*args)
+                    original = backend.start
+                    def start(*args, **kwargs):
+                        entered.set()
+                        if not release.wait(3):
+                            raise RuntimeError('test did not release native startup')
+                        return original(*args, **kwargs)
+                    backend.start = start
+                    return backend
+            factory, camera = Factory(), Camera()
+            service = VisionService(config, directory, camera=camera, detector=FakeDetector(),
+                                    backend_factory=factory, defer_backend_start=True)
+            self.assertEqual(factory.instances, [])
+            self.assertIsNone(service.session_id)
+            try:
+                # Isolate optional workers; the real start, processing, API
+                # query and capture paths remain under test.
+                with patch.object(service.metric, 'start_worker'), \
+                     patch.object(service.atlas, 'start'), \
+                     patch.object(service.radio, 'start'), \
+                     patch.object(service.ahrs, 'start'), \
+                     patch.object(service.ultrasonic, 'start'):
+                    with service.live_frames.subscribe() as inbox:
+                        service.start()
+                        self.assertTrue(entered.wait(1))
+                        captured = frame(1)
+                        camera.offer(captured)
+                        meta, jpeg = unpack(inbox.get(timeout=1))
+                        self.assertEqual(meta['frame_id'], 'capture:1')
+                        self.assertEqual(jpeg, captured.jpeg_bytes)
+                        self.assertFalse(meta['pose']['valid'])
+                        status = service.query('robot.vision.status', {})
+                        self.assertTrue(status['streaming']['camera_delivery']['independent_of_processing'])
+                        self.assertIsNone(service.backend)
+                        self.assertFalse(release.is_set())
+            finally:
+                release.set()
+                service.close()
+
     def test_processing_never_publishes_an_old_image_and_queue_keeps_latest(self):
         camera, output = Camera(), LiveFrames()
         worker = LiveCamera(camera, output, lambda f, p: {

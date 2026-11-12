@@ -46,7 +46,9 @@ class ParentLifecycleTests(unittest.TestCase):
         thread_api = types.SimpleNamespace(Event=lambda: stop, Thread=threading.Thread)
 
         class Service:
-            def __init__(self, *_args):
+            def __init__(self, *_args, defer_backend_start=False):
+                if not defer_backend_start:
+                    raise AssertionError('daemon must defer backend restoration until capture is available')
                 self.live_frames=types.SimpleNamespace(close=lambda:events.append("live_frames_closed"))
                 self.live_maps=types.SimpleNamespace(close=lambda:events.append("live_maps_closed"))
                 events.append("initialized")
@@ -112,3 +114,4 @@ class ParentLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

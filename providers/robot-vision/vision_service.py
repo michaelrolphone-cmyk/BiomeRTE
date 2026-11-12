@@ -54,7 +54,7 @@ def unknown_localization(reason):
 
 class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
-                 radio_source=None, radio_model=None, ahrs_source=None):
+                 radio_source=None, radio_model=None, ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
         self.live_frames = LiveFrames()
         from leased_maps import LiveMap
@@ -120,7 +120,9 @@ class VisionService:
         self.map_id = map_id
         self.revision = info["revision"]
         self.session_id = None
-        self._start_backend_and_session()
+        self._backend_start_pending = bool(defer_backend_start)
+        if not self._backend_start_pending:
+            self._start_backend_and_session()
         self.metric = MetricCalibration(self.store)
         from world_atlas import WorldAtlas
         self.atlas = WorldAtlas(self.state_dir / "world.sqlite3", self.store)
@@ -335,6 +337,17 @@ class VisionService:
         return self
 
     def _run(self):
+        if self._backend_start_pending:
+            try:
+                with self._pipeline_lock:
+                    self._start_backend_and_session()
+            except Exception as exc:
+                self._error = 'backend_start_failed:' + type(exc).__name__
+                self._lifecycle_state = 'backend_start_failed'
+                LOG.exception('Backend startup failed; independent camera delivery remains available')
+                return
+            finally:
+                self._backend_start_pending = False
         try:
             self.detector.start()
         except Exception as exc:
@@ -1229,7 +1242,8 @@ def main(argv=None):
             try:
                 if stop.is_set():
                     return
-                service = VisionService(load_config(args.state, args.config), args.state)
+                service = VisionService(load_config(args.state, args.config), args.state,
+                                        defer_backend_start=True)
                 if stop.is_set():
                     return
                 socket_path.unlink(missing_ok=True)
