@@ -144,15 +144,34 @@ class Rover:
         # epoch. Other lanes keep running. Only authoritative rejection returns
         # to the owner lifecycle to close the superseded session.
         while not self.closed:
+            attached = False
             try:
                 current = await self.call('stream.attach', session=descriptor['id'], role='server')
+                attached = True
                 await self.lane(current, lane)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 status = getattr(error, 'status', getattr(error, 'code', None))
+                if status is None:
+                    status = getattr(getattr(error, 'response', None), 'status_code', None)
                 if status in (403, 404, 409, 410):
                     raise
+                if not attached:
+                    # RPC adapters may lose the original HTTP status. Reconcile
+                    # against the authority instead of retrying a deleted/expired
+                    # grant forever or treating a network outage as a release.
+                    try:
+                        lease = await self.call('cap.lease', lease=descriptor['lease'])
+                        sessions = await self.call('stream.list', lease=descriptor['lease'])
+                    except Exception:
+                        # An unreachable authority proves nothing about ownership.
+                        pass
+                    else:
+                        if (lease['state'] != 'bound' or
+                                lease['generation'] != descriptor['generation'] or
+                                not any(s['id'] == descriptor['id'] for s in sessions)):
+                            raise ConnectionError('Stream ownership no longer current') from error
                 await asyncio.sleep(.5)
 
     async def lane(self, descriptor, lane):
@@ -273,3 +292,4 @@ def web_app(rover, authenticate):
     app.on_startup.append(lambda app:rover.start())
     app.on_cleanup.append(lambda app:rover.close())
     return app
+
