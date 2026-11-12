@@ -63,6 +63,15 @@ class SessionTests(unittest.TestCase):
         result=self.store.query('status',{})
         self.assertFalse(result['recording']);self.assertFalse(result['recorder']['alive'])
 
+    def test_recent_receipt_of_old_capture_does_not_qualify_learning(self):
+        self.store.query('start',dict(session_id='stale'))
+        now=time.time()
+        health=dict(applied_control_received_utc=now,ahrs_capture_received_utc=now,capture_host_lower_s=time.monotonic()-100.)
+        self.db.execute('INSERT INTO training_health VALUES(1,?,?)',(json.dumps(health),now));self.db.commit()
+        result=self.store.query('status',dict(session_id='stale'))
+        self.assertFalse(result['recorder']['learning_inputs_ready'])
+        self.assertGreater(result['recorder']['capture_age_s'],99)
+
     def test_rolling_buffer_preserves_legacy_and_named_session_evidence(self):
         self.db.execute("INSERT INTO events VALUES(1,'vision',0,0,'{}')")
         self.db.execute("DELETE FROM training_retention");self.db.commit();schema(self.db)
