@@ -19,6 +19,10 @@ import threading
 import time
 
 CONTRACTS = {
+ "robot.motion.plan:1": dict(name="robot.motion.plan",version=1,
+    inputs={"target":"obj","initial_state":"obj?","constraints":"obj?","model_revision":"int?"},
+    outputs={"result":"obj"},synchronous=False,
+    description="Inverse motion estimate: target {distance_m,yaw_deg} to pulse timings using the learned history-dependent model. Distance is signed travelled distance; yaw is unwrapped heading change in degrees, positive left. Optional initial_state, model_revision and constraints bound the scenario/search. Returns pulse plan, forward prediction, residual, uncertainty and support; untrained models return insufficient_calibration without invented timings. Read-only; never drives or guarantees stopping/obstacle clearance."),
  "robot.motion.model:1": dict(name="robot.motion.model",version=1,inputs={"include_parameters":"bool?"},
     outputs={"result":"obj"},synchronous=False,
     description="Read the adaptive rover motion model, retained steering/motion state, observation support and freshness. Steering persists across neutral/straight pulses. include_parameters exports the portable estimator snapshot; no movement is commanded."),
@@ -66,7 +70,7 @@ class ModelBackend:
     def query(self,contract,inputs):
         if contract not in CONTRACTS:raise QueryError("unsupported_contract","Unknown motion capability")
         if not isinstance(inputs,dict):raise QueryError("invalid_request","Inputs must be an object")
-        allowed={"include_parameters"} if contract=="robot.motion.model:1" else {"pulses","initial_state","step_s","model_revision"}
+        allowed={"include_parameters"} if contract=="robot.motion.model:1" else ({"target","initial_state","constraints","model_revision"} if contract=="robot.motion.plan:1" else {"pulses","initial_state","step_s","model_revision"})
         if set(inputs)-allowed:raise QueryError("invalid_request","Unknown motion input fields")
         saved,freshness,digest=self.read()
         from biomerte.motion_model import MotionModel
@@ -84,9 +88,14 @@ class ModelBackend:
             revision=inputs.get("model_revision")
             if revision is not None and (type(revision) is not int or revision!=model.revision):
                 raise QueryError("model_revision_conflict","Requested revision is not the current model snapshot")
-            if "pulses" not in inputs:raise QueryError("invalid_request","pulses is required")
             try:
-                result=model.predict(inputs["pulses"],inputs.get("initial_state"),inputs.get("step_s",.05))
+                if contract=="robot.motion.plan:1":
+                    from biomerte.motion_planning import plan_motion
+                    if "target" not in inputs:raise ValueError("target is required")
+                    result=plan_motion(model,inputs["target"],inputs.get("initial_state"),inputs.get("constraints"))
+                else:
+                    if "pulses" not in inputs:raise ValueError("pulses is required")
+                    result=model.predict(inputs["pulses"],inputs.get("initial_state"),inputs.get("step_s",.05))
             except (ValueError,TypeError,OverflowError) as error:
                 raise QueryError("invalid_request",str(error)) from error
         result.update(freshness=freshness,model_snapshot_sha256=digest,executes_motion=False,
