@@ -68,11 +68,15 @@ async def run():
                 recorder.offer("gap",dict(reason=lane+"_disconnected",error=type(error).__name__))
                 await asyncio.sleep(1.)
     async def sonar():
+        last=None
         while True:
             try:
                 start=time.monotonic()
                 value=await asyncio.to_thread(sonar_query)
-                recorder.offer("sonar",dict(value,query_started_monotonic=start))
+                identity=(value.get('boot_id'),tuple((s.get('id'),s.get('sequence'),s.get('observed_uptime_ms')) for s in value.get('sensors',[])))
+                if identity!=last:
+                    recorder.offer("sonar",dict(value,query_started_monotonic=start))
+                    last=identity
                 interval=value.get("update_rate",{}).get("nominal_per_sensor_period_s") or .26
             except asyncio.CancelledError:raise
             except Exception as error:
@@ -80,13 +84,36 @@ async def run():
                 interval=1.
             await asyncio.sleep(interval)
     async def snapshots():
+        last=None
         while True:
             try:
                 value=await asyncio.to_thread(cached_query,"robot.vision.snapshot")
-                recorder.offer("vision",observation_payload(value))
+                payload=observation_payload(value)
+                frame=payload.get('frame') or {}
+                identity=(frame.get('capture_boot_id'),frame.get('frame_id'),frame.get('capture_monotonic_us'))
+                if identity!=last:
+                    recorder.offer("vision",payload)
+                    last=identity
             except asyncio.CancelledError:raise
             except Exception as error:
                 recorder.offer("sensor_error",dict(sensor="coherent_snapshot",error=type(error).__name__))
+            await asyncio.sleep(.25)
+    async def ahrs():
+        last=None
+        while True:
+            try:
+                value=await asyncio.to_thread(cached_query,"robot.ahrs.snapshot")
+                sample=value.get('snapshot') or {}
+                sensor=(sample.get('sensors') or {}).get('attitude') or {}
+                identity=(sample.get('boot_id'),sensor.get('sample_identity'),sensor.get('observed_uptime_ms'))
+                if identity!=last:
+                    # Preserve the native per-sensor validity/timing bounds.
+                    # Raw AHRS receipt is not promoted to camera-qualified fit.
+                    recorder.offer('ahrs',value)
+                    last=identity
+            except asyncio.CancelledError:raise
+            except Exception as error:
+                recorder.offer('sensor_error',dict(sensor='ahrs',error=type(error).__name__))
             await asyncio.sleep(.25)
     async def heartbeat():
         while True:
@@ -98,7 +125,7 @@ async def run():
             recorder.offer("heartbeat",{})
             await asyncio.sleep(.5)
     tasks=[asyncio.create_task(observe("control")),asyncio.create_task(observe("vision")),
-           asyncio.create_task(sonar()),asyncio.create_task(snapshots()),asyncio.create_task(heartbeat())]
+           asyncio.create_task(sonar()),asyncio.create_task(snapshots()),asyncio.create_task(ahrs()),asyncio.create_task(heartbeat())]
     try:await stopped.wait()
     finally:
         for task in tasks:task.cancel()
