@@ -121,7 +121,7 @@ def contract_definitions():
          "Read a revision-pinned metric map view with explicit qualification and stale-state reporting."),
     ]
     definitions = [dict(name=name, version=1, description=description, inputs=inputs,
-                        outputs={"result": "obj"}) for name, inputs, description in specs]
+                        outputs={"result": "obj"}, synchronous=False) for name, inputs, description in specs]
     ground = next(item for item in definitions if item["name"] == "robot.vision.project_ground")
     modern = copy.deepcopy(ground)
     modern["version"] = 2

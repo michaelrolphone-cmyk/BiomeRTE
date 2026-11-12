@@ -22,7 +22,8 @@
       "parameters": {
         "steps": "Relay mapping on this rover: 1 forward, 2 back, 3 left, 4 right; binary on/off, no PWM; speed-duration curve uncalibrated."
       }
-    }
+    },
+    "synchronous": false
   },
   {
     "name": "device.outputs.stream",
@@ -34,7 +35,8 @@
       "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
       "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
       "parameters": {}
-    }
+    },
+    "synchronous": false
   },
   {
     "name": "relay.bank",
@@ -56,6 +58,7 @@
       "parameters": {
         "channel": "Relay mapping on this rover: 1 forward, 2 back, 3 left, 4 right; binary on/off, no PWM; speed-duration curve uncalibrated."
       }
-    }
+    },
+    "synchronous": false
   }
 ]

@@ -197,7 +197,7 @@
       "provenance": "deployed_dashboard_motion_mapping"
     }
   },
-  "revision": 3,
+  "revision": 5,
   "schema_version": 1,
   "updated_at": "2026-11-12T06:04:48.289509+00:00",
   "ahrs_mounting": {
@@ -206,9 +206,50 @@
     "provenance": "user_confirmed_2026-11-10",
     "position_reference": "camera_optical_center",
     "position_offset_description": "4_mm_directly_behind_camera",
-    "T_camera_imu": null,
-    "R_body_from_imu": null,
-    "orientation_status": "owner_axis_checks",
+    "T_camera_imu": [
+      [
+        -1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        -1,
+        -0.004
+      ],
+      [
+        0,
+        0,
+        0,
+        1
+      ]
+    ],
+    "R_body_from_imu": [
+      [
+        0,
+        0,
+        -1
+      ],
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        -1,
+        0
+      ]
+    ],
+    "orientation_status": "vertical_resting_orientation_and_owner_axis_checks",
     "stationary_up_in_imu": [
       0.038193767,
       -0.983895818,
@@ -227,7 +268,7 @@
       "persistent": false,
       "valid_only_for_reported_boot": true
     },
-    "applied_to_estimator": false,
+    "applied_to_estimator": true,
     "position_offset_camera_m": [
       0,
       0,
@@ -246,20 +287,21 @@
       ],
       [
         0,
-        0,
-        -1
+        1,
+        0
       ],
       [
         0,
-        -1,
-        0
+        0,
+        -1
       ]
     ],
     "axis_checks": {
       "left_turn": "positive_yaw",
       "front_up": "negative_roll",
       "right_side_up": "positive_pitch"
-    }
+    },
+    "mapping_release": "e48dff7d20ef"
   },
   "coordinate_frame": {
     "name": "robot_body",
