@@ -67,10 +67,17 @@ def main():
         if plist.read_bytes()!=original:raise RuntimeError("Service changed while staging; reconcile before deployment")
         temporary=plist.with_suffix(".motion.tmp")
         temporary.write_bytes(staged.read_bytes());os.replace(temporary,plist)
-        result=subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/org.biomerte.rover-server"],capture_output=True,text=True)
+        domain="gui/"+str(os.getuid())
+        label=domain+"/org.biomerte.rover-server"
+        subprocess.run(["launchctl","bootout",label],capture_output=True,text=True)
+        result=None
+        for unused in range(5):
+            result=subprocess.run(["launchctl","bootstrap",domain,str(plist)],capture_output=True,text=True)
+            if result.returncode==0:break
+            time.sleep(1.)
         if result.returncode:
             plist.write_bytes(original)
-            subprocess.run(["launchctl","kickstart","-k","gui/"+str(os.getuid())+"/org.biomerte.rover-server"],check=False)
+            subprocess.run(["launchctl","bootstrap",domain,str(plist)],check=False)
             raise RuntimeError("Service restart rejected: "+result.stderr)
         print("APPLIED",release,flush=True)
 
