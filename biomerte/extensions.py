@@ -137,11 +137,12 @@ def migrate(tx, ctx, run, expected_rev, target_rev, nodes, variables=None):
     return r
 
 
-@op('cap.prepare', 'contract:str resource?:str')
-def prepare(tx, ctx, contract, resource=''):
+@op('cap.prepare', 'contract:str resource?:str placement?:obj')
+def prepare(tx, ctx, contract, resource='', placement=None):
     """Arrange activation of a configurable offer. Provider confirms before use."""
+    resource, placement = providers.selection.normalize(resource, placement)
     offers = [o for o in tx.rows('offers') if o['contract'] == contract and
-              (not resource or o['resource'] == resource)]
+              providers.selection.matches(o, resource, placement)]
     for off in offers:
         if providers.admitted(tx, off):
             return {'state': 'ready', 'offer': off['id']}

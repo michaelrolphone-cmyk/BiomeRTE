@@ -203,3 +203,25 @@ class CapabilityFollowup(unittest.TestCase):
         with self.assertRaises(Fault):
             compile_xml(self.xml.replace('b:contractRef="input.contract"',
                                           'b:contractRef="input.contract" b:operation="bus.send"'))
+
+    def test_request_placement_is_preserved_by_async_workflow(self):
+        self.call('cap.offer',dict(provider='other',contract='qa.command:1',resource='other-terminal',
+                  configuration={'execution_host':'target.local'}))
+        run=self.launch(resource='',placement={'host':'target.local'})
+        job=self.claim('other')
+        self.assertEqual(job['resource'],'other-terminal')
+        self.assertEqual(self.call('cap.lease',{'lease':job['lease']})['placement'],{'host':'target.local'})
+        self.finish(job,'succeeded',{'exit_code':0,'text':'correct target'})
+        self.assertEqual(self.claim('reader')['inputs']['context']['outcome']['resource'],'other-terminal')
+
+    def test_existing_followup_definition_upgrades_for_new_placement_only(self):
+        from biomerte.xmlprofile import compile_xml
+        graph=compile_xml(self.xml)
+        graph['inputs'].pop('placement')
+        graph['nodes']['work'].pop('placement')
+        old=self.call('process.publish',{'name':NAME,'graph':graph})
+        self.call('cap.offer',dict(provider='other',contract='qa.command:1',resource='other-terminal',
+                  configuration={'execution_host':'target.local'}))
+        run=self.launch(resource='',placement={'host':'target.local'})
+        self.assertNotEqual(self.call('process.get',{'run':run})['rev'],old['rev'])
+        self.assertEqual(self.claim('other')['resource'],'other-terminal')

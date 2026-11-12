@@ -72,6 +72,10 @@ def compile_xml(xml):
                 n['resource'] = {'$': e.get(X + 'resourceRef')}
             elif e.get(X + 'resource'):
                 n['resource'] = e.get(X + 'resource')
+            if e.get(X + 'placementRef'):
+                n['placement'] = {'$': e.get(X + 'placementRef')}
+            elif e.get(X + 'placement'):
+                n['placement'] = json.loads(e.get(X + 'placement'))
             if e.get(X + 'leaseScope'):
                 n['lease_scope'] = e.get(X + 'leaseScope')
             if e.get(X + 'captureOutcome') == 'true':

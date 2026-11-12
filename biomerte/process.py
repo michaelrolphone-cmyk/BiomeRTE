@@ -394,6 +394,7 @@ def advance(tx, ctx, r, t, n, version):
         else:
             contract = ev(n['contract'])
             resource = ev(n.get('resource', ''))
+            placement = ev(n.get('placement', {}))
             scoped = n.get('lease_scope') == 'activity'
             if 'action' not in t:
                 if scoped:
@@ -403,14 +404,14 @@ def advance(tx, ctx, r, t, n, version):
                     validate(definition['inputs'], inputs)
                 holder = digest([r['id'], t['id'], t['at']]) if scoped else (r['task'] or r['id'])
                 try:
-                    lease = providers.acquire(tx, ctx, holder, contract, resource)
+                    lease = providers.acquire(tx, ctx, holder, contract, resource, placement=placement)
                     if lease['state'] == 'queued':
                         t['queued_lease'] = lease['id']
                         raise Fault('Waiting for queued lease ' + lease['id'], 409)
                 except Fault as e:
                     if e.status in (404, 409):
                         from .extensions import prepare, demand
-                        status = prepare(tx, ctx, contract, resource)
+                        status = prepare(tx, ctx, contract, resource, placement=placement)
                         waiting = str(e)
                         if status['state'] == 'missing':
                             need = demand(tx, ctx, contract, resource, r['id'], t['at'])
