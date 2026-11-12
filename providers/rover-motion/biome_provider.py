@@ -19,6 +19,18 @@ import threading
 import time
 
 CONTRACTS = {
+ "robot.motion.training.start:1": dict(name="robot.motion.training.start",version=1,
+    inputs={"session_id":"str","label":"str?","metadata":"obj?"},outputs={"result":"obj"},synchronous=False,
+    description="Start an idempotent named manual-driving training session. Records applied controls and sensor observations through the passive observer; no driving is commanded. A repeated session_id never reopens a stopped session. Inspect recording, recorder health and accepted sample counts before assuming training is working."),
+ "robot.motion.training.stop:1": dict(name="robot.motion.training.stop",version=1,
+    inputs={"session_id":"str"},outputs={"result":"obj"},synchronous=False,
+    description="Stop recording a named manual-driving session idempotently. Already-received observations drain before status becomes stopped. Does not stop the physical rover; use its normal stop control."),
+ "robot.motion.training.status:1": dict(name="robot.motion.training.status",version=1,
+    inputs={"session_id":"str?"},outputs={"result":"obj"},synchronous=False,
+    description="Read manual training session, captured event counts, accepted distance/yaw samples, rejection reasons, observer heartbeat and sensor/control freshness. Omit session_id for the most recent session. Recording is not physical calibration."),
+ "robot.motion.training.read:1": dict(name="robot.motion.training.read",version=1,
+    inputs={"session_id":"str","after_id":"int?","limit":"int?"},outputs={"result":"obj"},synchronous=False,
+    description="Read a page of retained manual-driving controls and sensor metadata with sample acceptance/rejection evidence and initial model snapshot. No video is recorded. Follow next_after_id; active/draining sessions are mutable. Never drives."),
  "robot.motion.plan:1": dict(name="robot.motion.plan",version=1,
     inputs={"target":"obj","initial_state":"obj?","constraints":"obj?","model_revision":"int?"},
     outputs={"result":"obj"},synchronous=False,
@@ -58,7 +70,7 @@ class ModelBackend:
         capture_age=None
         if latest:
             sample=json.loads(latest[0])
-            interval=sample.get("frame",{}).get("capture_host_monotonic_interval_s")
+            interval=(sample.get("frame") or {}).get("capture_host_monotonic_interval_s")
             if isinstance(interval,list) and len(interval)==2:
                 try:capture_age=time.monotonic()-float(interval[0])
                 except (ValueError,TypeError):pass
@@ -70,6 +82,14 @@ class ModelBackend:
     def query(self,contract,inputs):
         if contract not in CONTRACTS:raise QueryError("unsupported_contract","Unknown motion capability")
         if not isinstance(inputs,dict):raise QueryError("invalid_request","Inputs must be an object")
+        if contract.startswith("robot.motion.training."):
+            from biomerte.motion_training import TrainingStore
+            try:
+                return TrainingStore(self.database).query(contract.split('.')[-1].split(':')[0],inputs)
+            except (ValueError,TypeError) as error:
+                raise QueryError("invalid_request",str(error)) from error
+            except sqlite3.Error as error:
+                raise QueryError("training_store_unavailable","Training store is unavailable") from error
         allowed={"include_parameters"} if contract=="robot.motion.model:1" else ({"target","initial_state","constraints","model_revision"} if contract=="robot.motion.plan:1" else {"pulses","initial_state","step_s","model_revision"})
         if set(inputs)-allowed:raise QueryError("invalid_request","Unknown motion input fields")
         saved,freshness,digest=self.read()
