@@ -51,3 +51,8 @@ class UpgradeTests(unittest.TestCase):
             with patch.object(upgrade.subprocess,"run",side_effect=values) as run,patch.object(upgrade.time,"sleep"):
                 upgrade.bootstrap("gui/501",plist)
                 self.assertEqual(run.call_count,3)
+
+    def test_wait_unloaded_waits_for_old_service_removal(self):
+        with patch.object(upgrade.subprocess,"run",side_effect=[subprocess.CompletedProcess([],0,"state = exiting", ""),subprocess.CompletedProcess([],113,"", "not found")]) as run,patch.object(upgrade.time,"sleep") as sleep:
+            upgrade.wait_unloaded('gui/501','org.biomerte.rover-motion')
+            self.assertEqual(run.call_count,2);sleep.assert_called_once()
