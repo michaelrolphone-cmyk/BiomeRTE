@@ -5,11 +5,15 @@ import hmac
 import json
 import time
 import unittest
-from websockets.asyncio.client import connect
-from websockets.asyncio.server import serve
+try:
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+except ImportError:
+    connect = serve = None
 from biomerte.stream_router import Router, frame
 
 
+@unittest.skipIf(connect is None, 'wire tests run with websockets in live-streaming CI')
 class PayloadErrors(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.grant = dict(id='session', epoch='epoch', authority='controller', generation=4,
