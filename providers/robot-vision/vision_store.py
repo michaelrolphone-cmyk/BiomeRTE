@@ -219,12 +219,64 @@ CREATE TABLE IF NOT EXISTS checkpoints (
  map_revision INTEGER NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);
 PRAGMA user_version=1;
 """)
+        self._ensure_entity_heads()
         with self._lock:
             with self._transaction():
                 self._remove_orphan_blobs()
                 expired = self._prune_locked()
             self._delete_blobs(expired)
         self.reconcile_checkpoint_inventory()
+
+    def _ensure_entity_heads(self):
+        """Materialize current identities once; retain every historical version."""
+        with self._lock, self._transaction():
+            if self._db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entity_heads'").fetchone():
+                return
+            self._db.execute("""CREATE TABLE entity_heads (
+                map_id TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL,
+                revision INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+                PRIMARY KEY(map_id,kind,entity_id))""")
+            self._db.execute("""INSERT INTO entity_heads
+                SELECT e.map_id,e.kind,e.entity_id,e.revision,e.ordinal
+                FROM entity_versions e JOIN
+                (SELECT map_id,kind,entity_id,MAX(revision) revision
+                 FROM entity_versions GROUP BY map_id,kind,entity_id) v
+                ON e.map_id=v.map_id AND e.kind=v.kind
+                AND e.entity_id=v.entity_id AND e.revision=v.revision""")
+            upsert = """INSERT INTO entity_heads VALUES(
+                NEW.map_id,NEW.kind,NEW.entity_id,NEW.revision,NEW.ordinal)
+                ON CONFLICT(map_id,kind,entity_id) DO UPDATE SET
+                revision=excluded.revision,ordinal=excluded.ordinal
+                WHERE excluded.revision>=entity_heads.revision;"""
+            repair_old = """DELETE FROM entity_heads WHERE map_id=OLD.map_id
+                AND kind=OLD.kind AND entity_id=OLD.entity_id
+                AND revision=OLD.revision AND ordinal=OLD.ordinal;
+                INSERT OR IGNORE INTO entity_heads
+                SELECT map_id,kind,entity_id,revision,ordinal FROM entity_versions
+                WHERE map_id=OLD.map_id AND kind=OLD.kind AND entity_id=OLD.entity_id
+                ORDER BY revision DESC LIMIT 1;"""
+            self._db.execute("CREATE TRIGGER entity_heads_insert AFTER INSERT ON entity_versions "
+                             "BEGIN " + upsert + " END")
+            self._db.execute("CREATE TRIGGER entity_heads_delete AFTER DELETE ON entity_versions "
+                             "BEGIN " + repair_old + " END")
+            self._db.execute("CREATE TRIGGER entity_heads_update AFTER UPDATE ON entity_versions "
+                             "BEGIN " + repair_old + upsert + " END")
+
+    @contextmanager
+    def _read_transaction(self):
+        self._open()
+        nested = self._db.in_transaction
+        if not nested:
+            self._db.execute("BEGIN")
+        try:
+            yield
+            if not nested:
+                self._db.execute("COMMIT")
+        except BaseException:
+            if not nested:
+                self._db.execute("ROLLBACK")
+            raise
 
     def _open(self):
         if self._closed:
@@ -719,7 +771,7 @@ PRAGMA user_version=1;
         region = _bounds(bounds) if bounds is not None else None
         if kinds is not None:
             kinds = sorted({_id(kind, "kind") for kind in kinds})
-        with self._lock:
+        with self._lock, self._read_transaction():
             self._open()
             info = self._map_locked(map_id, revision)
             query_key = {"map_id": map_id, "revision": info["revision"],
@@ -729,14 +781,23 @@ PRAGMA user_version=1;
                 return {"map": info, "entities": [], "next_cursor": None}
             kind_filter = (" AND kind IN (" + ",".join("?" for _ in kinds) + ")"
                            if kinds is not None else "")
-            sql = (
-                "SELECT e.* FROM entity_versions e JOIN "
-                "(SELECT kind,entity_id,MAX(revision) revision FROM entity_versions "
-                "WHERE map_id=? AND revision<=?" + kind_filter +
-                " GROUP BY kind,entity_id) v "
-                "ON e.kind=v.kind AND e.entity_id=v.entity_id AND e.revision=v.revision "
-                "WHERE e.map_id=? AND e.deleted=0")
-            args = [map_id, info["revision"], *(kinds or []), map_id]
+            if info["revision"] == info["latest_revision"]:
+                sql = ("SELECT e.* FROM entity_heads h JOIN entity_versions e "
+                       "ON e.map_id=h.map_id AND e.revision=h.revision AND e.ordinal=h.ordinal "
+                       "WHERE h.map_id=? AND e.deleted=0")
+                args = [map_id]
+                if kinds is not None:
+                    sql += " AND h.kind IN (" + ",".join("?" for _ in kinds) + ")"
+                    args.extend(kinds)
+            else:
+                sql = (
+                    "SELECT e.* FROM entity_versions e JOIN "
+                    "(SELECT kind,entity_id,MAX(revision) revision FROM entity_versions "
+                    "WHERE map_id=? AND revision<=?" + kind_filter +
+                    " GROUP BY kind,entity_id) v "
+                    "ON e.kind=v.kind AND e.entity_id=v.entity_id AND e.revision=v.revision "
+                    "WHERE e.map_id=? AND e.deleted=0")
+                args = [map_id, info["revision"], *(kinds or []), map_id]
             if region is not None:
                 sql += " AND e.min_x IS NOT NULL AND e.max_x>=? AND e.min_x<=? AND e.max_y>=? AND e.min_y<=?"
                 args.extend([region[0], region[3], region[1], region[4]])
