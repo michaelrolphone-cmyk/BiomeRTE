@@ -46,7 +46,8 @@ def caller_usage(contract, guide, resource=None):
         {'operation': 'cap.release', 'arguments': {'lease': '<acquire.id>'}, 'request_id': '<release request ID>'}
     ]
     fields = ', '.join(sorted(contract['outputs'])) or '(empty object)'
-    result = {'calls': calls, 'inputs_kind': 'example' if 'example_inputs' in guide else 'template',
+    from .placement import GUIDANCE
+    result = {'placement': GUIDANCE, 'calls': calls, 'inputs_kind': 'example' if 'example_inputs' in guide else 'template',
               'instructions': 'Use these arguments with biome_invoke in the same realm. Replace angle-bracket bindings. '
                               'Wait for a bound lease before invoking. Follow the invocation next_call to cap.status. '
                               'Inspect result on succeeded, inspect the failure on failed, and reconcile uncertain effects before retry. '

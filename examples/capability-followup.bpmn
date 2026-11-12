@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:b="urn:biomerte:v1" targetNamespace="urn:biomerte:workflows">
   <process id="capability-followup" name="Run a capability and resume its caller" isExecutable="true"
-      b:inputs='{"contract":"str","arguments":"obj","caller":"str","success_prompt":"str","failure_prompt":"str","resource":"str?","caller_resource":"str?","context":"obj?","success_equals":"obj?"}'
+      b:inputs='{"contract":"str","arguments":"obj","caller":"str","success_prompt":"str","failure_prompt":"str","resource":"str?","placement":"obj?","caller_resource":"str?","context":"obj?","success_equals":"obj?"}'
       b:outputs='{"outcome":"obj","continuation":"obj"}'>
     <startEvent id="start"/>
     <sequenceFlow id="s1" sourceRef="start" targetRef="prepare"/>
@@ -9,7 +9,7 @@
         b:args='{"$":"input"}' b:save="bindings"/>
     <sequenceFlow id="s2" sourceRef="prepare" targetRef="work"/>
     <serviceTask id="work" name="Run delegated capability" b:contractRef="input.contract"
-        b:resourceRef="bindings.resource" b:args='{"$":"input.arguments"}' b:leaseScope="activity"
+        b:resourceRef="bindings.resource" b:placementRef="bindings.placement" b:args='{"$":"input.arguments"}' b:leaseScope="activity"
         b:captureOutcome="true" b:successEqualsRef="bindings.success_equals" b:save="outcome"/>
     <sequenceFlow id="s3" sourceRef="work" targetRef="route"/>
     <exclusiveGateway id="route" name="Did the capability succeed?" default="failure"/>

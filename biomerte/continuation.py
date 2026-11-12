@@ -6,17 +6,17 @@ from .store import Fault
 
 NAME = 'capability-followup'
 FIELDS = ('contract:str arguments:obj caller:str success_prompt:str failure_prompt:str resource?:str '
-          'caller_resource?:str context?:obj success_equals?:obj')
+          'caller_resource?:str context?:obj success_equals?:obj placement?:obj')
 
 
 @op('continuation.prepare', FIELDS, False)
 def prepare(tx, ctx, contract, arguments, caller, success_prompt, failure_prompt,
-            resource='', caller_resource='', context=None, success_equals=None):
+            resource='', caller_resource='', context=None, success_equals=None, placement=None):
     """Validate the continuation address and bounded correlation metadata before starting work."""
     ident(contract)
     ident(caller)
-    if resource:
-        ident(resource)
+    from .placement import normalize
+    resource, placement = normalize(resource, placement)
     if caller_resource:
         ident(caller_resource)
     receiver = tx.need('contracts', caller)
@@ -29,7 +29,7 @@ def prepare(tx, ctx, contract, arguments, caller, success_prompt, failure_prompt
     if success_equals is not None and (len(success_equals) > 32 or any(
             not path or len(path) > 256 or not all(path.split('.')) for path in success_equals)):
         raise Fault('success_equals needs at most 32 nonempty dotted result paths')
-    return dict(resource=resource, caller_resource=caller_resource, context=context, success_equals=success_equals)
+    return dict(resource=resource, placement=placement, caller_resource=caller_resource, context=context, success_equals=success_equals)
 
 
 @op('cap.run_async', FIELDS)
@@ -37,7 +37,8 @@ def run_async(tx, ctx, **args):
     """Start capability-followup BPMN and return run_id immediately. Supply contract and arguments, caller (the initiating agent's request/context capability contract), success_prompt and failure_prompt. Optional resource pins the worker, caller_resource pins the receiver, context carries task/thread correlation, and success_equals matches dotted output fields. The caller receives the selected prompt and output via its normal agent adapter. Retry the same launch with the same request_id."""
     from .process import import_bpmn, start
     prepare(tx, ctx, **args)
-    if not tx.get('definitions', NAME):
+    definition = tx.get('definitions', NAME)
+    if not definition or (args.get('placement') and 'placement' not in definition['inputs']):
         path = os.path.join(os.path.dirname(__file__), '..', 'examples', NAME + '.bpmn')
         with open(path, encoding='utf-8') as stream:
             import_bpmn(tx, ctx, NAME, stream.read())

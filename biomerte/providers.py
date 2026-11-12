@@ -4,7 +4,7 @@ import time
 from .api import op, ident, validate, schema
 from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
-from . import lifecycle
+from . import lifecycle, placement as selection
 
 
 def owner(ctx, provider):
@@ -119,7 +119,8 @@ def discover(tx, ctx, contract=''):
     """List capabilities with per-contract and provider-specific call examples, prerequisites and result paths."""
     definitions = {d['id']: d for d in tx.rows('contracts') if not contract or d['id'] == contract}
     guides = {key: tx.get('_contract_usage', key, {}) for key in definitions}
-    contracts = [dict(definitions[key], usage=caller_usage(definitions[key], guides[key])) for key in sorted(definitions)]
+    contracts = [dict(definitions[key], usage=caller_usage(definitions[key], guides[key]),
+                      placement=selection.GUIDANCE, implementations=[]) for key in sorted(definitions)]
     offers = []
     for off in tx.rows('offers'):
         key = off['contract']
@@ -132,6 +133,11 @@ def discover(tx, ctx, contract=''):
             guide['parameters'] = dict(guides[key].get('parameters', {}), **override['parameters'])
         offers.append(dict(off, capacity=capacity_of(tx, off),
                            usage=caller_usage(definitions[key], guide, off['resource'])))
+    by_contract = {item['id']: item for item in contracts}
+    for item in offers:
+        by_contract[item['contract']]['implementations'].append(dict(
+            selection.summary(item), offer=item['id'], state=item['state'],
+            admitted=admitted(tx, item), capacity=item['capacity']))
     return {'contracts': contracts, 'offers': offers}
 
 
@@ -212,7 +218,7 @@ def bind(tx, ctx, request):
         resource = of['resource']
         if of['contract'] != request['contract'] or not admitted(tx, of):
             continue
-        if request['requested_resource'] and request['requested_resource'] != resource:
+        if not selection.matches(of, request['requested_resource'], request.get('placement')):
             continue
         if any(a['resource'] == resource and a['state'] == 'pending' for a in tx.rows('activations')):
             continue
@@ -263,14 +269,15 @@ def promote(tx, ctx):
     return False
 
 
-@op('cap.acquire', 'task:str contract:str resource?:str enqueue?:bool reply_to?:str')
-def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
+@op('cap.acquire', 'task:str contract:str resource?:str enqueue?:bool reply_to?:str placement?:obj')
+def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to='', placement=None):
     """Acquire or queue. Use distinct task IDs for independent sessions. The worker fences automatically."""
     tx.need('contracts', contract)
     text(task, 'task')
     if reply_to:
         text(reply_to, 'reply_to')
-    key = digest([task, contract, resource])
+    resource, placement = selection.normalize(resource, placement)
+    key = selection.identity(task, contract, resource, placement)
     batch_full = promote(tx, ctx)
     old = tx.get('leases', key, {})
     if old.get('state') in ('queued', 'bound', 'fencing') and ctx.permissions is not None and old.get('owner') != ctx.actor:
@@ -284,6 +291,8 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to=''):
     req = {'id': key, 'task': task, 'contract': contract, 'resource': resource,
            'requested_resource': resource, 'generation': old.get('generation', 0), 'owner': ctx.actor,
            'provider': '', 'reply_to': reply_to}
+    if placement:
+        req['placement'] = placement
     lease = None if batch_full else bind(tx, ctx, req)
     if lease:
         return lease
@@ -579,16 +588,19 @@ def finish_submission(tx, ctx, operation):
             tx.drop('_submission_active', operation)
 
 
-@op('cap.submit', 'contract:str resource:str inputs:obj operation:str destination?:str')
-def submit(tx, ctx, contract, resource, inputs, operation, destination=''):
+@op('cap.submit', 'contract:str inputs:obj operation:str resource?:str destination?:str placement?:obj')
+def submit(tx, ctx, contract, resource='', inputs=None, operation='', destination='', placement=None):
     """Durably acquire, fence, dispatch and release one command; safe across disconnects."""
     if ctx.permissions is not None:
         raise Fault('Submission requires task owner access', 403)
     ident(operation)
     validate(tx.need('contracts', contract)['inputs'], inputs)
-    lease_id = digest([operation, contract, resource])
+    resource, placement = selection.normalize(resource, placement)
+    lease_id = selection.identity(operation, contract, resource, placement)
     record = dict(id=operation, lease=lease_id, contract=contract, resource=resource,
                   inputs=inputs, owner=ctx.actor)
+    if placement:
+        record['placement'] = placement
     if destination:
         lifecycle.destination(tx, ctx, destination)
         record['destination'] = destination
@@ -611,7 +623,7 @@ def submit(tx, ctx, contract, resource, inputs, operation, destination=''):
     tx.put('_submissions', operation, record)
     tx.put('_submission_leases', lease_id, operation)
     tx.put('_submission_active', operation, {'id': operation})
-    lease = acquire(tx, ctx, operation, contract, resource)
+    lease = acquire(tx, ctx, operation, contract, resource, placement=placement)
     start_submission(tx, ctx, lease)
     return submission_status(tx, ctx, operation)
 

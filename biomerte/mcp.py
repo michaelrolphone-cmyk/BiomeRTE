@@ -4,7 +4,8 @@ from .store import Fault, encode, digest
 
 
 CALLER_GUIDE = {
-    'capability_usage': 'Read the selected offer.usage for its prerequisites, argument example, call sequence and result interpretation. A contract.usage applies across providers.',
+    'capability_usage': 'Start with contracts: one stable capability contract lists its implementations. Contract usage is provider independent; offer usage describes implementation prerequisites and optional pinned examples.',
+    'placement': 'Omit resource and placement for automatic eligible selection. cap.acquire, cap.submit and cap.prepare accept optional placement {provider, host, resource}; every supplied constraint is required. Host is advertised execution host. A specific workspace/device requires resource affinity. Retry the same operation without moving its execution.',
     'caller': ['cap.discover', 'cap.acquire', 'cap.lease', 'cap.invoke', 'cap.status', 'cap.release'],
     'provider_only': ['provider.poll', 'cap.fenced', 'provider.claim', 'provider.result'],
     'lease': 'Use a distinct task ID per session. Queued means waiting for capacity; fencing means the provider is preparing the slot; bound means usable. Subscribe to lease.available using the reply_to inbox supplied to cap.acquire.',
