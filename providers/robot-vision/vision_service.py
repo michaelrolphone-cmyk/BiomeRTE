@@ -629,7 +629,7 @@ class VisionService:
         """Live pixels and sensors; older analysis keeps its own frame identity."""
         frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
         auto_calibration = self._automatic_gyro_calibration(frame,captured.image)
-        self.metric_worker.offer(frame)
+        self.metric_worker.offer(frame,captured.image)
         binding = {key: previous.get(key, fallback) for key, fallback in (
             ('map_id', self.map_id), ('map_revision', self.revision),
             ('session_id', self.session_id),
@@ -1017,6 +1017,7 @@ class VisionService:
             raise KeyError("unsupported_operation")
         if operation == "robot.ahrs.status":
             return {**self.ahrs.status(), "pose_estimation": dict(self.pose_estimator.status),
+                    "metric_pose_estimation": self.metric_worker.status(),
                     "automatic_calibration": self.auto_gyro.status()}
         if operation == "robot.ahrs.snapshot":
             snapshot = self.ahrs.snapshot()

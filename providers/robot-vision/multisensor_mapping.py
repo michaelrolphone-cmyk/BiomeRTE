@@ -339,7 +339,8 @@ class SonarMetricOdometry:
         temporary.write_text(json.dumps(state,allow_nan=False))
         temporary.replace(self.path)
 
-    def update(self, observations, absolute_rotation, epoch, rotation_time_s, stationary_reference_reset=False):
+    def update(self, observations, absolute_rotation, epoch, rotation_time_s, stationary_reference_reset=False,
+               stationary_observed=False):
         if absolute_rotation is None or len(observations) < 3:
             return {'valid': False, 'reason':'insufficient_rotation_or_ranges', 'local_frame_id':self.local_frame_id}
         epoch = json.dumps(epoch,sort_keys=True)
@@ -370,7 +371,18 @@ class SonarMetricOdometry:
         if at_scan is None:
             return {'valid':False,'reason':'awaiting_rotation_at_measurement_time','local_frame_id':self.local_frame_id}
         old = self.previous
-        if old is not None:
+        if old is not None and stationary_observed:
+            # Unchanged textured captures plus quiet calibrated IMU constrain
+            # zero translation even when changing sonar echoes reject a surface
+            # correspondence. Retain the origin and observed rotation.
+            anchor=np.asarray(old['R_reference'])
+            estimate=transform(old['pose']).copy()
+            estimate[:3,:3]=anchor.T@at_scan[:3,:3]
+            velocity=np.zeros(3)
+            quality={'stationarity_observed':True,
+                     'translation_covariance_xz':None,
+                     'translation_source':'unchanged_textured_camera_and_quiet_calibrated_imu'}
+        elif old is not None:
             common = sorted(set(old['scan']) & set(scan))
             if len(common) < 3 or any(scan[k]['id']==old['scan'][k]['id'] for k in common):
                 return {'valid':False,'reason':'awaiting_new_transducer_cycle','local_frame_id':self.local_frame_id}

@@ -58,5 +58,37 @@ class MetricWorkerTests(unittest.TestCase):
             worker.pose_for(room_frame(2))
             self.assertEqual(worker.last,last)
 
+    def test_stationary_visual_imu_constraint_survives_changing_echoes(self):
+        with tempfile.TemporaryDirectory() as d:
+            worker = MetricSensorWorker(SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts()),np.eye(3))
+            image = np.tile(np.arange(320,dtype=float),(240,1))
+            identity = None
+            for i in range(30):
+                f=room_frame(1+i*.2)
+                raw=f['sensor_packet']['ahrs']['ahrs']
+                raw['imu'].update(gyro_rad_s=[0,0,0],accel_m_s2=[0,-9.81,0])
+                raw['calibration']={'gyro_bias_valid':True,'status':'succeeded'}
+                # Multipath changes ranges without camera/IMU motion.
+                for row in f['sensor_packet']['ultrasonic']['ultrasonic']['sensors']:
+                    row['distance_m']=.4+(i%3)*.6
+                result=worker.observe(f,image)
+                if result.get('valid'):
+                    identity=identity or result['local_frame_id']
+                    self.assertEqual(result['local_frame_id'],identity)
+                    np.testing.assert_allclose(np.asarray(result['T_local_metric_camera'])[:3,3],0,atol=1e-8)
+            self.assertIsNotNone(identity)
+            self.assertTrue(result['stationarity_observed'])
+
+    def test_dark_or_changing_images_never_assert_stationarity(self):
+        with tempfile.TemporaryDirectory() as d:
+            worker=MetricSensorWorker(SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts()),np.eye(3))
+            for i in range(3):
+                f=room_frame(1+i*.2);raw=f['sensor_packet']['ahrs']['ahrs']
+                raw['imu'].update(gyro_rad_s=[0,0,0],accel_m_s2=[0,-9.81,0]);raw['calibration']={'gyro_bias_valid':True}
+                self.assertFalse(worker._stationary(f,np.zeros((240,320))))
+            image=np.tile(np.arange(320,dtype=float),(240,1))
+            worker._stationary(room_frame(2),image)
+            self.assertFalse(worker._stationary(room_frame(2.2),255-image))
+
 
 if __name__=='__main__':unittest.main()

@@ -1,6 +1,7 @@
 """Capture-clock metric odometry independent of visual processing latency."""
 import copy
 import threading
+import numpy as np
 from multisensor_mapping import attitude_sample, sonar_observations
 
 
@@ -13,6 +14,7 @@ class MetricSensorWorker:
         self.stopping = False
         self.thread = None
         self.last = None
+        self.previous_image = None
         self.result = dict(odometry.status)
 
     def start(self):
@@ -20,13 +22,45 @@ class MetricSensorWorker:
             self.thread = threading.Thread(target=self._run, name='metric-sensor-pose', daemon=True)
             self.thread.start()
 
-    def offer(self, frame):
+    def status(self):
+        with self.lock:
+            return dict(copy.deepcopy(self.result), capture_identity=self.last,
+                        delivery='independent_capture_clock_sensor_worker')
+
+    def offer(self, frame, image=None):
         # No estimator, disk write or visual-pipeline lock on camera delivery.
         with self.condition:
-            self.pending = frame
+            self.pending = (frame, image)
             self.condition.notify()
 
-    def observe(self, frame):
+    def _stationary(self, frame, image):
+        if image is None:
+            return False
+        packet = frame.get('sensor_packet') or {}
+        raw = ((packet.get('ahrs') or {}).get('ahrs') or {})
+        imu = raw.get('imu') or {}
+        try:
+            pixels = np.asarray(image)
+            gray = pixels.mean(axis=2) if pixels.ndim==3 else pixels.astype(float)
+            h,w = gray.shape
+            by,bx = h//24,w//32
+            small = gray[:24*by,:32*bx].reshape(24,by,32,bx).mean(axis=(1,3))
+            accel = np.asarray(imu.get('accel_m_s2'),float)
+            quiet = (imu.get('valid') and (raw.get('calibration') or {}).get('gyro_bias_valid')
+                     and np.linalg.norm(imu.get('gyro_rad_s'))<.02
+                     and accel.shape==(3,) and abs(np.linalg.norm(accel)-9.81)<.6)
+            key = (packet.get('boot_id'),packet['capture_monotonic_us'])
+            old = self.previous_image
+            self.previous_image = (key,small.copy())
+            if not quiet or old is None or key[0]!=old[0][0] or not 0<key[1]-old[0][1]<=1000000:
+                return False
+            difference = np.abs(small-old[1])
+            return bool(small.std()>5 and difference.mean()<=1.5 and (difference>8).mean()<=.01)
+        except (TypeError,ValueError,KeyError,IndexError):
+            self.previous_image = None
+            return False
+
+    def observe(self, frame, image=None):
         with self.lock:
             packet = frame.get('sensor_packet') or {}
             key = (packet.get('boot_id'), packet.get('capture_monotonic_us'))
@@ -39,11 +73,13 @@ class MetricSensorWorker:
             if sample is None or self.mount is None:
                 return copy.deepcopy(self.result)
             self.last = key
+            stationary = self._stationary(frame,image)
             calibration = ((packet.get('ahrs') or {}).get('ahrs') or {}).get('calibration') or {}
             self.result = self.odometry.update(observations,
                 self.mount @ sample['R'] @ self.mount.T, ('ahrs', sample['epoch']), sample['time_s'],
                 stationary_reference_reset=bool(calibration.get('gyro_bias_valid') and
-                                                calibration.get('status') == 'succeeded'))
+                                                calibration.get('status') == 'succeeded'),
+                stationary_observed=stationary)
             return copy.deepcopy(self.result)
 
     def _run(self):
@@ -52,9 +88,9 @@ class MetricSensorWorker:
                 self.condition.wait_for(lambda: self.pending is not None or self.stopping)
                 if self.stopping:
                     return
-                frame, self.pending = self.pending, None
+                pending, self.pending = self.pending, None
             try:
-                self.observe(frame)
+                self.observe(*pending)
             except Exception as error:
                 with self.lock:
                     self.result = {'valid':False, 'reason':'metric_sensor_error',

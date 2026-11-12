@@ -10,7 +10,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 PORTABLE_OPERATIONS = ["robot.body.model", "robot.control.model",
-                       "robot.sonar.snapshot", "robot.metric.status"]
+                       "robot.sonar.snapshot", "robot.metric.status",
+                       "robot.camera.exposure.status", "robot.camera.exposure.set"]
 MOTION = {"1": "forward", "2": "back", "3": "left", "4": "right",
           "5": "unassigned", "6": "unassigned"}
 DRIVE = {"actuation": "binary_on_off_relays", "pwm_available": False,
@@ -119,7 +120,11 @@ def sonar_snapshot(service):
             "status":row.get("status"),"sequence":row.get("sequence"),
             "observed_uptime_ms":row.get("observed_uptime_ms"),
             "pose":model.get("sonar_poses",{}).get(row["id"])})
-    base["update_rate"]["firmware_update_interval_ms"]=raw.get("update_interval_ms")
+    trigger_ms=raw.get("trigger_interval_ms")
+    base["update_rate"].update(firmware_trigger_interval_ms=trigger_ms,
+        nominal_per_sensor_period_s=None if trigger_ms is None else 4*trigger_ms/1000,
+        nominal_per_sensor_hz=None if not trigger_ms else 1000/(4*trigger_ms),
+        rate_qualification="nominal_round_robin_schedule_actual_measurement_ages_are_per_sensor")
     fusion=getattr(service,"fusion",None)
     return {**base,"availability":"available","sensors":sensors,
         "boot_id":cached["telemetry"].get("boot_id"),
@@ -135,7 +140,7 @@ def enrich(service, operation, result):
         result["drive_model"]=copy.deepcopy(DRIVE)
         result["metric"]=metric_status(service)
         result["metric_scale_available"]=result["metric"]["metric_scale_available"]
-        result["local_metric_geometry_available"]=True
+        result["local_metric_geometry_available"]=result["metric"]["local_metric_geometry_available"]
         result["camera_exposure_timing"]=copy.deepcopy(EXPOSURE_TIME)
         result["camera_driving_light"]={"contract":"robot.camera.light.set:1",
             "purpose":"illuminate_camera_view_for_driving"}
@@ -145,7 +150,7 @@ def enrich(service, operation, result):
         metric=metric_status(service,binding)
         binding["metric_scale"]=metric["map_scale"]
         binding["metric_scale_available"]=metric["metric_scale_available"]
-        binding["local_metric_geometry_available"]=True
+        binding["local_metric_geometry_available"]=metric["local_metric_geometry_available"]
         binding["body_model_capability"]="robot.body.model:1"
         if isinstance(binding.get("frame"),dict):
             binding["frame"]["exposure_timestamp_qualification"]=copy.deepcopy(EXPOSURE_TIME)
@@ -158,6 +163,23 @@ def enrich(service, operation, result):
     return result
 
 def dispatch(service, operation, inputs, fallback):
+    if operation in ("robot.camera.exposure.status","robot.camera.exposure.set"):
+        from camera_telemetry import CameraHTTPClient, CameraHTTPError
+        allowed={"auto_exposure":bool,"auto_exposure_dsp":bool,"auto_gain":bool,
+                 "exposure_value":int,"exposure_level":int,"gain":int}
+        if operation.endswith(".set"):
+            if not inputs or any(k not in allowed or type(v) is not allowed[k] for k,v in inputs.items()):
+                raise ValueError("invalid_exposure_fields")
+            for key,minimum,maximum in [("exposure_value",9,1200),("exposure_level",-2,2),("gain",0,30)]:
+                if key in inputs and not minimum<=inputs[key]<=maximum:
+                    raise ValueError("exposure_value_out_of_range")
+        elif inputs:raise ValueError("exposure_status_takes_no_inputs")
+        try:
+            value=CameraHTTPClient(service.config["camera"])._request("/api/camera/exposure",
+                body=json.dumps(inputs).encode() if operation.endswith(".set") else None)
+            return {"availability":"available","exposure":value,"timestamp_qualification":copy.deepcopy(EXPOSURE_TIME)}
+        except CameraHTTPError as exc:
+            return {"availability":"unavailable",**exc.as_dict(),"timestamp_qualification":copy.deepcopy(EXPOSURE_TIME)}
     if operation=="robot.body.model":return service._robot_model()
     if operation=="robot.control.model":return copy.deepcopy(DRIVE)
     if operation=="robot.sonar.snapshot":return sonar_snapshot(service)

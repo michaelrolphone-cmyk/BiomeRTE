@@ -35,6 +35,8 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.camera.exposure.status", {}, "Read camera exposure and gain controls; capture DMA time is not calibrated exposure time."),
+        ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure and gain update; inspect unknown outcomes before retry."),
         ("robot.vision.snapshot", {"snapshot_id": field("str"), "include_frame": field("bool")},
          "One coherent retained frame, pose and map revision; image bytes are opt-in."),
         ("robot.vision.frame", {"snapshot_id": field("str"), "frame_id": field("str")},
@@ -128,6 +130,7 @@ CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
 
 
 MUTATING_CONTRACTS = frozenset({
+    "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
     "robot.camera.light.set:1", "robot.ahrs.calibrate:1",
     "robot.vision.calibration:1",
