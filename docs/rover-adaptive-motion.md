@@ -198,3 +198,11 @@ buffer with bounded pruning work, so leaving the observer on does not retain
 an endless raw sensor history. Training sessions are not automatically deleted.
 The AHRS null-reference failure is handled and a writer heartbeat/watchdog prevents
 a dead recorder from continuing to advertise a live recording.
+
+Standalone native AHRS snapshots are recorded independently of the camera. Their
+original sensor validity, source identity and timing uncertainty are preserved;
+an unqualified HTTP timing estimate is not silently treated as a camera capture.
+Duplicate cached frame/AHRS/sonar identities are suppressed. Training readiness
+checks actual capture age as well as receipt age, so repeated old frames cannot
+make learning appear ready. Raw AHRS/sonar evidence can still be retained while
+camera-qualified fitting is unavailable.
