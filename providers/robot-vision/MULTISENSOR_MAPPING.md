@@ -6,10 +6,21 @@ Visual translation is combined with a separate local metric sonar odometry track
 stationary pose just because orientation is available. Large visual orientation
 innovations re-anchor the filter, preserving relocalization and loop closure.
 
-`multisensor_mapping.ahrs.R_camera_imu` supplies a measured IMU-to-camera rotation.
-Without it, paired visual and AHRS rotation increments estimate a mount passively.
-Predominantly planar motion constrains only its observed rotation axis; this is
-an estimated mount, not a claim of full six-degree calibration.
+The AHRS position is known from the user's mounting description: rigidly glued
+on the back of the camera board, centered directly behind the camera, about
+4mm away. In camera axes (x right, y down, z forward), its nominal translation
+is approximately [0, 0, -0.004] metres. Treat it as near-coincident with the
+camera origin for attitude estimation; this small lever arm is not a reason to
+exclude AHRS from heading or pose estimation. This is a user-reported approximate
+position, not a precision measurement of the IMU sensing die.
+
+`multisensor_mapping.ahrs.R_camera_imu` describes the alignment of the sensor
+axes with the camera axes, not the physical location of the module. When that
+rotation is not configured, paired visual and AHRS rotation increments estimate
+it passively. Predominantly planar motion constrains only its observed rotation
+axis. An axis-alignment status must not be reported as an unknown AHRS position.
+The current AHRS path uses orientation increments; it does not double-integrate
+accelerometer readings into position.
 
 Firmware adds four-sonar history to `biome.capture.v1`. Each transducer retains
 its own transmit/echo midpoint measurement time and completion time, on esp_timer.
