@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import plistlib
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,7 +21,7 @@ class UpgradeTests(unittest.TestCase):
             cfg=dict(runtime=str(home/"old"),python=sys.executable,provider="original",resource="rover")
             config=state/"provider.json";config.write_text(json.dumps(cfg))
             plist=home/"Library/LaunchAgents/org.biomerte.rover-motion-provider.plist"
-            plist.parent.mkdir(parents=True);plist.write_bytes(plistlib.dumps(dict(Label="org.biomerte.rover-motion-provider")))
+            plist.parent.mkdir(parents=True);plist.write_bytes(plistlib.dumps(dict(Label="org.biomerte.rover-motion-provider",ProgramArguments=[sys.executable,"old-adapter"])))
             original=(config.read_bytes(),plist.read_bytes())
             with sqlite3.connect(state/"worker.sqlite") as db:
                 db.executescript("CREATE TABLE actions(state TEXT); CREATE TABLE supervised_pending(id TEXT); INSERT INTO actions VALUES('running');")
@@ -33,8 +34,20 @@ class UpgradeTests(unittest.TestCase):
                 def simulate(argv,**kwargs):
                     if argv[:2]==["launchctl","bootstrap"] and config.read_bytes()!=original[0]:
                         raise RuntimeError("bootstrap failed")
+                    return subprocess.CompletedProcess(argv,0,"","")
                 run.side_effect=simulate
                 with self.assertRaisesRegex(RuntimeError,"bootstrap failed"):
                     upgrade.upgrade(path.parents[2],state)
                 self.assertEqual(original,(config.read_bytes(),plist.read_bytes()))
                 self.assertEqual(run.call_args_list[-1].args[0][:2],["launchctl","bootstrap"])
+
+    def test_bootstrap_reconciles_transient_unload_race(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plist=Path(directory)/"worker.plist"
+            plist.write_bytes(plistlib.dumps(dict(ProgramArguments=[sys.executable,"new-adapter"])))
+            values=[subprocess.CompletedProcess([],5,"","unloading"),
+                    subprocess.CompletedProcess([],113,"","not found"),
+                    subprocess.CompletedProcess([],0,"","")]
+            with patch.object(upgrade.subprocess,"run",side_effect=values) as run,patch.object(upgrade.time,"sleep"):
+                upgrade.bootstrap("gui/501",plist)
+                self.assertEqual(run.call_count,3)
