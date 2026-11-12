@@ -1,129 +1,107 @@
-# Observational rover motion response
+# Biome rover motion capabilities
 
-The predictor is read-only. It neither acquires control leases nor drives a
-calibration maneuver. Normal driving supplies the experiments.
+The consumer interface is Biome's capability registry and invocation protocol.
+Clients do not need an IP address, HTTP endpoint, dashboard session, separate
+bearer token or a Heroku deployment.
 
-## State and model
+| Contract | Inputs | Result |
+|---|---|---|
+| `robot.motion.model:1` | Optional `include_parameters: bool` | Model revision, retained steering/motion state, training support, residuals, freshness and optional portable parameter snapshot |
+| `robot.motion.predict:1` | Required `pulses: list`; optional `initial_state: object`, `step_s: number`, `model_revision: integer` | Per-step trajectory/state estimates, support, uncertainty and explicit `executes_motion:false` |
 
-The state contains signed speed, yaw rate, prior drive direction, continuous
-on/idle times, a persistent steering latch and four latent steering-memory traces (0.15, 0.5, 1.5 and 5 second
-basis time scales). These traces are features, not measured steering angles or
-calibrated settling constants. Neutral at rest preserves them. The steering latch remains turned through straight drive until corrective steering is applied; the model does not assume that removing steering power centers the wheels. Transient basis features may relax while rolling, allowing observations to distinguish persistent steering from dynamic settling. Reversing retains steering history.
-An adaptive autoregressive regression learns signed speed and yaw response from
-those features. Time-based forgetting and residual-triggered covariance inflation
-allow the observed response to change as power, payload or traction changes.
-No battery-voltage measurement or wheel encoder is invented.
+Discover or acquire the generic contract without specifying a controller or host.
+The gateway selects an eligible implementation. A resource constraint is optional
+when a caller needs the model for a particular robot; deployment placement is not
+part of the contract name.
 
-The model is an observational estimator, not a certified vehicle dynamics model.
-Nonlinear behavior is represented by memory/input interaction features; unobserved
-steering/drive combinations are explicitly flagged. Strong extrapolation and
-different floor/contact conditions remain unqualified. Additional encoder,
-battery-voltage or steering-angle sensors can be incorporated from the raw log.
+## Invocation
 
-## Recording and qualification
+1. Discover `robot.motion.model:1` or `robot.motion.predict:1`.
+2. `cap.acquire` with the contract and a unique task identity.
+3. Read `cap.lease` until bound.
+4. `cap.invoke` with the lease, a unique operation identity and inputs.
+5. Read `cap.status` for that same operation; the telemetry is under
+   `result.result`. Inspect an explicit query error before using the result.
+6. Release the lease. `cap.submit` is also supported when using a discovered
+   resource; follow its returned operation to completion.
 
-`install_motion(rover, authenticated_app, home)` adds an independent recorder thread.
-Control dispatch and frame forwarding do not wait for fitting or SQLite writes.
-The SQLite file is `home/motion/observations.sqlite`; raw applied/requested events,
-sensor metadata, source identities and clock bounds are retained, with model
-snapshots in the same transaction. Image pixels and geometry clouds are excluded.
-
-Requested commands and applied ACKs are distinct records. ACK receive time is
-not labeled GPIO time: issue-to-receipt brackets and provider monotonic stamps
-are retained. Duplicate/reordered ACKs, connection changes, stale frames, source
-boot changes, AHRS reference resets and ambiguous actuation windows cannot train
-the response model. Ambiguous windows still update uncertain steering history.
-
-AHRS readings use their capture-associated attitude and validity/age fields.
-The independent cache-only sonar reader logs all four ranges and actual sample
-times. Readings are associated to earlier camera captures only within the same
-device boot and documented sensor-period age. Metric training requires agreement
-between opposed front/rear range changes and little heading change. Sequential
-sonar samples and beam/target geometry still limit this translation hypothesis;
-a changing range alone is never labeled traveled distance. Missing metric support
-returns null metric predictions.
-
-The process retains the learned response and steering memory across restarts,
-but marks live speed and steering continuity unknown after a restart/disconnect.
-No old command is replayed. The full source log permits later offline replay and
-improved synchronization/fitting without recollecting every experiment.
-
-## Endpoints and function
-
-On the authenticated paired Rover HTTP app:
-
-* `GET /api/motion/model`: live estimated state, model revision, sample/domain
-  support, rejection reasons, residuals, drift counters and recorder health.
-* `POST /api/motion/predict`: simulate a sequence from current or supplied state.
-
-Example request:
+Prediction inputs:
 
 ```json
-{"pulses":[{"mask":5,"duration_s":0.8},{"mask":0,"duration_s":0.3},{"mask":1,"duration_s":0.7}]}
+{
+  "pulses": [
+    {"mask": 5, "duration_s": 0.8},
+    {"mask": 0, "duration_s": 0.3},
+    {"mask": 1, "duration_s": 0.7}
+  ]
+}
 ```
 
-Masks: 1 forward, 2 reverse, 4 left, 8 right; combine drive and steer.
-The example predicts forward-left, neutral, then straight driving while retaining
-the prior steering state. Opposed drive or steering pairs are rejected.
-Optional `initial_state` overrides explicit estimated state fields. Optional
-`step_s` controls numerical integration. Every response includes
-`executes_motion:false`, angular/metric availability, unsupported combinations,
-per-step state and accumulated trajectory, and an uncertainty proxy. That proxy
-is not a calibrated confidence interval or collision-clearance guarantee.
+Mask bits are 1 forward, 2 reverse, 4 left and 8 right. This estimates a turn,
+neutral and subsequent straight-drive request. Opposing drive or steering pairs
+are rejected. The predictor never sends these commands to the robot.
 
-Reusable function:
+The steering latch remains turned through neutral and straight drive until
+corrective steering is applied; release is not treated as centered wheels.
+Four transient memory features let the response estimator distinguish settling
+from persistent steering. These are latent features, not measured wheel angles.
+Signed speed/yaw, drive history and on/idle times contribute to the adaptive
+regression. Time-based forgetting and residual-triggered covariance inflation
+allow response changes due to power, payload or traction to be learned rather
+than freezing the initial fit.
+
+Unsupported/untrained outputs are null. A query completing successfully is not
+physical calibration. The uncertainty field is an observational residual/leverage
+proxy, not a calibrated confidence interval or collision-clearance guarantee.
+A caller can pin `model_revision`; a mismatched revision returns
+`model_revision_conflict`. Stale capture/model data makes live motion state
+explicitly unknown. A caller may supply an explicit initial-state assumption.
+
+## Architecture and ownership
+
+The observer consumes existing multiplexed control/video streams and independently
+reads sonar and coherent cached capture snapshots. It owns no physical lease and
+issues no motion commands. Raw fast-frame AHRS/sonar headers are retained separately
+from snapshots with capture-host clock bounds. Requested/application feedback,
+source identities, sensor/reference resets and timing uncertainty are distinct.
+
+A dedicated native capability worker has its own provider identity, work inbox,
+fenced execution ledger and parallel action pool. It reads a consistent,
+read-only SQLite model snapshot and calls the same reusable `MotionModel.predict`
+function. It does not proxy a local or public HTTP prediction API. Both contracts
+are read-only; their leases protect execution ownership, not physical driving.
+
+The live observer database is
+`~/.local/share/biome-rover-motion/motion/observations.sqlite`.
+Provider configuration/ledger is separately stored in
+`~/.local/share/biome-rover-motion/provider`.
+The gateway assigns implementation authority from the provider's reported locality;
+neither caller instructions nor contract names require Mac/Pi placement.
+
+The observer's records and model survive restarts. Prior steering history is
+retained while gap/restart uncertainty remains explicit. No old motion command
+is replayed. Duplicate/reordered ACKs, missed output transitions, camera boot or
+AHRS reference changes, stale samples and ambiguous actuation windows cannot
+train as if their physical state were known. Metric fitting additionally checks
+opposed front/rear sonar changes at nearly constant heading. Sequential beam
+measurements and target geometry remain limitations.
+
+## Reusable estimator and verification
 
 ```python
 from biomerte.motion_model import MotionModel
-model = MotionModel(saved_model)
-prediction = model.predict(pulses, initial_state=state)
+prediction = MotionModel(saved_parameters).predict(pulses, initial_state=state)
 ```
 
-Predictions do not update the live model. `MotionRecorder.predict` preserves the
-current in-process state when taking an immutable prediction snapshot.
+The native provider exposes this function through `robot.motion.predict:1`.
+`include_parameters:true` on the model contract supplies an immutable snapshot
+for offline estimation or another implementation.
 
-The public stream gateway must allow the two new HTTP paths before remote
-consumers can use them. Existing gateway auth remains required. Adding local
-routes alone does not prove public delivery. Deployment records must distinguish
-local integration, public endpoint verification and physical predictive accuracy.
+Run `python -m unittest tests.test_motion_model tests.test_motion_capabilities -v`.
+Verification must include actual generic discovery, lease binding, invocation,
+status and release through Biome; local function or HTTP tests alone do not
+establish capability delivery. No driving tests are implied by these read-only
+checks. Ordinary qualified driving observations must establish physical
+predictive accuracy.
 
-## Deployment and verification
-
-`python deploy/enable-rover-motion.py --apply` snapshots the currently deployed
-Rover package and adapters, overlays only these modules and the app attachment,
-and records the prior launch-agent file for rollback. It preserves existing
-clock/stream repairs, maps and camera/vision service. Inspect the fresh production
-service identity before deploying if another worker changed it.
-
-Run `python -m unittest tests.test_motion_model -v`. Tests cover retained steering,
-recentring, history-dependent predictions, read-only estimation, missing metric
-data, adaptation after a response shift, restart continuity and ambiguous windows.
-Software tests do not qualify physical prediction accuracy. This starts with no
-fabricated calibration coefficients; ordinary qualified observations build support.
-
-## Independent observer deployment
-
-When another worker owns the paired Rover service, run the read-only observer
-entry point `deploy/rover-motion-observer.py` as its own service. It subscribes to
-the existing multiplexed vision/control WebSockets, queries the local sonar cache
-independently, and acquires no physical leases. It never sends a control intent.
-Its authenticated API listens at `http://127.0.0.1:8094`; credentials use the
-existing private Rover bearer derivation. Its database is
-`~/.local/share/biome-rover-motion/motion/observations.sqlite`.
-
-This subscriber mode receives actual provider ACKs but cannot see another
-client's rejected desired requests. The primary in-process attachment additionally
-records requested commands and their immediate receipts/errors. Latest-value
-stream delivery can skip ACKs: output-transition counter gaps are recorded and
-cannot train as if the omitted states were known. Do not run two recorders against
-the same database. Subscriber and primary databases have deliberately distinct
-owners; transfer learned state explicitly before switching owners.
-
-Remote public delivery is a separate qualification. A Heroku route allowance
-does not by itself redirect the older Mac bridge to the observer port; either
-enable the in-process attachment on port8093 or update the Mac bridge routing.
-
-Raw fast-stream headers and coherent cached snapshots have different envelopes.
-Both are logged. Fitting uses snapshots with explicit capture-host clock bounds,
-while original fast-stream AHRS/sonar headers remain available for later replay.
-The cache readers run independently from control/video delivery.
+Install a new worker with `python providers/rover-motion/install.py --resource ROBOT_MODEL_RESOURCE` after the observer is installed. The installer uses the current native worker runtime (including settlement-proof handling), reuses the existing managed gateway transport, and retains the observer/model runtime separately. An existing provider must be reconciled before replacement; camera and drive services are not restarted.
