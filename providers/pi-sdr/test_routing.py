@@ -69,4 +69,20 @@ class CoverageTests(unittest.TestCase):
             ctx.plan(radio.settings({'frequencies_hz':[433920000,1800000000]}))
 
 
+class VersionedGuidanceTests(unittest.TestCase):
+    def test_v1_guidance_excludes_v2_parameters_without_changing_shared_resource(self):
+        from install import versioned_offers
+        offer={'contract':'radio.sdr.receive:1','resource':'radio.sdr.test','capacity':5,
+               'usage':{'parameters':{'action':'devices','device':'auto',
+                                      'antenna_ranges_hz':'bands','gain_index':'PHY index'}}}
+        extended,legacy=versioned_offers(offer)
+        self.assertEqual('radio.sdr.receive:2',extended['contract'])
+        self.assertEqual('radio.sdr.receive:1',legacy['contract'])
+        self.assertEqual({'action','device'},set(legacy['usage']['parameters']))
+        self.assertIn('gain_index',extended['usage']['parameters'])
+        self.assertIn('antenna_ranges_hz',extended['usage']['parameters'])
+        self.assertEqual(legacy['resource'],extended['resource'])
+        self.assertIn('gain_index',offer['usage']['parameters'])
+
+
 if __name__=='__main__': unittest.main()

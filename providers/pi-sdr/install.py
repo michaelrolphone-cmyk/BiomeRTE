@@ -9,6 +9,18 @@ import sys
 import tempfile
 import pwd
 
+def versioned_offers(offer):
+    import copy
+    legacy=copy.deepcopy(offer)
+    extended=copy.deepcopy(offer)
+    extended['contract']='radio.sdr.receive:2'
+    # Guidance is validated against each immutable ABI, just like call inputs.
+    with open(os.path.join(os.path.dirname(__file__),'contract-v1.json')) as f:
+        allowed=json.load(f)['arguments']['inputs']
+    legacy['usage']['parameters']={k:v for k,v in legacy['usage']['parameters'].items() if k in allowed}
+    return [extended,legacy]
+
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('phase',choices=['prepare','activate'])
@@ -59,12 +71,7 @@ def main():
               'offers':[{'contract':'radio.sdr.receive:1','resource':'radio.sdr.'+conf['node'][:24],
                          'service':'sdr-receiver','capacity':5,'configuration':{'host':__import__('socket').gethostname()},
                          'argv':[sys.executable,os.path.join(source,'server.py'),'call',home],'usage':usage}]}
-    # Both versions share the same physical resource, locks and daemon. Keep v1
-    # usable while v2 adds antenna/gain configuration fields to its immutable ABI.
-    import copy
-    extended=copy.deepcopy(manifest['offers'][0])
-    extended['contract']='radio.sdr.receive:2'
-    manifest['offers'].insert(0,extended)
+    manifest['offers']=versioned_offers(manifest['offers'][0])
     path=os.path.join(home,'manifest.json')
     with open(path,'w') as f: json.dump(manifest,f,indent=2)
     units={
