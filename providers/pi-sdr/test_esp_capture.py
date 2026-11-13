@@ -2,7 +2,7 @@ import unittest
 import zlib
 from unittest import mock
 import numpy as np
-from esp_capture import Protocol, decode, array_bytes
+from esp_capture import Protocol, decode, array_bytes, configure_gain
 from capture import spectrum
 
 
@@ -39,6 +39,15 @@ class ProtocolTests(unittest.TestCase):
         with mock.patch('esp_capture.time.monotonic',side_effect=[0,0,7]):
             with self.assertRaises(RuntimeError):protocol.burst(2)
         self.assertEqual([],port.writes)
+
+    def test_documented_manual_gain_command_and_runtime_limits(self):
+        port=Port(b'OK\nOK\n')
+        protocol=Protocol(port)
+        configure_gain(protocol,20,{'gain':[0,82,1]})
+        configure_gain(protocol,None,{'gain':[0,82,1]})
+        self.assertEqual([b'GAIN MANUAL 20\n',b'GAIN HARDWARE\n'],port.writes)
+        with self.assertRaises(ValueError):configure_gain(protocol,83,{'gain':[0,82,1]})
+        self.assertEqual(2,len(port.writes))
 
     def test_iq_sign_and_tone_frequency(self):
         size=4096;rate=16000000;tune=2442000000

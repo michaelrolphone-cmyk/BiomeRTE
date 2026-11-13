@@ -63,6 +63,14 @@ def decode(payload):
     return values[0::2] - 1j*values[1::2]
 
 
+def configure_gain(protocol, gain, limits):
+    if gain is not None:
+        lo, hi, step = limits['gain']
+        if not lo <= gain <= hi or (gain-lo) % step:
+            raise ValueError('ESP gain_index outside runtime limits')
+    protocol.command('GAIN HARDWARE' if gain is None else 'GAIN MANUAL {}'.format(gain))
+
+
 def measure(cfg):
     import serial
     target = cfg['device']
@@ -93,10 +101,7 @@ def measure(cfg):
         protocol.command('FREQ {}'.format(tune//1000000))
         protocol.command('BANDWIDTH 13')
         gain = cfg.get('gain_index')
-        if gain is not None:
-            lo, hi, step = limits['gain']
-            if not lo <= gain <= hi or (gain-lo) % step: raise ValueError('ESP gain_index outside runtime limits')
-        protocol.command('GAIN {}'.format(gain if gain is not None else 'HARDWARE'))
+        configure_gain(protocol, gain, limits)
         rate = 16000000; fft_size = 4096
         sums = np.zeros(fft_size); maximum = np.zeros(fft_size)
         frames = 0; samples = 0; iq = b''; bursts = []
