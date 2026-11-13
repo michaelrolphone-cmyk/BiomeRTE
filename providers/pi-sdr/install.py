@@ -37,7 +37,7 @@ def main():
                          'device':'Numeric index or exact unique USB serial from devices',
                          'frequency_hz':'25 MHz to 1.75 GHz; alternatively frequencies_hz or profile=garage_us',
                          'scan_id':'Use scan_id and offset; one spectrum window per page. IQ is cu8 base64 when include_iq=true.'}}
-    manifest={'url':a.url,'site':a.site,'timeout':None,'poll_seconds':0.1,'parallelism':4,
+    manifest={'url':a.url,'site':a.site,'timeout':None,'poll_seconds':2,'parallelism':4,
               'offers':[{'contract':'radio.sdr.receive:1','resource':'radio.sdr.'+conf['node'][:24],
                          'service':'sdr-receiver','capacity':4,'configuration':{'host':__import__('socket').gethostname()},
                          'argv':[sys.executable,os.path.join(source,'server.py'),'call',home],'usage':usage}]}
