@@ -1,0 +1,21 @@
+{
+  "name": "radio.fm.transmit",
+  "version": 1,
+  "description": "On-demand GPIO FM broadcast with tone/WAV, durable job IDs, status, stop and clock cleanup.",
+  "inputs": {
+    "action": "str",
+    "frequency_hz": "int?",
+    "duration_seconds": "num?",
+    "source": "str?",
+    "tone_hz": "num?",
+    "volume": "num?",
+    "audio_path": "str?",
+    "job_id": "str?",
+    "request_id": "str?"
+  },
+  "outputs": {
+    "ok": "bool",
+    "data": "obj?",
+    "error": "obj?"
+  }
+}
