@@ -9,6 +9,7 @@ import math
 import sys
 import time
 import numpy as np
+import routing
 
 
 def check(rc, name):
@@ -35,7 +36,11 @@ def measure(cfg):
         rows.append((i,c.value.decode('utf8','replace')))
     target=cfg['device']
     matching=[i for i,s in rows if s==target['serial']] if target['unique_serial'] else [i for i,s in rows if i==target['index'] and s==target['serial']]
+    if target.get('usb_path'):
+        paths = routing.usb_rtl_paths(len(rows))
+        matching = [i for i,s in rows if paths[i] == target['usb_path'] and s == target['serial']]
     if len(matching)!=1: raise RuntimeError('Receiver identity changed or is ambiguous')
+    target = dict(target, index=matching[0])
     dev=ctypes.c_void_p();check(lib.rtlsdr_open(ctypes.byref(dev),matching[0]),'open')
     try:
         rate=1024000 if cfg['width_hz']<=500000 else 2400000

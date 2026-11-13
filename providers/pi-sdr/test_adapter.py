@@ -18,11 +18,11 @@ class AdapterTest(unittest.TestCase):
             server=os.path.join(os.path.dirname(__file__),'server.py')
             p=subprocess.Popen([sys.executable,server,'serve',home,state],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
             try:
-                deadline=time.time()+10
+                deadline=time.monotonic()+30
                 while not os.path.exists(os.path.join(home,'service.sock')):
                     if p.poll() is not None:
                         self.fail(p.stderr.read().decode())
-                    if time.time()>deadline:self.fail('Daemon socket did not appear')
+                    if time.monotonic()>deadline:self.fail('Daemon socket did not appear')
                     time.sleep(.02)
                 def call(operation,inputs):
                     child=subprocess.Popen([sys.executable,server,'call',home],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)

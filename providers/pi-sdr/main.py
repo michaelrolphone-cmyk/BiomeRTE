@@ -1,4 +1,4 @@
-"""Generic receive-only RTL-SDR service, Python 3.4+, librtlsdr and NumPy."""
+"""Generic receive-only SDR service, Python 3.4+, librtlsdr and NumPy."""
 import base64
 import collections
 import ctypes
@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
+import routing
 
 GARAGE_US = [300000000, 310000000, 315000000, 318000000, 372500000, 390000000, 433920000]
 LIMIT_NOTE = 'Single tuner: other frequencies are unobserved during each dwell. RF activity is not door position or a decoded opener identity.'
@@ -49,19 +50,22 @@ def settings(inputs):
         frequencies = [inputs['frequency_hz']]
     if not isinstance(frequencies, list) or not 1 <= len(frequencies) <= 32:
         raise ValueError('Supply 1..32 frequencies_hz or profile=garage_us')
-    result = {'frequencies_hz': [int(number(f, 25000000, 1750000000, 'frequency')) for f in frequencies],
-              'device': str(inputs.get('device', '0')), 'gain_db': number(inputs.get('gain_db', 28), 0, 49.6, 'gain'),
+    result = {'frequencies_hz': [int(number(f, 25000000, 2750000000, 'frequency')) for f in frequencies],
+              'device': str(inputs.get('device', 'auto')), 'gain_db': number(inputs.get('gain_db', 28), 0, 49.6, 'gain'),
               'ppm': int(number(inputs.get('ppm', 0), -200, 200, 'ppm')),
               'dwell_seconds': number(inputs.get('dwell_seconds', .25), .1, 2, 'dwell'),
               'width_hz': int(number(inputs.get('width_hz', 200000), 10000, 1000000, 'width')),
               'threshold_db': number(inputs.get('threshold_db', 12), 3, 50, 'threshold')}
-    if not result['device'] or len(result['device']) > 64 or not all(c.isalnum() or c in '_-:' for c in result['device']):
+    if not result['device'] or len(result['device']) > 64 or not all(c.isalnum() or c in '_-:.' for c in result['device']):
         raise ValueError('device must be a numeric index or exact USB serial')
     if result['dwell_seconds'] * len(frequencies) > 120:
         raise ValueError('Scan dwell budget exceeds 120 seconds')
     for f in result['frequencies_hz']:
-        if f - result['width_hz']//2 < 25000000 or f + result['width_hz']//2 > 1750000000:
+        if f - result['width_hz']//2 < 25000000 or f + result['width_hz']//2 > 2750000000:
             raise ValueError('Scan window outside tuner range')
+    result['gain_db_explicit'] = inputs.get('gain_db_explicit', 'gain_db' in inputs)
+    if 'gain_index' in inputs:
+        result['gain_index'] = int(number(inputs['gain_index'], 0, 82, 'gain_index'))
     return result
 
 
@@ -77,6 +81,9 @@ def devices():
                      'manufacturer': manufacturer.value.decode('utf8', 'replace'),
                      'product': product.value.decode('utf8', 'replace'), 'serial': serial.value.decode('utf8', 'replace'),
                      'usb_strings_ok': rc == 0, 'receive_only': True})
+    paths = routing.usb_rtl_paths(len(rows))
+    for row, path in zip(rows, paths):
+        row.update(id='rtl:usb:'+path, usb_path=path, aliases=[])
     counts = collections.Counter(r['serial'] for r in rows)
     for row in rows:
         row['unique_serial'] = bool(row['serial']) and counts[row['serial']] == 1
@@ -100,6 +107,7 @@ class SDR:
         self.root = config.get('root', os.path.join(pwd.getpwuid(os.getuid()).pw_dir, '.local/share/sdr-receiver'))
         os.makedirs(self.root, exist_ok=True)
         self.capture = os.path.join(os.path.dirname(__file__), 'capture.py')
+        self.catalog = routing.Catalog(self.root, devices)
         self.jobs = collections.OrderedDict()
         self.guard = threading.RLock()
         self.stop = threading.Event()
@@ -140,7 +148,7 @@ class SDR:
             return output.decode('utf8', 'replace'), error.decode('utf8', 'replace')
 
     def lock_device(self, device):
-        key = hashlib.sha256((device['serial'] if device['unique_serial'] else 'index:'+str(device['index'])).encode()).hexdigest()[:24]
+        key = hashlib.sha256(device['id'].encode()).hexdigest()[:24]
         lock = open(os.path.join(self.root, 'device-'+key+'.lock'), 'a')
         deadline = time.time()+20
         while True:
@@ -153,35 +161,49 @@ class SDR:
                     raise RuntimeError('Receiver busy')
                 time.sleep(.05)
 
-    def window(self, cfg, center):
-        device = resolve_device(cfg['device'])
+    def plan(self, cfg):
+        rows = self.catalog.inventory()
+        plan = [self.catalog.select(cfg['device'], f, cfg['width_hz'], rows) for f in cfg['frequencies_hz']]
+        for receiver in plan:
+            if receiver['driver'] == 'esp_sdr' and (cfg.get('gain_db_explicit') or cfg['ppm']):
+                raise ValueError('ESP-SDR uses gain_index (0..82), not gain_db; ppm correction unsupported')
+            if receiver['driver'] == 'rtl' and 'gain_index' in cfg:
+                raise ValueError('RTL receiver uses gain_db, not gain_index')
+        return plan
+
+    def window(self, cfg, center, device=None):
+        device = device or self.catalog.select(cfg['device'], center, cfg['width_hz'])
         with self.lock_device(device):
             spec = dict(cfg, device=device, frequency_hz=center)
-            argv = [sys.executable, self.capture, json.dumps(spec)]
+            script = self.capture if device['driver'] == 'rtl' else os.path.join(os.path.dirname(__file__), 'esp_capture.py')
+            argv = [sys.executable, script, json.dumps(spec)]
             started = time.time()
             output, stderr = self.run(argv, cfg['dwell_seconds']+15)
             row = json.loads(output)
             row.update({'observed_start': started, 'observed_end': time.time(),
-                        'receiver_log': stderr[-1000:], 'limitations': LIMIT_NOTE})
+                        'receiver_log': stderr[-1000:], 'limitations': LIMIT_NOTE,
+                        'receiver_id': device['id'], 'driver': device['driver'],
+                        'selection_basis': device['selection_basis'], 'routing_revision': device['routing_revision']})
             return row
 
     def scan(self, inputs):
         cfg = settings(inputs)
         cfg['include_iq'] = inputs.get('include_iq', False) is True
+        plan = self.plan(cfg)
         with self.guard:
-            if sum(j['state'] == 'running' for j in self.jobs.values()) >= 4:
-                raise RuntimeError('At most four bounded scans may run concurrently')
+            if sum(j['state'] == 'running' for j in self.jobs.values()) >= 5:
+                raise RuntimeError('At most five bounded scans may run concurrently')
             while len(self.jobs) >= 16:
                 removable = next((k for k,v in self.jobs.items() if v['state'] != 'running'), None)
                 if removable is None: raise RuntimeError('Scan history busy')
                 del self.jobs[removable]
             key = str(uuid.uuid4())
-            job = {'scan_id': key, 'state': 'running', 'settings': cfg, 'started_at': time.time(), 'results': []}
+            job = {'scan_id': key, 'state': 'running', 'settings': cfg, 'routing_plan': plan, 'started_at': time.time(), 'results': []}
             self.jobs[key] = job
         def work():
             try:
-                for f in cfg['frequencies_hz']:
-                    row = self.window(cfg, f)
+                for f, receiver in zip(cfg['frequencies_hz'], plan):
+                    row = self.window(cfg, f, receiver)
                     with self.guard: job['results'].append(row)
                 with self.guard: job['state'] = 'completed'
             except Exception as error:
@@ -202,7 +224,8 @@ class SDR:
                 for f in cfg['frequencies_hz']:
                     if self.stop.is_set() or not self.monitor.get('enabled') or self.monitor['revision'] != rev: break
                     try:
-                        row = self.window(cfg, f)
+                        receiver = self.plan(dict(cfg, frequencies_hz=[f]))[0]
+                        row = self.window(cfg, f, receiver)
                         summary = {k:v for k,v in row.items() if k not in ('bins','receiver_log','block_power_dbfs','iq_base64')}
                         with self.guard:
                             previous = self.latest.get(str(f), {})
@@ -229,8 +252,8 @@ class SDR:
             raise ValueError('Monitor revision changed; read status first')
         cfg = settings(inputs) if enabled else self.monitor.get('settings')
         if enabled:
-            selected = resolve_device(cfg['device'])
-            if selected['unique_serial']: cfg['device'] = selected['serial']
+            plan = self.plan(cfg)
+            if cfg['device'] != 'auto': cfg['device'] = plan[0]['id']
         self.monitor = {'enabled': enabled, 'settings': cfg, 'revision': revision+1, 'updated_at': time.time()}
         atomic(os.path.join(self.root,'monitor.json'),self.monitor)
         return dict(self.monitor)
@@ -261,7 +284,11 @@ def health(ctx): return os.path.isfile(ctx.capture) and ctx.monitor_thread.is_al
 def handle(method, inputs, ctx):
     if method == 'call':
         method = inputs.get('action')
-    if method == 'devices': return {'devices':devices(),'receive_only':True}
+    if method in ('devices', 'receivers'):
+        return {'devices':ctx.catalog.inventory(), 'revision':ctx.catalog.config['revision'], 'receive_only':True}
+    if method in ('receiver_configure','receiver_reset_antenna'):
+        if method == 'receiver_reset_antenna': inputs = dict(inputs, antenna_ranges_hz=None)
+        return ctx.catalog.configure(inputs)
     if method in ('scan','sample'): return ctx.scan(inputs)
     if method == 'monitor_start': return ctx.configure(inputs,True)
     if method == 'monitor_stop': return ctx.configure(inputs,False)
