@@ -78,6 +78,11 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
     for prior in tx.rows('_stream_grants'):
         if prior['lease'] == lease and prior['state'] == 'open':
             valid(tx, ctx, prior)
+            if (subscription['id'] in prior.get('closed_consumers', [])
+                    and not subscription.get('shared_owner_released')):
+                prior['closed_consumers'] = [item for item in prior['closed_consumers']
+                                             if item != subscription['id']]
+                tx.put('_stream_grants', prior['id'], prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
             return dict(shared_streams.public(tx, prior), url=url.rstrip('/') + '/' + prior['id'],
                         role='server', attachment_credential=token(ctx, prior, 'server', member['id']))

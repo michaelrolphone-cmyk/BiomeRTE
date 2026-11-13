@@ -35,6 +35,9 @@ from navigation_frames import read_robot_pose
 from portable_rover import PORTABLE_OPERATIONS, dispatch
 from auto_gyro_calibration import AutoGyroCalibration
 from metric_sensor_worker import MetricSensorWorker
+from rover_events import MotionEvents
+from applied_control_stream import AppliedControlStream
+from sensor_tick_stream import SensorTickStream
 from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
 
 CAPABILITIES = [
@@ -64,6 +67,10 @@ class VisionService:
                  radio_source=None, radio_model=None, ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
         self.live_frames = LiveFrames()
+        self.motion_events = MotionEvents(config.get('motion_events'))
+        from drive_response import CaptureDriveResponseMonitor
+        self.drive_response = CaptureDriveResponseMonitor(None,config.get('drive_response',{}))
+        self.applied_controls = AppliedControlStream(self.motion_events,config.get('motion_control_stream'),self.drive_response.control)
         from leased_maps import LiveMap
         self.live_maps = LiveMap()
         self.config = copy.deepcopy(config)
@@ -98,6 +105,7 @@ class VisionService:
         self._stop = threading.Event()
         self._thread = None
         self._live_camera = None
+        self.sensor_ticks = SensorTickStream(self)
         self._started = time.monotonic()
         self._frames = 0
         self._skipped = 0
@@ -347,12 +355,14 @@ class VisionService:
         return result
 
     def start(self):
+        self.applied_controls.start()
         self.metric.start_worker()
         self.atlas.start(self)
         self.radio.start()
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.sensor_ticks.start()
         self.metric_worker.start()
         from live_camera import LiveCamera
         self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
@@ -624,6 +634,8 @@ class VisionService:
                                "source": "estimated_planar_sonar_odometry", "coordinate_frame": "local_metric"},
             "radio": self.radio.evidence(localization, now_s=measurement_time),
             "ahrs": ahrs_evidence,
+            "motion_events": self._stream_motion_events(frame),
+            **self._drive_response_telemetry(),
         }
         if isinstance(ahrs_evidence, dict):
             ahrs_evidence["pose_estimation"] = localization.get("sensor_fusion", {})
@@ -666,6 +678,8 @@ class VisionService:
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
             "radio": self._stream_radio(frame),
             "ahrs": self._stream_ahrs(frame),
+            "motion_events": self._stream_motion_events(frame),
+            **self._drive_response_telemetry(),
             "ultrasonic": self._stream_ultrasonic(),
             "map_snapshot_required_on_revision_gap": True,
         }
@@ -707,8 +721,26 @@ class VisionService:
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
                     radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
+                    motion_events=self._stream_motion_events(frame),
+                    **self._drive_response_telemetry(),
                     ultrasonic=self._stream_ultrasonic(),
                     map_snapshot_required_on_revision_gap=True)
+
+    def _stream_motion_events(self,frame):
+        detector=getattr(self,'motion_events',None)
+        if detector is None:return {'schema':'biome.rover.events.v1','state':{'available':False},'events':[]}
+        result=detector.observe(frame)
+        self.drive_response.capture(detector)
+        return result
+
+    def _drive_response_telemetry(self):
+        monitor=getattr(self,'drive_response',None)
+        motion=getattr(self,'motion_events',None)
+        if monitor is None:return {}
+        state=monitor.snapshot()
+        events=state.pop('events')
+        if motion is not None:events+=motion.snapshot()['events']
+        return {'events':events,'drive_response':state}
 
     def _automatic_gyro_calibration(self,frame,image):
         automatic = getattr(self,"auto_gyro",None)
@@ -811,7 +843,7 @@ class VisionService:
         age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
         return {**copy.deepcopy(raw),'frame_id':frame['frame_id'],
                 'capture_monotonic_us':packet['capture_monotonic_us'],
-                'sample_reference':'camera_capture','timing_qualified':True,
+                'sample_reference':'sensor_tick' if packet.get('schema')=='biome.sensor_tick.v1' else 'camera_capture','timing_qualified':True,
                 'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
 
     def _stream_radio(self,frame):
@@ -821,10 +853,10 @@ class VisionService:
         if captured is None:return {'state':'unavailable','reason':'no_radio_sample_for_capture','frame_id':frame['frame_id']}
         age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
         captured.update(elapsed_since_receive_s=age,received_at=frame.get('receive_decode_time'),
-                        frame_id=frame['frame_id'],sample_reference='camera_capture')
+                        frame_id=frame['frame_id'],sample_reference='sensor_tick' if frame['sensor_packet'].get('schema')=='biome.sensor_tick.v1' else 'camera_capture')
         for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
         return {**self.radio.status(include_observations=False),'telemetry':captured,
-                'frame_id':frame['frame_id'],'sample_reference':'camera_capture'}
+                'frame_id':frame['frame_id'],'sample_reference':captured['sample_reference']}
 
     def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
@@ -1091,6 +1123,7 @@ class VisionService:
                 return {"availability": "unavailable", "reason": "ahrs_snapshot_unavailable",
                         "status": self.ahrs.status()}
             return {"availability": "available", "snapshot": snapshot,
+                    **self._drive_response_telemetry(),
                     "interpretation": "inspect_each_sensor_validity_age_frame_and_units"}
         if operation == "robot.ahrs.calibrate":
             if inputs:
@@ -1159,6 +1192,7 @@ class VisionService:
                 "metric_calibration": self.metric.status(map_id=self.map_id),
                 "radio": self.radio.status(),
                 "ahrs": self.ahrs.status(),
+                "motion_events": self.motion_events.snapshot(),
                 "ultrasonic": self._stream_ultrasonic(),
                 "control": {"motion_commands": False, "brain": "external",
                             "camera_light": "explicit_authenticated_camera_api",
@@ -1327,6 +1361,8 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        self.sensor_ticks.close()
+        self.applied_controls.close()
         self._stop.set()
         if getattr(self, "atlas", None) is not None:
             self.atlas.close()

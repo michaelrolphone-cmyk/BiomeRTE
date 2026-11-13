@@ -13,9 +13,36 @@ def size(value):
 
 
 def bounded_metadata(metadata, maximum=15872):
-    if size(metadata) <= maximum or not any(key in metadata for key in ("ahrs", "radio", "ultrasonic")):
-        return metadata
     value = copy.deepcopy(metadata)
+    # Dense history is new in this stream. A columnar representation preserves
+    # every sample value without repeating sixteen object keys 32 times.
+    ahrs_state=(value.get("ahrs") or {}).get("ahrs")
+    if isinstance(ahrs_state,dict) and isinstance(ahrs_state.get("imu_samples"),list):
+        rows=ahrs_state.pop("imu_samples")
+        ahrs_state["imu_history"]={
+            "schema":"biome.imu_history.v1",
+            "columns":["monotonic_us","sample_count","generation","valid","attitude_valid",
+                "ax_m_s2","ay_m_s2","az_m_s2","gx_rad_s","gy_rad_s","gz_rad_s",
+                "qw","qx","qy","qz","yaw_deg"],
+            "rows":[[r.get("monotonic_us"),r.get("sample_count"),r.get("generation"),
+                r.get("valid"),r.get("attitude_valid"),*(r.get("accel_m_s2") or [None]*3),
+                *(r.get("gyro_rad_s") or [None]*3),*(r.get("quaternion_wxyz") or [None]*4),
+                r.get("yaw_deg")] for r in rows if isinstance(r,dict)]}
+    motion=value.get("motion_events")
+    if isinstance(motion,dict):
+        # One full event representation per packet. The 64-event recovery ring
+        # remains available through robot.vision.status.
+        events=motion.pop("events",[])
+        motion["event_ids"]=[e.get("event_id") for e in events[-8:]]
+        motion["events_reference"]="top_level.events"
+        motion["history_capability"]="robot.vision.status"
+    events=value.get("events")
+    if isinstance(events,list) and len(events)>8:
+        value["event_delivery"]={"recent_events_omitted":len(events)-8,
+            "recovery_capability":"robot.vision.status"}
+        value["events"]=events[-8:]
+    if size(value) <= maximum or not any(key in value for key in ("ahrs", "radio", "ultrasonic")):
+        return value
     ahrs = value.get("ahrs")
     radio = value.get("radio")
     for sensor in (ahrs, value.get("ultrasonic")):
@@ -86,6 +113,12 @@ def bounded_metadata(metadata, maximum=15872):
                         and row["index"] < limits[row["radio"]]]
                 cache["observations"] = kept
                 cache["stream_reference_rows_omitted"] = len(refs)-len(kept)
+    events=value.get("events")
+    while size(value)>maximum and isinstance(events,list) and len(events)>1:
+        events.pop(0)
+        delivery=value.setdefault("event_delivery",{"recent_events_omitted":0,"recovery_capability":"robot.vision.status"})
+        delivery["recent_events_omitted"]+=1
+    if isinstance(motion,dict) and isinstance(events,list):motion["event_ids"]=[e.get("event_id") for e in events]
     if size(value) > maximum:
-        raise ValueError("Live metadata exceeds stream header budget")
+        raise ValueError("Live metadata exceeds stream header budget: "+str({k:size(v) for k,v in value.items()}))
     return value
