@@ -29,6 +29,29 @@ class SharedGrants(StreamGrants):
         with self.assertRaises(Exception):
             self.call('stream.inspect',session=stream['id'])
 
+    def test_anchor_owner_reacquires_after_release_with_other_reader(self):
+        first,second,stream=self.start_shared()
+        self.call('cap.release',lease=first['id'])
+        self.assertEqual([second['id']],self.call('stream.inspect',session=stream['id'])['consumers'])
+        rejoined=self.acquire('first')
+        self.assertFalse(rejoined.get('shared_owner_released'))
+        self.assertEqual(first['id'],rejoined['id'])
+        self.assertEqual(first['generation'],rejoined['generation'])
+        reopened=self.call('stream.open',lease=rejoined['id'])
+        self.assertEqual(stream['id'],reopened['id'])
+        self.assertEqual({first['id'],second['id']},set(self.call('stream.inspect',session=stream['id'])['consumers']))
+        self.assertEqual('bound',self.call('cap.lease',lease=second['id'])['state'])
+
+    def test_anchor_owner_rejoins_after_explicit_stream_close(self):
+        first,second,stream=self.start_shared()
+        self.call('stream.close',session=stream['id'],lease=first['id'])
+        self.assertEqual([second['id']],self.call('stream.inspect',session=stream['id'])['consumers'])
+        with self.assertRaises(Exception):
+            self.call('stream.open',lease=first['id'])
+        self.acquire('first')
+        self.assertEqual(stream['id'],self.call('stream.open',lease=first['id'])['id'])
+        self.assertEqual({first['id'],second['id']},set(self.call('stream.inspect',session=stream['id'])['consumers']))
+
     def test_discovery_publishes_generic_shared_stream_path(self):
         self.start_shared()
         discovered=self.call('cap.discover',contract='sample:1')['offers'][0]['usage']
