@@ -1,8 +1,8 @@
 """Fit live sensor metadata to the existing 16 KiB stream header contract.
 
 Keep physical measurements and their original clocks. Discard duplicated cache
-envelopes and diagnostics before trimming FTM detail. Report omissions;
-the complete cache remains available through the discrete telemetry capability.
+envelopes and diagnostics while preserving directional FTM measurements. Report omissions;
+only duplicated diagnostics require the discrete telemetry capability.
 """
 import copy
 import json
@@ -56,8 +56,24 @@ def bounded_metadata(metadata, maximum=15872):
     if isinstance(tof,dict) and size(value)>maximum:
         anchors=tof.get("anchors")
         if isinstance(anchors,list):
-            tof["anchors"]=[{k:a[k] for k in ("id","bssid","connected","received_age_s","ftm_state","channel") if k in a} for a in anchors]
-            tof["anchor_range_details_omitted"]=True
+            compact=[]
+            for anchor in anchors:
+                if not isinstance(anchor,dict):
+                    continue
+                item={key:anchor[key] for key in (
+                    "id","bssid","boot_id","connected","received_age_s",
+                    "ftm_state","channel","tx_power_dbm","height_known","height_m")
+                    if key in anchor}
+                ranges=anchor.get("ranges")
+                if isinstance(ranges,list):
+                    item["ranges"]=[{key:report[key] for key in (
+                        "target_bssid","status","range_seq","age_ms","rtt_ns",
+                        "samples","valid","distance_m") if key in report}
+                        for report in ranges if isinstance(report,dict)]
+                compact.append(item)
+            tof["anchors"]=compact
+            tof["anchor_range_details_compacted"]=True
+            tof.pop("anchor_range_details_omitted",None)
             tof["detail_capability"]="robot.tof.status"
     # Health diagnostics duplicate fields available through status capabilities.
     if size(value) > maximum and isinstance(ahrs, dict):
