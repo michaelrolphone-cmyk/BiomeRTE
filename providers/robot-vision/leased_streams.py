@@ -104,7 +104,7 @@ class VisionStreams:
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
-                        if grant['lane']=='vision':metadata['type']='telemetry' if metadata.get('image_available') is False else 'frame'
+                        if grant['lane']=='vision':metadata['type']='frame'
                         stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:

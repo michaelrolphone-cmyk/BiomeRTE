@@ -22,7 +22,7 @@ def validate_packet(packet,allow_sensor_tick=False):
     for name in (() if packet['schema']=='biome.sensor_tick.v1' else ('width','height')):
         if type(packet.get(name)) is not int or not 1<=packet[name]<=16384:
             raise ValueError('Invalid frame dimensions')
-    for name in ('ahrs','radio','ultrasonic'):
+    for name in ('ahrs','ultrasonic'):
         data=packet.get(name)
         if data is None:continue
         if not isinstance(data,dict) or any(data.get(k)!=packet[k] for k in ('receiver_id','boot_id')):
@@ -30,6 +30,8 @@ def validate_packet(packet,allow_sensor_tick=False):
     if packet.get("ultrasonic") is not None:
         from ultrasonic_source import validate_ultrasonic
         validate_ultrasonic(packet["ultrasonic"])
+    # Retired scan payloads from older firmware never enter new observations.
+    packet.pop("radio",None)
     return packet
 
 
@@ -106,19 +108,3 @@ def frame_ahrs_snapshot(frame):
                 available=True,device_frame_aligned=packet['schema']=='biome.capture.v1',sensor_tick_aligned=packet['schema']=='biome.sensor_tick.v1',
                 capture_monotonic_us=packet['capture_monotonic_us'])
 
-
-def frame_radio_snapshot(frame):
-    from camera_telemetry import observation_id,validate_telemetry_snapshot
-    packet=validate_packet(frame['sensor_packet'],allow_sensor_tick=True);raw=packet.get('radio')
-    if raw is None:return None
-    validate_telemetry_snapshot(raw)
-    observations=[]
-    for radio in ('wifi','ble'):
-        for index,row in enumerate(raw.get(radio,[])):
-            age=sensor_age_ms(packet['capture_monotonic_us'],row.get('observed_uptime_ms'))
-            if age is None:continue
-            observations.append(dict(radio=radio,index=index,effective_age_ms=age,
-                source_observation_id=observation_id(frame.get('source_id','camera'),raw,radio,row)))
-    return dict(source_id=frame.get('source_id'),received_monotonic=frame['measurement_monotonic_s'],
-                received_at=None,request_duration_s=0.,telemetry=raw,observations=observations,
-                device_frame_aligned=packet['schema']=='biome.capture.v1',sensor_tick_aligned=packet['schema']=='biome.sensor_tick.v1',fresh=True)

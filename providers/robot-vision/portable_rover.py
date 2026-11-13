@@ -9,9 +9,7 @@ import math
 from pathlib import Path
 from datetime import datetime, timezone
 
-PORTABLE_OPERATIONS = ["robot.body.model", "robot.control.model",
-                       "robot.sonar.snapshot", "robot.metric.status",
-                       "robot.camera.exposure.status", "robot.camera.exposure.set"]
+PORTABLE_OPERATIONS = ['robot.body.model', 'robot.control.model', 'robot.sonar.snapshot', 'robot.metric.status', 'robot.camera.exposure.status', 'robot.camera.exposure.set']
 MOTION = {"1": "forward", "2": "back", "3": "left", "4": "right",
           "5": "unassigned", "6": "unassigned"}
 DRIVE = {"actuation": "binary_on_off_relays", "pwm_available": False,
@@ -59,8 +57,6 @@ def body_definition(previous=None, mounts=None):
         position_body_m=[.043625,0,.0635],
         position_offset_description="4_mm_directly_behind_camera",
         axis_checks={"left_turn":"positive_yaw","front_up":"negative_roll","right_side_up":"positive_pitch"})
-    model["ahrs_mounting"].setdefault("R_camera_imu",[[-1,0,0],[0,1,0],[0,0,-1]])
-    model["ahrs_mounting"].setdefault("orientation_status","owner_axis_checks")
     model.setdefault("control",{}).update(copy.deepcopy(DRIVE))
     model["relay_mapping"] = {key: {"function": value, "provenance":"deployed_dashboard_motion_mapping"}
                               for key,value in MOTION.items()}

@@ -735,7 +735,9 @@ class VisionServiceTests(unittest.TestCase):
         self.assertEqual(geometry["metric_localization"]["solution_id"],
                          snapshot["metric_localization"]["solution_id"])
         status = service.query("robot.vision.status")
-        self.assertEqual(len(status["capabilities"]), 38)
+        self.assertIn("robot.tof.status",status["capabilities"])
+        self.assertIn("robot.tof.localize",status["capabilities"])
+        self.assertFalse(set(status["capabilities"]) & {"robot.radio.status","robot.radio.localize","robot.map.radio.read"})
         self.assertFalse(status["control"]["motion_commands"])
         self.assertEqual(status["metric_scale"]["availability"], "available")
         native = service.query("robot.map.read", {"kinds": ["keyframe"]})

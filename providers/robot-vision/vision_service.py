@@ -27,7 +27,7 @@ from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
 from vision_store import VisionStore
 from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
-from radio_tracking import RadioTracking
+from tof_source import read_tof
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
 from ultrasonic_source import UltrasonicSource
@@ -47,7 +47,7 @@ CAPABILITIES = [
     "robot.map.read", "robot.map.changes", "robot.map.checkpoint",
     "robot.map.create", "robot.map.open", "robot.vision.calibration",
     "robot.vision.project_ground",
-    "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
+    "robot.tof.status", "robot.tof.localize",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
 ] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
@@ -64,7 +64,7 @@ def unknown_localization(reason):
 
 class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
-                 radio_source=None, radio_model=None, ahrs_source=None, defer_backend_start=False):
+                 ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
         self.live_frames = LiveFrames()
         self.motion_events = MotionEvents(config.get('motion_events'))
@@ -80,8 +80,10 @@ class VisionService:
         self.store = VisionStore(self.state_dir / "observations",
                                  max_observations=int(config.get("max_observations", 300)))
         self.camera = camera or CameraSource(config["camera"])
-        self.radio = RadioTracking(config["camera"], config.get("radio", {}), self.state_dir,
-                                   source=radio_source, model=radio_model)
+        from camera_telemetry import CameraHTTPClient
+        self.camera_http = CameraHTTPClient(config["camera"])
+        self.tof_path = Path(config.get("tof", {}).get("state_path",
+            Path.home() / ".local/share/biome-tof/latest.json"))
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
         self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
         mapping = config.get("multisensor_mapping") or {}
@@ -326,20 +328,7 @@ class VisionService:
             if self.backend is None:
                 self.backend = old_backend
 
-    def _radio_keyframes(self, map_id, revision=None):
-        keyframes, cursor = {}, None
-        while True:
-            page = self.store.read_map(map_id, revision=revision, kinds=["keyframe"],
-                                       cursor=cursor, limit=500)
-            for entity in page["entities"]:
-                keyframes[str(entity["entity_id"])] = copy.deepcopy(entity["data"])
-            cursor = page.get("next_cursor")
-            if not cursor:
-                return keyframes
-
     def _reset_tracking_context(self):
-        self.radio.set_context(self.map_id, self.calibration["calibration_id"],
-                               self._radio_keyframes(self.map_id, self.revision), self.revision)
         self.ahrs.set_context(self.map_id, self.calibration["calibration_id"], self.session_id)
 
     def _start_backend_and_session(self):
@@ -358,7 +347,6 @@ class VisionService:
         self.applied_controls.start()
         self.metric.start_worker()
         self.atlas.start(self)
-        self.radio.start()
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
@@ -453,8 +441,6 @@ class VisionService:
                 self.map_id, self.revision, self._pending_changes, reason=reason,
                 metadata={"session_id": self.session_id})
             self.revision = update["revision"] if isinstance(update, dict) else int(update)
-            self.radio.update_geometry(self.map_id, self.calibration["calibration_id"],
-                                       self._pending_changes, self.revision)
             self.live_maps.publish(self.map_id, previous, self.revision, self._pending_changes)
             self._pending_changes.clear()
 
@@ -470,7 +456,6 @@ class VisionService:
         frame_id = frame["frame_id"]
         frame["auto_gyro_calibration"] = self._automatic_gyro_calibration(frame,captured.image)
         ahrs_evidence=self.ahrs.evidence(frame)
-        if hasattr(self.radio,'record_frame'):self.radio.record_frame(frame)
         measurement_time=frame.get('measurement_monotonic_s',captured.decoded_monotonic)
         gray = cv2.cvtColor(captured.image, cv2.COLOR_BGR2GRAY)
         mean_luma = float(gray.mean())
@@ -506,7 +491,7 @@ class VisionService:
             try:
                 if hasattr(self.backend, "set_relocalization_prior"):
                     self.backend.set_relocalization_prior(
-                        self.radio.prior(now_s=measurement_time), map_id=self.map_id)
+                        None, map_id=self.map_id)
                 attitude_prior = self.pose_estimator.prior(frame, self.map_id)
                 if hasattr(self.backend, "set_orientation_prior"):
                     self.backend.set_orientation_prior(attitude_prior)
@@ -632,7 +617,7 @@ class VisionService:
             "robot_velocity": {"availability": "available" if metric_pose.get("valid") else "unavailable",
                                "velocity_m_s": metric_pose.get("velocity_m_s"),
                                "source": "estimated_planar_sonar_odometry", "coordinate_frame": "local_metric"},
-            "radio": self.radio.evidence(localization, now_s=measurement_time),
+            "tof": read_tof(self.tof_path),
             "ahrs": ahrs_evidence,
             "motion_events": self._stream_motion_events(frame),
             **self._drive_response_telemetry(),
@@ -659,7 +644,6 @@ class VisionService:
             self.store.pin_frame(frame_id, f"keyframe:{self.map_id}:{anchor['keyframe_id']}")
             semantic_change["data"]["snapshot_id"] = snapshot["snapshot_id"]
             self._commit_changes([semantic_change], "semantic_observation")
-        self.radio.record_pose(frame, localization)
         self.ahrs.record_pose(frame, localization)
         try:
             self.metric.offer(snapshot)
@@ -676,7 +660,7 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
-            "radio": self._stream_radio(frame),
+            "tof": read_tof(self.tof_path),
             "ahrs": self._stream_ahrs(frame),
             "motion_events": self._stream_motion_events(frame),
             **self._drive_response_telemetry(),
@@ -720,7 +704,7 @@ class VisionService:
                         'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
-                    radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
+                    tof=read_tof(self.tof_path), ahrs=self._stream_ahrs(frame),
                     motion_events=self._stream_motion_events(frame),
                     **self._drive_response_telemetry(),
                     ultrasonic=self._stream_ultrasonic(),
@@ -845,18 +829,6 @@ class VisionService:
                 'capture_monotonic_us':packet['capture_monotonic_us'],
                 'sample_reference':'sensor_tick' if packet.get('schema')=='biome.sensor_tick.v1' else 'camera_capture','timing_qualified':True,
                 'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
-
-    def _stream_radio(self,frame):
-        if frame.get('sensor_packet') is None:return self.radio.status(include_observations=True)
-        from capture_packet import frame_radio_snapshot
-        captured=frame_radio_snapshot(frame)
-        if captured is None:return {'state':'unavailable','reason':'no_radio_sample_for_capture','frame_id':frame['frame_id']}
-        age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
-        captured.update(elapsed_since_receive_s=age,received_at=frame.get('receive_decode_time'),
-                        frame_id=frame['frame_id'],sample_reference='sensor_tick' if frame['sensor_packet'].get('schema')=='biome.sensor_tick.v1' else 'camera_capture')
-        for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
-        return {**self.radio.status(include_observations=False),'telemetry':captured,
-                'frame_id':frame['frame_id'],'sample_reference':captured['sample_reference']}
 
     def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
@@ -1107,6 +1079,20 @@ class VisionService:
 
 
     def query(self, operation, inputs=None):
+        # FTM has its own clock and geometry. Do not route it through metric-map enrichment.
+        if operation in ("robot.tof.status", "robot.tof.localize"):
+            if inputs:
+                raise ValueError("tof_queries_take_no_inputs")
+            return self._query_core(operation, {})
+        # Internal provider liveness must not acquire map/checkpoint/calibration locks.
+        # The public status capability retains its complete response and empty input schema.
+        if operation == "robot.vision.status" and inputs == {"provider_only": True}:
+            return {"availability": "available",
+                    "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
+                    "capabilities": CAPABILITIES,
+                    "map_id": getattr(self,"map_id",None),
+                    "streaming": {"available": not self._stop.is_set(),
+                                  "lanes": ["vision", "map"]}}
         return dispatch(self, operation, inputs or {}, self._query_core)
 
     def _query_core(self, operation, inputs=None):
@@ -1135,26 +1121,12 @@ class VisionService:
             except CameraHTTPError as exc:
                 return {"availability": "unavailable", **exc.as_dict(),
                         "motion_commands": False}
-        if operation == "robot.radio.status":
-            return self.radio.status(include_observations=inputs.get("include_observations") is True)
-        if operation == "robot.radio.localize":
-            return self.radio.prediction()
-        if operation == "robot.map.radio.read":
-            map_id = inputs.get("map_id", self.map_id)
-            revision = inputs.get("revision")
-            info = self.store.read_map(map_id, revision=revision, kinds=["keyframe"], limit=1)["map"]
-            calibration_id = info.get("metadata", {}).get("calibration_id")
-            result = self.radio.read_map(
-                map_id, calibration_id, self._radio_keyframes(map_id, info["revision"]),
-                cursor=inputs.get("cursor"), limit=inputs.get("limit", 100),
-                source_id=inputs.get("source_id"))
-            return {**result, "map_id": map_id, "map_revision": info["revision"],
-                    "calibration_id": calibration_id, "units": "arbitrary",
-                    "clock_qualification": "approximate_host_receive_alignment"}
+        if operation in ("robot.tof.status", "robot.tof.localize"):
+            return read_tof(self.tof_path)
         if operation in ("robot.camera.light.status", "robot.camera.light.set"):
             try:
-                state = (self.radio.source.set_light(inputs) if operation.endswith(".set")
-                         else self.radio.source.light_status())
+                state = (self.camera_http.set_light(inputs) if operation.endswith(".set")
+                         else self.camera_http.get_light())
                 return {"availability": "available", "camera_light": state,
                         "physical_verification": "use_reported_hardware_verified_and_optical_readback",
                         "motion_commands": False}
@@ -1190,7 +1162,7 @@ class VisionService:
                                 "errors": calibration_errors(self.calibration)},
                 "metric_scale": self.metric.attachment_status(self.map_id),
                 "metric_calibration": self.metric.status(map_id=self.map_id),
-                "radio": self.radio.status(),
+                "tof": read_tof(self.tof_path),
                 "ahrs": self.ahrs.status(),
                 "motion_events": self.motion_events.snapshot(),
                 "ultrasonic": self._stream_ultrasonic(),
@@ -1217,14 +1189,11 @@ class VisionService:
                 "time": {"capture": ("ESP32 first-DMA capture event" if self.config["camera"].get("synchronized_capture") else "unknown"), "source_media": "relative clock",
                          "receive_decode": "Mac UTC after decode", "processing": "Mac monotonic durations",
                          "ahrs": ("same ESP32 capture clock with per-sensor observed uptimes" if self.config["camera"].get("synchronized_capture") else "causal HTTP receipt history with per-sensor age and network timing uncertainty; camera exposure alignment unqualified")},
-                "map_layers": ["keyframe", "sparse_point", "semantic_observation", "radio_fingerprint"],
-                "map_layer_readers": {"radio_fingerprint": "robot.map.radio.read"},
-                "radio_model": {"learning": "time_aligned_independently_verified_visual_poses",
-                                "inference": "adaptive_source_distributions_and_competing_spatial_modes",
-                                "visual_relocalization": "candidate_prior_with_unchanged_geometry_and_visual_fallback",
-                                "clock_qualification": ("device_capture_clock" if self.config["camera"].get("synchronized_capture") else "approximate_host_receive_alignment"),
-                                "navigation_usable": False, "heading_available": False,
-                                "storage": "bounded_radio_sqlite_outside_vision_checkpoint_packages"},
+                "map_layers": ["keyframe", "sparse_point", "semantic_observation"],
+                "tof_model": {"reader": "robot.tof.localize",
+                              "source": "wifi_ftm_round_trip_time",
+                              "world_alignment": "unqualified",
+                              "navigation_usable": False},
                 "ahrs_evidence": {
                     "use": "sensor-frame motion and tilt evidence attached to coherent observations",
                     "orientation": "Hamilton quaternion wxyz maps IMU axes into initial-yaw reference",
@@ -1376,10 +1345,6 @@ class VisionService:
             self._thread.join()
         if self._detection_executor is not None:
             self._detection_executor.shutdown(wait=True)
-        try:
-            self.radio.close()
-        except Exception:
-            LOG.exception("Radio shutdown failed; continuing vision shutdown")
         try:
             self.ahrs.close()
         except Exception:
