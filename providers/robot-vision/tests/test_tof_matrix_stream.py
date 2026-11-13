@@ -68,4 +68,24 @@ class ToFMatrixStreamTests(unittest.TestCase):
         self.assertLessEqual(size(packed),15872)
         self.assertEqual(sum(len(a.get("ranges",[])) for a in packed["tof"]["anchors"]),
                          sum(len(a.get("ranges",[])) for a in data["anchors"]))
+
+    def test_baseline_state_and_coordinates_survive_with_directional_ranges(self):
+        value=self.payload()
+        positions=[{"bssid":a["bssid"],"x_m":i*2.,"y_m":i*.7,"z_m":i*.3,"model_sigma_m":.4} for i,a in enumerate(value["tof"]["anchors"])]
+        value["tof"]["anchor_geometry"]=positions
+        value["tof"]["baseline"]={"schema":"rover.tof.baseline/1","status":"recalibrating",
+            "valid":False,"epoch":4,"frame_id":"tof-relative-1","positions":copy.deepcopy(positions),
+            "movement_anchors":[positions[2]["bssid"]]}
+        value["tof"]["edges"]=[{"diagnostic":"q"*20000}]
+        value["ahrs"]["source"]={"state":"available","diagnostic":"z"*20000}
+        original=copy.deepcopy(value);packed=bounded_metadata(value)
+        self.assertLessEqual(size(packed),15872);self.assertEqual(value,original)
+        baseline=packed["tof"]["baseline"]
+        self.assertEqual(baseline["status"],"recalibrating");self.assertFalse(baseline["valid"])
+        self.assertEqual(baseline["epoch"],4);self.assertEqual(baseline["frame_id"],"tof-relative-1")
+        self.assertEqual(baseline["movement_anchors"],[positions[2]["bssid"]])
+        self.assertEqual(baseline["positions_reference"],"anchor_geometry")
+        self.assertEqual(packed["tof"]["anchor_geometry"],positions)
+        self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
+
 if __name__=="__main__":unittest.main()

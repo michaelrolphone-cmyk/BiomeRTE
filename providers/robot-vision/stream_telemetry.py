@@ -75,6 +75,16 @@ def bounded_metadata(metadata, maximum=15872):
             tof["anchor_range_details_compacted"]=True
             tof.pop("anchor_range_details_omitted",None)
             tof["detail_capability"]="robot.tof.status"
+    if isinstance(tof,dict) and size(value)>maximum and isinstance(tof.get("baseline"),dict):
+        baseline=tof["baseline"]
+        # Coordinates are already at anchor_geometry. Never duplicate the fit,
+        # and keep raw directional measurements for the live matrix.
+        baseline.pop("positions",None)
+        baseline["positions_reference"]="anchor_geometry"
+        # Per-link calibration diagnostics are available through the full capability.
+        tof.pop("edges",None)
+        tof["baseline_diagnostics_compacted"]=True
+        tof["detail_capability"]="robot.tof.status"
     # Health diagnostics duplicate fields available through status capabilities.
     if size(value) > maximum and isinstance(ahrs, dict):
         source = ahrs.pop("source", None)
