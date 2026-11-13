@@ -75,8 +75,19 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         raise Fault('Paired server required', 403)
     from .authorization import guard
     guard(tx, 'stream-' + lease, l['contract'], l['resource'], {}, ctx)
+    current_guard = tx.need('guards', l['guard'])
+    if (current_guard['holder'], current_guard['generation']) != (lease, l['generation']):
+        raise Fault('Provider stream reservation is superseded', 409)
     for prior in tx.rows('_stream_grants'):
         if prior['lease'] == lease and prior['state'] == 'open':
+            # A persistent lease may be fenced again under the same ID. Its
+            # previous grant must not block every reconnect until its TTL ends.
+            # Retire only stale authority; valid consumers still share one grant.
+            if prior['generation'] != l['generation'] or prior['expires_at'] <= time.time():
+                prior.update(state='closed', expires_at=time.time(),
+                             closed_reason='lease_refenced_or_grant_expired')
+                tx.put('_stream_grants', prior['id'], prior)
+                continue
             valid(tx, ctx, prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
             return dict(shared_streams.public(tx, prior), url=url.rstrip('/') + '/' + prior['id'],

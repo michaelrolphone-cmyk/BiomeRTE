@@ -73,6 +73,47 @@ class SharedGrants(StreamGrants):
                 streams.attach(tx,ctx,stream['id'],'server')
         self.app.stores['site'].execute(check)
 
+
+    def test_refenced_persistent_lease_replaces_obsolete_grant(self):
+        first, second, prior = self.start_shared()
+        def refence(tx):
+            anchor = tx.need('leases', first['id'])
+            guard = tx.need('guards', anchor['guard'])
+            anchor['generation'] += 1
+            guard['generation'] = anchor['generation']
+            tx.put('leases', anchor['id'], anchor)
+            tx.put('guards', anchor['guard'], guard)
+        self.app.stores['site'].execute(refence)
+        current = self.call('stream.open', lease=second['id'])
+        self.assertNotEqual(prior['id'], current['id'])
+        self.assertNotEqual(prior['epoch'], current['epoch'])
+        self.assertEqual(first['generation'] + 1, current['generation'])
+        self.assertEqual(current['id'], self.call('stream.open', lease=first['id'])['id'])
+        self.assertCountEqual([first['id'], second['id']], current['consumers'])
+        with self.assertRaises(Exception):
+            self.call('stream.attach', session=prior['id'], role='provider')
+        self.assertEqual([current['id']], [s['id'] for s in self.call('stream.list')])
+
+    def test_expired_grant_reopens_without_releasing_subscriptions(self):
+        first, second, prior = self.start_shared()
+        self.now += 3601
+        current = self.call('stream.open', lease=second['id'])
+        self.assertNotEqual(prior['id'], current['id'])
+        self.assertEqual(first['generation'], current['generation'])
+        self.assertCountEqual([first['id'], second['id']], current['consumers'])
+
+    def test_stale_reservation_cannot_mint_fresh_grant(self):
+        first, second, prior = self.start_shared()
+        def supersede(tx):
+            anchor = tx.need('leases', first['id'])
+            guard = tx.need('guards', anchor['guard'])
+            guard['generation'] += 1
+            tx.put('guards', anchor['guard'], guard)
+        self.app.stores['site'].execute(supersede)
+        with self.assertRaises(Exception):
+            self.call('stream.open', lease=second['id'])
+
+
 @unittest.skipIf(connect is None,'websockets transport unavailable')
 class SharedWire(StreamWire):
     async def asyncSetUp(self):
