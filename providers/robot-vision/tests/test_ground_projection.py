@@ -32,6 +32,12 @@ class GroundProjectionTests(unittest.TestCase):
         self.assertAlmostEqual(p["position"][1], -.03175)
         self.assertIsNone(p["global_map_position"])
 
+    def test_floor_invariant_needs_no_per_query_confirmation(self):
+        result = project_ground([320, 400], calibration(), [640, 480])
+        self.assertEqual(result["availability"], "available")
+        self.assertEqual(result["ground_contact"], "robot_body_floor_contact_invariant")
+        self.assertEqual(result["pixel_interpretation"], "floor_plane_intersection_not_object_contact_confirmation")
+        self.assertIsNone(result["global_map_position"])
     def test_floor_invariant_requires_no_caller_contact_assertion(self):
         result=project_ground([320,400],calibration(),[640,480])
         self.assertEqual(result["availability"],"available")
