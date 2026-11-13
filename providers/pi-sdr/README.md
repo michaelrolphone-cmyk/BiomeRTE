@@ -7,10 +7,11 @@ No controller-core changes are required.
 ## Installation
 
 Requires Linux, Python 3.4 or later, NumPy, librtlsdr, USB permission, an enrolled BiomeRTE controller, and systemd.
-Use a pinned BiomeRTE runtime:
+Publish the cap.define operation in contract.json through the controller first. Then use a pinned BiomeRTE runtime:
 ```sh
 python3 install.py prepare --runtime /path/to/runtime --url http://127.0.0.1:8740 --site SITE
-# Approve the returned fingerprint for provider operations at the controller.
+# Approve the returned fingerprint with the required_scopes printed by prepare.
+# Grants include offer:radio.sdr.receive:1 and the exact resource:<resource ID>.
 python3 install.py activate --runtime /path/to/runtime --url http://127.0.0.1:8740 --site SITE
 ```
 The installer creates a distinct provider identity, manifest, persistent SDR daemon and provider worker.
