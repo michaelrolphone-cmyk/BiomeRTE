@@ -1,8 +1,8 @@
 """Fit live sensor metadata to the existing 16 KiB stream header contract.
 
 Keep physical measurements and their original clocks. Discard duplicated cache
-envelopes and diagnostics before trimming FTM detail. Report omissions;
-the complete cache remains available through the discrete telemetry capability.
+envelopes and diagnostics while preserving directional FTM measurements. Report omissions;
+only duplicated diagnostics require the discrete telemetry capability.
 """
 import copy
 import json
@@ -56,9 +56,35 @@ def bounded_metadata(metadata, maximum=15872):
     if isinstance(tof,dict) and size(value)>maximum:
         anchors=tof.get("anchors")
         if isinstance(anchors,list):
-            tof["anchors"]=[{k:a[k] for k in ("id","bssid","connected","received_age_s","ftm_state","channel") if k in a} for a in anchors]
-            tof["anchor_range_details_omitted"]=True
+            compact=[]
+            for anchor in anchors:
+                if not isinstance(anchor,dict):
+                    continue
+                item={key:anchor[key] for key in (
+                    "id","bssid","boot_id","connected","received_age_s",
+                    "ftm_state","channel","tx_power_dbm","height_known","height_m")
+                    if key in anchor}
+                ranges=anchor.get("ranges")
+                if isinstance(ranges,list):
+                    item["ranges"]=[{key:report[key] for key in (
+                        "target_bssid","status","range_seq","age_ms","rtt_ns",
+                        "samples","valid","distance_m") if key in report}
+                        for report in ranges if isinstance(report,dict)]
+                compact.append(item)
+            tof["anchors"]=compact
+            tof["anchor_range_details_compacted"]=True
+            tof.pop("anchor_range_details_omitted",None)
             tof["detail_capability"]="robot.tof.status"
+    if isinstance(tof,dict) and size(value)>maximum and isinstance(tof.get("baseline"),dict):
+        baseline=tof["baseline"]
+        # Coordinates are already at anchor_geometry. Never duplicate the fit,
+        # and keep raw directional measurements for the live matrix.
+        baseline.pop("positions",None)
+        baseline["positions_reference"]="anchor_geometry"
+        # Per-link calibration diagnostics are available through the full capability.
+        tof.pop("edges",None)
+        tof["baseline_diagnostics_compacted"]=True
+        tof["detail_capability"]="robot.tof.status"
     # Health diagnostics duplicate fields available through status capabilities.
     if size(value) > maximum and isinstance(ahrs, dict):
         source = ahrs.pop("source", None)
@@ -70,6 +96,38 @@ def bounded_metadata(metadata, maximum=15872):
         delivery=value.setdefault("event_delivery",{"recent_events_omitted":0,"recovery_capability":"robot.vision.status"})
         delivery["recent_events_omitted"]+=1
     if isinstance(motion,dict) and isinstance(events,list):motion["event_ids"]=[e.get("event_id") for e in events]
+    if size(value)>maximum and isinstance(tof,dict) and isinstance(tof.get("baseline"),dict):
+        baseline=tof["baseline"]
+        refinement=baseline.get("refinement")
+        if isinstance(refinement,dict):
+            baseline["refinement"]={k:refinement[k] for k in (
+                "revision","accepted","state","last_update_at","before_rms_m","after_rms_m")
+                if k in refinement}
+            baseline["refinement_details_compacted"]=True
+        # Scheduler diagnostics are available through the full status capability.
+        if size(value)>maximum:
+            tof.pop("request_age_s",None)
+            tof["scheduler_diagnostics_omitted"]=True
+    if size(value)>maximum:
+        # These are status-capability diagnostics, not sensor observations.
+        # Preserve every physical sample, original clock and range report.
+        for sensor, keys in (
+            (ahrs, ("map_id","calibration_id","session_id","accepted_observations",
+                "accepted_sensor_endpoints","pending_observation","max_evidence_gap_s",
+                "position_verified","navigation_usable","heading_available",
+                "camera_pose_corrected","metric_scale_available","motion_commands",
+                "physical_capture_time_uncertainty_s")),
+            (value.get("ultrasonic"), ("polls","snapshots_accepted","duplicate_snapshots",
+                "replayed_snapshots","boot_changes","last_attempt_at","buffer"))):
+            if isinstance(sensor,dict):
+                for key in keys:sensor.pop(key,None)
+        if isinstance(tof,dict) and isinstance(tof.get("baseline"),dict):
+            baseline=tof["baseline"]
+            for key in ("last_event","last_rejection","load_error","movement_threshold_m",
+                        "movement_hold_s","sample_count","edge_count","condition_number"):
+                baseline.pop(key,None)
+        value["status_diagnostics_compacted"]=True
+        value["status_detail_capability"]="robot.vision.status"
     if size(value) > maximum:
         raise ValueError("Live metadata exceeds stream header budget: "+str({k:size(v) for k,v in value.items()}))
     return value
