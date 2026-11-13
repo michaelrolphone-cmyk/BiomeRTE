@@ -1,0 +1,64 @@
+[
+  {
+    "name": "device.outputs.batch",
+    "version": 1,
+    "description": "Apply a locally timed sequence of relay, RGB and buzzer frames.",
+    "inputs": {
+      "steps": "list"
+    },
+    "outputs": {
+      "applied_at_ms": "list",
+      "commanded_mask": "int",
+      "contact_feedback": "bool",
+      "elapsed_ms": "int",
+      "relay_masks": "list",
+      "rgb": "list",
+      "steps_completed": "int",
+      "tone_hz": "int"
+    },
+    "usage": {
+      "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {
+        "steps": "Relay mapping on this rover: 1 forward, 2 back, 3 left, 4 right; binary on/off, no PWM; speed-duration curve uncalibrated."
+      }
+    },
+    "synchronous": false
+  },
+  {
+    "name": "device.outputs.stream",
+    "version": 1,
+    "description": "Persistent fenced desired-output stream; discrete invocation is unsupported.",
+    "inputs": {},
+    "outputs": {},
+    "usage": {
+      "before": "Persistent shared desired-output stream. Connect /control using stream.open credentials. JSON metadata: type=\"desired\", authority/generation/epoch from stream.open, increasing integer sequence, outputs={\"mask\":N}, issued_at/expires_at numeric UTC Unix seconds; issued_at<=router_now<expires_at<=issued_at+1. A400ms intent uses expires_at=issued_at+0.4. Channels1forward(mask1),2back(mask2),3left(mask4),4right(mask8); mask0stop. Binary uses4-byte big-endian JSON length then the same metadata. Errors reply STREAM_REJECTED with reason and non1000 close; ACK is commanded state, not measured motion. No PWM; speed-duration curve uncalibrated. Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {}
+    },
+    "synchronous": false
+  },
+  {
+    "name": "relay.bank",
+    "version": 1,
+    "description": "Set one physical relay channel, 1 through 6; reports commanded state.",
+    "inputs": {
+      "channel": "int",
+      "on": "bool"
+    },
+    "outputs": {
+      "channel": "int",
+      "commanded_mask": "int",
+      "contact_feedback": "bool",
+      "on": "bool"
+    },
+    "usage": {
+      "before": "Rover relay6ch.30eda0d95f24 wiring: channel 1 forward, 2 back/reverse, 3 left, 4 right; 5/6 unassigned. Binary on/off, no PWM. Hold steering and throttle together; speed versus continuous on-duration curve is not yet calibrated. Read robot.control.model:1.",
+      "read_result": "Inspect commanded state and contact_feedback separately; command acknowledgment does not measure motion.",
+      "parameters": {
+        "channel": "Relay mapping on this rover: 1 forward, 2 back, 3 left, 4 right; binary on/off, no PWM; speed-duration curve uncalibrated."
+      }
+    },
+    "synchronous": false
+  }
+]

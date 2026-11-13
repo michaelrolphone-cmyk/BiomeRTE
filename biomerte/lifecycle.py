@@ -201,6 +201,9 @@ def heartbeat(tx, ctx, provider, operation, generation):
 
 
 def recover(tx, ctx, lease, actions, now):
+    from .shared_streams import recover as recover_subscription
+    if recover_subscription(tx, lease):
+        return False
     cfg = policy(tx, lease)
     if tx.get('offers', lease.get('offer', ''), {}).get('state') == 'offline':
         return abandon(tx, ctx, lease, 'provider_offline', now)

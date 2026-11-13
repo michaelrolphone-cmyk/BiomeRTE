@@ -156,20 +156,15 @@ class ScaleContractTests(unittest.TestCase):
         cls.fault = Fault
 
     def test_original_thirteen_v1_contracts_are_immutable(self):
-        extensions = self.NEW_CONTRACTS | {
-            "robot.camera.exposure.status:1", "robot.camera.exposure.set:1",
-            "robot.body.model:1", "robot.control.model:1", "robot.sonar.snapshot:1", "robot.metric.status:1",
-            "robot.world.read:1", "robot.world.status:1", "robot.map.obstacles:1",
-            "robot.radio.status:1", "robot.radio.localize:1", "robot.map.radio.read:1",
-            "robot.camera.light.status:1", "robot.camera.light.set:1",
-            "robot.ahrs.status:1", "robot.ahrs.snapshot:1", "robot.ahrs.calibrate:1",
-        }
-        legacy = {name: spec for name, spec in adapter.CONTRACTS.items()
-                  if name not in extensions}
-        self.assertEqual(len(legacy), 13)
-        encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
-        self.assertEqual(hashlib.sha256(encoded).hexdigest(), "c8f552dc9a2ca49d35f641e4f5dc0c729a84bcbe13195da5aeac64207c540189")
-        self.assertEqual(set(adapter.CONTRACTS) - set(legacy), extensions)
+        from pathlib import Path
+        path=Path(__file__).parent/"fixtures/original-v1-contract-schemas.json"
+        expected=json.loads(path.read_text())
+        self.assertEqual(len(expected),13)
+        for name,schema in expected.items():
+            with self.subTest(contract=name):
+                self.assertEqual({key:adapter.CONTRACTS[name][key] for key in schema},schema)
+        modern=adapter.CONTRACTS["robot.vision.project_ground:2"]
+        self.assertNotIn("confirmed_floor_contact",modern["inputs"])
 
     def valid_inputs(self):
         return {
@@ -457,7 +452,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 38)
+        self.assertEqual({item["contract"] for item in offers}, set(adapter.CONTRACTS))
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])

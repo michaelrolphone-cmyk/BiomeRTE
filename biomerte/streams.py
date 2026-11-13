@@ -7,6 +7,8 @@ import time
 from .api import op, ident
 from .store import Fault, uid, encode
 from . import lifecycle
+from . import shared_streams
+import re
 
 
 def settings(ctx):
@@ -18,7 +20,10 @@ def settings(ctx):
 
 
 def authorize(tx, ctx, grant, role='server'):
-    expected = grant['server'] if role == 'server' else grant['provider']
+    if role == 'server':
+        shared_streams.consumer(tx, ctx, grant)
+        return
+    expected = grant['provider']
     if ctx.permissions is not None and ctx.actor != expected:
         raise Fault('Stream attachment identity mismatch', 403)
 
@@ -38,9 +43,10 @@ def valid(tx, ctx, grant):
     return grant
 
 
-def token(ctx, grant, role):
+def token(ctx, grant, role, consumer=''):
     secret, unused = settings(ctx)
     payload = dict(grant, role=role, credential_expires_at=min(grant['expires_at'], time.time() + 120))
+    payload.update(attachment_id=uid(), consumer=consumer)
     raw = encode(payload).encode()
     signature = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(raw).decode().rstrip('=') + '.' + signature
@@ -56,6 +62,11 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         raise Fault('Lease belongs to another task owner', 403)
     if l['state'] != 'bound' or lifecycle.policy(tx, l)['lease_class'] != 'persistent':
         raise Fault('Streaming requires a bound persistent lease', 409)
+    subscription = l
+    l = shared_streams.root(tx, l)
+    if l['state'] != 'bound':
+        raise Fault('Provider stream reservation is still fencing', 409)
+    lease = l['id']
     offer = tx.need('offers', l['offer'])
     stream = offer.get('configuration', {}).get('stream', {})
     if stream.get('enabled') is not True:
@@ -66,7 +77,10 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
     guard(tx, 'stream-' + lease, l['contract'], l['resource'], {}, ctx)
     for prior in tx.rows('_stream_grants'):
         if prior['lease'] == lease and prior['state'] == 'open':
-            raise Fault('Stream already open; attach or close the existing session', 409)
+            valid(tx, ctx, prior)
+            member = shared_streams.consumer(tx, ctx, prior, subscription)
+            return dict(shared_streams.public(tx, prior), url=url.rstrip('/') + '/' + prior['id'],
+                        role='server', attachment_credential=token(ctx, prior, 'server', member['id']))
     direction = stream.get('direction', 'provider_to_server')
     delivery = stream.get('delivery', 'supersedable')
     if direction not in ('provider_to_server', 'server_to_provider', 'bidirectional'):
@@ -81,7 +95,7 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
             raise Fault('Invalid stream limit ' + key)
         limits[key] = n
     lanes = stream.get('lanes', ['data'])
-    if not isinstance(lanes, list) or not 1 <= len(lanes) <= 8 or any(lane not in ('data', 'vision', 'telemetry', 'pose', 'map', 'control') for lane in lanes):
+    if not isinstance(lanes, list) or not lanes or any(not isinstance(lane, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', lane) for lane in lanes) or len(set(lanes)) != len(lanes):
         raise Fault('Invalid stream lanes')
     policies = stream.get('policies', {})
     if not isinstance(policies, dict) or any(k not in lanes or v not in ('supersedable', 'ordered', 'ack_required') for k,v in policies.items()):
@@ -91,32 +105,39 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         generation=l['generation'], server=ctx.actor, direction=direction, delivery=delivery,
         limits=limits, policies=policies, lanes=stream.get('lanes', ['data']), schema=stream.get('schema', {}), state='open', expires_at=time.time() + ttl_seconds)
     tx.put('_stream_grants', grant['id'], grant)
-    return dict(grant, url=url.rstrip('/') + '/' + grant['id'], role='server', attachment_credential=token(ctx, grant, 'server'))
+    return dict(shared_streams.public(tx, grant), url=url.rstrip('/') + '/' + grant['id'], role='server', attachment_credential=token(ctx, grant, 'server', subscription['id']))
 
 
-@op('stream.attach', 'session:str role:str', False)
-def attach(tx, ctx, session, role):
+@op('stream.attach', 'session:str role:str lease?:str', False)
+def attach(tx, ctx, session, role, lease=''):
     if role not in ('server', 'provider'):
         raise Fault('Invalid stream role')
     grant = valid(tx, ctx, tx.need('_stream_grants', session))
     authorize(tx, ctx, grant, role)
     unused, url = settings(ctx)
-    return dict(grant, url=url.rstrip('/') + '/' + session, role=role, attachment_credential=token(ctx, grant, role))
+    member = shared_streams.consumer(tx, ctx, grant, tx.need('leases', lease) if lease else None)['id'] if role == 'server' else ''
+    return dict(shared_streams.public(tx, grant), url=url.rstrip('/') + '/' + session, role=role,
+                attachment_credential=token(ctx, grant, role, member))
 
 
 @op('stream.inspect', 'session:str', False)
 def inspect(tx, ctx, session):
     grant = tx.need('_stream_grants', session)
-    if ctx.permissions is not None and ctx.actor not in (grant['provider'], grant['server']):
-        raise Fault('Other stream', 403)
-    return valid(tx, ctx, grant)
+    if ctx.permissions is not None and ctx.actor != grant['provider']:
+        shared_streams.consumer(tx, ctx, grant)
+    return shared_streams.public(tx, valid(tx, ctx, grant))
 
 
-@op('stream.close', 'session:str')
-def close(tx, ctx, session):
+@op('stream.close', 'session:str lease?:str')
+def close(tx, ctx, session, lease=''):
     grant = tx.need('_stream_grants', session)
     authorize(tx, ctx, grant)
-    grant.update(state='closed', expires_at=time.time())
+    member = shared_streams.consumer(tx, ctx, grant, tx.need('leases', lease) if lease else None)
+    grant['closed_consumers'] = list(set(grant.get('closed_consumers', []) + [member['id']]))
+    from .providers import release
+    release(tx, member)
+    if not shared_streams.consumers(tx, grant):
+        grant.update(state='closed', expires_at=time.time())
     return tx.put('_stream_grants', session, grant)
 
 
@@ -131,5 +152,5 @@ def revoke(tx, ctx, session):
 @op('stream.list', 'lease?:str', False)
 def listing(tx, ctx, lease=''):
     return [g for g in tx.rows('_stream_grants') if (not lease or g['lease'] == lease) and
-            (ctx.permissions is None or ctx.actor in (g['server'], g['provider'])) and
+            (ctx.permissions is None or ctx.actor == g['provider'] or any(l.get('owner') == ctx.actor for l in shared_streams.consumers(tx, g))) and
             g['state'] == 'open' and g['expires_at'] > time.time()]

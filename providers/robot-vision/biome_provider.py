@@ -35,8 +35,12 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
-        ("robot.camera.exposure.status", {}, "Read camera exposure and gain controls; capture DMA time is not calibrated exposure time."),
-        ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure and gain update; inspect unknown outcomes before retry."),
+        ("robot.camera.exposure.status", {}, "Read live camera auto-exposure, auto-gain and manual driver control values; first-DMA capture stamps are not calibrated photon exposure times."),
+        ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure/gain update. Auto modes are Boolean; exposure_value 9..1200 sensor-driver units (not microseconds); exposure_level -2..2; gain 0..30. Settings are RAM-only. Inspect unknown outcomes before retry."),
+        ("robot.body.model", {}, "Metric body dimensions, wheelbase, track, camera/sonar/AHRS rigid mounts and always-on-floor invariant."),
+        ("robot.control.model", {}, "Relay motion map: 1 forward, 2 back, 3 left, 4 right. Binary on/off, no PWM; speed depends on continuous on-duration; curve not yet calibrated."),
+        ("robot.sonar.snapshot", {}, "Latest four fused body-mounted sonar ranges in meters with per-reading age, validity, freshness, sensor poses and polling update rate."),
+        ("robot.metric.status", {}, "Available metric geometry, sonar units and separately scoped native-map scale attachment and provenance."),
         ("robot.vision.snapshot", {"snapshot_id": field("str"), "include_frame": field("bool")},
          "One coherent retained frame, pose and map revision; image bytes are opt-in."),
         ("robot.vision.frame", {"snapshot_id": field("str"), "frame_id": field("str")},
@@ -45,7 +49,7 @@ def contract_definitions():
          "Current-frame detections and tracker-epoch identities with quality and freshness."),
         ("robot.vision.geometry", {"snapshot_id": field("str")},
          "Localization and spatial evidence with explicit availability, quality and unknown coverage."),
-        ("robot.vision.metadata", {}, "Source, calibration, implementation and coordinate metadata."),
+        ("robot.vision.metadata", {}, "Camera and body metadata; robot.camera.light.set:1 illuminates the view for driving. Capture timestamps are first-DMA events, not calibrated exposure start/midpoint/end."),
         ("robot.vision.status", {}, "Camera, transport, decoding, inference and provider health."),
         ("robot.radio.status", {"include_observations": field("bool")},
          "Cached camera radio telemetry, model learning, freshness and coarse localization health."),
@@ -57,7 +61,7 @@ def contract_definitions():
         ("robot.camera.light.status", {},
          "Read authenticated camera light command/driver state; physical readback remains as reported."),
         ("robot.camera.light.set", {"on": field("bool"), "brightness": field("int"), "rgb": field("list")},
-         "One-shot partial camera light update: on, brightness 0..255, rgb three bytes; inspect unknown outcomes before retry."),
+         "Illuminate the camera view for driving using the onboard LED. One-shot partial camera light update: on, brightness 0..255, rgb three bytes; inspect unknown outcomes before retry."),
         ("robot.ahrs.status", {},
          "Cached AHRS health, per-sensor freshness, attitude reference and calibration command state."),
         ("robot.ahrs.snapshot", {},
@@ -71,11 +75,6 @@ def contract_definitions():
         ("robot.world.read", {"cursor": field("str"), "limit": field("int")},
          "Persistent world geometry; unaligned local submaps remain explicitly separate."),
         ("robot.world.status", {}, "Persistent world identity, submap transforms and alignment evidence."),
-        ("robot.body.model", {}, "Rigid rover body geometry, measured sonar mounting and camera/IMU axes."),
-        ("robot.control.model", {}, "Binary relay motion mapping and duration-dependent uncalibrated drive curve."),
-        ("robot.sonar.snapshot", {}, "Cached four-direction sonar measurements in metres and rigid-body mounting."),
-        ("robot.metric.status", {}, "Metric model and native map scale with explicit availability."),
-
         ("robot.map.obstacles", {"map_id": field("str"), "revision": field("int")},
          "Accumulated mounted sonar rays, obstacle voxels, clearing evidence and uncertainty at a map revision."),
         ("robot.map.changes", {"map_id": field("str"), "since_revision": field("int", True),
@@ -91,9 +90,8 @@ def contract_definitions():
         ("robot.vision.calibration", {"action": field("str"), "calibration": field("obj"), "calibration_id": field("str")},
          "Get or set calibration. action is get or set; unverified geometry remains explicit."),
         ("robot.vision.project_ground", {"pixel": field("list", True),
-                                        "confirmed_floor_contact": field("bool", True),
                                         "snapshot_id": field("str")},
-         "Intersect an individually confirmed floor pixel with the calibrated ground plane."),
+         "Intersect a pixel ray with the calibrated floor plane; rover body is always on the floor, no caller contact assertion. Ray intersection does not classify object contact."),
 
         ("robot.map.scale.start", {"method": field("str", True),
                                    "reference": field("obj"), "policy": field("obj"),
@@ -122,11 +120,24 @@ def contract_definitions():
                                    "kinds": field("list"), "cursor": field("obj"), "limit": field("int")},
          "Read a revision-pinned metric map view with explicit qualification and stale-state reporting."),
     ]
-    return [dict(name=name, version=1, description=description, inputs=inputs,
-                 outputs={"result": "obj"}) for name, inputs, description in specs]
+    definitions = [dict(name=name, version=1, description=description, inputs=inputs,
+                        outputs={"result": "obj"}, synchronous=False) for name, inputs, description in specs]
+    ground = next(item for item in definitions if item["name"] == "robot.vision.project_ground")
+    modern = copy.deepcopy(ground)
+    modern["version"] = 2
+    ground["inputs"]["confirmed_floor_contact"] = field("bool", True)
+    ground["description"] = "Legacy floor query; prefer robot.vision.project_ground:2, which uses the body floor-contact invariant without a caller assertion."
+    definitions.append(modern)
+    legacy_descriptions = {'robot.vision.metadata': 'Source, calibration, implementation and coordinate metadata.', 'robot.camera.light.set': 'One-shot partial camera light update: on, brightness 0..255, rgb three bytes; inspect unknown outcomes before retry.', 'robot.vision.project_ground': 'Intersect an individually confirmed floor pixel with the calibrated ground plane.'}
+    legacy_guidance = {'robot.vision.metadata': {'before': 'Read robot.body.model:1 and robot.metric.status:1. robot.camera.light.set:1 illuminates the view for driving. First-DMA capture timestamps are not calibrated exposure times.'}, 'robot.camera.light.set': {'before': 'The onboard LED illuminates the camera view for driving. Partial on/brightness/rgb update; inspect uncertain outcomes before retry.'}, 'robot.vision.project_ground': {'before': 'Legacy v1 schema; use robot.vision.project_ground:2 to project onto the floor plane without a caller contact assertion.'}}
+    for item in definitions:
+        if item["version"] == 1 and item["name"] in legacy_descriptions:
+            item["description"] = legacy_descriptions[item["name"]]
+            item["usage"] = legacy_guidance[item["name"]]
+    return definitions
 
 
-CONTRACTS = {item["name"] + ":1": item for item in contract_definitions()}
+CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contract_definitions()}
 
 
 MUTATING_CONTRACTS = frozenset({
@@ -393,6 +404,7 @@ def offer(cfg, contract, state):
     for name, guidance in {**SCALE_GUIDANCE.get(contract, {}),
                            **AHRS_GUIDANCE.get(contract, {})}.items():
         usage[name] += " " + guidance
+    usage.update(CONTRACTS[contract].get("usage", {}))
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
                 service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)
 
@@ -492,6 +504,7 @@ def serve(cfg):
             stopping.set()
 
         def advertise():
+            relay_metadata_published = False
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
@@ -509,6 +522,10 @@ def serve(cfg):
                             ready = set()
                         else:
                             raise
+                    if not relay_metadata_published:
+                        for spec in json.loads((HERE / "rover-relay-contracts.json").read_text()):
+                            remote.call("cap.define", spec)
+                        relay_metadata_published = True
                     remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
                         "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
                     if stopping.is_set():return
