@@ -3,6 +3,7 @@
 Processing updates a separate, explicitly frame-bound analysis reference.
 It never publishes an image or delays the camera's latest-frame consumer.
 """
+import logging
 import threading
 import time
 
@@ -82,6 +83,8 @@ class LiveCamera:
                 with self._lock:
                     self._publish(captured, metadata, image)
             except Exception as exc:
+                if self._error != type(exc).__name__ + ':' + str(exc)[:180]:
+                    logging.getLogger(__name__).exception('Independent live camera publication failed')
                 with self._lock:
                     self._error = type(exc).__name__ + ':' + str(exc)[:180]
                 self._stop.wait(0.1)

@@ -41,7 +41,7 @@ class Events(unittest.TestCase):
         d=self.ready();self.applied(d,1)
         for t in [11,11.2,11.4,11.6,11.8]:d.observe(frame(t))
         events=d.snapshot()['events']
-        self.assertEqual([e['type'] for e in events],['stuck'])
+        self.assertEqual([e['kind'] for e in events],['stuck'])
         self.assertEqual(d.snapshot()['state']['drive_response'],'no_response_observed')
     def test_requested_drive_is_not_applied(self):
         d=self.ready();d.control(dict(stage='requested',commanded_mask=1,sequence=1),1001)
@@ -63,18 +63,18 @@ class Events(unittest.TestCase):
         for rate,direction in [(30,'left'),(-30,'right')]:
             d=self.ready()
             for i in range(12):d.observe(frame(11+i*.2,yaw_rate=rate))
-            starts=[e for e in d.snapshot()['events'] if e['type']=='turning' and e['phase']=='started']
+            starts=[e for e in d.snapshot()['events'] if e['kind']=='turning' and e['phase']=='started']
             self.assertEqual([e['direction'] for e in starts],[direction])
     def test_pickup_accel_decel(self):
         d=self.ready()
         def a(t):return [0,0,3 if 11<=t<11.25 else -3 if 11.25<=t<11.5 else 0]
         for i in range(8):d.observe(frame(11+i*.2,a))
-        self.assertEqual([e['type'] for e in d.snapshot()['events']],['pickup'])
+        self.assertEqual([e['kind'] for e in d.snapshot()['events']],['pickup'])
     def test_collision_opposes_drive(self):
         d=self.ready();self.applied(d,1)
         def a(t):return [0,5 if 11.3<=t<11.34 else -1 if 11<=t<11.1 else 0,0]
         for i in range(6):d.observe(frame(11+i*.2,a))
-        self.assertIn('collision',[e['type'] for e in d.snapshot()['events']])
+        self.assertIn('collision',[e['kind'] for e in d.snapshot()['events']])
     def test_duplicate_and_out_of_order(self):
         d=self.ready();d.observe(frame(11.4,yaw_rate=30));before=d.snapshot()
         d.observe(frame(11.4,yaw_rate=30));d.observe(frame(11,yaw_rate=-30))

@@ -92,9 +92,9 @@ class MotionEvents:
         self.cooldown[key] = t
         self.sequence += 1
         self.events.append(dict(event_id='motion:'+str(self.epoch)+':'+str(self.sequence),
-            sequence=self.sequence, type=kind, phase=phase, capture_time_s=t, timestamp=time.time(),
+            sequence=self.sequence, type='robot.motion.'+kind, kind=kind, phase=phase, capture_time_s=t, timestamp=time.time(),
             frame_id=frame.get('frame_id'), boot_id=self.epoch[0],
-            schema='biome.telemetry.event.v1', state=phase, severity='info' if kind=='turning' else 'warning',
+            schema='biome.telemetry.event.v1', state='cleared' if phase=='ended' else 'active', severity='info' if kind=='turning' else 'warning',
             message={'turning':'Observed '+str(extra.get('direction'))+' turn','collision':'Suspected collision: opposing drive impact','stuck':'Applied drive without a measurable acceleration response','pickup':'Inferred pickup or loss of support'}[kind],
             assessment='sensor_inference', evidence=evidence, **extra))
 

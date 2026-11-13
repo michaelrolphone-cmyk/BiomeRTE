@@ -49,3 +49,30 @@ class StreamTelemetryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DenseMotionTelemetryTests(unittest.TestCase):
+    def test_dense_history_and_events_fit_and_round_trip(self):
+        import json
+        from stream_telemetry import bounded_metadata,size
+        from leased_publish import packet
+        rows=[dict(monotonic_us=10000000+i*20000,sample_count=i,generation=1,
+            valid=True,attitude_valid=True,accel_m_s2=[.01,-9.8,.02],
+            gyro_rad_s=[.001,.002,.003],quaternion_wxyz=[.707,-.707,0,0],yaw_deg=.1)
+            for i in range(32)]
+        events=[dict(event_id=str(i),type='turning',evidence={'heading_delta_deg':.6},
+            message='Observed left turn',sequence=i) for i in range(64)]
+        metadata=dict(ahrs=dict(ahrs=dict(imu_samples=rows,imu={'valid':True})),
+            radio={},ultrasonic={},motion_events=dict(events=events,last_sequence=63,state={'available':True}),
+            events=events,frame_id='capture:1')
+        result=bounded_metadata(metadata)
+        self.assertLessEqual(size(result),15872)
+        history=result['ahrs']['ahrs']['imu_history']
+        self.assertEqual(len(history['rows']),32)
+        self.assertEqual(history['rows'][-1],[10620000,31,1,True,True,.01,-9.8,.02,.001,.002,.003,.707,-.707,0,0,.1])
+        self.assertEqual(result['events'][-1]['event_id'],'63')
+        self.assertEqual(result['event_delivery']['recent_events_omitted'],56)
+        self.assertIn('imu_samples',metadata['ahrs']['ahrs']) # never mutate source evidence
+        payload=packet(metadata,b'jpeg')
+        length=int.from_bytes(payload[:4],'big')
+        decoded,pixels=decode(payload[4:4+length],4194304)
+        self.assertEqual(decoded['frame_id'],'capture:1');self.assertEqual(pixels,b'jpeg')

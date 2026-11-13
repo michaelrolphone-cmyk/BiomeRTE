@@ -29,3 +29,15 @@ observer's coherent snapshot reads are triggered by incoming vision frames;
 AHRS is recorded directly from the matching frame. No 250 ms AHRS timer remains.
 
 Deployment must include the repository biomerte package alongside providers so the passive subscriber can use the shared stream codec.
+
+Stream event types use robot.motion.collision, robot.motion.stuck,
+robot.motion.turning and robot.motion.pickup; kind is the short name. The common
+event state is active/cleared, with the detailed phase and direction retained.
+
+To fit the existing wire header, stream AHRS history is encoded losslessly as
+imu_history {schema, columns, rows}. Column names include units and each row
+preserves all 16 fields. Internal capture packets keep imu_samples objects.
+The stream has one full event list at top-level events, with references under
+motion_events. It resends up to eight recent events; additional older omissions
+are explicit in event_delivery. robot.vision.status retains the 64-event recovery
+ring. Stream header overflow logs per-field byte sizes instead of failing silently.
