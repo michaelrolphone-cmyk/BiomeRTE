@@ -1046,3 +1046,5 @@ The explicit maintenance method `compact_checkpoint_databases(keep=5)` verifies
 revision references and backend integrity before removing older full database
 copies. Consumers should resolve checkpoint IDs for their current database path
 after this migration. Legacy standalone backups remain readable.
+
+Independent sensor continuity: when decoded camera frames stop for over 600 ms, the service reads authenticated /api/sensors/capture at the configured camera cadence. These biome.sensor_tick.v1 packets retain device clocks and IMU history, but explicitly carry image_available=false and never enter visual SLAM. Normal image-associated sampling resumes as soon as captures recover. Shared consumers receive telemetry-only packets and preserve the last image with a camera-health notice.

@@ -37,6 +37,7 @@ from auto_gyro_calibration import AutoGyroCalibration
 from metric_sensor_worker import MetricSensorWorker
 from rover_events import MotionEvents
 from applied_control_stream import AppliedControlStream
+from sensor_tick_stream import SensorTickStream
 from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
 
 CAPABILITIES = [
@@ -104,6 +105,7 @@ class VisionService:
         self._stop = threading.Event()
         self._thread = None
         self._live_camera = None
+        self.sensor_ticks = SensorTickStream(self)
         self._started = time.monotonic()
         self._frames = 0
         self._skipped = 0
@@ -360,6 +362,7 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.sensor_ticks.start()
         self.metric_worker.start()
         from live_camera import LiveCamera
         self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
@@ -840,7 +843,7 @@ class VisionService:
         age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
         return {**copy.deepcopy(raw),'frame_id':frame['frame_id'],
                 'capture_monotonic_us':packet['capture_monotonic_us'],
-                'sample_reference':'camera_capture','timing_qualified':True,
+                'sample_reference':'sensor_tick' if packet.get('schema')=='biome.sensor_tick.v1' else 'camera_capture','timing_qualified':True,
                 'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
 
     def _stream_radio(self,frame):
@@ -850,10 +853,10 @@ class VisionService:
         if captured is None:return {'state':'unavailable','reason':'no_radio_sample_for_capture','frame_id':frame['frame_id']}
         age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
         captured.update(elapsed_since_receive_s=age,received_at=frame.get('receive_decode_time'),
-                        frame_id=frame['frame_id'],sample_reference='camera_capture')
+                        frame_id=frame['frame_id'],sample_reference='sensor_tick' if frame['sensor_packet'].get('schema')=='biome.sensor_tick.v1' else 'camera_capture')
         for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
         return {**self.radio.status(include_observations=False),'telemetry':captured,
-                'frame_id':frame['frame_id'],'sample_reference':'camera_capture'}
+                'frame_id':frame['frame_id'],'sample_reference':captured['sample_reference']}
 
     def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
@@ -1358,6 +1361,7 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        self.sensor_ticks.close()
         self.applied_controls.close()
         self._stop.set()
         if getattr(self, "atlas", None) is not None:
