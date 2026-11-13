@@ -53,6 +53,10 @@ class Protocol:
         return payload, {'crc32': '{:08x}'.format(crc), 'firmware_capture_us': int(fields[3])}
 
 
+def array_bytes(value):
+    return value.tobytes() if hasattr(value, 'tobytes') else value.tostring()
+
+
 def decode(payload):
     values = np.frombuffer(payload, dtype=np.int8).astype(np.float32)
     # Firmware wire convention is signed (I,-Q).
@@ -109,7 +113,7 @@ def measure(cfg):
                 # Preserve generic cu8 I,Q output convention; saturate -(-128).
                 values = np.frombuffer(raw, dtype=np.int8).astype(np.int16)
                 values[1::2] *= -1
-                iq = np.clip(values+128, 0, 255).astype(np.uint8).tostring()
+                iq = array_bytes(np.clip(values+128, 0, 255).astype(np.uint8))
             if time.monotonic() >= deadline: break
         finished = time.time()
         protocol.command('RELEASE')

@@ -2,7 +2,7 @@ import unittest
 import zlib
 from unittest import mock
 import numpy as np
-from esp_capture import Protocol, decode
+from esp_capture import Protocol, decode, array_bytes
 from capture import spectrum
 
 
@@ -45,7 +45,7 @@ class ProtocolTests(unittest.TestCase):
         tone=60*np.exp(2j*np.pi*32*np.arange(size)/size)
         wire=np.empty(size*2,dtype=np.int8)
         wire[0::2]=np.round(tone.real);wire[1::2]=np.round(-tone.imag)
-        z=decode(wire.tostring())
+        z=decode(array_bytes(wire))
         self.assertLess(float(abs(z-tone).max()),1)
         f,p=spectrum(z,rate,tune,size)
         self.assertEqual(tune+125000,int(f[np.argmax(p[0])]))
