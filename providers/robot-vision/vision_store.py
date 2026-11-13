@@ -32,8 +32,9 @@ Map updates:
   and deltas are pinned to an exact revision. A non-null world pose or
   world-position observation requires an explicitly supplied map_revision.
 
-A checkpoint saves a SQLite backup and, if supplied, copies/hashes the actual
-backend artifact. It never claims relocalization has been qualified merely
+Routine map checkpoints reference immutable revisions in the durable SQLite
+store and copy/hash only the native backend artifact. The compatibility store
+API can still explicitly request a standalone full SQLite backup. It never claims relocalization has been qualified merely
 because an artifact exists. Camera height/mounting are calibration evidence,
 not proof that an independently reconstructed monocular map has metric scale.
 """
@@ -890,23 +891,39 @@ PRAGMA user_version=1;
             checkpoint_id = str(uuid.uuid4())
             staging = self.checkpoint_dir / (checkpoint_id + ".partial")
             staging.mkdir()
-            # Pin an exact WAL read snapshot now; copying it belongs to the
-            # checkpoint worker, not to the tracking/store critical section.
-            reader = sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
-                                     uri=True, check_same_thread=False,
-                                     isolation_level=None)
-            try:
-                reader.execute("PRAGMA query_only=ON")
-                reader.execute("BEGIN")
-                revision = reader.execute("SELECT revision FROM maps WHERE id=?",
-                                          (map_id,)).fetchone()
-                if revision is None or revision[0] != info["revision"]:
-                    raise RevisionConflict("map changed while pinning checkpoint snapshot")
-                self._checkpoint_readers[checkpoint_id] = reader
-            except BaseException:
-                reader.close()
-                shutil.rmtree(staging, ignore_errors=True)
-                raise
+            reference = extra.get("database_mode") == "revision_reference"
+            interval = extra.get("database_backup_interval_s")
+            if reference and interval is not None:
+                interval = float(interval)
+                if not math.isfinite(interval) or interval < 0:
+                    raise ValueError("invalid_database_backup_interval")
+                latest = self._db.execute(
+                    "SELECT created_at FROM checkpoints WHERE "
+                    "json_extract(payload,'$.publication')='complete_v2' AND "
+                    "coalesce(json_extract(payload,'$.availability'),'available')!='unavailable' "
+                    "ORDER BY created_at DESC LIMIT 1").fetchone()
+                due = latest is None or (datetime.now(timezone.utc) -
+                    datetime.fromisoformat(latest[0])).total_seconds() >= interval
+                if due:
+                    reference = False
+                    extra["database_mode"] = "full_backup"
+            reader = None
+            if not reference:
+                reader = sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
+                                         uri=True, check_same_thread=False,
+                                         isolation_level=None)
+                try:
+                    reader.execute("PRAGMA query_only=ON")
+                    reader.execute("BEGIN")
+                    revision = reader.execute("SELECT revision FROM maps WHERE id=?",
+                                              (map_id,)).fetchone()
+                    if revision is None or revision[0] != info["revision"]:
+                        raise RevisionConflict("map changed while pinning checkpoint snapshot")
+                except BaseException:
+                    reader.close()
+                    shutil.rmtree(staging, ignore_errors=True)
+                    raise
+            self._checkpoint_readers[checkpoint_id] = reader
             return dict(checkpoint_id=checkpoint_id, map_id=map_id,
                         info=_copy(info), metadata=extra, created_at=_now())
 
@@ -928,11 +945,13 @@ PRAGMA user_version=1;
             with self._lock:
                 self._open()
                 reader = self._checkpoint_readers.pop(checkpoint_id)
+            reference = extra.get("database_mode") == "revision_reference"
             try:
-                self._backup_database(staging / "vision.sqlite3", source=reader)
+                if not reference:
+                    self._backup_database(staging / "vision.sqlite3", source=reader)
             finally:
-                # Release the WAL snapshot even when copying fails.
-                reader.close()
+                if reader is not None:
+                    reader.close()
             artifact = {"availability": "unavailable", "reason": "backend_artifact_not_supplied"}
             if backend_artifact is not None:
                 source = Path(backend_artifact).expanduser()
@@ -972,14 +991,14 @@ PRAGMA user_version=1;
             result = {
                 "checkpoint_id": checkpoint_id, "map_id": map_id,
                 "map_revision": info["revision"], "created_at": prepared["created_at"],
-                "database_path": str(folder / "vision.sqlite3"),
+                "database_path": str(self.db_path if reference else folder / "vision.sqlite3"),
                 "backend_artifact": artifact, "metadata": extra,
-                "publication": "complete_v2",
+                "publication": "revision_reference_v3" if reference else "complete_v2",
                 "image_retention": "rolling_and_explicitly_pinned",
                 "relocalization_qualification": "not_tested_by_store"}
             # The finalized record contains this backup's hash. It belongs
             # in the external manifest, never self-referentially in the backup.
-            result["database_sha256"] = _file_digest(staging / "vision.sqlite3")
+            result["database_sha256"] = None if reference else _file_digest(staging / "vision.sqlite3")
             with (staging / "manifest.json").open("w", encoding="utf8") as stream:
                 stream.write(_dump(result))
                 stream.flush()
@@ -1042,10 +1061,22 @@ PRAGMA user_version=1;
                         "database_sha256", "backend_artifact"):
                 if manifest.get(key) != result.get(key):
                     raise ValueError("checkpoint_manifest_mismatch")
-            database = folder / "vision.sqlite3"
+            reference = result.get("publication") == "revision_reference_v3"
+            database = self.db_path if reference else folder / "vision.sqlite3"
             if Path(result["database_path"]).resolve() != database:
                 raise ValueError("checkpoint_database_path_mismatch")
-            expected = [(database, None, result["database_sha256"])]
+            if reference:
+                if result.get("database_sha256") is not None:
+                    raise ValueError("revision_reference_must_not_claim_database_hash")
+                if not self._db.execute(
+                        "SELECT 1 FROM map_revisions WHERE map_id=? AND revision=?",
+                        (result["map_id"], result["map_revision"])).fetchone():
+                    raise ValueError("checkpoint_revision_not_retained")
+                calibration = result.get("metadata", {}).get("calibration_id")
+                if calibration and not self._db.execute(
+                        "SELECT 1 FROM calibrations WHERE id=?", (calibration,)).fetchone():
+                    raise ValueError("checkpoint_calibration_not_retained")
+            expected = [] if reference else [(database, None, result["database_sha256"]) ]
             artifact = result.get("backend_artifact", {})
             if artifact.get("availability") == "available":
                 backend = folder / "backend"
@@ -1079,14 +1110,15 @@ PRAGMA user_version=1;
                 for path, size, digest in expected:
                     if (size is not None and path.stat().st_size != size) or _file_digest(path) != digest:
                         raise ValueError("checkpoint_integrity_error")
-                with sqlite3.connect("file:" + str(database) + "?mode=ro&immutable=1", uri=True) as backup:
-                    row = backup.execute("SELECT revision FROM maps WHERE id=?", (result["map_id"],)).fetchone()
-                    if row is None or row[0] != result["map_revision"]:
-                        raise ValueError("checkpoint_database_map_revision_mismatch")
-                    calibration_id = result.get("metadata", {}).get("calibration_id")
-                    if calibration_id and not backup.execute(
-                            "SELECT 1 FROM calibrations WHERE id=?", (calibration_id,)).fetchone():
-                        raise ValueError("checkpoint_database_calibration_missing")
+                if not reference:
+                    with sqlite3.connect("file:" + str(database) + "?mode=ro&immutable=1", uri=True) as backup:
+                        row = backup.execute("SELECT revision FROM maps WHERE id=?", (result["map_id"],)).fetchone()
+                        if row is None or row[0] != result["map_revision"]:
+                            raise ValueError("checkpoint_database_map_revision_mismatch")
+                        calibration_id = result.get("metadata", {}).get("calibration_id")
+                        if calibration_id and not backup.execute(
+                                "SELECT 1 FROM calibrations WHERE id=?", (calibration_id,)).fetchone():
+                            raise ValueError("checkpoint_database_calibration_missing")
                 backend_manifest = folder / "backend" / "backend_manifest.json"
                 if artifact.get("availability") == "available" and backend_manifest.is_file():
                     native = json.loads(backend_manifest.read_text())
@@ -1128,6 +1160,71 @@ PRAGMA user_version=1;
                     continue
             return {"recovered": recovered}
 
+    def compact_checkpoint_databases(self, keep=5):
+        """Keep bounded standalone backups; retain every native map checkpoint.
+
+        Explicit maintenance operation, never an implicit destructive startup.
+        Publish and inventory a verified revision reference before unlinking the
+        obsolete full database. Existing map revisions/calibrations stay intact.
+        """
+        keep = _integer(keep, "keep", 1)
+        with self._lock:
+            self._open()
+            rows = self._db.execute(
+                "SELECT id,payload FROM checkpoints ORDER BY created_at DESC,id DESC").fetchall()
+            protected, converted, errors = [], [], []
+            reclaimed = 0
+            for row in rows:
+                record = json.loads(row["payload"])
+                folder = self._checkpoint_folder(row["id"])
+                database = folder / "vision.sqlite3"
+                if (record.get("availability") == "unavailable"
+                        or record.get("publication") == "revision_reference_v3"
+                        or not database.is_file() or database.is_symlink()):
+                    continue
+                if len(protected) < keep:
+                    if self._verified_checkpoint(record)["availability"] == "available":
+                        protected.append(row["id"])
+                    continue
+                manifest = folder / "manifest.json"
+                original = manifest.read_bytes()
+                candidate = {**record, "publication": "revision_reference_v3",
+                             "database_path": str(self.db_path), "database_sha256": None}
+                temp = folder / "manifest.reference.tmp"
+                try:
+                    with temp.open("wb") as stream:
+                        stream.write(_dump(candidate).encode("utf8"))
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    temp.replace(manifest)
+                    _sync_directory(folder)
+                    self._checkpoint_integrity.pop(row["id"], None)
+                    if self._verified_checkpoint(candidate)["availability"] != "available":
+                        raise ValueError("replacement_reference_unavailable")
+                    with self._transaction():
+                        changed = self._db.execute(
+                            "UPDATE checkpoints SET payload=? WHERE id=? AND payload=?",
+                            (_dump(candidate), row["id"], row["payload"]))
+                        if changed.rowcount != 1:
+                            raise RevisionConflict("checkpoint changed during conversion")
+                except Exception as exc:
+                    with temp.open("wb") as stream:
+                        stream.write(original)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    temp.replace(manifest)
+                    _sync_directory(folder)
+                    self._checkpoint_integrity.pop(row["id"], None)
+                    errors.append({"checkpoint_id": row["id"], "error": type(exc).__name__})
+                    continue
+                size = database.stat().st_size
+                database.unlink()
+                _sync_directory(folder)
+                reclaimed += size
+                converted.append(row["id"])
+            return {"full_backups_kept": protected, "converted": converted,
+                    "database_bytes_removed": reclaimed, "errors": errors}
+
     def retire_superseded_checkpoints(self, *, include_legacy=False, protected_ids=()):
         """Keep a current and rollback backend per map, plus explicit references.
 
@@ -1136,6 +1233,14 @@ PRAGMA user_version=1;
         """
         with self._lock:
             self._open()
+            full_count = self._db.execute(
+                "SELECT count(*) FROM checkpoints WHERE "
+                "json_extract(payload,'$.publication')='complete_v2' AND "
+                "coalesce(json_extract(payload,'$.availability'),'available')!='unavailable'").fetchone()[0]
+            if full_count > 5:
+                compacted = self.compact_checkpoint_databases(keep=5)
+                if compacted["errors"]:
+                    raise OSError("checkpoint_database_compaction_failed")
             records = [json.loads(row[0]) for row in self._db.execute(
                 "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")]
             protected = set(protected_ids)
@@ -1245,7 +1350,9 @@ PRAGMA user_version=1;
                 "partial_packages": sum(path.name.endswith(".partial") for path in folders),
                 "logical_bytes": sum(path.stat().st_size for folder in folders
                                      for path in folder.rglob("*") if path.is_file() and not path.is_symlink()),
-                "legacy_retention": "preserved_until_explicit_recovery_audit"}
+                "legacy_retention": "preserved_until_explicit_recovery_audit",
+                "routine_database_mode": "revision_reference",
+                "full_database_copies": sum((folder / "vision.sqlite3").is_file() for folder in folders)}
 
     def status(self):
         with self._lock:
@@ -1274,7 +1381,8 @@ PRAGMA user_version=1;
                 self._db.close()
                 self._closed = True
         for reader in readers:
-            reader.close()
+            if reader is not None:
+                reader.close()
 
     def __enter__(self):
         return self

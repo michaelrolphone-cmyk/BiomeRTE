@@ -1033,3 +1033,16 @@ arrays. The native persistence qualifier includes a real blank input before
 saving, checks that its identity and empty arrays survive restore, and then
 requires a real non-keyframe image to relocalize. An empty image never supplies
 a current pose or deletes the initialized map.
+
+
+### Checkpoint database storage
+
+Routine checkpoints pin an immutable map revision in the durable observation
+store and save the native backend state. They do not copy the shared database.
+A standalone database backup is captured at most once per hour across all maps
+(`database_backup_interval_s`, default 3600); at most five full backups are kept
+globally. Native current/rollback map state remains available for each submap.
+The explicit maintenance method `compact_checkpoint_databases(keep=5)` verifies
+revision references and backend integrity before removing older full database
+copies. Consumers should resolve checkpoint IDs for their current database path
+after this migration. Legacy standalone backups remain readable.
