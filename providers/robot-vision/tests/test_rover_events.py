@@ -102,6 +102,13 @@ class Events(unittest.TestCase):
         result=service._stream_motion_events(frame(11.4,yaw_rate=30))
         self.assertEqual(result['events'][0]['direction'],'left')
 
+    def test_round_trip_jitter_does_not_reject_new_capture(self):
+        d=self.ready()
+        f=frame(11);f['capture_host_monotonic_interval_s']=[1000.95,1001.25]
+        d.observe(f)
+        g=frame(11.02);g['capture_host_monotonic_interval_s']=[1000.99,1001.05]
+        self.assertEqual(d.observe(g)['state']['frame_id'],g['frame_id'])
+
     def test_history_and_events_bounded(self):
         d=self.ready()
         for i in range(100):d.observe(frame(11+i*.2,yaw_rate=30 if i%2 else -30))

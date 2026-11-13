@@ -27,3 +27,5 @@ observation target, not a hard end-to-end delivery guarantee.
 The passive control reader never acquires control or sends outputs. The motion
 observer's coherent snapshot reads are triggered by incoming vision frames;
 AHRS is recorded directly from the matching frame. No 250 ms AHRS timer remains.
+
+Deployment must include the repository biomerte package alongside providers so the passive subscriber can use the shared stream codec.

@@ -128,11 +128,11 @@ class MotionEvents:
             rows, raw, packet = self._sensor_rows(frame)
             interval=frame.get('capture_host_monotonic_interval_s')
             capture_host=sum(interval)/2 if vector(interval,2) and interval[1]>=interval[0] else None
-            if capture_host is not None and self.last_capture_host is not None and capture_host<self.last_capture_host:return self.snapshot()
+            if self.epoch and packet.get('boot_id')!=self.epoch[0] and capture_host is not None and self.last_capture_host is not None and capture_host<self.last_capture_host:return self.snapshot()
             epoch = (packet.get('boot_id'), (raw.get('attitude') or {}).get('generation'))
             key = (epoch, packet.get('capture_monotonic_us'))
             if key == self.frame_key: return self.snapshot()
-            if self.frame_key and epoch == self.epoch and finite(key[1]) and finite(self.frame_key[1]) and key[1] <= self.frame_key[1]: return self.snapshot()
+            if self.frame_key and epoch[0] == self.epoch[0] and finite(key[1]) and finite(self.frame_key[1]) and key[1] <= self.frame_key[1]: return self.snapshot()
             if self.epoch != epoch:
                 self.epoch = epoch; self.previous = None; self.samples.clear()
                 self.baseline = 0; self.bias = [0.,0.,0.]; self.lift = None
