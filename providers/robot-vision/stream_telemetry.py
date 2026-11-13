@@ -96,6 +96,18 @@ def bounded_metadata(metadata, maximum=15872):
         delivery=value.setdefault("event_delivery",{"recent_events_omitted":0,"recovery_capability":"robot.vision.status"})
         delivery["recent_events_omitted"]+=1
     if isinstance(motion,dict) and isinstance(events,list):motion["event_ids"]=[e.get("event_id") for e in events]
+    if size(value)>maximum and isinstance(tof,dict) and isinstance(tof.get("baseline"),dict):
+        baseline=tof["baseline"]
+        refinement=baseline.get("refinement")
+        if isinstance(refinement,dict):
+            baseline["refinement"]={k:refinement[k] for k in (
+                "revision","accepted","state","last_update_at","before_rms_m","after_rms_m")
+                if k in refinement}
+            baseline["refinement_details_compacted"]=True
+        # Scheduler diagnostics are available through the full status capability.
+        if size(value)>maximum:
+            tof.pop("request_age_s",None)
+            tof["scheduler_diagnostics_omitted"]=True
     if size(value) > maximum:
         raise ValueError("Live metadata exceeds stream header budget: "+str({k:size(v) for k,v in value.items()}))
     return value

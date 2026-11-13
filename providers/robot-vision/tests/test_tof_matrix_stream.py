@@ -88,4 +88,21 @@ class ToFMatrixStreamTests(unittest.TestCase):
         self.assertEqual(packed["tof"]["anchor_geometry"],positions)
         self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
 
+
+    def test_refinement_revision_and_progress_survive_header_pressure(self):
+        value=self.payload();positions=[{"bssid":a["bssid"],"x_m":i,"y_m":i*.2,"z_m":i*.3} for i,a in enumerate(value["tof"]["anchors"])]
+        value["tof"]["anchor_geometry"]=positions
+        value["tof"]["request_age_s"]={"diagnostics":"x"*20000}
+        value["tof"]["baseline"]={"epoch":2,"revision":8,"frame_id":"tof-relative-2",
+            "positions":positions,"status":"ready","valid":True,
+            "refinement":{"revision":8,"accepted":7,"state":"refined","last_update_at":1000,
+                          "before_rms_m":.9,"after_rms_m":.8,"extra_diagnostics":"x"*20000}}
+        packed=bounded_metadata(value);baseline=packed["tof"]["baseline"]
+        self.assertLessEqual(size(packed),15872)
+        self.assertEqual(baseline["revision"],8);self.assertEqual(baseline["epoch"],2)
+        self.assertEqual(baseline["refinement"]["accepted"],7)
+        self.assertEqual(baseline["refinement"]["after_rms_m"],.8)
+        self.assertEqual(packed["tof"]["anchor_geometry"],positions)
+        self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
+
 if __name__=="__main__":unittest.main()
