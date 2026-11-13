@@ -77,6 +77,19 @@ class CheckpointReferenceTests(unittest.TestCase):
         self.store.prepare_checkpoint(m, {"database_mode":"revision_reference"})
         self.store.close()
 
+    def test_native_manifest_verification_after_conversion_and_capture(self):
+        for index in range(7):
+            m = self.store.create_map({})["map_id"]
+            native = Path(self.temp.name) / m
+            native.mkdir()
+            (native / "backend_manifest.json").write_text(json.dumps({"map_id":m}))
+            self.store.checkpoint(m, native, {"checkpoint_origin":"automatic"})
+        result = self.store.compact_checkpoint_databases(keep=5)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(len(result["converted"]), 2)
+        cp = self.store.checkpoint(m, native, {"database_mode":"revision_reference"})
+        self.assertEqual(self.store.get_checkpoint(cp["checkpoint_id"])["availability"], "available")
+
     def test_failed_conversion_restores_original_package(self):
         saved = [self.save(self.store.create_map({})["map_id"], False) for _ in range(2)]
         original = self.store._verified_checkpoint

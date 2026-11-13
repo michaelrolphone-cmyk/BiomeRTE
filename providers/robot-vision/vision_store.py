@@ -1078,6 +1078,7 @@ PRAGMA user_version=1;
                     raise ValueError("checkpoint_calibration_not_retained")
             expected = [] if reference else [(database, None, result["database_sha256"]) ]
             artifact = result.get("backend_artifact", {})
+            calibration_id = result.get("metadata", {}).get("calibration_id")
             if artifact.get("availability") == "available":
                 backend = folder / "backend"
                 destination = Path(artifact["path"]).resolve()
