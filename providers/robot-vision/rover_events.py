@@ -3,6 +3,7 @@ import copy
 import math
 import threading
 import time
+import uuid
 from collections import deque
 
 G = 9.80665
@@ -34,6 +35,7 @@ class MotionEvents:
         self.samples = deque(maxlen=300)
         self.drives = deque(maxlen=32)
         self.sequence = 0
+        self.instance_id = uuid.uuid4().hex
         self.drive_response = 'awaiting_applied_drive'
         self.epoch = self.frame_key = self.control_epoch = self.control_sequence = None
         self.active = None
@@ -91,7 +93,7 @@ class MotionEvents:
         if t-self.cooldown.get(key, -1e20) < (.5 if kind=='turning' else 1.): return
         self.cooldown[key] = t
         self.sequence += 1
-        self.events.append(dict(event_id='motion:'+str(self.epoch)+':'+str(self.sequence),
+        self.events.append(dict(event_id='motion:'+self.instance_id+':'+str(self.epoch)+':'+str(self.sequence),
             sequence=self.sequence, type='robot.motion.'+kind, kind=kind, phase=phase, capture_time_s=t, timestamp=time.time(),
             frame_id=frame.get('frame_id'), boot_id=self.epoch[0],
             schema='biome.telemetry.event.v1', state='cleared' if phase=='ended' else 'active', severity='info' if kind=='turning' else 'warning',
@@ -245,6 +247,6 @@ class MotionEvents:
             age=None if self.last_observed is None else time.monotonic()-self.last_observed
             state['telemetry_age_s']=age
             if age is not None and age>1.:state.update(available=False,reason='telemetry_stale',turning=None)
-            return dict(schema='biome.rover.events.v1', state=state,
+            return dict(schema='biome.rover.events.v1', instance_id=self.instance_id, state=state,
                 events=copy.deepcopy(list(self.events)), last_sequence=self.sequence,
                 delivery='capture_frame_keyed_latest_telemetry', retention='bounded_64_events')

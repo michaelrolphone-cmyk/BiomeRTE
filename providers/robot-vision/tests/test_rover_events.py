@@ -122,6 +122,14 @@ class Events(unittest.TestCase):
         self.assertEqual(len(starts),2)
         self.assertEqual(starts[-1]['boot_id'],'reboot')
 
+    def test_event_ids_do_not_collide_after_service_restart(self):
+        ids=[]
+        for unused in range(2):
+            d=self.ready()
+            d.observe(frame(11.2,yaw_rate=30))
+            ids.append(d.snapshot()['events'][0]['event_id'])
+        self.assertNotEqual(ids[0],ids[1])
+
     def test_history_and_events_bounded(self):
         d=self.ready()
         for i in range(100):d.observe(frame(11+i*.2,yaw_rate=30 if i%2 else -30))
