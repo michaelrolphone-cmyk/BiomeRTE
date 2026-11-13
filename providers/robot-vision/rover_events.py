@@ -82,7 +82,7 @@ class MotionEvents:
             if direction and self.active is None:
                 self.active = dict(id=str(epoch)+':'+str(seq), direction=direction,
                     start=now, end=None, uncertainty_s=uncertainty,
-                    end_uncertainty_s=None, detected=False, uncertain=not self.control_known)
+                    end_uncertainty_s=None, detected=False, uncertain=not self.control_known or uncertainty is None)
                 self.drives.append(self.active)
             self.control_known = True
 
@@ -137,6 +137,7 @@ class MotionEvents:
                 self.epoch = epoch; self.previous = None; self.samples.clear()
                 self.baseline = 0; self.bias = [0.,0.,0.]; self.lift = None
                 self.turn = self.turn_quiet = None
+                self.cooldown.clear()
                 for d in self.drives: d['uncertain'] = True
             self.frame_key = key
             if not rows or raw.get('worker_ready') is not True or raw.get('paused') or packet['capture_monotonic_us']/1e6-rows[-1]['t']>.12:

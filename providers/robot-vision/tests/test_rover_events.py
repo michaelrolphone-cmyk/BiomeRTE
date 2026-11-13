@@ -109,6 +109,19 @@ class Events(unittest.TestCase):
         g=frame(11.02);g['capture_host_monotonic_interval_s']=[1000.99,1001.05]
         self.assertEqual(d.observe(g)['state']['frame_id'],g['frame_id'])
 
+    def test_reboot_clock_reset_does_not_silence_new_turn_events(self):
+        d=self.ready()
+        d.observe(frame(11.2,yaw_rate=30))
+        for t in [11,11.2]:
+            f=frame(t,yaw_rate=30,boot='reboot')
+            f['capture_host_monotonic_interval_s']=[v+1 for v in f['capture_host_monotonic_interval_s']]
+            f['sensor_packet']['capture_monotonic_us']-=10000000
+            for row in f['sensor_packet']['ahrs']['ahrs']['imu_samples']:row['monotonic_us']-=10000000
+            d.observe(f)
+        starts=[e for e in d.snapshot()['events'] if e['kind']=='turning' and e['phase']=='started']
+        self.assertEqual(len(starts),2)
+        self.assertEqual(starts[-1]['boot_id'],'reboot')
+
     def test_history_and_events_bounded(self):
         d=self.ready()
         for i in range(100):d.observe(frame(11+i*.2,yaw_rate=30 if i%2 else -30))

@@ -45,7 +45,7 @@ class AppliedControlStream:
                                 value,_=decode(message.data,4194304)
                                 issued=value.get('issued_utc_ms')
                                 if type(issued) in (int,float):
-                                    value['host_issue_age_s']=max(0.,time.time()-issued/1000.)
+                                    value['host_issue_age_s']=time.time()-issued/1000.
                                 self._deliver(value)
                             elif message.type in (WSMsgType.CLOSED,WSMsgType.CLOSE,WSMsgType.ERROR):
                                 break
