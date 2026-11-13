@@ -41,4 +41,28 @@ class SensorTicks(unittest.TestCase):
         self.assertEqual(service.live_frames.publish.call_count,1)
         self.assertTrue(stream.publish(packet(1200000),10.2,10.3))
 
+
+    def test_sensor_only_packet_survives_actual_shared_codec(self):
+        import struct,json
+        from leased_publish import LiveFrames
+        output=LiveFrames()
+        service=SimpleNamespace(config=dict(camera=dict(url='http://camera',source_id='cam')),
+            map_id='map',revision=3,session_id='session',live_frames=output,
+            _stream_motion_events=Mock(return_value=dict(state=dict(available=True),events=[])),
+            _stream_ahrs=Mock(return_value=dict(state='available')),_stream_radio=Mock(return_value={}),
+            _capture_sensor_stream=Mock(return_value={}),_drive_response_telemetry=Mock(return_value={}))
+        with output.subscribe() as inbox:
+            self.assertTrue(SensorTickStream(service).publish(packet(),10.,10.1))
+            data=inbox.get_nowait()
+        length=struct.unpack('!I',data[:4])[0]
+        self.assertEqual(length,len(data)-4)
+        header_size=struct.unpack('!I',data[4:8])[0]
+        metadata=json.loads(data[8:8+header_size])
+        self.assertEqual(data[8+header_size:],b'')
+        self.assertTrue(metadata['sensor_tick'])
+        self.assertFalse(metadata['image_available'])
+        self.assertEqual(metadata['frame_id'],'boot:1000000')
+        self.assertEqual(metadata['camera']['init_error'],'ESP_ERR_NOT_FOUND')
+        self.assertEqual(metadata['ahrs']['state'],'available')
+
 if __name__=='__main__':unittest.main()
