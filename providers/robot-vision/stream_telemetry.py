@@ -108,6 +108,26 @@ def bounded_metadata(metadata, maximum=15872):
         if size(value)>maximum:
             tof.pop("request_age_s",None)
             tof["scheduler_diagnostics_omitted"]=True
+    if size(value)>maximum:
+        # These are status-capability diagnostics, not sensor observations.
+        # Preserve every physical sample, original clock and range report.
+        for sensor, keys in (
+            (ahrs, ("map_id","calibration_id","session_id","accepted_observations",
+                "accepted_sensor_endpoints","pending_observation","max_evidence_gap_s",
+                "position_verified","navigation_usable","heading_available",
+                "camera_pose_corrected","metric_scale_available","motion_commands",
+                "physical_capture_time_uncertainty_s")),
+            (value.get("ultrasonic"), ("polls","snapshots_accepted","duplicate_snapshots",
+                "replayed_snapshots","boot_changes","last_attempt_at","buffer"))):
+            if isinstance(sensor,dict):
+                for key in keys:sensor.pop(key,None)
+        if isinstance(tof,dict) and isinstance(tof.get("baseline"),dict):
+            baseline=tof["baseline"]
+            for key in ("last_event","last_rejection","load_error","movement_threshold_m",
+                        "movement_hold_s","sample_count","edge_count","condition_number"):
+                baseline.pop(key,None)
+        value["status_diagnostics_compacted"]=True
+        value["status_detail_capability"]="robot.vision.status"
     if size(value) > maximum:
         raise ValueError("Live metadata exceeds stream header budget: "+str({k:size(v) for k,v in value.items()}))
     return value
