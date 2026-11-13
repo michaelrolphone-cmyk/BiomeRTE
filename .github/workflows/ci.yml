@@ -15,6 +15,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m unittest discover -v
+      - name: Qualify SDR routing, USB protocol and persistent adapter
+        run: |
+          python3 -m pip install numpy
+          python3 -m unittest discover -s providers/pi-sdr -p 'test*.py' -v
       - name: Qualify assistant workflows and recovery
         run: python3 -S -m unittest discover -s integrations/proactive_assistant/tests -v
       - name: Qualify the LM Studio coding adapter
