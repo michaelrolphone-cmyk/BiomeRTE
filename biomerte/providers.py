@@ -290,15 +290,7 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to='', pla
     if old.get('state') == 'queued':
         return old
     if old.get('state') in ('bound', 'fencing'):
-        if admitted(tx, tx.need('offers', old['offer'])):
-            # The anchor can stay bound for other subscribers after its owner
-            # releases. Reacquiring that owner's task is an explicit rejoin,
-            # not reuse of a logically released subscription.
-            if old.get('shared_owner_released') and old.get('owner') == ctx.actor:
-                old.pop('shared_owner_released')
-                tx.put('leases', old['id'], old)
-            return old
-        if not release(tx, old):
+        if admitted(tx, tx.need('offers', old['offer'])) or not release(tx, old):
             return old
         batch_full = promote(tx, ctx)
     req = {'id': key, 'task': task, 'contract': contract, 'resource': resource,
