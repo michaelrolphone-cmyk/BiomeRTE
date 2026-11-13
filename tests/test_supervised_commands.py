@@ -210,12 +210,40 @@ class RunnerTests(unittest.TestCase):
         worker, offer = self.worker(remote)
         original = worker.cleanup_results
         with mock.patch.object(worker, 'cleanup_results', side_effect=IOError('cleanup interrupted')):
-            with self.assertRaises(IOError):
-                worker.perform(self.action())
+            worker.perform(self.action())
+            self.assertEqual(supervised.pending(worker), [])
         try:
             worker.perform(self.action())
             self.assertEqual(remote.results['command']['result'], {'ok': True})
             self.assertEqual(supervised.pending(worker), [])
+        finally:
+            worker.db.close()
+
+    def test_failed_adapter_cleanup_keeps_diagnostics_without_holding_slot(self):
+        remote = Remote()
+        worker, offer = self.worker(remote)
+        offer['acknowledge_argv'] = [sys.executable, '-c', 'raise SystemExit(7)']
+        try:
+            worker.perform(self.action())
+            self.assertEqual(supervised.pending(worker), [])
+            self.assertEqual(worker.db.execute(
+                'SELECT id FROM result_cleanup').fetchall(), [('command',)])
+            self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
+            # A new fence must reach admission despite retained cleanup debt.
+            remote.call = lambda name, args=None, rid=None: {
+                'fences': [dict(id='new', guard='slot', resource='terminal')],
+                'actions': []} if name == 'provider.poll' else {}
+            class Pool:
+                failures, running = {}, {}
+                def dispatch(self, actions, fences=()):
+                    self.actions, self.fences = actions, fences
+                    return 0
+            pool = Pool()
+            worker.once(pool)
+            self.assertEqual([f['id'] for f in pool.fences], ['new'])
+            self.assertEqual(pool.actions, [])
+            self.assertEqual(worker.db.execute(
+                'SELECT id FROM result_cleanup').fetchall(), [('command',)])
         finally:
             worker.db.close()
 

@@ -176,7 +176,14 @@ def cleanup(worker, action, adapter, signature):
         if not worker.retire_result(action['id'], signature, row[0], json.loads(row[1]),
                                     adapter.get('acknowledge_argv')):
             return
-    worker.cleanup_results(action['id'])
+    try:
+        worker.cleanup_results(action['id'])
+    except Exception as error:
+        # The exact delivery ACK is already durable. File cleanup has its own
+        # retry queue and must not retain execution custody on this slot.
+        import logging
+        logging.warning('Acknowledged adapter cleanup deferred for %s: %s',
+                        action['id'], type(error).__name__)
     # Retire bulky runner copies only after the exact controller ACK is durable.
     directory = runner.location(os.path.join(os.path.dirname(worker.path), 'command-runners'), action['id'])
     receipt = worker.db.execute('SELECT signature,state,result_digest FROM supervised_delivery WHERE id=?',
