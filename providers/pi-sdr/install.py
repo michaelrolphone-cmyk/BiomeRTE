@@ -27,6 +27,7 @@ def main():
     biome=os.path.join(runtime,'biome')
     if a.phase=='prepare':
         subprocess.check_call([biome,'--home',home,'pair',a.url,'--label','Receive-only SDR provider'])
+        print(json.dumps({'required_scopes':['cap.offer','cap.status','cap.fenced','cap.configured','provider.claim','provider.result','provider.poll','offer:radio.sdr.receive:1','resource:radio.sdr.'+conf['node'][:24]]}))
         return
     if not os.path.exists(os.path.join(home,'manifest.json')):
         subprocess.check_call([biome,'--home',home,'pair',a.url,'--finish'])
