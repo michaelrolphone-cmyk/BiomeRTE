@@ -1245,6 +1245,13 @@ PRAGMA user_version=1;
             records = [json.loads(row[0]) for row in self._db.execute(
                 "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")]
             protected = set(protected_ids)
+            # Periodic disaster-recovery backups have a GLOBAL lifetime, not
+            # the lifetime of a particular map's two latest native saves.
+            full_backups = [r for r in records
+                if r.get("publication") == "complete_v2"
+                and r.get("metadata", {}).get("database_mode") == "full_backup"
+                and r.get("availability") != "unavailable"]
+            protected.update(r["checkpoint_id"] for r in full_backups[:5])
             newest = {}
             backends = {}
             for record in records:

@@ -90,6 +90,20 @@ class CheckpointReferenceTests(unittest.TestCase):
         cp = self.store.checkpoint(m, native, {"database_mode":"revision_reference"})
         self.assertEqual(self.store.get_checkpoint(cp["checkpoint_id"])["availability"], "available")
 
+    def test_hourly_backup_survives_same_map_routine_retention(self):
+        m = self.store.create_map({})["map_id"]
+        saved = []
+        for index in range(8):
+            cp = self.store.checkpoint(m, self.source, {
+                "database_mode":"revision_reference", "database_backup_interval_s":3600,
+                "checkpoint_origin":"automatic"})
+            saved.append(cp)
+            self.store.retire_superseded_checkpoints()
+        self.assertEqual(saved[0]["metadata"]["database_mode"], "full_backup")
+        self.assertEqual(self.store.get_checkpoint(saved[0]["checkpoint_id"])["availability"], "available")
+        self.assertEqual(len(list(self.store.checkpoint_dir.glob("*/vision.sqlite3"))), 1)
+        self.assertTrue(all(cp["publication"] == "revision_reference_v3" for cp in saved[1:]))
+
     def test_failed_conversion_restores_original_package(self):
         saved = [self.save(self.store.create_map({})["map_id"], False) for _ in range(2)]
         original = self.store._verified_checkpoint
