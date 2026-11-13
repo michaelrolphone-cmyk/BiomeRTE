@@ -11,7 +11,7 @@ class CaptureTests(unittest.TestCase):
   p=packet();p['ahrs']={'receiver_id':'camera','boot_id':'boot'}
   data,jpeg=read_capture(Response(wire(p)));self.assertEqual(data,p);self.assertIn(b'--biomeframe-not',jpeg)
  def test_cross_boot_or_truncation_rejected(self):
-  p=packet();p['radio']={'receiver_id':'camera','boot_id':'previous'}
+  p=packet();p['ahrs']={'receiver_id':'camera','boot_id':'previous'}
   with self.assertRaises(ValueError):read_capture(Response(wire(p)))
   with self.assertRaises(ValueError):read_capture(Response(wire(packet())[:-6]))
  def test_clock_preserves_capture_intervals_and_restarts(self):
@@ -32,16 +32,6 @@ class SensorAssociationTests(unittest.TestCase):
   frame=dict(frame_id=p['frame_id'],stream_epoch='stream',source_id='camera',calibration_id='cal',session_id='session',receive_decode_monotonic_s=999.,measurement_monotonic_s=10.,sensor_packet=p)
   result=model.evidence(frame)
   self.assertTrue(result['timing']['timing_qualified']);self.assertEqual(result['timing']['clock_qualification'],'same_device_capture_clock');self.assertTrue(result['sensors']['imu']['valid']);self.assertEqual(model._pending['candidates']['attitude']['frame_tick'],10.)
- def test_radio_age_uses_device_observation_not_receipt(self):
-  from capture_packet import frame_radio_snapshot
-  from radio_tracking import RadioTracking
-  p=packet();p['radio']=dict(schema=1,receiver_id='camera',boot_id='boot',uptime_ms=1000,sequence=1,wifi=[dict(id='aa:bb:cc:dd:ee:ff',address='aa:bb:cc:dd:ee:ff',name='AP',age_ms=10,observed_uptime_ms=990,sample_count=1)],ble=[])
-  envelope=frame_radio_snapshot(dict(sensor_packet=p,measurement_monotonic_s=10.,source_id='camera'))
-  self.assertEqual(envelope['request_duration_s'],0);self.assertEqual(envelope['observations'][0]['effective_age_ms'],10)
-  # Exercise the actual fingerprint grouping path without creating a model DB.
-  model=object.__new__(RadioTracking);model.max_source_age=15;model.max_span=1
-  groups=model._groups(envelope,10.)
-  self.assertAlmostEqual(groups[0][0]['observed_at_s'],9.99)
 
 class CameraCaptureTests(unittest.TestCase):
  def test_camera_thread_uses_capture_intervals_and_closes(self):

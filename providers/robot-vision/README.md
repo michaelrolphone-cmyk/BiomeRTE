@@ -31,8 +31,7 @@ An unknown pose is never an identity matrix or a zero-position estimate.
 - STATE/config.json holds non-secret camera/model/calibration settings.
 - STATE/observations holds SQLite state and immutable rolling image blobs.
 - STATE/maps holds backend saves.
-- STATE/radio/radio.sqlite3 holds the optional bounded radio model separately
-  from SLAM checkpoint packages.
+- ToF snapshots are read from the independent coordinator state path.
 - STATE/runtime.json selects the active map and calibration.
 - STATE/vision.sock is the owner-only local API.
 - The provider uses its own identity, worker ledger and LaunchAgent.
@@ -147,8 +146,7 @@ Python again.
 
 ## Capabilities
 
-All 29 names below have version :1. The original 13 envelopes are unchanged;
-the eight scale/metric-read, five radio/light and three AHRS contracts are additive.
+Capabilities use version :1 unless explicitly versioned otherwise.
 The BiomeRTE adapter
 wraps local responses under result. Inputs are optional unless specified.
 The worker advertises an operation as ready only when the running service lists
@@ -177,9 +175,8 @@ it as supported.
 | robot.map.scale.cancel | session_id required | Cancel scale collection and return the persisted session state |
 | robot.map.scale.reference | session_id and reference required | Replace an unapplied board reference and recompute preserved board evidence |
 | robot.map.metric.read | map_id, revision, attachment_id, bounds, kinds, cursor (object), limit | Qualified metric view at a pinned raw-map revision; explicit unavailable/stale state |
-| robot.radio.status | include_observations=false | Cached source freshness, receiver/model/learning health and optional exact telemetry envelope |
-| robot.radio.localize | none | Current coarse radio hypotheses, competing modes, heuristic support and explicit abstention |
-| robot.map.radio.read | map_id, revision, source_id, cursor (opaque string), limit | Learned radio distributions resolved at a pinned visual-map revision, with independent model revision and guarded pagination |
+| robot.tof.status | no inputs | Qualified collector freshness and ranging geometry |
+| robot.tof.localize | no inputs | Qualified ToF location or explicit unavailable state |
 | robot.camera.light.status | none | Explicit firmware light command/driver state with physical-readback qualification |
 | robot.camera.light.set | nonempty partial on, brightness, rgb | One explicit authenticated light command; firmware result and unknown-outcome semantics retained |
 | robot.ahrs.status | none | Cached AHRS health, per-sensor freshness, reference identity and calibration-request state |
@@ -287,203 +284,30 @@ metadata and pinned keyframe images are durable. Full video is not journaled to
 BiomeRTE: requested images are uploaded on demand in checksum-verified chunks.
 
 
-## Adaptive radio fingerprints
+## Wi-Fi FTM time-of-flight status
 
-Wi-Fi and BLE observations provide coarse evidence about previously visited map
-regions. The radio model learns a conditional RSSI distribution for each source
-and spatial region, then compares a new fingerprint with those distributions.
-It can suggest native keyframes for visual relocalization and report whether a
-coarse radio estimate agrees with a valid visual pose. Its score is a heuristic,
-not a calibrated probability or a measured transmitter range. It never sets
-visual localization to valid, supplies a heading, or grants navigation authority.
+BLE and Wi-Fi RSSI scanning, fingerprint training, fingerprint database writes
+and RSSI localization contracts have been retired. Ordinary Wi-Fi connectivity,
+camera lighting, AHRS, sonar and persistent SLAM maps remain available.
 
-### Configuration and firmware contract
+The independent FTM coordinator writes its bounded latest snapshot to
+`~/.local/share/biome-tof/latest.json`, configured with `tof.state_path`.
+`robot.tof.status:1` and `robot.tof.localize:1` expose that qualified snapshot.
+The file reader validates schema/size, removes legacy signal-strength fields,
+and invalidates position/hypotheses when the collector is stale. Missing or
+inconsistent anchor geometry is explicitly unavailable, never a zero pose.
 
-The HTTP client implements the
-[pinned ESP32 camera radio/light contract](https://github.com/michaelrolphone-cmyk/RiscRTE-System-Apps/blob/801fd5ddb1a4685c4a9a6d999a430806b96835b4/firmware/esp32cam-rtsp-radio/README.md).
-It polls `GET /api/telemetry`; it does not enable scans, change firmware radio
-settings, or subscribe to the firmware's optional UDP output. Firmware scan
-periods and retained observation ages therefore remain independent of the
-host polling interval.
+Live frame metadata carries ToF status with its own timestamp and freshness.
+FTM observations are asynchronous to camera capture; their arrival does not
+establish capture-clock alignment or a calibrated transform into the SLAM world.
+No unqualified FTM position is injected into the map. Independent surveyed
+anchor geometry and a qualified world alignment are required before navigation
+can use a position fix.
 
-Radio polling and learning are opt-in. Existing configurations without a
-`radio` section behave as `enabled: false`. Merge a section like this into
-`STATE/config.json` when installing the feature on compatible firmware:
-
-```json
-{
-  "radio": {
-    "enabled": true,
-    "receiver_calibration_id": "rssi-v1",
-    "poll_interval_s": 5.0,
-    "network_timeout_s": 2.0,
-    "freshness_threshold_s": 15.0,
-    "prior_max_age_s": 5.0,
-    "pose_history_s": 180.0,
-    "pose_history_limit": 1200,
-    "mapping": {
-      "max_source_age_s": 15.0,
-      "max_fingerprint_span_s": 1.0,
-      "max_pose_time_delta_s": 0.5,
-      "spatial_bin_size_map_units": 0.5,
-      "cluster_radius_map_units": 1.0,
-      "independent_sample_interval_s": 1.0,
-      "min_anchor_samples": 3,
-      "min_source_reliability": 0.15,
-      "decay_half_life_s": 86400.0,
-      "retention_s": 1209600.0
-    }
-  }
-}
-```
-
-`radio.mapping` accepts the model settings defined in
-[radio_map.py](radio_map.py); unknown mapping keys are rejected.
-`receiver_calibration_id` belongs directly under `radio`, with default
-`rssi-v1`. Give a changed antenna, radio gain, or receiver RSSI calibration a
-new identity so incompatible receiver statistics remain separate. Camera lens
-calibration identity and firmware receiver identity are also retained.
-
-By default, the HTTP origin uses the camera host: an RTSP URL uses HTTP port 80,
-not the RTSP port. An optional `radio.base_url` may select an HTTP(S) origin on
-that same host. Authentication uses the existing camera URL or explicit camera
-username/password configuration; the client does not copy credentials into
-telemetry or redirect them to another host. HTTP requests run in a background
-poller with a latest-only buffer. Radio model work also runs outside the visual
-tracking path. Model storage failure is reported through radio status while
-vision continues; invalid configuration remains an explicit startup error.
-
-### Learning a changing RF landscape
-
-Training requires a successfully published, independently valid visual pose in
-the same map and calibration, a retained keyframe with the same capture identity,
-and a compatible radio observation interval. A radio-predicted location cannot
-label its own training sample. A radio-prior-assisted visual recovery can
-contribute only after the normal visual geometry checks independently accept its
-pose. A model with no qualifying visual observations remains empty.
-
-The model separates spatial variation from instability. It divides positions
-relative to each native keyframe into spatial cells and learns each source's
-RSSI mean, variance and reliability within those cells. A source that differs
-between places can remain useful; variation within one place and weak or aged
-support reduce its reliability. RSSI observations decay with a one-day default
-half-life and expire after fourteen days. New independently anchored visits can
-therefore adapt the model to changed transmitters, people and environmental
-conditions. It does not identify people, classify a transmitter as moving, or
-infer the physical cause of a changed signal.
-
-The default cell edge is 0.5 raw map units. The effective edge is capped at
-`cluster_radius_map_units / sqrt(3)`, so one cell cannot silently pool positions
-farther apart than the spatial grouping scale. These are heuristic scales in
-the existing monocular coordinate system, not metres. Map reads expose
-`region_id`, `spatial_cell`, effective cell size, visual frame count, sampling
-epoch count, decayed weight and maturity.
-
-Repeated scans retain useful variation without becoming repeated independent
-pose confirmations. Records sharing a visual frame or a one-second default
-sampling epoch share their learning weight. By default, a region needs at
-least three visual frames, three sampling epochs, and three overlapping sources
-with reliability at least 0.15 before it can support a coarse position.
-Insufficient support returns `insufficient_model_support` with
-`position: null`; candidate evidence remains available.
-
-Comparison uses a reliability-weighted mean residual. It estimates a bounded
-common RSSI offset using a weighted median, with a default maximum magnitude of
-6 dB, and penalizes that correction. Common attenuation across several radios
-is not multiplied into several independent confirmations. The implementation
-does not claim that this simple correction explains every multipath,
-orientation or environmental effect.
-
-Wi-Fi identity uses BSSID rather than SSID. BLE keeps address type and address,
-or a supplied iBeacon UUID/major/minor identity, with its stability provenance.
-Names are not identities; a beacon advertisement is not authenticated proof of
-a fixed transmitter. Rotating/private addresses can lose continuity. Missing
-a transmitter from one scan is not proof that it moved or that the robot left
-a place.
-
-All retained matching spatial regions are assessed for competing modes before
-the returned-candidate limit is applied. Complete-link grouping requires every
-pair in one mode to lie within the configured radius, preventing a chain of
-nearby matches from joining distant places. If a second separated mode has at
-least 0.8 of the best mode's similarity by default, the result is
-`ambiguous` with `position: null`. The output retains bounded candidate/mode
-summaries, total counts and truncation flags. It never averages two distant
-plausible places into an asserted midpoint. Reported covariance and spread
-describe the retained conditional observations, not a physical accuracy bound.
-
-### Observation timing and coherent map evidence
-
-A fresh telemetry response can contain old RF measurements. The client retains
-firmware receiver/boot identity, source observation counters and per-source age;
-cached ages continue advancing with the Mac monotonic clock. Repeated HTTP
-publication does not create a new RF sample or refresh its acquisition time.
-Persistent per-source watermarks reject replay, including across host restarts,
-and retired receiver boots are not treated as new measurements.
-
-The model estimates each radio observation's host time from receipt time minus
-firmware age and half the HTTP request duration. Half the request duration is
-retained as transport uncertainty. It groups sources within a one-second default
-span and requires each source's age-aware interval to align with an independent
-visual pose within 0.5 seconds by default. Late visual processing can retry the
-join against bounded pose history; an old RF payload still cannot be trained
-again merely because a new visual result arrived.
-
-This is explicitly approximate host receive/decode alignment. The firmware
-stream provides no synchronized camera exposure timestamp, and
-`physical_capture_time_uncertainty_s` remains unknown. These limits are
-policy thresholds, not measured synchronization accuracy. Consumers must inspect
-the returned observation age, expiry, clock qualification and availability.
-A radio estimate newer than the visual frame is not presented as coherent
-support for that earlier frame.
-
-Fingerprints are partitioned by map, lens calibration, receiver and receiver
-calibration identity. Positions are stored relative to their native keyframe
-and resolved against the requested map geometry on read. Loop corrections can
-therefore update their map positions without rewriting radio samples. A culled
-anchor, or reuse of its numeric ID for a different captured frame, cannot
-silently rebind the evidence. Context changes invalidate cached predictions
-until the matching geometry is available again.
-
-`robot.map.radio.read` is the dedicated layer reader. Its `revision` input
-pins the visual map revision; the response also carries the independent radio
-model revision and evaluation time. Pass the returned opaque `next_cursor`
-string unchanged, together with that same visual map revision and query.
-Pagination fixes the decay evaluation time and rejects changed model/geometry
-state; restart the traversal on a changed cursor. The radio layer retains raw
-map units even if a separate metric attachment exists.
-
-### Bounded persistence and visual relocalization
-
-Learned data live in `STATE/radio/radio.sqlite3`, separately from observation
-SQLite backups and backend checkpoint packages. Radio state is not copied into
-every SLAM checkpoint. Default bounds are 512 retained training records,
-16 records per native anchor shared across its spatial cells, 128 native
-anchors, 16 receiver/map contexts, and 96 source observations per fingerprint.
-Retention preserves recent and temporally distributed records with spatial-cell
-diversity, then recomputes statistics from the retained history.
-
-The main SQLite database is capped at 16 MiB by default. SQLite's delete-mode
-rollback journal may temporarily require additional disk; the limit is not a
-bound on every temporary filesystem byte. There is no persistent WAL. Replay
-protection is separately bounded at 4,096 source watermarks and 64 boot records
-per receiver, with thirty-day default retention. Exhausted deduplication or boot
-capacity fails closed instead of forgetting protection and relearning stale
-events. Status exposes counts, settings, database size and model errors.
-
-Fresh radio candidates can supply a first visual relocalization pass. The
-backend checks current retained native keyframe IDs before limiting the pass,
-then uses unchanged descriptor, correspondence, PnP and geometric acceptance
-checks. If that pass fails, normal visual place recognition still runs.
-`radio_prior.supported`, candidate IDs and the last native result distinguish
-available source support from an actually exercised successful recovery.
-
-Installing the Python feature alone does not install the native prior hook.
-Run the existing `setup_slam.py --phase patches` step against the intended
-state directory and load the patched backend through the normal service
-lifecycle before expecting the first pass. An older native backend reports
-`radio_prior.supported: false` and continues ordinary visual operation.
-Fixture and transform tests do not establish live RF accuracy, actual camera
-firmware compatibility, or successful relocalization on the robot.
+The provider release must include `rover-relay-contracts.json` alongside
+`biome_provider.py`; starting a process alone does not verify advertisement.
+Local lifecycle health is independent of detailed map/metric queries, so a
+map query cannot block advertisement of independent ToF and stream capabilities.
 
 ## Manual camera lighting
 

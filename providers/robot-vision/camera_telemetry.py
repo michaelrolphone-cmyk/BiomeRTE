@@ -1,15 +1,8 @@
-"""Bounded ESP32 camera HTTP access and a latest-snapshot telemetry poller.
-
-CameraTelemetrySource.snapshot() performs no I/O. Light calls are explicit,
-synchronous operations for an API worker, never the vision-frame loop. Firmware
-payloads remain unaltered; host receipt, age, and deduplication metadata live
-beside them. Driver receipts do not establish physical light output.
-"""
+"""Authenticated camera HTTP access for light, AHRS, sonar and capture requests."""
 from __future__ import annotations
 
 import base64
 import copy
-import hashlib
 import json
 import math
 import re
@@ -88,41 +81,7 @@ def validate_telemetry_snapshot(value):
         _integer(value.get(name), name)
     if value.get("timestamp_ms") is not None:
         _integer(value["timestamp_ms"], "timestamp_ms", maximum=(1 << 64) - 1)
-    for radio, capacity in (("wifi", 32), ("ble", 64)):
-        rows = value.get(radio)
-        if not isinstance(rows, list) or len(rows) > capacity:
-            raise ValueError(radio + " must be a bounded observation array")
-        identities = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                raise ValueError("radio observation must be an object")
-            _text(row.get("id"), "id", 128)
-            address = _text(row.get("address"), "address", 17)
-            if not MAC.fullmatch(address):
-                raise ValueError("invalid transmitter address")
-            _text(row.get("name"), "name", 256, empty=True)
-            for name in ("age_ms", "observed_uptime_ms"):
-                _integer(row.get(name), name)
-            _integer(row.get("sample_count"), "sample_count", minimum=1)
-            address_type = None
-            if radio == "ble":
-                address_type = _integer(row.get("address_type"), "address_type", maximum=255)
-            identity = (address.lower(), address_type)
-            if identity in identities:
-                raise ValueError("duplicate transmitter in snapshot")
-            identities.add(identity)
-            # HTTP snapshots stream rows after the envelope was generated.
-            # observed_uptime_ms can therefore be later than envelope uptime.
     return value
-
-
-def observation_id(source_id, snapshot, radio, row):
-    """Stable across HTTP republication; boot/address type separate identities."""
-    identity = [source_id, snapshot["receiver_id"], snapshot["boot_id"], radio,
-                row["address"].lower(), row.get("address_type") if radio == "ble" else None,
-                row["observed_uptime_ms"], row["sample_count"]]
-    body = json.dumps(identity, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    return "camera-radio:" + hashlib.sha256(body).hexdigest()
 
 
 def encode_light_update(update):
@@ -341,13 +300,14 @@ class CameraHTTPClient:
                                   response=value, outcome_known=False) from None
 
 
-class CameraTelemetrySource:
+
+class SensorTelemetrySource:
     """One background HTTP poller with a bounded, latest-only snapshot buffer.
 
     snapshot() returns unmodified firmware data plus host provenance. Effective
     age adds elapsed host monotonic time to each firmware age. The request
     duration is retained separately as transport timing uncertainty; receipt
-    time is never relabeled as the radio observation time.
+    time is never relabeled as the sensor observation time.
     """
     def __init__(self, camera_config, config=None, *, client=None,
                  monotonic=None, utc_clock=None):
@@ -390,16 +350,10 @@ class CameraTelemetrySource:
             self._stop.wait(self.poll_interval_s)
 
     def _read_snapshot(self):
-        return validate_telemetry_snapshot(self.client.get_telemetry())
+        raise NotImplementedError("A sensor source must select and validate its endpoint")
 
     def _observations(self, value, elapsed):
-        return [
-            {"radio": radio, "index": index,
-             "source_observation_id": observation_id(self.source_id, value["telemetry"], radio, row),
-             "effective_age_ms": row["age_ms"] + elapsed * 1000.0}
-            for radio in ("wifi", "ble")
-            for index, row in enumerate(value["telemetry"][radio])
-        ]
+        raise NotImplementedError("A sensor source must preserve its measurement ages")
 
     def poll_once(self):
         """Perform one polling attempt; intended for the poller or diagnostics."""
@@ -497,14 +451,6 @@ class CameraTelemetrySource:
             result["receiver_id"] = latest["telemetry"]["receiver_id"]
             result["boot_id"] = latest["telemetry"]["boot_id"]
         return result
-
-    def light_status(self):
-        """Explicit HTTP read for an API worker, independent of radio polling."""
-        return self.client.get_light()
-
-    def set_light(self, update):
-        """Explicit one-shot light mutation; no polling or automatic retries."""
-        return self.client.set_light(update)
 
     def close(self):
         self._stop.set()

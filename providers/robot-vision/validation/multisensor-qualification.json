@@ -10,5 +10,54 @@
   "deployment": "not activated: preserve independent driving experiment",
   "physical_mapping_qualification": "not performed",
   "front_sonar_height_above_floor_m": 0.0254,
-  "front_sonar_below_camera_m": 0.0381
+  "front_sonar_below_camera_m": 0.0381,
+  "latest_model_revision": {
+    "local_mapping_tests_run": 20,
+    "local_mapping_skips": 1,
+    "automatic_calibration_tests_run": 6,
+    "full_regression": "pending CI",
+    "sensor_model": "20mm photo-grid measured positions; front/left/right25.4mm high; rear50.8mm; measured rear tire envelope plus6.35mm protrusion",
+    "R_camera_imu": [
+      [
+        -1,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        -1
+      ]
+    ],
+    "axis_evidence": {
+      "positive_yaw": "left",
+      "negative_roll": "front_up",
+      "positive_pitch": "right_side_up"
+    },
+    "automatic_gyro_calibration": "two distinct fresh stationary captures plus quiet IMU; background two-second firmware window; does not block SLAM or video",
+    "native_activation": "blocked: native terminal provider is not acknowledging fences; Pi SSH to Mac lacks authentication"
+  },
+  "R_camera_imu": [
+    [
+      -1,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      -1
+    ]
+  ],
+  "axis_model_evidence": "IMU board vertical behind camera, live roll near-90deg; Euler yaw is world-up rotation; tests use vertical baseline"
 }

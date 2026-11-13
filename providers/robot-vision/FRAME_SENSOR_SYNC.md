@@ -7,15 +7,14 @@ own camera thread and publishes only the latest complete image/sensor packet.
 It makes no network calls from the vision-frame processing loop.
 
 Each observed frame retains the real device capture timestamp, receiver/boot
-identity, AHRS sample times and Wi-Fi/BLE observation times. Relative native
+identity, AHRS and sonar sample times. Relative native
 SLAM timestamps use capture intervals, with a fixed host epoch anchor per boot.
 Decode time remains separately labeled. Boot changes keep tracking time
 monotonic without changing the map identity.
 
 AHRS evidence is frozen before visual tracking from the same image packet.
-Radio training/estimation uses the packet's observation times against the
-corresponding capture-time visual pose history. Unlocalized frames do not
-become fabricated radio training positions. Live AHRS values are correlated to
+Independent FTM coordinator observations retain their own clocks and freshness;
+they are not asserted to be synchronized capture measurements. Live AHRS values are correlated to
 the displayed frame; old independently polled values cannot masquerade as that
 frame's measurements. Legacy telemetry polling remains for health, explicit
 sensor APIs and camera control.

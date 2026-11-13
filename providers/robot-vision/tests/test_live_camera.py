@@ -96,8 +96,7 @@ class LiveCameraTests(unittest.TestCase):
                 # query and capture paths remain under test.
                 with patch.object(service.metric, 'start_worker'), \
                      patch.object(service.atlas, 'start'), \
-                     patch.object(service.radio, 'start'), \
-                     patch.object(service.ahrs, 'start'), \
+                             patch.object(service.ahrs, 'start'), \
                      patch.object(service.ultrasonic, 'start'):
                     with service.live_frames.subscribe() as inbox:
                         service.start()

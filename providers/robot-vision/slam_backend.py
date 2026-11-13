@@ -246,6 +246,9 @@ class SlamBackend:
         tracker["num_features"] = int(self.config.get("num_features", 2000))
         loop = copy.deepcopy(LoopDetectorConfigs.DBOW3)
         self._states = SlamState
+        from mapper_checkpoint import install_owner_capture
+        from pyslam.slam.local_mapping import LocalMapping
+        install_owner_capture(LocalMapping)
         runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
                        environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
         runtime.preserve_map_on_tracking_loss = True

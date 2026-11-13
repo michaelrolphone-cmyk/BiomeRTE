@@ -156,7 +156,7 @@ class AHRSServiceTests(unittest.TestCase):
         self.assertTrue(snapshot["localization"]["valid"])
         self.assertFalse(snapshot["spatial_evidence"]["ahrs"]["available"])
         self.assertEqual(service.query("robot.vision.status")["availability"], "available")
-        self.assertIsInstance(service.query("robot.radio.status"), dict)
+        self.assertIsInstance(service.query("robot.tof.status"), dict)
         self.assertFalse(self.source.status()["supported"])
         self.assertEqual(self.client.calls, 1)
 
@@ -284,7 +284,8 @@ class AHRSProviderTests(unittest.TestCase):
     def test_additive_contracts_and_guidance_preserve_mutation_distinction(self):
         import biome_provider as provider
         expected = {"robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate"}
-        self.assertEqual(len(CAPABILITIES), 38)
+        self.assertIn("robot.tof.status",CAPABILITIES)
+        self.assertNotIn("robot.radio.status",CAPABILITIES)
         self.assertEqual(set(CAPABILITIES), {spec["name"] for spec in provider.CONTRACTS.values()})
         self.assertTrue(expected.issubset(CAPABILITIES))
         for name in expected:
