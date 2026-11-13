@@ -73,6 +73,8 @@ class VisionService:
                                    source=radio_source, model=radio_model)
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
         self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
+        from drive_response import DriveResponseMonitor
+        self.drive_response = DriveResponseMonitor(self.ahrs.source, config.get("drive_response", {}))
         mapping = config.get("multisensor_mapping", {})
         self.pose_estimator = AttitudePoseEstimator(mapping.get("ahrs"))
         self.pose_timeline = PoseTimeline()
@@ -339,6 +341,7 @@ class VisionService:
         self.atlas.start(self)
         self.radio.start()
         self.ahrs.start()
+        self.drive_response.start()
         self.ultrasonic.start()
         self.camera.start()
         from live_camera import LiveCamera
@@ -599,6 +602,7 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
+            **self._drive_response_telemetry(),
             "radio": self._stream_radio(frame),
             "ahrs": self._stream_ahrs(frame),
             "ultrasonic": self._stream_ultrasonic(),
@@ -640,6 +644,7 @@ class VisionService:
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
                     radio=self._stream_radio(frame), ahrs=self._stream_ahrs(frame),
                     ultrasonic=self._stream_ultrasonic(),
+                    **self._drive_response_telemetry(),
                     map_snapshot_required_on_revision_gap=True)
 
     def _sonar_anchor(self, map_id, identifier, revision=None):
@@ -742,6 +747,13 @@ class VisionService:
         for observation in captured['observations']:observation['effective_age_ms']+=age*1000.
         return {**self.radio.status(include_observations=False),'telemetry':captured,
                 'frame_id':frame['frame_id'],'sample_reference':'camera_capture'}
+
+    def _drive_response_telemetry(self):
+        monitor = getattr(self, "drive_response", None)
+        if monitor is None:
+            return {}
+        state = monitor.snapshot()
+        return {"events": state.pop("events"), "drive_response": state}
 
     def _stream_ahrs(self,frame=None):
         """Publish cached sensor values with original source identity and timing."""
@@ -1002,6 +1014,7 @@ class VisionService:
                 return {"availability": "unavailable", "reason": "ahrs_snapshot_unavailable",
                         "status": self.ahrs.status()}
             return {"availability": "available", "snapshot": snapshot,
+                    **self._drive_response_telemetry(),
                     "interpretation": "inspect_each_sensor_validity_age_frame_and_units"}
         if operation == "robot.ahrs.calibrate":
             if inputs:
@@ -1237,6 +1250,8 @@ class VisionService:
 
     def close(self):
         self._stop.set()
+        if getattr(self, "drive_response", None) is not None:
+            self.drive_response.close()
         if getattr(self, "atlas", None) is not None:
             self.atlas.close()
         if self._live_camera is not None:
