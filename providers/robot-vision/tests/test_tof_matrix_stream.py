@@ -105,4 +105,31 @@ class ToFMatrixStreamTests(unittest.TestCase):
         self.assertEqual(packed["tof"]["anchor_geometry"],positions)
         self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
 
+    def test_status_diagnostics_yield_to_physical_samples_under_dynamic_pressure(self):
+        value=self.payload()
+        value["ahrs"].update(map_id="map",calibration_id="cal",session_id="session",
+            accepted_observations=100,accepted_sensor_endpoints=10,pending_observation=None,
+            max_evidence_gap_s=.5,position_verified=False,navigation_usable=False,
+            heading_available=True,camera_pose_corrected=False,metric_scale_available=False,
+            motion_commands=False,physical_capture_time_uncertainty_s=None,
+            boot_id="boot",sequence=25)
+        value["tof"]["baseline"]={"epoch":2,"revision":8,"frame_id":"relative",
+            "valid":True,"status":"ready","last_event":{"diagnostics":"x"*800},
+            "refinement":{"revision":8,"accepted":7,"state":"refined"}}
+        initial=bounded_metadata(value)
+        maximum=size(initial)-250
+        before=copy.deepcopy(value)
+        packed=bounded_metadata(value,maximum)
+        self.assertLessEqual(size(packed),maximum)
+        self.assertEqual(value,before)
+        self.assertTrue(packed["status_diagnostics_compacted"])
+        self.assertEqual(packed["status_detail_capability"],"robot.vision.status")
+        self.assertEqual(packed["ahrs"]["ahrs"],value["ahrs"]["ahrs"])
+        self.assertEqual(packed["ahrs"]["boot_id"],"boot")
+        self.assertEqual(packed["ahrs"]["sequence"],25)
+        self.assertEqual(packed["ultrasonic"],value["ultrasonic"])
+        self.assertEqual(packed["tof"]["baseline"]["revision"],8)
+        self.assertEqual(packed["tof"]["baseline"]["refinement"]["accepted"],7)
+        self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
+
 if __name__=="__main__":unittest.main()
