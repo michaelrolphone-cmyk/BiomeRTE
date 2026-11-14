@@ -12,6 +12,25 @@ from sensor_push import ClockAlignment, SensorPushReceiver
 
 
 class ClockTests(unittest.TestCase):
+    def test_push_cache_replaces_http_without_refreshing_old_data(self):
+        from ahrs_source import AHRSTelemetrySource
+        from camera_telemetry import SensorTelemetrySource
+        client=types.SimpleNamespace(get_ahrs=lambda:(_ for _ in ()).throw(AssertionError('HTTP should not run')))
+        raw=dict(schema=1,type='ahrs',receiver_id='rover',boot_id='boot',uptime_ms=1000,sequence=1,
+                 ahrs=dict(worker_ready=True,paused=False))
+        source=AHRSTelemetrySource({},dict(enabled=True),client=client,monotonic=lambda:10.)
+        source.set_push_source(lambda:(raw,8.9,9.))
+        self.assertTrue(source.poll_once())
+        self.assertGreaterEqual(source.snapshot()['elapsed_since_receive_s'],1.)
+        source.set_push_source(lambda:None)
+        self.assertFalse(source.poll_once())
+        generic=SensorTelemetrySource({},dict(enabled=True),client=object(),monotonic=lambda:10.)
+        generic._read_snapshot=lambda:(_ for _ in ()).throw(AssertionError('HTTP should not run'))
+        generic._observations=lambda value,elapsed:[]
+        generic.set_push_source(lambda:(dict(receiver_id='rover',boot_id='boot',uptime_ms=1000),8.9,9.))
+        self.assertTrue(generic.poll_once())
+        self.assertEqual(generic.snapshot()['elapsed_since_receive_s'],1.)
+
     def test_publisher_does_not_require_retired_radio_stream(self):
         module=types.ModuleType('camera_telemetry');module.CameraHTTPClient=object
         packet_module=types.ModuleType('capture_packet');packet_module.validate_packet=lambda p,**kw:p

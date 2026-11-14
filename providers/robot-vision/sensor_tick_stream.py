@@ -16,10 +16,24 @@ class SensorTickStream:
         self.last_identity=None
         self.error=None
         self.published=0
+        self._push_snapshot=None
+
+    def pushed_sensor(self,name):
+        snapshot=self._push_snapshot
+        if snapshot is None:return None
+        packet,interval=snapshot
+        value=packet.get(name)
+        if value is None:return None
+        # Cache consumers retain the original device-clock interval. Re-reading
+        # a cached packet cannot give it a new receipt time.
+        return value,interval[0],interval[1]
 
     def start(self):
         from sensor_push import SensorPushReceiver
         self.push=SensorPushReceiver(self)
+        if self.push.configured:
+            self.service.ahrs.set_push_source(lambda:self.pushed_sensor('ahrs'))
+            self.service.ultrasonic.set_push_source(lambda:self.pushed_sensor('ultrasonic'))
         self.push.start()
         self.thread=threading.Thread(target=self._run,name='sensor-tick-stream',daemon=True)
         self.thread.start()
@@ -32,6 +46,8 @@ class SensorTickStream:
         if identity==self.last_identity:return False
         age=(packet['served_monotonic_us']-packet['capture_monotonic_us'])/1e6
         interval=[started-age,received-age] if capture_interval is None else capture_interval
+        if capture_interval is not None:self._push_snapshot=(packet,interval)
+        publication_started=time.monotonic()
         from datetime import datetime,timezone
         frame=dict(frame_id=packet['frame_id'],sensor_packet=packet,
             source_id=self.service.config['camera'].get('source_id','camera'),
@@ -47,11 +63,13 @@ class SensorTickStream:
             source_timestamp=None,source_timestamp_status='sensor_tick_not_camera_exposure',
             sensor_delivery='websocket_push' if capture_interval is not None else 'http_sensor_tick',
             sensor_clock_uncertainty_s=(interval[1]-interval[0])/2,
+            sensor_stream_sequence=packet.get('stream_sequence'),
             map_id=self.service.map_id,map_revision=self.service.revision,
             session_id=self.service.session_id,ahrs=self.service._stream_ahrs(frame),
             ultrasonic=self.service._capture_sensor_stream(frame,'ultrasonic'),
             motion_events=events,**(self.service._drive_response_telemetry()
                 if hasattr(self.service,'_drive_response_telemetry') else {}))
+        metadata['sensor_enrichment_s']=time.monotonic()-publication_started
         self.service.live_frames.publish(metadata,b'')
         self.last_identity=identity;self.published+=1;self.error=None
         return True
