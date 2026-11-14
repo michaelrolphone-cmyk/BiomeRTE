@@ -99,10 +99,13 @@ class SharedCameraRig:
   self.front_clock=CaptureClock();self.rear_clock=CaptureClock();self.front=deque(maxlen=128)
   self.config=validate(json.loads(self.path.read_text())) if self.path.exists() else copy.deepcopy(DEFAULT)
   self.stamp=None;self.previous=None;self.source_epoch=None;self.snapshot=None
+  from rear_sensor_push import RearSensorIngress
+  self.sensors=RearSensorIngress(self)
  def configure(self,value):
   value=validate(value);atomic_json(self.path,value)
   return {"availability":"available","configuration":value,"applied":"worker_hot_reload"}
  def start(self):
+  self.sensors.start()
   if self.thread is None:
    self.thread=threading.Thread(target=self._run,name="slam-rear-tracking",daemon=True);self.thread.start()
   return self
@@ -222,6 +225,7 @@ class SharedCameraRig:
    "enabled":self.config["rear"]["enabled"],"worker_thread":self.thread.name if self.thread else None,
    "alive":bool(self.thread and self.thread.is_alive()),"processed_frames":self.processed,
    "skipped_frames":self.skipped,"error":self.error,"camera":self.camera.status() if self.camera else None,
+   "sensor_push":self.sensors.status(),
    "configuration":copy.deepcopy(self.config),"clock_sync":"boot_scoped_device_capture_to_shared_host_monotonic"}
  def query(self,operation,inputs):
   with self.lock:captured=self.latest;snapshot=copy.deepcopy(self.snapshot)
@@ -241,6 +245,7 @@ class SharedCameraRig:
   return snapshot or {"availability":"unavailable","camera_id":"rear","map_id":self.service.map_id,
                       "reason":self.error or "rear_tracking_not_ready"}
  def close(self):
+  self.sensors.close()
   self.stop.set()
   if self.camera:self.camera.close()
   if self.thread:self.thread.join()
