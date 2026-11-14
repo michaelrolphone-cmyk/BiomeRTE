@@ -28,6 +28,7 @@ from vision_config import DEFAULT_STATE, atomic_json, load_config
 from vision_store import VisionStore
 from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from tof_source import read_tof
+from tof_registration import FrameRegistration
 from ahrs_tracking import AHRSTracking
 from camera_telemetry import CameraHTTPError
 from ultrasonic_source import UltrasonicSource
@@ -160,6 +161,31 @@ class VisionService:
         self.atlas.register(self.map_id)
         self._world_lost_frames = set()
         self.atlas.sonar_entities = self._sonar_entities
+        self.tof_registration = FrameRegistration(self.state_dir / 'tof-registration.json', self._sonar_anchor,
+                                                  config.get('tof_registration', {}))
+        self.atlas.registration_status = self._registration_for_map
+
+    def _registration_for_map(self, map_id, revision):
+        registrar = getattr(self, "tof_registration", None)
+        result = (registrar.status(read_tof(self.tof_path), map_id, revision) if registrar is not None else
+                  {"valid": False, "status": "registration_unavailable"})
+        result.update(map_id=map_id, map_revision=revision)
+        return result
+
+    def _read_tof(self):
+        data = read_tof(self.tof_path)
+        registrar = getattr(self, "tof_registration", None)
+        if registrar is not None:
+            data["registration"] = registrar.stream_status(data, self.map_id, self.revision)
+            data["registration"].update(map_id=self.map_id, map_revision=self.revision)
+            for anchor in [*data.get("anchor_geometry", []), *(data.get("baseline") or {}).get("positions", [])]:
+                prior = registrar.floor_priors.get(str(anchor.get("bssid", "")).lower())
+                if prior is not None:
+                    anchor["floor_prior"] = prior
+        position = data.get("position")
+        if data.get("valid") and isinstance(position, dict):
+            position.setdefault("frame_id", (data.get("frame") or {}).get("frame_id"))
+        return data
 
     def _map_metadata(self, extra=None):
         return {
@@ -595,6 +621,16 @@ class VisionService:
                         keyframe,self.revision)
             obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
             obstacle_status["metric_odometry"] = metric_pose
+        if getattr(self, "tof_registration", None) is not None:
+            try:
+                events = self._stream_motion_events(frame).get("events", [])
+                frame["tof_floor_motion_eligible"] = not any(e.get("kind") == "pickup" and
+                    time.time()-e.get("timestamp", 0) < 5 for e in events)
+                self.tof_registration.observe(frame, localization, read_tof(self.tof_path), keyframe,
+                    attitude, self.pose_estimator.mount if self.pose_estimator.mount_rank >= 3 else None)
+                self.tof_registration.refresh_stream_status(read_tof(self.tof_path), self.map_id, self.revision)
+            except Exception:
+                LOG.exception("ToF registration observation deferred; native mapping preserved")
         self._last_tracking_valid = bool(localization.get("valid"))
         self._performance_stages["sensor_fusion"] = (time.monotonic()-stage_started)*1000
         frame["processing_performance"] = dict(self._performance_stages)
@@ -617,7 +653,7 @@ class VisionService:
             "robot_velocity": {"availability": "available" if metric_pose.get("valid") else "unavailable",
                                "velocity_m_s": metric_pose.get("velocity_m_s"),
                                "source": "estimated_planar_sonar_odometry", "coordinate_frame": "local_metric"},
-            "tof": read_tof(self.tof_path),
+            "tof": self._read_tof(),
             "ahrs": ahrs_evidence,
             "motion_events": self._stream_motion_events(frame),
             **self._drive_response_telemetry(),
@@ -660,7 +696,7 @@ class VisionService:
             "calibration_revision": self.calibration["calibration_id"], "map_revision": self.revision,
             "map_id": self.map_id, "session_id": self.session_id,
             "detections": snapshot.get("detections", []), "pose": snapshot.get("localization", {}),
-            "tof": read_tof(self.tof_path),
+            "tof": self._read_tof(),
             "ahrs": self._stream_ahrs(frame),
             "motion_events": self._stream_motion_events(frame),
             **self._drive_response_telemetry(),
@@ -704,7 +740,7 @@ class VisionService:
                         'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
-                    tof=read_tof(self.tof_path), ahrs=self._stream_ahrs(frame),
+                    tof=self._read_tof(), ahrs=self._stream_ahrs(frame),
                     motion_events=self._stream_motion_events(frame),
                     **self._drive_response_telemetry(),
                     ultrasonic=self._stream_ultrasonic(),
@@ -1122,7 +1158,7 @@ class VisionService:
                 return {"availability": "unavailable", **exc.as_dict(),
                         "motion_commands": False}
         if operation in ("robot.tof.status", "robot.tof.localize"):
-            return read_tof(self.tof_path)
+            return self._read_tof()
         if operation in ("robot.camera.light.status", "robot.camera.light.set"):
             try:
                 state = (self.camera_http.set_light(inputs) if operation.endswith(".set")
@@ -1162,7 +1198,7 @@ class VisionService:
                                 "errors": calibration_errors(self.calibration)},
                 "metric_scale": self.metric.attachment_status(self.map_id),
                 "metric_calibration": self.metric.status(map_id=self.map_id),
-                "tof": read_tof(self.tof_path),
+                "tof": self._read_tof(),
                 "ahrs": self.ahrs.status(),
                 "motion_events": self.motion_events.snapshot(),
                 "ultrasonic": self._stream_ultrasonic(),
@@ -1246,9 +1282,12 @@ class VisionService:
         if operation == "robot.world.status":
             return self.atlas.status()
         if operation == "robot.map.read":
-            return self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),
+            result = self.store.read_map(inputs.get("map_id", self.map_id), revision=inputs.get("revision"),
                                        bounds=inputs.get("bounds"), kinds=inputs.get("kinds"),
                                        cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+            result["map"]["metadata"]["tof_registration"] = self._registration_for_map(
+                result["map"]["map_id"], result["map"]["revision"])
+            return result
         if operation == "robot.map.changes":
             return self.store.read_deltas(inputs.get("map_id", self.map_id), inputs["since_revision"],
                                           to_revision=inputs.get("to_revision"), cursor=inputs.get("cursor"),
@@ -1355,6 +1394,8 @@ class VisionService:
         self.auto_gyro.close()
         self.obstacle_map.close()
         self.metric.close()
+        if getattr(self, "tof_registration", None) is not None:
+            self.tof_registration.close()
         self._wait_checkpoint()
         with self._pipeline_lock:
             try:
