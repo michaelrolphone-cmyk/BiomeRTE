@@ -45,6 +45,14 @@ def bounded_metadata(metadata, maximum=15872):
         return value
     ahrs = value.get("ahrs")
     tof = value.get("tof")
+    if isinstance(tof, dict) and isinstance(tof.get("rover_refinement"), dict):
+        # Repeated-range moments remain available through robot.tof.status;
+        # keep the shared estimate and real raw matrix samples on the wire.
+        refinement = tof["rover_refinement"]
+        if isinstance(refinement.get("ranges"), list):
+            refinement.pop("ranges", None)
+            refinement["range_statistics_capability"] = "robot.tof.status"
+
     for sensor in (ahrs, value.get("ultrasonic")):
         if isinstance(sensor, dict):
             snapshot = sensor.pop("snapshot", None)
@@ -128,6 +136,36 @@ def bounded_metadata(metadata, maximum=15872):
                 baseline.pop(key,None)
         value["status_diagnostics_compacted"]=True
         value["status_detail_capability"]="robot.vision.status"
+    if size(value) > maximum and isinstance(tof,dict):
+        registration = tof.get("registration")
+        if isinstance(registration,dict):
+            # Detailed fit diagnostics remain available through robot.tof.status.
+            keep = ("valid","status","map_id","map_revision","frame_id","baseline_epoch",
+                    "baseline_revision","T_anchor_map","scale_m_per_map_unit","current_camera",
+                    "control_keyframe_ids","fitting","sample_count","validation_rms_m")
+            compact = {k:registration[k] for k in keep if k in registration}
+            floor = registration.get("floor")
+            if isinstance(floor,dict):
+                compact["floor"] = {k:floor[k] for k in ("valid","status","T_floor_anchor","normal_anchor") if k in floor}
+            compact["detail_capability"] = "robot.tof.status"
+            compact["diagnostics_omitted"] = True
+            compact["navigation_authority"] = False
+            tof["registration"] = compact
+        if size(value)>maximum:
+            for anchor in tof.get("anchor_geometry",[]):
+                prior=anchor.get("floor_prior")
+                if isinstance(prior,dict):
+                    anchor["floor_prior"]={k:prior[k] for k in ("floor","level") if k in prior}
+            for key in ("frame","uncertainty","height_mode","rover_height_m","geometry_quality",
+                        "motion_compensated","moving_rover_requires_motion_compensation"):
+                tof.pop(key,None)
+    if size(value)>maximum and isinstance(tof,dict) and isinstance(tof.get("registration"),dict):
+        registration=tof["registration"]
+        registration.pop("T_anchor_map",None)
+        if isinstance(registration.get("floor"),dict):
+            registration["floor"].pop("T_floor_anchor",None)
+        registration["transforms_reference"]="robot.map.read:1.metadata.tof_registration"
+        registration["world_transform_reference"]="robot.world.read:1.metadata.tof_registration"
     if size(value) > maximum:
         raise ValueError("Live metadata exceeds stream header budget: "+str({k:size(v) for k,v in value.items()}))
     return value

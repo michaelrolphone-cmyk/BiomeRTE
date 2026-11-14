@@ -34,7 +34,9 @@ class ToFTests(unittest.TestCase):
   self.assertLessEqual(size(result),15872)
   self.assertEqual(result["ahrs"],value["ahrs"])
   self.assertEqual(result["ultrasonic"],value["ultrasonic"])
-  self.assertTrue(result["tof"]["anchor_range_details_omitted"])
+  self.assertTrue(result["tof"]["anchor_range_details_compacted"])
+  self.assertEqual(len(result["tof"]["anchors"][0]["ranges"]),12)
+  self.assertEqual(result["tof"]["anchors"][0]["ranges"][0]["distance_m"],3)
   self.assertEqual(len(value["tof"]["anchors"][0]["ranges"]),12)
 
 class SonarReaderTests(unittest.TestCase):
