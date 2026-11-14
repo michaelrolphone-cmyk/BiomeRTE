@@ -1,4 +1,4 @@
-"""The socket matrix must survive telemetry compaction, not require a poll."""
+"""Complete matrix observations survive the socket without size-based trimming."""
 import copy,json,pathlib,sys,unittest
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from stream_telemetry import bounded_metadata,size
@@ -24,12 +24,12 @@ class ToFMatrixStreamTests(unittest.TestCase):
                 "snapshot":{"telemetry":{"diagnostic":"z"*16000},
                             "received_monotonic":12,"elapsed_since_receive_s":.1}},
             "ultrasonic":{"schema":"hcsr04.v1","sensors":{"front":{"distance_m":.5,"valid":True}}}}
-    def test_compaction_keeps_all_twenty_directed_measurements_and_clocks(self):
+    def test_stream_keeps_all_twenty_directed_measurements_and_clocks(self):
         original=self.payload();before=copy.deepcopy(original)
         value=bounded_metadata(original)
-        self.assertLessEqual(size(value),15872)
+        self.assertEqual(value,original)
         self.assertEqual(original,before)
-        self.assertTrue(value["tof"]["anchor_range_details_compacted"])
+        self.assertNotIn("anchor_range_details_compacted",value["tof"])
         self.assertNotIn("anchor_range_details_omitted",value["tof"])
         self.assertEqual(len(value["tof"]["anchors"]),5)
         for a,b in zip(value["tof"]["anchors"],original["tof"]["anchors"]):
@@ -40,7 +40,7 @@ class ToFMatrixStreamTests(unittest.TestCase):
             for r,s in zip(a["ranges"],b["ranges"]):
                 for k in ["target_bssid","status","range_seq","age_ms","rtt_ns","samples","valid","distance_m"]:
                     self.assertEqual(r[k],s[k])
-                self.assertNotIn("ssid",r)
+                self.assertEqual(r["ssid"],s["ssid"])
         self.assertEqual(value["ahrs"]["ahrs"]["imu"]["accel_m_s2"],[1,2,3])
         self.assertEqual(value["ultrasonic"]["sensors"]["front"]["distance_m"],.5)
     def test_failed_and_one_way_reports_remain_explicit(self):
@@ -57,7 +57,7 @@ class ToFMatrixStreamTests(unittest.TestCase):
         value["ahrs"].pop("snapshot")
         self.assertLess(size(value),15872)
         self.assertEqual(bounded_metadata(value),value)
-    def test_real_five_node_collector_remains_under_wire_budget(self):
+    def test_real_collector_is_preserved_in_full(self):
         path=pathlib.Path.home()/".local/share/biome-tof/latest.json"
         if not path.exists():self.skipTest("Live qualification only on deployed Mac")
         data=json.loads(path.read_text())
@@ -65,7 +65,7 @@ class ToFMatrixStreamTests(unittest.TestCase):
         # Force the real metadata down the compaction branch.
         value["ahrs"]["source"]={"state":"available","diagnostics":"q"*30000}
         packed=bounded_metadata(value)
-        self.assertLessEqual(size(packed),15872)
+        self.assertEqual(packed,value)
         self.assertEqual(sum(len(a.get("ranges",[])) for a in packed["tof"]["anchors"]),
                          sum(len(a.get("ranges",[])) for a in data["anchors"]))
 
@@ -79,12 +79,12 @@ class ToFMatrixStreamTests(unittest.TestCase):
         value["tof"]["edges"]=[{"diagnostic":"q"*20000}]
         value["ahrs"]["source"]={"state":"available","diagnostic":"z"*20000}
         original=copy.deepcopy(value);packed=bounded_metadata(value)
-        self.assertLessEqual(size(packed),15872);self.assertEqual(value,original)
+        self.assertEqual(packed,value);self.assertEqual(value,original)
         baseline=packed["tof"]["baseline"]
         self.assertEqual(baseline["status"],"recalibrating");self.assertFalse(baseline["valid"])
         self.assertEqual(baseline["epoch"],4);self.assertEqual(baseline["frame_id"],"tof-relative-1")
         self.assertEqual(baseline["movement_anchors"],[positions[2]["bssid"]])
-        self.assertEqual(baseline["positions_reference"],"anchor_geometry")
+        self.assertEqual(baseline["positions"],positions)
         self.assertEqual(packed["tof"]["anchor_geometry"],positions)
         self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
 
@@ -98,14 +98,14 @@ class ToFMatrixStreamTests(unittest.TestCase):
             "refinement":{"revision":8,"accepted":7,"state":"refined","last_update_at":1000,
                           "before_rms_m":.9,"after_rms_m":.8,"extra_diagnostics":"x"*20000}}
         packed=bounded_metadata(value);baseline=packed["tof"]["baseline"]
-        self.assertLessEqual(size(packed),15872)
+        self.assertEqual(packed,value)
         self.assertEqual(baseline["revision"],8);self.assertEqual(baseline["epoch"],2)
         self.assertEqual(baseline["refinement"]["accepted"],7)
         self.assertEqual(baseline["refinement"]["after_rms_m"],.8)
         self.assertEqual(packed["tof"]["anchor_geometry"],positions)
         self.assertEqual(sum(len(a["ranges"]) for a in packed["tof"]["anchors"]),20)
 
-    def test_status_diagnostics_yield_to_physical_samples_under_dynamic_pressure(self):
+    def test_diagnostics_and_physical_samples_are_both_preserved(self):
         value=self.payload()
         value["ahrs"].update(map_id="map",calibration_id="cal",session_id="session",
             accepted_observations=100,accepted_sensor_endpoints=10,pending_observation=None,
@@ -120,10 +120,10 @@ class ToFMatrixStreamTests(unittest.TestCase):
         maximum=size(initial)-250
         before=copy.deepcopy(value)
         packed=bounded_metadata(value,maximum)
-        self.assertLessEqual(size(packed),maximum)
+        self.assertEqual(packed,value)
         self.assertEqual(value,before)
-        self.assertTrue(packed["status_diagnostics_compacted"])
-        self.assertEqual(packed["status_detail_capability"],"robot.vision.status")
+        self.assertNotIn("status_diagnostics_compacted",packed)
+        self.assertEqual(packed["ahrs"],value["ahrs"])
         self.assertEqual(packed["ahrs"]["ahrs"],value["ahrs"]["ahrs"])
         self.assertEqual(packed["ahrs"]["boot_id"],"boot")
         self.assertEqual(packed["ahrs"]["sequence"],25)

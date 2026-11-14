@@ -29,11 +29,11 @@ def authorize(tx, ctx, grant, role='server'):
 
 
 def valid(tx, ctx, grant):
-    lease = tx.need('leases', grant['lease'])
-    guard = tx.need('guards', lease['guard'])
+    lease = tx.get('leases', grant['lease'])
+    guard = tx.get('guards', lease.get('guard', '')) if lease else None
     if (grant['state'] != 'open' or grant['expires_at'] <= time.time() or
             grant['authority'] != ctx.app.node or grant['realm'] != ctx.scope or
-            lease['state'] != 'bound' or
+            not lease or lease['state'] != 'bound' or not guard or
             (guard['holder'], guard['generation']) != (lease['id'], grant['generation'])):
         raise Fault('Stream authority superseded', 409)
     peer = tx.get('peers', grant['server'])

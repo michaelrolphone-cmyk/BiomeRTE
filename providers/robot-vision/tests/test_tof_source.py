@@ -25,16 +25,16 @@ class ToFTests(unittest.TestCase):
    self.assertEqual(read_tof(path)["status"],"collector_unavailable")
    path.write_text('{"schema":"wrong"}')
    self.assertEqual(read_tof(path)["status"],"collector_unavailable")
- def test_stream_keeps_sensor_values_and_bounds_ftm_details(self):
+ def test_stream_keeps_sensor_values_and_all_ftm_details(self):
   value=dict(ahrs={"sensors":{"imu":{"accel_m_s2":[1,2,3],"observed_uptime_ms":100}}},
    ultrasonic={"sensors":[{"id":"front","distance_m":1.2,"observed_uptime_ms":100}]},
    tof={"schema":"rover.tof.solution/1","status":"incomplete","valid":False,
     "anchors":[{"id":str(i),"ranges":[{"distance_m":3,"diagnostic":"x"*800} for j in range(12)]} for i in range(4)]})
   result=bounded_metadata(value)
-  self.assertLessEqual(size(result),15872)
+  self.assertEqual(result,value)
   self.assertEqual(result["ahrs"],value["ahrs"])
   self.assertEqual(result["ultrasonic"],value["ultrasonic"])
-  self.assertTrue(result["tof"]["anchor_range_details_compacted"])
+  self.assertNotIn("anchor_range_details_compacted",result["tof"])
   self.assertEqual(len(result["tof"]["anchors"][0]["ranges"]),12)
   self.assertEqual(result["tof"]["anchors"][0]["ranges"][0]["distance_m"],3)
   self.assertEqual(len(value["tof"]["anchors"][0]["ranges"]),12)
