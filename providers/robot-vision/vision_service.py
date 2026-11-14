@@ -1326,7 +1326,14 @@ class VisionService:
         if operation == "robot.map.obstacles":
             return self._read_obstacles(inputs.get("map_id", self.map_id), inputs.get("revision"))
         if operation == "robot.world.read":
-            return self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+            page = self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+            reference = self.state_dir / "survey-world.json"
+            if reference.is_file():
+                with reference.open() as stream:
+                    baseline = json.load(stream)
+                if baseline["world_id"] == page["map"]["map_id"]:
+                    page["map"]["metadata"]["survey_baseline"] = baseline
+            return page
         if operation == "robot.world.status":
             return self.atlas.status()
         if operation == "robot.map.read":
