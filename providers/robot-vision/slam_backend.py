@@ -476,6 +476,10 @@ class SlamBackend:
                         break
             self._radio_prior = tuple(selected)
 
+    def set_survey_revisit(self, confirmed, *, map_id):
+        with self._lock:
+            self._confirmed_survey_revisit = bool(confirmed and str(map_id) == self._map_id)
+
     def set_orientation_prior(self, T_map_camera):
         with self._lock:
             self._orientation_prior = None if T_map_camera is None else np.asarray(T_map_camera, float).copy()
@@ -534,9 +538,25 @@ class SlamBackend:
                         matrix[:3, 3] = -matrix[:3, :3] @ center
                         return Isometry3d(matrix), covariance
                     motion.predict_pose = predict_with_attitude
+                # The normal 50-inlier gate is unreachable in a sparse saved
+                # map. A separate repeat scene/grid match permits native PnP
+                # on that map. Never use the archived position as a live pose.
+                confirmed = getattr(self, "_confirmed_survey_revisit", False)
+                self._confirmed_survey_revisit = False
+                parameters = None
+                if confirmed and self._state in ("lost", "relocalizing"):
+                    from pyslam.config_parameters import Parameters
+                    with self._slam.map.update_lock:
+                        count = self._slam.map.num_points()
+                    original = Parameters.kRelocalizationDoPoseOpt2NumInliers
+                    if 18 <= count < original:
+                        parameters = Parameters
+                        parameters.kRelocalizationDoPoseOpt2NumInliers = max(18, (count+1)//2)
                 try:
                     self._slam.track(image, None, None, index, timestamp_s)
                 finally:
+                    if parameters is not None:
+                        parameters.kRelocalizationDoPoseOpt2NumInliers = original
                     if motion is not None:
                         motion.predict_pose = predict
                 native_state = self._slam.tracking.state.name

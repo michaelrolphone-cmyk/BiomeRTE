@@ -583,6 +583,14 @@ class VisionService:
                 if hasattr(self.backend, "set_relocalization_prior"):
                     self.backend.set_relocalization_prior(
                         None, map_id=self.map_id)
+                grid = getattr(self, "survey_grid", None)
+                if grid is not None and hasattr(self.backend, "set_survey_revisit"):
+                    view = grid.status()
+                    fresh_match = (view.get("reference_map_id") == self.map_id
+                                   and view.get("source_map_id") == self.map_id
+                                   and view.get("consecutive_matches", 0) >= 2
+                                   and time.monotonic()-view["sample_monotonic_s"] < 3)
+                    self.backend.set_survey_revisit(fresh_match, map_id=self.map_id)
                 attitude_prior = self.pose_estimator.prior(frame, self.map_id)
                 if hasattr(self.backend, "set_orientation_prior"):
                     self.backend.set_orientation_prior(attitude_prior)
