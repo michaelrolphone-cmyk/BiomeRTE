@@ -5,7 +5,7 @@ biome.rover.events.v1) and appends the same identified events to the existing
 top-level events list. Existing drive_response telemetry is preserved. Consumers
 deduplicate by event_id; the recent event ring holds at most 64 entries.
 
-Event types: collision (suspected opposing horizontal impact after drive onset),
+Event types: collision (suspected horizontal impact at rest or opposing impact during applied drive),
 stuck (suspected missing acceleration response), turning (started/ended, left or
 right), and pickup (inertial lift estimate, or suspected loss of support).
 Positive gravity-axis angular velocity and increasing relative yaw mean left.
@@ -41,3 +41,5 @@ The stream has one full event list at top-level events, with references under
 motion_events. It resends up to eight recent events; additional older omissions
 are explicit in event_delivery. robot.vision.status retains the 64-event recovery
 ring. Stream header overflow logs per-field byte sizes instead of failing silently.
+
+The stream publishes the supported fully qualified names in motion_events.event_types. A fresh, classified frame sets state.turning to a boolean and state.turn_direction to left, right, or null. With invalid attitude, a quiet capture-aligned raw gyro can still rule out a turn. A faster gyro alone cannot establish turn direction. The last applied relay acknowledgment appears in drive_response.last_applied. A pickup updates tof.ground_contact.last_pickup_at on the same live frame.

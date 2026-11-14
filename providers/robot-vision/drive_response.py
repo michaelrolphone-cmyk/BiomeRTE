@@ -339,8 +339,18 @@ class CaptureDriveResponseMonitor(DriveResponseMonitor):
             if not finite(age) or not 0<=age<=2*self.detector.max_clock_s:
                 self.detector.gap('applied_output_clock_unqualified')
                 return
+            previous = self.detector.authority, self.detector.sequence
             self.detector.applied(value.get('commanded_mask'),received-age/2,
                 value.get('sequence'),(value.get('authority'),value.get('epoch'),value.get('generation')),age/2)
+            if previous != (self.detector.authority,self.detector.sequence):
+                self.last_applied = {k:value.get(k) for k in
+                                     ('authority','epoch','generation','sequence','commanded_mask','issued_utc_ms')}
+
+    def snapshot(self):
+        result = super().snapshot()
+        with self.lock:
+            result['last_applied'] = getattr(self,'last_applied',None)
+            return result
 
     def capture(self,motion):
         if not self.enabled:return

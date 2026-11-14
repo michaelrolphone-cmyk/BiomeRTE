@@ -27,6 +27,9 @@ def rotate(q, v):
             2*(x*y+w*z)*a+(1-2*(x*x+z*z))*b+2*(y*z-w*x)*c,
             2*(x*z-w*y)*a+2*(y*z+w*x)*b+(1-2*(x*x+y*y))*c]
 
+EVENT_TYPES = tuple('robot.motion.' + kind for kind in
+                    ('turning', 'pickup', 'collision', 'stuck', 'no_drive_response'))
+
 class MotionEvents:
     def __init__(self, config=None):
         self.config = dict(config or {})
@@ -43,6 +46,7 @@ class MotionEvents:
         self.control_known = False
         self.last_control = None
         self.last_observed = None
+        self.last_pickup_at = None
         self.last_capture_host = None
         self.previous = None
         self.turn = None
@@ -97,8 +101,11 @@ class MotionEvents:
             sequence=self.sequence, type='robot.motion.'+kind, kind=kind, phase=phase, capture_time_s=t, timestamp=time.time(),
             frame_id=frame.get('frame_id'), boot_id=self.epoch[0],
             schema='biome.telemetry.event.v1', state='cleared' if phase=='ended' else 'active', severity='info' if kind=='turning' else 'warning',
-            message={'turning':'Observed '+str(extra.get('direction'))+' turn','collision':'Suspected collision: opposing drive impact','stuck':'Applied drive without a measurable acceleration response','pickup':'Inferred pickup or loss of support'}[kind],
+            message={'turning':'Observed '+str(extra.get('direction'))+' turn','collision':'Suspected collision: horizontal impact','stuck':'Applied drive without a measurable acceleration response','pickup':'Inferred pickup or loss of support'}[kind],
             assessment='sensor_inference', evidence=evidence, **extra))
+
+        if kind == 'pickup':
+            self.last_pickup_at = self.events[-1]['timestamp']
 
     def _sensor_rows(self, frame):
         packet = frame.get('sensor_packet') or {}
@@ -143,7 +150,28 @@ class MotionEvents:
                 for d in self.drives: d['uncertain'] = True
             self.frame_key = key
             if not rows or raw.get('worker_ready') is not True or raw.get('paused') or packet['capture_monotonic_us']/1e6-rows[-1]['t']>.12:
-                self.state = dict(available=False, reason='missing_or_invalid_capture_imu', turning=None)
+                imu = raw.get('imu') or {}
+                gyro = vector(imu.get('gyro_rad_s'))
+                age = imu.get('age_ms')
+                # Total angular speed bounds yaw rate for any mounting attitude.
+                fresh = ((raw.get('attitude') or {}).get('valid') is not True
+                         and type(packet.get('capture_monotonic_us')) is int and bool(packet.get('boot_id'))
+                         and raw.get('worker_ready') is True and not raw.get('paused')
+                         and imu.get('valid') is True and finite(age) and 0 <= age <= 120
+                         and gyro is not None and vector(imu.get('accel_m_s2')) is not None)
+                self.turn = self.turn_quiet = self.previous = self.lift = None
+                self.baseline = 0
+                self.bias = [0., 0., 0.]
+                self.samples.clear()
+                for drive in self.drives:
+                    drive['uncertain'] = True
+                if fresh:
+                    self.last_observed = time.monotonic()
+                self.state = dict(available=bool(fresh), frame_id=frame.get('frame_id'),
+                    capture_monotonic_us=packet.get('capture_monotonic_us'),
+                    reason='attitude_unavailable' if fresh else 'missing_or_invalid_capture_imu',
+                    turning=False if fresh and math.degrees(norm(gyro)) < 4 else None,
+                    turn_direction=None, attitude_qualified=False)
                 return self.snapshot()
             interval = frame.get('capture_host_monotonic_interval_s')
             host = sum(interval)/2 if vector(interval,2) and interval[1]>=interval[0] else None
@@ -189,6 +217,15 @@ class MotionEvents:
                 opposing=-longitudinal if active and active['direction']=='forward' else longitudinal
                 if active and not active['uncertain'] and r['host']-active['start']>.12 and opposing>=2.5 and horizontal >= self.config.get('impact_accel_m_s2',3.5) and jerk>=30 and horizontal>abs(vertical)*1.5:
                     self._emit('collision','suspected',t,frame,{'horizontal_accel_m_s2':horizontal,'jerk_m_s3':jerk,'opposing_accel_m_s2':opposing,'drive_id':active['id']},direction=active['direction'])
+                if (not self.active and self.baseline >= 10 and dt and dt <= .08
+                        and (self.last_control is None or r['host'] is not None
+                             and r['host']-self.last_control > .35)
+                        and horizontal >= self.config.get('impact_accel_m_s2',3.5)
+                        and horizontal > 1.5*abs(vertical) and jerk >= 30):
+                    self._emit('collision','suspected',t,frame,
+                        {'horizontal_accel_m_s2':horizontal,'jerk_m_s3':jerk,
+                         'reason':'horizontal_impact_without_applied_drive'},
+                        direction=None)
                 if vertical>.9 and self.baseline>=10 and self.lift is None:
                     self.lift=dict(start=t,v=0.,z=0.,peak=vertical)
                 if self.lift and dt and dt<=.08:
@@ -201,8 +238,8 @@ class MotionEvents:
                     self._emit('pickup','suspected',t,frame,{'reason':'loss_of_support_or_freefall','acceleration_norm_m_s2':norm(r['accel'])})
                 self.previous=r
             self._drive_response(frame)
-            self.state=dict(available=True, reason=None, turning=None if not self.turn else
-                dict(direction=self.turn,yaw_rate_deg_s=self.previous['rate']),
+            self.state=dict(available=True, reason=None, turning=bool(self.turn), turn_direction=self.turn,
+                yaw_rate_deg_s=self.previous['rate'], attitude_qualified=True,
                 imu_history_available=any(r['history'] for r in rows),
                 imu_sample_rate_hz=raw.get('sample_rate_hz'),
                 drive_evidence_connected=self.control_connected, baseline_samples=self.baseline,
@@ -246,7 +283,8 @@ class MotionEvents:
             state=copy.deepcopy(self.state)
             age=None if self.last_observed is None else time.monotonic()-self.last_observed
             state['telemetry_age_s']=age
-            if age is not None and age>1.:state.update(available=False,reason='telemetry_stale',turning=None)
+            if age is not None and age>1.:state.update(available=False,reason='telemetry_stale',turning=None,turn_direction=None)
             return dict(schema='biome.rover.events.v1', instance_id=self.instance_id, state=state,
+                event_types=list(EVENT_TYPES), last_pickup_at=self.last_pickup_at,
                 events=copy.deepcopy(list(self.events)), last_sequence=self.sequence,
                 delivery='capture_frame_keyed_latest_telemetry', retention='bounded_64_events')
