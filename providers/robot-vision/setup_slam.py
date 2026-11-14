@@ -189,6 +189,30 @@ def patch_dbow3_relocalization(source):
     return replace_once(source, "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure\n                )\n", "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query_relocalization(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure,\n                    eligible_frame_ids=getattr(task, \"relocalization_keyframe_ids\", None),\n                )\n")
 
 
+def patch_pnp_exhaustion(source):
+    # Honor both the per-call slice and the solver's existing total budget.
+    source = replace_once(source,
+        "while (mnIterations < mRansacMaxIts || nCurrentIterations < nIterations)",
+        "while (mnIterations < mRansacMaxIts && nCurrentIterations < nIterations)")
+    return replace_once(source, "                Tout = mRefinedTcw;\n                return true;",
+        "                Tout = mRefinedTcw;\n                bNoMore = mnIterations >= mRansacMaxIts;\n                return true;")
+
+
+def patch_relocalizer(source):
+    source = patch_relocalizer_membership(source)
+    # The native solver may return its best pose on its final iteration.
+    source = replace_once(source,
+        "                        num_candidates -= 1\n                        continue\n\n                    if not ok:",
+        "                        num_candidates -= 1\n\n                    if not ok:")
+    # A sparse retained map can contain fewer points than the acceptance threshold.
+    # The projection expansion only considers this candidate's matched map points.
+    source = replace_once(source,
+        "                if kf.id == frame.id or kf.is_bad():",
+        "                if (kf.id == frame.id or kf.is_bad() or\n"
+        "                        len(kf.get_matched_points()) < Parameters.kRelocalizationDoPoseOpt2NumInliers):")
+    return source
+
+
 def patch_relocalizer_membership(source):
     return replace_once(source, "            reloc_candidate_kfs = [\n                keyframes_map[idx]\n                for idx in detection_output.candidate_idxs\n                if idx in keyframes_map\n            ]  # get back the keyframes from their ids\n", "            reloc_candidate_kfs = []\n            for idx in detection_output.candidate_idxs:\n                # A keyframe can be culled while the detector process is querying.\n                candidate = keyframes_map.get(idx)\n                if candidate is not None and not candidate.is_bad():\n                    reloc_candidate_kfs.append(candidate)\n")
 
@@ -389,7 +413,8 @@ PATCHES = {
     "pyslam/loop_closing/loop_closing.py": patch_loop_viewer,
     "pyslam/loop_closing/loop_detector_base.py": patch_loop_detector_task,
     "pyslam/loop_closing/loop_detector_dbow3.py": patch_dbow3_relocalization,
-    "pyslam/slam/relocalizer.py": patch_relocalizer_membership,
+    "pyslam/slam/relocalizer.py": patch_relocalizer,
+    "cpp/modules/solvers/MLPnPsolver.cpp": patch_pnp_exhaustion,
 }
 
 
@@ -508,8 +533,10 @@ class Installer:
                                          if name.endswith("/loop_detector_base.py") else
                                          "Apply retained-map membership before the ranked relocalization candidate budget."
                                          if name.endswith("/loop_detector_dbow3.py") else
-                                         "Recheck live candidate membership without a check-then-lookup race after loop detection."
+                                         "Recheck live candidates, skip impossible support and evaluate the final PnP hypothesis."
                                          if name.endswith("/relocalizer.py") else
+                                         "Honor the native total and per-call RANSAC iteration budgets, including early success."
+                                         if name.endswith("/MLPnPsolver.cpp") else
                                          "Import optional dense, GUI, and nonselected loop engines only on use.")})
         artifact = {"pyslam_commit": PYSLAM_COMMIT, "patches": manifest}
         (self.source / "biome-patches.json").write_text(json.dumps(artifact, sort_keys=True, indent=2))
