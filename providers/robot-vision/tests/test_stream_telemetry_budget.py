@@ -17,7 +17,9 @@ class WireBudgetTests(unittest.TestCase):
   self.assertLessEqual(struct.unpack("!I",value[4:8])[0],15872)
   self.assertEqual(metadata["ahrs"],original["ahrs"])
   self.assertEqual(metadata["ultrasonic"],original["ultrasonic"])
-  self.assertTrue(metadata["tof"]["anchor_range_details_omitted"])
+  self.assertTrue(metadata["tof"]["anchor_range_details_compacted"])
+  self.assertEqual(len(metadata["tof"]["anchors"][0]["ranges"]),12)
+  self.assertEqual(metadata["tof"]["anchors"][0]["ranges"][0]["rtt_ns"],40)
   self.assertEqual(metadata["tof"]["detail_capability"],"robot.tof.status")
   self.assertEqual(image,b"jpeg");self.assertEqual(original,before)
  def test_smaller_budget_preserves_range_quality_and_imu_vectors(self):
