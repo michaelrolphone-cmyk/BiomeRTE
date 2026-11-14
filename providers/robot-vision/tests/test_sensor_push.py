@@ -80,6 +80,14 @@ class ClockTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             clock.observe('boot',10.,9.,1000000,1001000)
 
+    def test_slow_exchange_does_not_discard_a_tighter_measured_clock_bound(self):
+        clock=ClockAlignment()
+        clock.observe('boot',10.,10.04,1000000,1001000)
+        clock.observe('boot',11.,13.,2000000,2001000)
+        self.assertLess(clock.bounds[1]-clock.bounds[0],.05)
+        clock.observe('other-boot',11.,13.,2000000,2001000)
+        self.assertGreater(clock.bounds[1]-clock.bounds[0],1.)
+
 
 class PushTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_push_delivers_samples_and_ack_without_camera_polling(self):
@@ -106,12 +114,16 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
                         async with connect(f'ws://127.0.0.1:{port}/sensors'):pass
                     async with connect(f'ws://127.0.0.1:{port}/sensors',additional_headers={'Authorization':'Sensor '+token}) as ws:
                         clock=json.loads(await ws.recv())
+                        # The device may reply after the next synchronization
+                        # interval. It still answers the same outstanding ID.
+                        await asyncio.sleep(1.1)
                         await ws.send(json.dumps(dict(type='clock',id=clock['id'],boot_id='boot',received_monotonic_us=1000000,served_monotonic_us=1001000)))
                         p=dict(schema='biome.sensor_tick.v1',receiver_id='rover',boot_id='boot',capture_monotonic_us=1001000,
                                stream_sequence=1,ahrs=dict(ahrs=dict(imu_samples=[dict(monotonic_us=1000000)])))
                         await ws.send(json.dumps(p))
                         ack=json.loads(await ws.recv())
                         self.assertEqual(ack['monotonic_us'],1000000)
+                        self.assertEqual(ack['stream_sequence'],1)
                         self.assertEqual(len(observed),1)
                         self.assertIn('capture_interval',observed[0][1])
                 finally:
