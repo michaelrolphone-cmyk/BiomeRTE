@@ -232,6 +232,8 @@ class RearSensorIngress:
                 self.ranging_error=None
             except Exception as exc:
                 self.ranging_error=type(exc).__name__
+                if getattr(exc,"outcome_known",True) is False:
+                    awaiting=identity  # Reconcile a possibly queued operation on the socket.
                 self.stop.wait(1)
 
     def status(self):
