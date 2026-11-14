@@ -218,6 +218,10 @@ CREATE INDEX IF NOT EXISTS entity_history ON entity_versions(map_id,kind,entity_
 CREATE TABLE IF NOT EXISTS checkpoints (
  id TEXT PRIMARY KEY, map_id TEXT NOT NULL REFERENCES maps(id),
  map_revision INTEGER NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS checkpoint_map_time ON checkpoints(map_id,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS checkpoint_full_time ON checkpoints(created_at DESC,id DESC)
+ WHERE json_extract(payload,'$.publication')='complete_v2'
+ AND coalesce(json_extract(payload,'$.availability'),'available')!='unavailable';
 PRAGMA user_version=1;
 """)
         self._ensure_entity_heads()
@@ -1243,7 +1247,7 @@ PRAGMA user_version=1;
             return {"full_backups_kept": protected, "converted": converted,
                     "database_bytes_removed": reclaimed, "errors": errors}
 
-    def retire_superseded_checkpoints(self, *, include_legacy=False, protected_ids=()):
+    def retire_superseded_checkpoints(self, *, include_legacy=False, protected_ids=(), map_id=None):
         """Keep a current and rollback backend per map, plus explicit references.
 
         Legacy records are retained unless a caller explicitly requests a
@@ -1259,16 +1263,21 @@ PRAGMA user_version=1;
                 compacted = self.compact_checkpoint_databases(keep=5)
                 if compacted["errors"]:
                     raise OSError("checkpoint_database_compaction_failed")
-            records = [json.loads(row[0]) for row in self._db.execute(
-                "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")]
+            # A revision-reference publication changes the generation of just one
+            # map. Full backup rotations and explicit maintenance still audit all maps.
+            if map_id is None:
+                rows = self._db.execute("SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")
+            else:
+                rows = self._db.execute("SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC",
+                                        (map_id,))
+            records = [json.loads(row[0]) for row in rows]
             protected = set(protected_ids)
             # Periodic disaster-recovery backups have a GLOBAL lifetime, not
             # the lifetime of a particular map's two latest native saves.
-            full_backups = [r for r in records
-                if r.get("publication") == "complete_v2"
-                and r.get("metadata", {}).get("database_mode") == "full_backup"
-                and r.get("availability") != "unavailable"]
-            protected.update(r["checkpoint_id"] for r in full_backups[:5])
+            protected.update(row[0] for row in self._db.execute(
+                "SELECT id FROM checkpoints WHERE json_extract(payload,'$.publication')='complete_v2' AND "
+                "coalesce(json_extract(payload,'$.availability'),'available')!='unavailable' AND "
+                "json_extract(payload,'$.metadata.database_mode')='full_backup' ORDER BY created_at DESC,id DESC LIMIT 5"))
             newest = {}
             backends = {}
             for record in records:

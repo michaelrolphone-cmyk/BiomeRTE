@@ -1064,7 +1064,9 @@ class VisionService:
                     self._checkpoint_error = None
                     self._checkpoint_cleanup_error = None
                     try:
-                        saved["retention"] = self.store.retire_superseded_checkpoints()
+                        saved["retention"] = self.store.retire_superseded_checkpoints(
+                            map_id=saved["map_id"] if (origin == "automatic" and
+                                saved.get("publication") == "revision_reference_v3") else None)
                         if saved["retention"]["cleanup_errors"]:
                             self._checkpoint_cleanup_error = "checkpoint_retirement_cleanup_failed"
                     except Exception:
