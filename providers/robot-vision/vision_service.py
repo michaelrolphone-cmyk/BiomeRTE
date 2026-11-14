@@ -74,7 +74,9 @@ class VisionService:
         self.drive_response = CaptureDriveResponseMonitor(None,config.get('drive_response',{}))
         self.applied_controls = AppliedControlStream(self.motion_events,config.get('motion_control_stream'),self.drive_response.control)
         from leased_maps import LiveMap
-        self.live_maps = LiveMap()
+        self.live_maps = LiveMap(world=True)
+        from world_snapshot_stream import WorldSnapshotFeed
+        self.world_snapshots = WorldSnapshotFeed(self)
         self.config = copy.deepcopy(config)
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +184,8 @@ class VisionService:
         result = (registrar.status(tof, map_id, revision) if registrar is not None else
                   {"valid": False, "status": "registration_unavailable"})
         self._attach_survey(result, tof)
+        from stream_telemetry import complete_registration
+        complete_registration(result, tof.get("baseline") or {})
         result.update(map_id=map_id, map_revision=revision)
         return result
 
@@ -225,6 +229,8 @@ class VisionService:
                 prior = registrar.floor_priors.get(str(anchor.get("bssid", "")).lower())
                 if prior is not None:
                     anchor["floor_prior"] = prior
+        from stream_telemetry import complete_tof
+        complete_tof(data)
         position = data.get("position")
         if data.get("valid") and isinstance(position, dict):
             position.setdefault("frame_id", (data.get("frame") or {}).get("frame_id"))
@@ -436,6 +442,7 @@ class VisionService:
         self.applied_controls.start()
         self.metric.start_worker()
         self.atlas.start(self)
+        self.world_snapshots.start()
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
@@ -1371,12 +1378,16 @@ class VisionService:
                 with reference.open() as stream:
                     baseline = json.load(stream)
                 if baseline["world_id"] == page["map"]["map_id"]:
+                    from stream_telemetry import complete_survey_features
+                    complete_survey_features(baseline)
                     page["map"]["metadata"]["survey_baseline"] = baseline
                     if getattr(self, "survey_grid", None) is not None:
                         evidence = self.survey_grid.status()
                         if evidence:
                             evidence["age_s"] = max(0., time.monotonic()-evidence["sample_monotonic_s"])
                         page["map"]["metadata"]["survey_grid_observation"] = evidence
+            from stream_telemetry import complete_world_registration
+            complete_world_registration(page)
             return page
         if operation == "robot.world.status":
             return self.atlas.status()
@@ -1471,6 +1482,8 @@ class VisionService:
         self.sensor_ticks.close()
         self.applied_controls.close()
         self._stop.set()
+        if getattr(self, "world_snapshots", None) is not None:
+            self.world_snapshots.close()
         if getattr(self, "atlas", None) is not None:
             self.atlas.close()
         if self._live_camera is not None:

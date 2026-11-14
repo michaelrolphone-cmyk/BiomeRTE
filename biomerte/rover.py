@@ -179,6 +179,9 @@ class Rover:
                             continue
                     if lane=='map':
                         metadata,_=decode(message,None if lane in ('vision','map') else descriptor['limits']['max_message_bytes'])
+                        # The console tracks local revisions here and reads its atlas separately.
+                        if metadata.get('type') == 'world_snapshot':
+                            continue
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:
                             self.broadcast('map',json.dumps({'type':'snapshot_required','map_id':metadata.get('map_id'),
                                                            'revision':metadata.get('revision')}))

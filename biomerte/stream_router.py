@@ -69,6 +69,17 @@ class Session:
         self.sequences = {}
         self.closed = False
         self.revisions = {}
+        self.world_snapshot = None
+        self.world_version = None
+
+    def cache_world_snapshot(self, metadata, forwarded):
+        world = metadata["data"]["map"]
+        survey = world["metadata"].get("survey_baseline") or {}
+        version = (world["map_id"], world["revision"], survey.get("survey_revision"))
+        changed = version != self.world_version
+        self.world_version = version
+        self.world_snapshot = forwarded
+        return changed
 
     def peers_on(self, role, lane):
         return [p for (r, l, identity), p in list(self.peers.items())
@@ -301,6 +312,8 @@ class Router:
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
         peer.consumer = grant.get('consumer') or (grant['lease'] if role == 'server' else '')
         session.peers[key] = peer
+        if lane == 'map' and role == 'server' and session.world_snapshot is not None:
+            peer.put(session.world_snapshot)
         if lane == 'control':session.notify_control_status()
         pump = asyncio.create_task(peer.pump())
         window, count = time.monotonic(), 0
@@ -316,9 +329,13 @@ class Router:
                     count += 1
                     if count > grant['limits']['messages_per_second']:
                         raise Fault('Stream rate exceeded', 429)
-                    session.check(role, lane, message, sender=identity)
+                    meta, _ = session.check(role, lane, message, sender=identity)
                     if session.quarantined:continue
                     forwarded = session.forward(role, lane, message, identity)
+                    if lane == 'map' and role == 'provider' and grant.get('contract') == 'robot.vision.stream:1':
+                        if meta.get('type') == 'world_snapshot':
+                            if not session.cache_world_snapshot(meta, forwarded):
+                                continue
                     for other in session.peers_on('provider' if role == 'server' else 'server', lane):
                         try:
                             other.put(forwarded)
