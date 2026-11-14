@@ -10,12 +10,13 @@ def complete_registration(registration, baseline):
     for key, source in (("frame_id", "frame_id"), ("baseline_epoch", "epoch"),
                         ("baseline_revision", "revision")):
         registration.setdefault(key, baseline.get(source))
-    for key in ("T_anchor_map", "sample_count", "current_camera"):
+    for key in ("T_anchor_map", "sample_count"):
         registration.setdefault(key, None)
-    camera = registration["current_camera"]
-    if isinstance(camera, dict):
-        for key in ("position_anchor_m", "R_anchor_camera", "age_s", "frame_id"):
-            camera.setdefault(key, None)
+    camera = registration.get("current_camera")
+    if camera is None:
+        camera = registration["current_camera"] = {}
+    for key in ("position_anchor_m", "R_anchor_camera", "age_s", "frame_id"):
+        camera.setdefault(key, None)
 
 
 def complete_tof(tof):
@@ -28,6 +29,27 @@ def complete_tof(tof):
         tof["rover_refinement"] = {"range_exclusions":None}
     else:
         refinement.setdefault("range_exclusions", [] if "ranges" in refinement else None)
+
+
+def complete_survey_features(baseline):
+    """Expose stable identities for older surveys that only stored feature labels."""
+    import uuid
+    sonar_labels = {}
+    for item in (baseline.get("checkpoint") or {}).get("sonar", []):
+        sensor = item.get("sensor")
+        if sensor:
+            for suffix in ("sonar", "echo"):
+                sonar_labels[f"{sensor} {suffix}"] = (item.get("observation") or {}).get("id", sensor)
+    for feature in baseline.get("features", []):
+        kind, label = feature.get("kind"), feature.get("label")
+        if "id" not in feature and kind and label:
+            identity = json.dumps([baseline["world_id"], kind, label], ensure_ascii=False)
+            feature["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+        feature.setdefault("id", None)
+        feature.setdefault("sensor_id", sonar_labels.get(label, feature.get("peer")))
+        feature.setdefault("distance_m", feature.get("measured_range_m"))
+        for key in ("vertices_m", "square_m"):
+            feature.setdefault(key, None)
 
 
 def complete_world_registration(page):

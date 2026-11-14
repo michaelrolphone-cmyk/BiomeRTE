@@ -47,6 +47,34 @@ class AgentWorldStreamTest(unittest.TestCase):
                 self.assertEqual(msg, late.get_nowait())
                 self.assertEqual(decode(msg[4:], None)[0]["revision"], 5)
 
+    def test_reconnecting_publisher_refreshes_cache_without_repeating_revision(self):
+        from biomerte.stream_router import Session
+        session = Session.__new__(Session)
+        session.world_version = None
+        world = {"map_id":"atlas","revision":12,"metadata":{"survey_baseline":{"survey_revision":2}}}
+        meta = {"data":{"map":world}}
+        self.assertTrue(session.cache_world_snapshot(meta, b"first"))
+        self.assertFalse(session.cache_world_snapshot(meta, b"reconnect"))
+        self.assertEqual(session.world_snapshot, b"reconnect")
+        world["revision"] += 1
+        self.assertTrue(session.cache_world_snapshot(meta, b"new"))
+
+    def test_stable_survey_feature_identity_and_actual_sensor(self):
+        from stream_telemetry import complete_survey_features
+        s = {"world_id":"house","features":[{"kind":"echo","label":"front echo","measured_range_m":0.7},
+             {"kind":"wall","label":"North wall","id":"north"}],
+             "checkpoint":{"sonar":[{"sensor":"front","observation":{"id":"front"}}]}}
+        complete_survey_features(s)
+        echo, wall = s["features"]
+        self.assertEqual(echo["sensor_id"], "front")
+        self.assertEqual(echo["distance_m"], 0.7)
+        self.assertIsNone(wall["sensor_id"])
+        self.assertEqual(wall["id"], "north")
+        identifier = echo.pop("id")
+        s["features"].reverse()
+        complete_survey_features(s)
+        self.assertEqual(echo["id"], identifier)
+
     def test_preserves_computed_values_and_marks_missing_fields(self):
         value = {"frame_id":"a", "tof":{"baseline":{"epoch":3,"revision":8,"frame_id":"enu"},
                  "registration":{"valid":False,"sample_count":7}}, "motion_events":{"events":[]}}
@@ -54,7 +82,7 @@ class AgentWorldStreamTest(unittest.TestCase):
         r = wire["tof"]["registration"]
         self.assertEqual([r["frame_id"],r["baseline_epoch"],r["baseline_revision"]],["enu",3,8])
         self.assertEqual(r["sample_count"],7)
-        self.assertIsNone(r["current_camera"])
+        self.assertEqual(r["current_camera"], dict.fromkeys(("position_anchor_m", "R_anchor_camera", "age_s", "frame_id")))
         self.assertIsNone(r["T_anchor_map"])
         self.assertIn("range_exclusions", wire["tof"]["rover_refinement"])
         self.assertEqual(wire["event_delivery"]["recent_events_omitted"],0)

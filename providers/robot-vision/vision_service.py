@@ -1378,6 +1378,8 @@ class VisionService:
                 with reference.open() as stream:
                     baseline = json.load(stream)
                 if baseline["world_id"] == page["map"]["map_id"]:
+                    from stream_telemetry import complete_survey_features
+                    complete_survey_features(baseline)
                     page["map"]["metadata"]["survey_baseline"] = baseline
                     if getattr(self, "survey_grid", None) is not None:
                         evidence = self.survey_grid.status()

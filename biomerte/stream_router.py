@@ -70,6 +70,16 @@ class Session:
         self.closed = False
         self.revisions = {}
         self.world_snapshot = None
+        self.world_version = None
+
+    def cache_world_snapshot(self, metadata, forwarded):
+        world = metadata["data"]["map"]
+        survey = world["metadata"].get("survey_baseline") or {}
+        version = (world["map_id"], world["revision"], survey.get("survey_revision"))
+        changed = version != self.world_version
+        self.world_version = version
+        self.world_snapshot = forwarded
+        return changed
 
     def peers_on(self, role, lane):
         return [p for (r, l, identity), p in list(self.peers.items())
@@ -324,7 +334,8 @@ class Router:
                     forwarded = session.forward(role, lane, message, identity)
                     if lane == 'map' and role == 'provider' and grant.get('contract') == 'robot.vision.stream:1':
                         if meta.get('type') == 'world_snapshot':
-                            session.world_snapshot = forwarded
+                            if not session.cache_world_snapshot(meta, forwarded):
+                                continue
                     for other in session.peers_on('provider' if role == 'server' else 'server', lane):
                         try:
                             other.put(forwarded)
