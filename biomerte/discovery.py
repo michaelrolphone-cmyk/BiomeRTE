@@ -6,11 +6,11 @@ from .store import Fault, digest, encode, uid
 from . import providers
 
 SECTIONS = ('operations', 'contracts', 'offers', 'guide')
-PAGE_BYTES = 16000  # Transport page target, never an inventory or item limit.
+DEFAULT_DISCOVERY_LIMIT = 25
 
-@op('system.discovery', 'section?:str cursor?:str', False)
-@op('discovery.page', 'section?:str cursor?:str', False)
-def page(tx, ctx, section='', cursor=''):
+@op('system.discovery', 'section?:str cursor?:str limit?:int', False)
+@op('discovery.page', 'section?:str cursor?:str limit?:int', False)
+def page(tx, ctx, section='', cursor='', limit=None):
     from .mcp import CALLER_GUIDE
     after = ''
     if cursor:
@@ -19,10 +19,16 @@ def page(tx, ctx, section='', cursor=''):
             if section and section != value['section']:
                 raise ValueError('section mismatch')
             section, after = value['section'], value['after']
+            if limit is None:
+                limit = value.get('limit', DEFAULT_DISCOVERY_LIMIT)
             if not isinstance(after, str):
                 raise ValueError('invalid key')
         except Exception:
             raise Fault('Invalid discovery cursor')
+    if limit is None:
+        limit = DEFAULT_DISCOVERY_LIMIT
+    if type(limit) is not int or limit < 1:
+        raise Fault('Discovery limit must be a positive integer')
     section = section or 'operations'
     if section not in SECTIONS:
         raise Fault('Unknown discovery section')
@@ -38,18 +44,14 @@ def page(tx, ctx, section='', cursor=''):
         rows, key = [dict(id='caller-guide', **CALLER_GUIDE)], 'id'
     rows = sorted(rows, key=lambda row: row[key])
     remaining = [row for row in rows if row[key] > after]
-    items, size = [], 0
-    for row in remaining:
-        amount = len(encode(row).encode('utf8'))
-        if items and size + amount > PAGE_BYTES:
-            break
-        items.append(row)
-        size += amount
+    items = remaining[:limit]
     following = None
     if len(items) < len(remaining):
         following = {'section': section, 'after': items[-1][key]}
     elif section != SECTIONS[-1]:
         following = {'section': SECTIONS[SECTIONS.index(section)+1], 'after': ''}
+    if following:
+        following['limit'] = limit
     cursor = base64.urlsafe_b64encode(encode(following).encode('utf8')).decode('ascii') if following else None
     result = {'section': section, 'items': items, 'section_total': len(rows),
               'next_cursor': cursor, 'complete': following is None,

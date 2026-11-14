@@ -109,8 +109,8 @@ test('native and OAuth discovery forward controller pages, including continuatio
  ];
  const calls=[
   ['/api/mcp',auth,'biome_discover',{}, {},'site'],
-  ['/mcp',owner,'biome_discover',{section:'offers'},{section:'offers'},'site'],
-  ['/mcp',owner,'biome_invoke',{operation:'discovery.page',arguments:{cursor:'native-cursor'},realm:'local',request_id:'alias'},{cursor:'native-cursor'},'local']
+  ['/mcp',owner,'biome_discover',{section:'offers',limit:25},{section:'offers',limit:25},'site'],
+  ['/mcp',owner,'biome_invoke',{operation:'discovery.page',arguments:{cursor:'native-cursor',limit:7},realm:'local',request_id:'alias'},{cursor:'native-cursor',limit:7},'local']
  ];
  for(const [i,[path,headers,name,args,expected,realm]] of calls.entries()){
   const pending=send(path,rpc('tools/call',{name,arguments:args}),headers);
@@ -125,7 +125,7 @@ test('native and OAuth discovery forward controller pages, including continuatio
   const response=await pending;assert.equal(response.status,200);
   assert.deepEqual((await response.json()).result,answer);
  }
- for(const args of [{section:'bad'},{cursor:5},{cursor:'discovery-legacy:offers:0'}]){
+ for(const args of [{section:'bad'},{cursor:5},{cursor:'discovery-legacy:offers:0'},...[0,-1,'25',1.5,null].map(limit=>({limit}))]){
   const res=await send('/mcp',rpc('tools/call',{name:'biome_discover',arguments:args}),owner);
   assert.equal(res.status,200);assert.equal((await res.json()).result.isError,true);
  }

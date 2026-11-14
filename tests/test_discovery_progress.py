@@ -36,6 +36,21 @@ class Discovery(unittest.TestCase):
         row={'id':'large','description':'x'*500000}
         with patch.object(discovery.providers,'discover',return_value={'contracts':[row],'offers':[]}):
             self.assertEqual(discovery.page(Tx(),None,'contracts')['items'],[row])
+    def test_limit_counts_rows_and_survives_keyset_continuations(self):
+        rows = [dict(id='%02d' % n, description='x' * 17000) for n in range(64)]
+        with patch.object(discovery.providers, 'discover', return_value={'contracts': rows, 'offers': rows}):
+            result = discovery.page(Tx(), None, 'contracts')
+            self.assertEqual(len(result['items']), 25)
+            result = discovery.page(Tx(), None, cursor=result['next_cursor'], limit=30)
+            self.assertEqual([r['id'] for r in result['items']], [r['id'] for r in rows[25:55]])
+            result = discovery.page(Tx(), None, cursor=result['next_cursor'])
+            self.assertEqual(result['items'], rows[55:])
+            result = discovery.page(Tx(), None, cursor=result['next_cursor'])
+            self.assertEqual(result['items'], rows[:30])
+            for limit in (0, -1, True, 1.5, '25'):
+                with self.assertRaises(Fault):
+                    discovery.page(Tx(), None, 'offers', limit=limit)
+
     def test_bad_cursor_returns_explicit_error(self):
         with self.assertRaises(Fault): discovery.page(Tx(),None,cursor='broken')
     def test_progress_exposes_uncertainty_separately(self):
