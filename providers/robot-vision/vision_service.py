@@ -687,6 +687,16 @@ class VisionService:
         pose = previous.get('pose') if same_frame else None
         pose = pose or dict(unknown_localization('frame_processing_pending'),
                     frame_id=frame['frame_id'], map_id=binding['map_id'])
+        motion = self._stream_motion_events(frame)
+        tof = read_tof(self.tof_path)
+        pickup = motion.get('last_pickup_at')
+        if isinstance(pickup, (int, float)) and isinstance(tof, dict):
+            ground = (tof.get('ground_contact') or {}).copy()
+            if pickup > (ground.get('last_pickup_at') or 0):
+                ground['last_pickup_at'] = pickup
+                if pickup >= (ground.get('confirmed_at') or 0):
+                    ground['active'] = False
+                tof = dict(tof, ground_contact=ground)
         return dict(binding, frame_id=frame['frame_id'], auto_gyro_calibration=auto_calibration,
                     source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
                     source_timestamp_status=frame.get('capture_time_status', 'unknown'),
@@ -704,8 +714,8 @@ class VisionService:
                         'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
-                    tof=read_tof(self.tof_path), ahrs=self._stream_ahrs(frame),
-                    motion_events=self._stream_motion_events(frame),
+                    tof=tof, ahrs=self._stream_ahrs(frame),
+                    motion_events=motion,
                     **self._drive_response_telemetry(),
                     ultrasonic=self._stream_ultrasonic(),
                     map_snapshot_required_on_revision_gap=True)
@@ -835,7 +845,24 @@ class VisionService:
         status = self.ahrs.status()
         if frame is not None:
             captured=self._capture_sensor_stream(frame,'ahrs')
-            if captured is not None:return {**status,**captured}
+            if captured is not None:
+                if 'ahrs' not in captured:
+                    return {**status, **captured, 'sensors': {}}
+                from capture_packet import frame_ahrs_snapshot
+                from ahrs_source import _age_sensor
+                try:
+                    snap = frame_ahrs_snapshot(frame)
+                except (TypeError, ValueError, KeyError):
+                    return {**captured, 'sensors': {}, 'state':'unavailable',
+                            'reason':'invalid_capture_ahrs', 'timing_qualified':False}
+                sensors = snap['sensors']
+                for row in sensors.values():
+                    _age_sensor(row, 0., 0.)
+                    row['timing_qualified'] = row['valid']
+                state = ('available' if all(row['valid'] for row in sensors.values()) else
+                         'partial' if any(row['valid'] for row in sensors.values()) else 'unavailable')
+                return {**status, **captured, 'sensors': sensors, 'state': state,
+                        'calibration': snap['calibration']}
         snapshot = self.ahrs.snapshot()
         if not isinstance(snapshot, dict):
             return status

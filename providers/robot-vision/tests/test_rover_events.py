@@ -135,4 +135,51 @@ class Events(unittest.TestCase):
         for i in range(100):d.observe(frame(11+i*.2,yaw_rate=30 if i%2 else -30))
         self.assertLessEqual(len(d.samples),300);self.assertLessEqual(len(d.snapshot()['events']),64)
 
+class StreamAcceptance(unittest.TestCase):
+    def test_invalid_attitude_only_rules_out_turn_from_quiet_fresh_raw_gyro(self):
+        f = frame(11)
+        raw = f['sensor_packet']['ahrs']['ahrs']
+        raw['attitude']['valid'] = False
+        for row in raw['imu_samples']:
+            row['attitude_valid'] = False
+        for gyro, age, available, turning in (([0,0,0],10,True,False),
+                ([1,0,0],10,True,None),([0,0,0],800,False,None)):
+            with self.subTest(gyro=gyro, age=age):
+                raw['imu'].update(gyro_rad_s=gyro,age_ms=age)
+                out = MotionEvents().observe(f)
+                self.assertEqual(out['state']['available'],available)
+                self.assertIs(out['state']['turning'],turning)
+                self.assertEqual(out['events'],[])
+
+    def test_late_applied_ack_is_visible_without_qualifying_motion(self):
+        from drive_response import CaptureDriveResponseMonitor
+        m = CaptureDriveResponseMonitor(None, {'enabled':True})
+        ack = dict(stage='applied', authority='relay', epoch='boot', generation=3,
+                   sequence=294,intent_sequence=146,commanded_mask=0,host_issue_age_s=2.)
+        m.control(ack,20.)
+        m.control(dict(ack,sequence=293,commanded_mask=1),20.1)
+        last = m.snapshot()['last_applied']
+        self.assertEqual((last['sequence'],last['intent_sequence'],last['commanded_mask']),(294,146,0))
+        self.assertFalse(last['timing_qualified'])
+        self.assertIsNone(m.detector.current)
+
+    def test_passive_impact_enum_and_stationary_state(self):
+        d = MotionEvents()
+        for t in (10,10.2,10.4): quiet = d.observe(frame(t))
+        self.assertIs(quiet['state']['turning'],False)
+        out = d.observe(frame(10.6,lambda t: [6 if 10.48 <= t < 10.52 else 0,0,0]))
+        self.assertEqual([e['type'] for e in out['events']],['robot.motion.collision'])
+        self.assertIn('robot.motion.collision',out['event_types'])
+
+    def test_pickup_timestamp_and_turn_state(self):
+        d = MotionEvents()
+        for i in range(12):
+            out = d.observe(frame(10+i*.2,lambda t: [0,0,3 if 11<=t<11.25 else -3 if 11.25<=t<11.5 else 0]))
+        self.assertEqual(out['last_pickup_at'],out['events'][-1]['timestamp'])
+        for rate, direction in [(30,'left'),(-30,'right')]:
+            d = MotionEvents()
+            for i in range(9): out=d.observe(frame(10+i*.2,yaw_rate=rate))
+            self.assertIs(out['state']['turning'],True)
+            self.assertEqual(out['state']['turn_direction'],direction)
+
 if __name__=='__main__':unittest.main()

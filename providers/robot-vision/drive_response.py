@@ -335,12 +335,32 @@ class CaptureDriveResponseMonitor(DriveResponseMonitor):
                 return
             self.control_connected=True
             if value.get('stage')!='applied':return
-            age=value.get('host_issue_age_s')
-            if not finite(age) or not 0<=age<=2*self.detector.max_clock_s:
+            sequence = value.get('sequence')
+            epoch = tuple(value.get(k) for k in ('authority','epoch','generation'))
+            mask = value.get('commanded_mask')
+            if (type(sequence) is not int or any(v is None for v in epoch)
+                    or type(mask) is not int or not 0 <= mask <= 63 or mask & 3 == 3):
+                return
+            previous = getattr(self, 'last_applied', None)
+            if previous and epoch == tuple(previous[k] for k in ('authority','epoch','generation')):
+                if sequence <= previous['sequence']:
+                    return
+            age = value.get('host_issue_age_s')
+            qualified = finite(age) and 0 <= age <= 2*self.detector.max_clock_s
+            # Delivery of an applied ACK and precision of its timing are separate facts.
+            self.last_applied = {k:value.get(k) for k in ('authority','epoch','generation',
+                'sequence','intent_sequence','commanded_mask','issued_utc_ms','provider_received_utc_ms')}
+            self.last_applied.update(timing_qualified=qualified, host_issue_age_s=age if finite(age) else None)
+            if not qualified:
                 self.detector.gap('applied_output_clock_unqualified')
                 return
-            self.detector.applied(value.get('commanded_mask'),received-age/2,
-                value.get('sequence'),(value.get('authority'),value.get('epoch'),value.get('generation')),age/2)
+            self.detector.applied(mask,received-age/2,sequence,epoch,age/2)
+
+    def snapshot(self):
+        result = super().snapshot()
+        with self.lock:
+            result['last_applied'] = getattr(self,'last_applied',None)
+            return result
 
     def capture(self,motion):
         if not self.enabled:return
