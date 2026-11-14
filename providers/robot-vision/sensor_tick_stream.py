@@ -32,7 +32,7 @@ class SensorTickStream:
         from sensor_push import SensorPushReceiver
         self.push=SensorPushReceiver(self)
         if self.push.configured:
-            self.service.ahrs.set_push_source(lambda:self.pushed_sensor('ahrs'))
+            self.service.ahrs.source.set_push_source(lambda:self.pushed_sensor('ahrs'))
             self.service.ultrasonic.set_push_source(lambda:self.pushed_sensor('ultrasonic'))
         self.push.start()
         self.thread=threading.Thread(target=self._run,name='sensor-tick-stream',daemon=True)

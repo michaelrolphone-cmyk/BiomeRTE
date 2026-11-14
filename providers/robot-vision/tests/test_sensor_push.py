@@ -3,6 +3,7 @@ import importlib
 import json
 from pathlib import Path
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -12,6 +13,22 @@ from sensor_push import ClockAlignment, SensorPushReceiver
 
 
 class ClockTests(unittest.TestCase):
+    def test_start_wires_tracking_source_and_sonar_cache(self):
+        from ahrs_source import AHRSTelemetrySource
+        from camera_telemetry import SensorTelemetrySource
+        from sensor_tick_stream import SensorTickStream
+        ahrs=AHRSTelemetrySource({},dict(enabled=True),client=object())
+        sonar=SensorTelemetrySource({},dict(enabled=True),client=object())
+        stream=object.__new__(SensorTickStream)
+        stream.service=types.SimpleNamespace(ahrs=types.SimpleNamespace(source=ahrs),ultrasonic=sonar)
+        stream._push_snapshot=None;stream._run=lambda:None;stream.stop=threading.Event()
+        receiver=types.SimpleNamespace(configured=True,start=lambda:None,close=lambda:None)
+        with patch('sensor_push.SensorPushReceiver',return_value=receiver):
+            stream.start();stream.close()
+        self.assertIsNotNone(ahrs._push_reader)
+        self.assertIsNotNone(sonar._push_reader)
+        self.assertIsNone(ahrs._push_reader())
+
     def test_push_cache_replaces_http_without_refreshing_old_data(self):
         from ahrs_source import AHRSTelemetrySource
         from camera_telemetry import SensorTelemetrySource
