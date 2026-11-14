@@ -101,8 +101,13 @@ def build_survey(folder):
         if p:
             result["peer_label"] = p.get("label") or result["target_bssid"]
             result["peer_position_source"] = p.get("position_source")
-            if p.get("position_source")=="measured_fixed":
-                anchor = np.array([p["x_m"],p["y_m"],p["z_m"]])
+            survey_positions = radios["xyz_from_survey"]
+            name = result["peer_label"]
+            if name not in survey_positions and name.endswith(" Room"):
+                name = name[:-5]
+            if p.get("position_source")=="measured_fixed" and name in survey_positions:
+                # Use corrected survey geometry with the original capture-time range.
+                anchor = np.asarray(survey_positions[name]) * inch
                 result["camera_to_anchor_m"] = float(np.linalg.norm(anchor-cam))
                 feature("ftm", result["peer_label"]+" FTM", [cam,anchor],
                     measured_range_m=result["distance_m"],peer=result["target_bssid"])
