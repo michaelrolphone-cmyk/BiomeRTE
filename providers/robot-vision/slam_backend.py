@@ -37,7 +37,9 @@ def next_native_frame_index(runtime, fallback):
                     runtime.map.add_frame(reference)
                     previous = reference
                     break
-        return int(previous.img_id) + 1 if previous is not None else fallback
+        successor=int(previous.img_id)+1 if previous is not None else fallback
+        reserved=getattr(runtime,"rig_next_frame_index",None)
+        return max(successor,reserved) if reserved is not None else successor
 
 
 
@@ -251,6 +253,14 @@ class SlamBackend:
         runtime.preserve_map_on_tracking_loss = True
         return runtime
 
+    def rig_anchor(self, pose):
+        from rig_native_map import anchor
+        return anchor(self,pose)
+
+    def rig_resolve(self, value):
+        from rig_native_map import resolve
+        return resolve(self,value)
+
     def continuity_state(self):
         with self._lock:
             if self._slam is None:
@@ -326,6 +336,7 @@ class SlamBackend:
             self._radio_prior = self._last_radio_prior = ()
             self._entities = {}
             self._source_frames = {}
+            self._rig_sources = {}; self._rig_anchors = {}; self._rig_calibrations = {}
             self._next_frame_index = 0
             self._geometry = self._geometry_summary({}, False)
             self._complete_snapshot_pending = False
@@ -343,6 +354,8 @@ class SlamBackend:
                 self._slam = self._new_runtime()
                 if manifest is not None:
                     self._slam.load_system_state(str(path))
+                    from rig_native_map import restore
+                    restore(self,path)
                     self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])
@@ -368,6 +381,8 @@ class SlamBackend:
             return self.status()
 
     def _read_entities(self):
+        from rig_native_map import refresh_anchors
+        refresh_anchors(self)
         entities = {}
         for keyframe in self._slam.map.get_keyframes():
             if not keyframe.is_bad():
@@ -380,6 +395,8 @@ class SlamBackend:
         for point in self._slam.map.get_points():
             if not point.is_bad():
                 entities[("sparse_point", str(point.id))] = _point_data(point.pt(), point.color)
+        for (kind,identity),value in entities.items():
+            if kind=="keyframe":value["camera_id"]=getattr(self,"_rig_sources",{}).get(str(value["backend_frame_index"]),"front")
         return entities
 
     def _diff(self, entities, complete=False):
@@ -562,6 +579,8 @@ class SlamBackend:
                 raise CheckpointError("Checkpoint target must be a fresh empty directory")
             target.mkdir(parents=True, exist_ok=True)
             self._slam.save_system_state(str(target))
+            from rig_native_map import metadata, write_state
+            write_state(target,metadata(self))
             # Upstream can catch a serialization exception internally. Verify
             # actual files and parse the saved map before reporting success.
             document = json.loads((target / "map.json").read_text())
@@ -604,7 +623,8 @@ class SlamBackend:
             native = capture(self._slam, target_dir)
             entities = _saved_entities(native["document"], self._source_frames)
             changes = self._diff(entities, complete=True)
-            return dict(native=native, entities=entities, map_changes=changes,
+            from rig_native_map import metadata
+            return dict(native=native, rig_state=metadata(self), entities=entities, map_changes=changes,
                         geometry=copy.deepcopy(self._geometry), config=copy.deepcopy(self.config),
                         map_id=self._map_id, next_frame_index=self._next_frame_index,
                         source_frames=copy.deepcopy(self._source_frames),
@@ -615,6 +635,8 @@ class SlamBackend:
     def write_checkpoint(self, ticket):
         from async_checkpoint import write
         target = write(ticket["native"])
+        from rig_native_map import write_state
+        write_state(target,ticket.get("rig_state",{}))
         # Upstream can catch a serialization exception internally. Verify
         # actual files and parse the saved map before reporting success.
         document = ticket["native"]["document"]

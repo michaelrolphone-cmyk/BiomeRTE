@@ -43,7 +43,7 @@ CAPABILITIES = [
     "robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
-] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
+] + ["robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
 LOG = logging.getLogger("robot-vision")
 
 
@@ -138,6 +138,8 @@ class VisionService:
         self.atlas.register(self.map_id)
         self._world_lost_frames = set()
         self.atlas.sonar_entities = self._sonar_entities
+        from camera_rig import SharedCameraRig
+        self.camera_rig = SharedCameraRig(self)
 
     def _map_metadata(self, extra=None):
         return {
@@ -341,6 +343,7 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.camera_rig.start()
         from live_camera import LiveCamera
         self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
@@ -546,6 +549,7 @@ class VisionService:
                     keyframe,self.revision)
         obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
         obstacle_status["metric_odometry"] = metric_pose
+        if getattr(self,"camera_rig",None) is not None:self.camera_rig.observe_front(frame,localization)
         self._last_geometry = copy.deepcopy(geometry)
         spatial = {
             "sparse_geometry": geometry,
@@ -988,7 +992,14 @@ class VisionService:
 
 
     def query(self, operation, inputs=None):
-        return dispatch(self, operation, inputs or {}, self._query_core)
+        inputs = inputs or {}
+        rig = getattr(self,"camera_rig",None)
+        if rig is not None:
+            if operation=="robot.vision.rig.status":return rig.status()
+            if operation=="robot.vision.rig.configure":return rig.configure(inputs.get("configuration",inputs))
+            if inputs.get("camera_id")=="rear" and operation in ("robot.vision.frame","robot.vision.snapshot","robot.vision.geometry"):
+                return rig.query(operation,inputs)
+        return dispatch(self, operation, inputs, self._query_core)
 
     def _query_core(self, operation, inputs=None):
         inputs = inputs or {}
@@ -1046,6 +1057,7 @@ class VisionService:
             return {
                 "availability": "available", "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
                 "capabilities": CAPABILITIES,
+                "camera_rig": self.camera_rig.status() if getattr(self,"camera_rig",None) is not None else None,
                 "streaming": {"available": not self._stop.is_set(), "lanes": ["vision", "map"],
                               "transport": "native_leased_stream", "per_message_actions": False,
                               "camera_delivery": self._live_camera.status() if self._live_camera else None},
@@ -1236,6 +1248,7 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        if getattr(self,"camera_rig",None) is not None:self.camera_rig.close()
         self._stop.set()
         if getattr(self, "atlas", None) is not None:
             self.atlas.close()
