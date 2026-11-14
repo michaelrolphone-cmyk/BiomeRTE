@@ -255,11 +255,14 @@ class WorldAtlas:
     def _world_registration(self, root, rows):
         if self.registration_status is None:
             return {"valid": False, "status": "awaiting_motion_registration"}
+        survey = None
         ordered = sorted(rows, key=lambda row: row[0] != root)
         for mid, revision, raw, _, _ in ordered:
             if raw is None or revision is None:
                 continue
             registration = self.registration_status(mid, revision)
+            if survey is None:
+                survey = registration.get("surveyed_world")
             if not registration.get("valid"):
                 continue
             try:
@@ -268,7 +271,12 @@ class WorldAtlas:
                 continue
             return dict(registration, T_anchor_map=t.tolist(), map_id=self.world_id,
                         reference_map_id=mid, reference_map_revision=revision)
-        return {"valid": False, "status": "awaiting_world_reference_registration"}
+        result = {"valid": False, "status": "awaiting_world_reference_registration"}
+        if survey is None and getattr(self, "survey_status", None):
+            survey = self.survey_status()
+        if survey:
+            result.update(surveyed_world=survey, floor=survey["ground_plane"])
+        return result
 
     def status(self):
         with self.lock:
@@ -278,7 +286,10 @@ class WorldAtlas:
         registration["map_revision"] = revision
         return {"world_id":self.world_id,"revision":revision,"root_map_id":root,
                 "tof_registration":registration,
-                "units":"arbitrary","scale_status":"unobserved","floor_alignment":"unmeasured",
+                "units":"arbitrary","scale_status":"unobserved",
+                "floor_alignment":("surveyed_enu_registered" if registration.get("valid") else "surveyed_enu_unregistered")
+                    if registration.get("surveyed_world") else "unmeasured",
+                "surveyed_world":registration.get("surveyed_world"),
                 "submaps":[{"map_id":m,"revision":r,"alignment":"unlocalized" if t is None else "aligned",
                             "T_world_map":None if t is None else json.loads(t),
                             "evidence":None if e is None else json.loads(e),"checkpoint_id":c}
@@ -348,7 +359,8 @@ class WorldAtlas:
         return {"map":{"map_id":self.world_id,"revision":state["revision"],
                        "metadata":{"kind":"continuous_world_atlas","units":"arbitrary",
                                    "scale_status":"unobserved","root_map_id":state["root_map_id"],
-                                   "tof_registration":state.get("tof_registration")}},
+                                   "tof_registration":state.get("tof_registration"),
+                                   "surveyed_world":(state.get("tof_registration") or {}).get("surveyed_world")}},
                 "entities":entities,"next_cursor":next_cursor,"submaps":state["submaps"],
                 "unlocalized_submaps":[x for x in state["submaps"] if x["T_world_map"] is None]}
 

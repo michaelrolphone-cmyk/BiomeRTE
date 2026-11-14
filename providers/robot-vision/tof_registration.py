@@ -245,7 +245,8 @@ class FrameRegistration:
             for raw in tof.get("rover_ranges", []):
                 try:
                     target = str(raw["target_bssid"]).lower(); observed = float(raw["observed"])
-                    distance = float(raw["distance_m"])
+                    if raw.get("consistent") is False: continue
+                    distance = float(raw.get("corrected_distance_m", raw["distance_m"]))
                     if not np.isfinite([observed, distance]).all() or distance <= 0 or not 0 <= now-observed <= 30 or raw.get("samples", 0) <= 0: continue
                     signature = (distance, raw.get("rtt_ns"), raw.get("samples"))
                     old = self.seen.get(target)
@@ -317,7 +318,7 @@ class FrameRegistration:
                 if len(levels) >= 2:
                     order = np.mean(levels[max(levels)], axis=0)-np.mean(levels[min(levels)], axis=0)
                 up = rotation @ np.mean(ups, axis=0) if len(ups) >= 5 else None
-                fitted["floor"] = floor_from_motion(transform(t, camera_positions) if camera_positions else [], rotation @ first_rotation,
+                fitted["floor"] = baseline.get("ground_plane") or floor_from_motion(transform(t, camera_positions) if camera_positions else [], rotation @ first_rotation,
                     float(self.config.get("camera_height_m", .0635)), up, order)
                 if orientations:
                     epoch = orientations[-1][0]; rotations_ref = [rotation @ r for e, r in orientations if e == epoch]
