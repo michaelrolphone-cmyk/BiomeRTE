@@ -151,6 +151,18 @@ class StreamAcceptance(unittest.TestCase):
                 self.assertIs(out['state']['turning'],turning)
                 self.assertEqual(out['events'],[])
 
+    def test_late_applied_ack_is_visible_without_qualifying_motion(self):
+        from drive_response import CaptureDriveResponseMonitor
+        m = CaptureDriveResponseMonitor(None, {'enabled':True})
+        ack = dict(stage='applied', authority='relay', epoch='boot', generation=3,
+                   sequence=294,intent_sequence=146,commanded_mask=0,host_issue_age_s=2.)
+        m.control(ack,20.)
+        m.control(dict(ack,sequence=293,commanded_mask=1),20.1)
+        last = m.snapshot()['last_applied']
+        self.assertEqual((last['sequence'],last['intent_sequence'],last['commanded_mask']),(294,146,0))
+        self.assertFalse(last['timing_qualified'])
+        self.assertIsNone(m.detector.current)
+
     def test_passive_impact_enum_and_stationary_state(self):
         d = MotionEvents()
         for t in (10,10.2,10.4): quiet = d.observe(frame(t))
