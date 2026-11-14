@@ -269,6 +269,7 @@ class WorldAtlas:
         if self.registration_status is None:
             return {"valid": False, "status": "awaiting_motion_registration"}
         survey = None
+        baseline_identity = {}
         ordered = sorted(rows, key=lambda row: row[0] != root)
         for mid, revision, raw, _, _ in ordered:
             if raw is None or revision is None:
@@ -276,6 +277,8 @@ class WorldAtlas:
             registration = self.registration_status(mid, revision)
             if survey is None:
                 survey = registration.get("surveyed_world")
+                baseline_identity = {key:registration.get(key) for key in
+                                     ("frame_id", "baseline_epoch", "baseline_revision")}
             if not registration.get("valid"):
                 continue
             try:
@@ -284,7 +287,7 @@ class WorldAtlas:
                 continue
             return dict(registration, T_anchor_map=t.tolist(), map_id=self.world_id,
                         reference_map_id=mid, reference_map_revision=revision)
-        result = {"valid": False, "status": "awaiting_world_reference_registration"}
+        result = dict(baseline_identity, valid=False, status="awaiting_world_reference_registration")
         if survey is None and getattr(self, "survey_status", None):
             survey = self.survey_status()
         if survey:
@@ -336,7 +339,7 @@ class WorldAtlas:
                 continue
             page = ({"entities": [], "next_cursor": None} if state["local_cursor"] == "sonar_only" else
                 self.store.read_map(item["map_id"],revision=item["revision"],
-                kinds=["keyframe","sparse_point"],cursor=state["local_cursor"],limit=limit-len(entities)))
+                kinds=["keyframe","sparse_point","landmark"],cursor=state["local_cursor"],limit=limit-len(entities)))
             t=np.asarray(item["T_world_map"])
             local_entities = list(page["entities"])
             if not page.get("next_cursor") and getattr(self, "sonar_entities", None):
@@ -354,6 +357,10 @@ class WorldAtlas:
                 data["source_map_id"]=item["map_id"]
                 if entity["kind"]=="sparse_point":
                     data["xyz"]=transform_points(t,[data["xyz"]])[0].tolist()
+                elif entity["kind"] == "landmark":
+                    for name in ("xyz", "position"):
+                        if data.get(name) is not None:
+                            data[name] = transform_points(t,[data[name]])[0].tolist()
                 elif "T_map_camera" in data:
                     pose=np.asarray(data["T_map_camera"])
                     world_pose=np.eye(4)
