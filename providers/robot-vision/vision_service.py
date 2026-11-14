@@ -648,10 +648,9 @@ class VisionService:
             added = self.obstacle_map.record(self.map_id, frame_id, observations,
                 self.pose_timeline.at, keyframe, sonar_revision,
                 metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
-            resolved = self.obstacle_map.resolve_pending(self.map_id, self.pose_timeline.at, keyframe, sonar_revision,
-                earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
-                    for t,_ in list(timeline.poses)[:1]],default=None),
-                metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+            resolved = self.obstacle_map.resolve_timeline_pending(
+                self.map_id, self.pose_timeline, self.metric_odometry.timeline,
+                keyframe=keyframe, revision=sonar_revision, local_frame_id=self.metric_odometry.local_frame_id)
             ledger_count = self.obstacle_map.summary(self.map_id)['ray_count']
             committed_counts = getattr(self, '_sonar_committed_counts', {})
             if added or resolved or ledger_count != committed_counts.get(self.map_id,0):
@@ -823,10 +822,8 @@ class VisionService:
             (frame.get('sensor_packet') or {}).get('frame_id'), observations,
             lambda *_:None, revision=revision, metric_pose_at=timeline.at,
             local_frame_id=self.metric_odometry.local_frame_id)
-        resolved = self.obstacle_map.resolve_pending(map_id,lambda *_:None,revision=revision,
-            earliest_time=timeline.poses[0][0] if timeline.poses else
-                min((o['time_s'] for o in observations),default=0)-.5,
-            metric_pose_at=timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+        resolved = self.obstacle_map.resolve_timeline_pending(
+            map_id, None, timeline, revision=revision, local_frame_id=self.metric_odometry.local_frame_id)
         return {'map_id':map_id, 'added':added, 'resolved':resolved,
                 'ray_count':self.obstacle_map.summary(map_id)['ray_count'],
                 'visual_processing_required':False}

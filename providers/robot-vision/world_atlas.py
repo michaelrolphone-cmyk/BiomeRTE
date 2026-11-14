@@ -154,6 +154,7 @@ class WorldAtlas:
         self.db.commit()
         self.cursor_key = self.db.execute("SELECT value FROM atlas_meta WHERE key=\'cursor_key\'").fetchone()[0].encode()
         self._landmarks = {}
+        self._pair_fits = {}
         self._stop = threading.Event()
         self.thread = None
         self.error = None
@@ -168,7 +169,7 @@ class WorldAtlas:
                 self.db.execute("UPDATE world SET revision=revision+1")
             self.db.commit()
 
-    def update(self, checkpoint):
+    def update(self, checkpoint, *, align=True):
         mid, revision = checkpoint["map_id"],checkpoint["map_revision"]
         self.register(mid)
         with self.lock:
@@ -178,6 +179,7 @@ class WorldAtlas:
         landmarks = checkpoint_landmarks(checkpoint)
         with self.lock:
             self._landmarks[mid] = landmarks
+            self._pair_fits = {pair: fit for pair, fit in self._pair_fits.items() if mid not in pair}
             root = self.db.execute("SELECT root FROM world").fetchone()[0]
             if root is None and len(landmarks)>=3:
                 self.db.execute("UPDATE world SET root=?",(mid,))
@@ -188,7 +190,8 @@ class WorldAtlas:
                             (revision,checkpoint["checkpoint_id"],mid))
             self.db.execute("UPDATE world SET revision=revision+1")
             self.db.commit()
-        self.align_pending()
+        if align:
+            self.align_pending()
 
     def align_pending(self):
         # Native optimization can revise local coordinates after a link was fitted.
@@ -197,6 +200,12 @@ class WorldAtlas:
             root = self.db.execute("SELECT root FROM world").fetchone()[0]
             if root is None:
                 return
+            registrations = {}
+            def registration(mid):
+                if mid not in registrations:
+                    registrations[mid] = self.registration_status(mid, self._revision(mid))
+                return registrations[mid]
+
             connected = {root:np.eye(4)}
             evidence = {}
             pending = set(self._landmarks)-{root}
@@ -205,8 +214,8 @@ class WorldAtlas:
                 for mid in sorted(pending):
                     candidates = []
                     for reference,world_reference in connected.items():
-                        source_registration = self.registration_status(mid, self._revision(mid)) if self.registration_status else None
-                        reference_registration = self.registration_status(reference, self._revision(reference)) if self.registration_status else None
+                        source_registration = registration(mid) if self.registration_status else None
+                        reference_registration = registration(reference) if self.registration_status else None
                         if (source_registration and reference_registration and
                                 source_registration.get("valid") and reference_registration.get("valid") and
                                 source_registration.get("frame_id") == reference_registration.get("frame_id") and
@@ -221,7 +230,10 @@ class WorldAtlas:
                                  "tolerance": source_registration.get("acceptance_m", 1.),
                                  "frame_id": source_registration["frame_id"],
                                  "baseline_epoch": source_registration["baseline_epoch"]}))
-                        fit = fit_submap(self._landmarks[mid],self._landmarks[reference])
+                        pair = (mid, reference)
+                        if pair not in self._pair_fits:
+                            self._pair_fits[pair] = fit_submap(self._landmarks[mid], self._landmarks[reference])
+                        fit = self._pair_fits[pair]
                         if fit:
                             t = world_reference @ np.asarray(fit["T_target_source"])
                             candidates.append((fit["inliers"],t,reference,fit))
@@ -376,9 +388,10 @@ class WorldAtlas:
                     try:
                         cp=self.store.latest_backend_checkpoint(info["map_id"])
                         if cp.get("availability")=="available":
-                            self.update(cp)
+                            self.update(cp, align=False)
                     except Exception:
                         LOG.exception("World import unavailable for %s; preserving its stored map",info["map_id"])
+                self.align_pending()
                 while not self._stop.wait(1):
                     try:
                         cp=self.store.latest_backend_checkpoint(service.map_id)

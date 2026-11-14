@@ -193,6 +193,24 @@ class SonarTests(unittest.TestCase):
             self.assertEqual(store.read('map',scale_m_per_map_unit=2,resolve_anchor=lambda _:None)['unresolved_observations'],1)
             store.close()
 
+    def test_pose_retry_only_decodes_missing_observations_in_each_live_clock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = SonarObstacleMap(Path(directory)/'rays', estimated_rover_mounts())
+            self.addCleanup(ledger.close)
+            for t, boot in [(1, 'old'), (1, 'current'), (2, 'current'), (20, 'current')]:
+                obs = sonar_observations(frame(t, boot=boot))
+                ledger.record('map', str(t), obs, lambda *args: None)
+            visual, metric = PoseTimeline(), PoseTimeline()
+            visual.append('map', 'current', .95, pose(1))
+            metric.append('metric', 'current', 1.95, pose(2))
+            with patch('multisensor_mapping.json.loads', wraps=json.loads) as decoded:
+                self.assertEqual(ledger.resolve_timeline_pending('map', visual, metric), 2)
+                self.assertEqual(ledger.resolve_timeline_pending('map', visual, metric), 0)
+                self.assertEqual(decoded.call_count, 2)
+            summary = ledger.summary('map')
+            self.assertEqual((summary['ray_count'], summary['posed_observations'],
+                              summary['metric_observations']), (4, 1, 1))
+
     def test_missing_pose_is_preserved_then_resolved(self):
         with tempfile.TemporaryDirectory() as directory:
             store = SonarObstacleMap(Path(directory)/'rays',estimated_rover_mounts())

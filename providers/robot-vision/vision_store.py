@@ -223,6 +223,7 @@ PRAGMA user_version=1;
         self._ensure_entity_heads()
         with self._lock:
             with self._transaction():
+                self._ensure_prune_candidates()
                 self._remove_orphan_blobs()
                 expired = self._prune_locked()
             self._delete_blobs(expired)
@@ -527,24 +528,40 @@ PRAGMA user_version=1;
                     self._delete_blobs([new_blob])
                 raise
 
+    def _ensure_prune_candidates(self):
+        # Called in the startup transaction. Maintain candidates for old as well
+        # as new frames across pin changes, cascades and concurrent DB writers.
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='prune_candidates'").fetchone():
+            return
+        self._db.execute("CREATE TABLE prune_candidates(serial INTEGER PRIMARY KEY, "
+                         "frame_id TEXT UNIQUE NOT NULL REFERENCES frames(id) ON DELETE CASCADE)")
+        select = ("SELECT s.serial,s.frame_id FROM snapshots s JOIN frames f ON s.frame_id=f.id "
+                  "WHERE (s.durable=0 OR f.blob IS NOT NULL) AND NOT EXISTS "
+                  "(SELECT 1 FROM frame_pins p WHERE p.frame_id=s.frame_id)")
+        self._db.execute("INSERT INTO prune_candidates " + select)
+        for name, event, frame in (
+                ("snapshot_add", "AFTER INSERT ON snapshots", "NEW.frame_id"),
+                ("durability", "AFTER UPDATE OF durable ON snapshots", "NEW.frame_id"),
+                ("image", "AFTER UPDATE OF blob ON frames", "NEW.id"),
+                ("pin_add", "AFTER INSERT ON frame_pins", "NEW.frame_id"),
+                ("pin_remove", "AFTER DELETE ON frame_pins", "OLD.frame_id")):
+            self._db.execute(f"CREATE TRIGGER prune_{name} {event} BEGIN "
+                             f"DELETE FROM prune_candidates WHERE frame_id={frame}; "
+                             f"INSERT OR IGNORE INTO prune_candidates {select} AND s.frame_id={frame}; END")
+        self._db.execute("CREATE TRIGGER prune_snapshot_remove AFTER DELETE ON snapshots BEGIN "
+                         "DELETE FROM prune_candidates WHERE serial=OLD.serial; END")
+
     def _prune_locked(self):
         cutoff = self._db.execute(
             "SELECT serial FROM snapshots ORDER BY serial DESC LIMIT 1 OFFSET ?",
             (self.max_observations-1,)).fetchone()
         if cutoff is None:
             return []
-        # Covering indexes avoid visiting large JSON payload pages. Durable
-        # records whose image was already evicted need no further work.
         rows = self._db.execute(
-            "SELECT f.id,f.blob,s.durable FROM snapshots s INDEXED BY snapshots_retention "
-            "JOIN frames f ON f.id=s.frame_id WHERE s.durable=0 AND s.serial<? "
-            "AND NOT EXISTS(SELECT 1 FROM frame_pins p WHERE p.frame_id=f.id) "
-            "UNION ALL "
-            "SELECT f.id,f.blob,s.durable FROM frames f INDEXED BY frames_retention "
-            "JOIN snapshots s INDEXED BY snapshots_retention_frame ON s.frame_id=f.id "
-            "WHERE f.blob IS NOT NULL AND s.durable<>0 AND s.serial<? "
-            "AND NOT EXISTS(SELECT 1 FROM frame_pins p WHERE p.frame_id=f.id)",
-            (cutoff[0], cutoff[0])).fetchall()
+            "SELECT f.id,f.blob,s.durable FROM prune_candidates c "
+            "CROSS JOIN snapshots s ON s.serial=c.serial CROSS JOIN frames f ON f.id=c.frame_id "
+            "WHERE c.serial<?", (cutoff[0],)).fetchall()
         expired = []
         for row in rows:
             if row["blob"] is not None:

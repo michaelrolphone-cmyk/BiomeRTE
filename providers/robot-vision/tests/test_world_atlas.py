@@ -165,6 +165,16 @@ class AtlasTests(unittest.TestCase):
         self.assertEqual(len(self.atlas.status()["submaps"]),2)
         self.assertEqual(len(self.atlas.read()["entities"]),36)
 
+    def test_unmatched_pair_is_retried_only_when_its_geometry_changes(self):
+        from unittest.mock import patch
+        self.atlas.update(self.checkpoint('root',landmarks()))
+        with patch('world_atlas.fit_submap',return_value=None) as matcher:
+            self.atlas.update(self.checkpoint('other',landmarks(seed=22)))
+            self.atlas.align_pending()
+            self.assertEqual(matcher.call_count, 1)
+            self.atlas.update(self.checkpoint('other',landmarks(seed=33),revision=2))
+            self.assertEqual(matcher.call_count, 2)
+
     def test_world_pagination_pins_native_map_revisions(self):
         p=landmarks()
         self.atlas.update(self.checkpoint("root",p))

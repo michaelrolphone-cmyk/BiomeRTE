@@ -421,7 +421,7 @@ class SlamBackend:
         """A bounded candidate hint, never a camera pose or acceptance decision."""
         with self._lock:
             selected = []
-            if str(map_id) == self._map_id:
+            if str(map_id) == self._map_id and keyframe_ids is not None:
                 for identifier in keyframe_ids:
                     if isinstance(identifier, bool):
                         continue

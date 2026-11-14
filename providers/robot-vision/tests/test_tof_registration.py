@@ -87,6 +87,17 @@ class CollectionAndPersistenceTests(unittest.TestCase):
     def tearDown(self):
         self.reg.close(); self.tmp.cleanup()
 
+    def test_stationary_reference_skips_unobservable_nonlinear_fit(self):
+        from unittest.mock import patch
+        sample = {'anchor_id':'a', 'T_key_camera':np.eye(4).tolist()}
+        rows = [{'left':sample, 'right':sample, 'fraction':.5, 'time_s':i,
+                 'anchor':'0', 'distance_m':2.} for i in range(40)]
+        with patch('tof_registration.fit_ranges') as solver:
+            _, result = self.reg._fit(1, self.tof['baseline'], 'm', 1, rows)
+        solver.assert_not_called()
+        self.assertEqual(result['status'], 'awaiting_observable_keyframe_controls')
+        self.assertEqual(result['sample_count'], len(rows))
+
     def accepted(self):
         return {'valid':True,'status':'range_motion_registered','map_id':'m','map_revision':1,
                 'frame_id':'f','baseline_epoch':2,'baseline_revision':3,'T_anchor_map':np.eye(4).tolist(),

@@ -580,12 +580,37 @@ class SonarObstacleMap:
                      int(item.get('T_map_camera') is not None),int(item.get('T_local_metric_camera') is not None), item['time_s'])).rowcount
         return inserted
 
+    def resolve_timeline_pending(self, map_id, visual, metric, *, keyframe=None,
+                                 revision=0, local_frame_id=None):
+        # ESP uptime repeats across reboots. Only inspect rays a retained pose
+        # can actually bracket, separately for each clock and missing pose.
+        windows = []
+        args = []
+        for timeline, missing in ((visual, "resolved"), (metric, "metric_resolved")):
+            if timeline is None or not timeline.poses or timeline.context is None:
+                continue
+            windows.append(f"SELECT id FROM rays WHERE map_id=? AND "
+                           f"(resolved=0 OR metric_resolved=0) AND {missing}=0 "
+                           "AND observed_s BETWEEN ? AND ? AND json_extract(data,'$.boot_id')=?")
+            args.extend((map_id, timeline.poses[0][0], timeline.poses[-1][0], timeline.context[1]))
+        if not windows:
+            return 0
+        sql = "SELECT id,data FROM rays WHERE id IN (" + " UNION ".join(windows) + ")"
+        return self._resolve_rows(sql, args, visual.at if visual is not None else None,
+                                  keyframe, revision, metric.at if metric is not None else None,
+                                  local_frame_id)
+
     def resolve_pending(self, map_id, pose_at, keyframe=None, revision=0, earliest_time=None,
                         metric_pose_at=None, local_frame_id=None):
+        sql = ("SELECT id,data FROM rays WHERE map_id=? AND "
+               "(resolved=0 OR metric_resolved=0) AND observed_s>=?")
+        return self._resolve_rows(sql, (map_id, -1e100 if earliest_time is None else earliest_time),
+                                  pose_at, keyframe, revision, metric_pose_at, local_frame_id)
+
+    def _resolve_rows(self, sql, args, pose_at, keyframe, revision, metric_pose_at, local_frame_id):
         changed = 0
         with self.lock, self.db:
-            rows = self.db.execute('SELECT id,data FROM rays WHERE map_id=? AND (resolved=0 OR metric_resolved=0) AND observed_s>=?',
-                                   (map_id, -1e100 if earliest_time is None else earliest_time)).fetchall()
+            rows = self.db.execute(sql, args).fetchall()
             for identifier, raw in rows:
                 item = json.loads(raw)
                 changed_item=False
@@ -595,7 +620,7 @@ class SonarObstacleMap:
                         item.update(T_local_metric_camera=transform(metric_pose).tolist(),
                                     local_frame_id=local_frame_id,resolved_revision=revision)
                         changed_item=True
-                pose = None if item.get('T_map_camera') is not None else pose_at(item['time_s'], item['boot_id'])
+                pose = None if pose_at is None or item.get('T_map_camera') is not None else pose_at(item['time_s'], item['boot_id'])
                 if pose is None and not changed_item:
                     continue
                 if pose is not None:

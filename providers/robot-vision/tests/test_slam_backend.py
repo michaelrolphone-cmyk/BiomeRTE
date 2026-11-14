@@ -50,6 +50,14 @@ def document():
 
 
 class BackendContractTests(unittest.TestCase):
+    def test_absent_relocalization_prior_clears_previous_candidates(self):
+        with tempfile.TemporaryDirectory() as root:
+            backend = SlamBackend({}, root)
+            backend._map_id = 'active'
+            backend.set_relocalization_prior(['3'], map_id='active')
+            backend.set_relocalization_prior(None, map_id='active')
+            self.assertEqual(backend._radio_prior, ())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
