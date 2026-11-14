@@ -166,6 +166,15 @@ class VisionService:
                                                   config.get('tof_registration', {}))
         self.atlas.registration_status = self._registration_for_map
         self.atlas.survey_status = self._survey_for_world
+        self.survey_grid = None
+        self._survey_revisit_at = -float("inf")
+        path = self.state_dir / "survey-visual-reference"
+        if (path / "grid.json").is_file():
+            from survey_grid_matcher import AsyncSurveyGrid, SurveyGridMatcher
+            try:
+                self.survey_grid = AsyncSurveyGrid(SurveyGridMatcher(path, self.atlas.world_id, self.calibration["calibration_id"]))
+            except Exception:
+                LOG.exception("Stored visual survey reference unavailable")
 
     def _registration_for_map(self, map_id, revision):
         registrar = getattr(self, "tof_registration", None)
@@ -322,30 +331,47 @@ class VisionService:
         if self._stop.is_set() or not hasattr(self.backend, "continuity_state"):
             return
         quality = self.backend.continuity_state()
-        if (quality.get("state") not in ("lost", "relocalizing")
+        grid = getattr(self, "survey_grid", None)
+        evidence = grid.status() if grid is not None else {}
+        target = evidence.get("reference_map_id")
+        revisit = (target and target != self.map_id and evidence.get("source_map_id") == self.map_id
+                   and evidence.get("consecutive_matches", 0) >= 2
+                   and time.monotonic()-evidence["sample_monotonic_s"] < 3
+                   and time.monotonic()-self._survey_revisit_at > 45
+                   and not getattr(self, "_last_tracking_valid", False))
+        if revisit:
+            ref = self.store.latest_backend_checkpoint(target)
+            revisit = ref.get("backend_artifact", {}).get("availability") == "available"
+        if revisit:
+            self._survey_revisit_at = time.monotonic()
+        if not revisit and (quality.get("state") not in ("lost", "relocalizing")
                 or quality.get("features", 0) < 200
                 or quality.get("keyframes", 0) < 2 or quality.get("points", 0) < 1):
             self._world_lost_frames.clear()
             return
-        self._world_lost_frames.add((self.map_id, quality["frame_index"]))
-        if len(self._world_lost_frames) < 5:
+        if not revisit:
+            self._world_lost_frames.add((self.map_id, quality["frame_index"]))
+        if not revisit and len(self._world_lost_frames) < 5:
             return
         with self._pipeline_lock:
             fresh = self.backend.continuity_state()
-            if fresh.get("state") not in ("lost", "relocalizing") or fresh.get("features", 0) < 200:
+            if not revisit and (fresh.get("state") not in ("lost", "relocalizing") or fresh.get("features", 0) < 200):
                 self._world_lost_frames.clear()
                 return
             previous = self.map_id
             pending = (self._schedule_checkpoint(origin="recovery")
                        if hasattr(self.backend, "capture_checkpoint") else self._checkpoint(origin="recovery"))
         saved = pending.result() if hasattr(pending, "result") else pending
-        if saved.get("backend_artifact", {}).get("availability") != "available":
+        if (saved.get("backend_artifact", {}).get("availability") != "available"
+                and (not revisit or quality.get("points", 0) or quality.get("keyframes", 0))):
             return
         with self._pipeline_lock:
             if self._stop.is_set() or self.map_id != previous:
                 return
             fresh = self.backend.continuity_state()
-            if fresh.get("state") not in ("lost", "relocalizing"):
+            if revisit and (getattr(self, "_last_tracking_valid", False) or self.map_id != evidence["source_map_id"]):
+                return
+            if not revisit and fresh.get("state") not in ("lost", "relocalizing"):
                 self._world_lost_frames.clear()
                 return
             old_backend = self.backend
@@ -359,11 +385,14 @@ class VisionService:
             old_backend.close()
             if self._stop.is_set():
                 return
-            info = self.store.create_map(self._map_metadata({
-                "world_id": self.atlas.world_id, "prior_map_id": previous,
-                "prior_checkpoint_id": saved["checkpoint_id"],
-                "prior_map_preserved": True, "alignment": "unlocalized",
-                "reason": "unknown_area_local_submap_after_visual_relocalization_attempts"}))
+            if revisit:
+                info = self.store.read_map(target, kinds=["keyframe"], limit=1)["map"]
+            else:
+                info = self.store.create_map(self._map_metadata({
+                    "world_id": self.atlas.world_id, "prior_map_id": previous,
+                    "prior_checkpoint_id": saved["checkpoint_id"],
+                    "prior_map_preserved": True, "alignment": "unlocalized",
+                    "reason": "unknown_area_local_submap_after_visual_relocalization_attempts"}))
             self.atlas.register(info["map_id"])
             prepared = self._prepare_backend(info["map_id"], calibration)
             if prepared[2] is not None:
@@ -373,7 +402,7 @@ class VisionService:
                 self._activate_map(info["map_id"], info["revision"], calibration, prepared=prepared)
                 prepared = None
                 self._world_lost_frames.clear()
-            LOG.info("Retained world %s; initialized unlocalized submap %s from %s",
+            LOG.info("Retained world %s; activated submap %s from %s",
                      self.atlas.world_id, self.map_id, previous)
         except Exception:
             if prepared is not None:
@@ -518,6 +547,8 @@ class VisionService:
         ahrs_evidence=self.ahrs.evidence(frame)
         measurement_time=frame.get('measurement_monotonic_s',captured.decoded_monotonic)
         gray = cv2.cvtColor(captured.image, cv2.COLOR_BGR2GRAY)
+        if getattr(self, "survey_grid", None) is not None:
+            self.survey_grid.offer(frame_id, gray, self.map_id, self.calibration["calibration_id"])
         mean_luma = float(gray.mean())
         frame["lighting"] = {"mean_luma_0_255": mean_luma, "low_light_observed": mean_luma < 35.0,
                              "assessment": "image_brightness_not_measured_illumination",
@@ -552,6 +583,14 @@ class VisionService:
                 if hasattr(self.backend, "set_relocalization_prior"):
                     self.backend.set_relocalization_prior(
                         None, map_id=self.map_id)
+                grid = getattr(self, "survey_grid", None)
+                if grid is not None and hasattr(self.backend, "set_survey_revisit"):
+                    view = grid.status()
+                    fresh_match = (view.get("reference_map_id") == self.map_id
+                                   and view.get("source_map_id") == self.map_id
+                                   and view.get("consecutive_matches", 0) >= 2
+                                   and time.monotonic()-view["sample_monotonic_s"] < 3)
+                    self.backend.set_survey_revisit(fresh_match, map_id=self.map_id)
                 attitude_prior = self.pose_estimator.prior(frame, self.map_id)
                 if hasattr(self.backend, "set_orientation_prior"):
                     self.backend.set_orientation_prior(attitude_prior)
@@ -648,10 +687,9 @@ class VisionService:
             added = self.obstacle_map.record(self.map_id, frame_id, observations,
                 self.pose_timeline.at, keyframe, sonar_revision,
                 metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
-            resolved = self.obstacle_map.resolve_pending(self.map_id, self.pose_timeline.at, keyframe, sonar_revision,
-                earliest_time=min([t for timeline in (self.pose_timeline,self.metric_odometry.timeline)
-                    for t,_ in list(timeline.poses)[:1]],default=None),
-                metric_pose_at=self.metric_odometry.timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+            resolved = self.obstacle_map.resolve_timeline_pending(
+                self.map_id, self.pose_timeline, self.metric_odometry.timeline,
+                keyframe=keyframe, revision=sonar_revision, local_frame_id=self.metric_odometry.local_frame_id)
             ledger_count = self.obstacle_map.summary(self.map_id)['ray_count']
             committed_counts = getattr(self, '_sonar_committed_counts', {})
             if added or resolved or ledger_count != committed_counts.get(self.map_id,0):
@@ -674,9 +712,10 @@ class VisionService:
                 events = self._stream_motion_events(frame).get("events", [])
                 frame["tof_floor_motion_eligible"] = not any(e.get("kind") == "pickup" and
                     time.time()-e.get("timestamp", 0) < 5 for e in events)
-                self.tof_registration.observe(frame, localization, read_tof(self.tof_path), keyframe,
+                tof = read_tof(self.tof_path)
+                self.tof_registration.observe(frame, localization, tof, keyframe,
                     attitude, self.pose_estimator.mount if self.pose_estimator.mount_rank >= 3 else None)
-                self.tof_registration.refresh_stream_status(read_tof(self.tof_path), self.map_id, self.revision)
+                self.tof_registration.refresh_stream_status(tof, self.map_id, self.revision)
             except Exception:
                 LOG.exception("ToF registration observation deferred; native mapping preserved")
         self._last_tracking_valid = bool(localization.get("valid"))
@@ -823,10 +862,8 @@ class VisionService:
             (frame.get('sensor_packet') or {}).get('frame_id'), observations,
             lambda *_:None, revision=revision, metric_pose_at=timeline.at,
             local_frame_id=self.metric_odometry.local_frame_id)
-        resolved = self.obstacle_map.resolve_pending(map_id,lambda *_:None,revision=revision,
-            earliest_time=timeline.poses[0][0] if timeline.poses else
-                min((o['time_s'] for o in observations),default=0)-.5,
-            metric_pose_at=timeline.at,local_frame_id=self.metric_odometry.local_frame_id)
+        resolved = self.obstacle_map.resolve_timeline_pending(
+            map_id, None, timeline, revision=revision, local_frame_id=self.metric_odometry.local_frame_id)
         return {'map_id':map_id, 'added':added, 'resolved':resolved,
                 'ray_count':self.obstacle_map.summary(map_id)['ray_count'],
                 'visual_processing_required':False}
@@ -1066,7 +1103,9 @@ class VisionService:
                     self._checkpoint_error = None
                     self._checkpoint_cleanup_error = None
                     try:
-                        saved["retention"] = self.store.retire_superseded_checkpoints()
+                        saved["retention"] = self.store.retire_superseded_checkpoints(
+                            map_id=saved["map_id"] if (origin == "automatic" and
+                                saved.get("publication") == "revision_reference_v3") else None)
                         if saved["retention"]["cleanup_errors"]:
                             self._checkpoint_cleanup_error = "checkpoint_retirement_cleanup_failed"
                     except Exception:
@@ -1326,7 +1365,19 @@ class VisionService:
         if operation == "robot.map.obstacles":
             return self._read_obstacles(inputs.get("map_id", self.map_id), inputs.get("revision"))
         if operation == "robot.world.read":
-            return self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+            page = self.atlas.read(cursor=inputs.get("cursor"), limit=inputs.get("limit", 500))
+            reference = self.state_dir / "survey-world.json"
+            if reference.is_file():
+                with reference.open() as stream:
+                    baseline = json.load(stream)
+                if baseline["world_id"] == page["map"]["map_id"]:
+                    page["map"]["metadata"]["survey_baseline"] = baseline
+                    if getattr(self, "survey_grid", None) is not None:
+                        evidence = self.survey_grid.status()
+                        if evidence:
+                            evidence["age_s"] = max(0., time.monotonic()-evidence["sample_monotonic_s"])
+                        page["map"]["metadata"]["survey_grid_observation"] = evidence
+            return page
         if operation == "robot.world.status":
             return self.atlas.status()
         if operation == "robot.map.read":
@@ -1430,6 +1481,8 @@ class VisionService:
         self.camera.close()
         if self._thread:
             self._thread.join()
+        if getattr(self, "survey_grid", None) is not None:
+            self.survey_grid.close()
         if self._detection_executor is not None:
             self._detection_executor.shutdown(wait=True)
         try:

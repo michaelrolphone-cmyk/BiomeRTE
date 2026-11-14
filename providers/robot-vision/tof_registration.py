@@ -215,15 +215,23 @@ class FrameRegistration:
     def observe(self, frame, localization, tof, keyframe, attitude=None, mount=None):
         now = time.monotonic(); map_id = localization.get("map_id")
         with self.lock:
-            b = self._base(tof, map_id)
+            b = tof.get("baseline") or {}
             if not b.get("valid") or float(tof.get("collector_age_s", math.inf)) > 5:
                 self.diagnostic = {"valid": False, "status": "baseline_unavailable"}; return
+            self._base(tof, map_id)
             if not localization.get("valid") or not keyframe:
                 self.last_pose = None; self.poses.clear()
                 self.stream_cache = None
                 self.diagnostic.update(status="awaiting_visual_tracking_and_keyframe"); return
             try:
+                capture = frame.get("capture_host_monotonic_interval_s")
                 host_time = float(frame["receive_decode_monotonic_s"])
+                if capture is not None:
+                    low, high = map(float, capture)
+                    if not (math.isfinite(low) and low <= high <= host_time):
+                        return
+                    # Bound the exposure on the host clock using this capture request.
+                    host_time = (low + high) / 2
                 if not 0 <= now-host_time <= 3: return
                 camera = matrix(localization["T_map_camera"]); anchor = matrix(keyframe["T_map_keyframe"])
                 pose = {"time_s": host_time, "anchor_id": str(keyframe["id"]),
@@ -293,40 +301,43 @@ class FrameRegistration:
         anchors = {p["bssid"].lower(): point([p["x_m"], p["y_m"], p["z_m"]]) for p in baseline["positions"]}
         prior = self.attachments.get(map_id)
         prior_t = matrix(prior["T_anchor_map"]) if prior and prior.get("frame_id") == baseline["frame_id"] else None
-        fitted = fit_ranges(resolved, anchors, prior_t)
+        # A qualified Sim(3) must survive future keyframe optimization.
+        # Check its required independent controls before running 24 nonlinear fits.
+        xyz = np.array([control[:3, 3] for control in controls.values()])
+        observable = len(xyz) >= 3 and np.linalg.matrix_rank(xyz-xyz.mean(0), tol=1e-6) >= 2
+        fitted = (fit_ranges(resolved, anchors, prior_t) if observable else
+                  {"valid": False, "status": "awaiting_observable_keyframe_controls",
+                   "sample_count": len(resolved), "control_keyframe_count": len(controls)})
         fitted.update(map_id=map_id, map_revision=revision, frame_id=baseline["frame_id"],
                       baseline_epoch=baseline["epoch"], baseline_revision=baseline.get("revision", 1),
-                      navigation_authority=False, clock_basis="mac_monotonic_receive_time_estimates",
+                      navigation_authority=False, clock_basis="mac_monotonic_capture_interval_midpoints_or_legacy_receive_times",
                       physical_capture_clock_alignment="unqualified", antenna_to_camera_offset="unmeasured")
         if fitted["valid"]:
             t = matrix(fitted["T_anchor_map"]); scale = fitted["scale_m_per_map_unit"]; rotation = t[:3, :3]/scale
-            if len(controls) < 3 or np.linalg.matrix_rank(np.array([x[:3, 3] for x in controls.values()])-np.mean([x[:3, 3] for x in controls.values()], axis=0), tol=1e-6) < 2:
-                fitted.update(valid=False, status="awaiting_observable_keyframe_controls")
-            else:
-                keys=list(controls); xyz=np.array([controls[k][:3,3] for k in keys])
-                first=0; second=int(np.argmax(np.linalg.norm(xyz-xyz[first],axis=1)))
-                third=int(np.argmax(np.linalg.norm(np.cross(xyz-xyz[first],xyz[second]-xyz[first]),axis=1)))
-                chosen=list(dict.fromkeys([first,second,third]+np.linspace(0,len(keys)-1,min(12,len(keys)),dtype=int).tolist()))[:12]
-                fitted["controls"] = {keys[i]:controls[keys[i]].tolist() for i in chosen}
-                fitted["anchor_reference"] = {key: value.tolist() for key, value in anchors.items()}
-                fitted["calibration_evidence"] = [{"point": row["point"], "anchor": row["anchor"],
-                    "distance_m": row["distance_m"], "time_s": row["time_s"]} for row in resolved]
-                order = None; levels = {}
-                for key, xyz in anchors.items():
-                    level = (self.floor_priors.get(key) or {}).get("level")
-                    if level is not None: levels.setdefault(level, []).append(xyz)
-                if len(levels) >= 2:
-                    order = np.mean(levels[max(levels)], axis=0)-np.mean(levels[min(levels)], axis=0)
-                up = rotation @ np.mean(ups, axis=0) if len(ups) >= 5 else None
-                fitted["floor"] = baseline.get("ground_plane") or floor_from_motion(transform(t, camera_positions) if camera_positions else [], rotation @ first_rotation,
-                    float(self.config.get("camera_height_m", .0635)), up, order)
-                if orientations:
-                    epoch = orientations[-1][0]; rotations_ref = [rotation @ r for e, r in orientations if e == epoch]
-                    u, _, vt = np.linalg.svd(np.sum(rotations_ref, axis=0)); mean = u @ np.diag([1., 1., np.linalg.det(u @ vt)]) @ vt
-                    scatter = max(float(Rotation.from_matrix(mean.T @ r).magnitude()) for r in rotations_ref)
-                    fitted["ahrs"] = {"valid": len(rotations_ref) >= 5 and scatter < math.radians(10), "reference_epoch": epoch,
-                                      "R_anchor_ahrs_reference": mean.tolist(), "max_rotation_scatter_deg": math.degrees(scatter),
-                                      "qualification": "matched_visual_rotations_and_supplied_IMU_mount"}
+            keys=list(controls); xyz=np.array([controls[k][:3,3] for k in keys])
+            first=0; second=int(np.argmax(np.linalg.norm(xyz-xyz[first],axis=1)))
+            third=int(np.argmax(np.linalg.norm(np.cross(xyz-xyz[first],xyz[second]-xyz[first]),axis=1)))
+            chosen=list(dict.fromkeys([first,second,third]+np.linspace(0,len(keys)-1,min(12,len(keys)),dtype=int).tolist()))[:12]
+            fitted["controls"] = {keys[i]:controls[keys[i]].tolist() for i in chosen}
+            fitted["anchor_reference"] = {key: value.tolist() for key, value in anchors.items()}
+            fitted["calibration_evidence"] = [{"point": row["point"], "anchor": row["anchor"],
+                "distance_m": row["distance_m"], "time_s": row["time_s"]} for row in resolved]
+            order = None; levels = {}
+            for key, xyz in anchors.items():
+                level = (self.floor_priors.get(key) or {}).get("level")
+                if level is not None: levels.setdefault(level, []).append(xyz)
+            if len(levels) >= 2:
+                order = np.mean(levels[max(levels)], axis=0)-np.mean(levels[min(levels)], axis=0)
+            up = rotation @ np.mean(ups, axis=0) if len(ups) >= 5 else None
+            fitted["floor"] = baseline.get("ground_plane") or floor_from_motion(transform(t, camera_positions) if camera_positions else [], rotation @ first_rotation,
+                float(self.config.get("camera_height_m", .0635)), up, order)
+            if orientations:
+                epoch = orientations[-1][0]; rotations_ref = [rotation @ r for e, r in orientations if e == epoch]
+                u, _, vt = np.linalg.svd(np.sum(rotations_ref, axis=0)); mean = u @ np.diag([1., 1., np.linalg.det(u @ vt)]) @ vt
+                scatter = max(float(Rotation.from_matrix(mean.T @ r).magnitude()) for r in rotations_ref)
+                fitted["ahrs"] = {"valid": len(rotations_ref) >= 5 and scatter < math.radians(10), "reference_epoch": epoch,
+                                  "R_anchor_ahrs_reference": mean.tolist(), "max_rotation_scatter_deg": math.degrees(scatter),
+                                  "qualification": "matched_visual_rotations_and_supplied_IMU_mount"}
         return generation, fitted
 
     def _finished(self, future):
@@ -399,7 +410,7 @@ class FrameRegistration:
                             control_keyframe_ids=list(controls))
             accepted.pop("controls", None)
             accepted.pop("anchor_reference", None); accepted.pop("calibration_evidence", None)
-            if latest and 0 <= time.monotonic()-latest["time_s"] <= 3:
+            if latest and map_id == (self.binding or (None,))[0] and 0 <= time.monotonic()-latest["time_s"] <= 3:
                 pose = self._resolved(latest, map_id, revision, {})
                 position = transform(t, pose[:3, 3])
                 scale = np.cbrt(np.linalg.det(t[:3, :3])); orientation = t[:3, :3]/scale @ pose[:3, :3]

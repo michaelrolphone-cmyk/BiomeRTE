@@ -87,6 +87,17 @@ class CollectionAndPersistenceTests(unittest.TestCase):
     def tearDown(self):
         self.reg.close(); self.tmp.cleanup()
 
+    def test_stationary_reference_skips_unobservable_nonlinear_fit(self):
+        from unittest.mock import patch
+        sample = {'anchor_id':'a', 'T_key_camera':np.eye(4).tolist()}
+        rows = [{'left':sample, 'right':sample, 'fraction':.5, 'time_s':i,
+                 'anchor':'0', 'distance_m':2.} for i in range(40)]
+        with patch('tof_registration.fit_ranges') as solver:
+            _, result = self.reg._fit(1, self.tof['baseline'], 'm', 1, rows)
+        solver.assert_not_called()
+        self.assertEqual(result['status'], 'awaiting_observable_keyframe_controls')
+        self.assertEqual(result['sample_count'], len(rows))
+
     def accepted(self):
         return {'valid':True,'status':'range_motion_registered','map_id':'m','map_revision':1,
                 'frame_id':'f','baseline_epoch':2,'baseline_revision':3,'T_anchor_map':np.eye(4).tolist(),
@@ -134,6 +145,26 @@ class CollectionAndPersistenceTests(unittest.TestCase):
         prior_binding=self.reg.binding
         self.reg.status(tof,'unrelated-map',1)
         self.assertEqual(self.reg.binding,prior_binding)
+
+    def test_capture_midpoints_and_transient_collector_outage(self):
+        now = time.monotonic()
+        raw = {'target_bssid':'radio','observed':now-.3,'distance_m':2.,'rtt_ns':12,'samples':12}
+        tof = {**self.tof, 'rover_ranges':[raw]}
+        loc = {'valid':True,'map_id':'m','map_revision':1,'T_map_camera':np.eye(4).tolist()}
+        def observe(delay, packet):
+            self.reg.observe({'receive_decode_monotonic_s':now+delay+.2,
+                'capture_host_monotonic_interval_s':[now+delay-.04,now+delay+.04],
+                'frame_id':str(delay)},loc,packet,self.anchors['a'])
+        observe(-.5, tof)
+        observe(-.2, {})
+        observe(-.1, tof)
+        self.assertEqual(len(self.reg.rows),1)
+        self.assertAlmostEqual(self.reg.rows[0]['fraction'],.5,places=5)
+        observe(-.05, {})
+        self.assertEqual(len(self.reg.rows),1)
+        moved = {**tof, 'baseline':{**tof['baseline'], 'epoch':4}}
+        observe(-.03, moved)
+        self.assertEqual(len(self.reg.rows),0)
 
     def test_floor_priors_preserve_different_mounting_heights(self):
         priors={'anchors':{'pi':{'level':0,'floor':'downstairs','mount_height_m':None},'garage':{'level':0},'laundry':{'level':0},'living':{'level':1},'kitchen':{'level':1}}}

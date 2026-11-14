@@ -19,6 +19,16 @@ class ToFTests(unittest.TestCase):
    self.assertEqual(stale["position_hypotheses"],[])
    self.assertEqual(stale["status"],"collector_stale")
    self.assertFalse(read_tof(path,now=90)["valid"])
+ def test_large_complete_collector_preserves_survey_and_ranges(self):
+  with tempfile.TemporaryDirectory() as directory:
+   path=Path(directory)/"latest.json"
+   data=dict(schema="rover.tof.solution/1",updated_at=100,valid=True,
+             baseline={"valid":True,"ground_plane":{"frame_id":"survey"}},
+             rover_ranges=[{"distance_m":2,"details":"x"*300000}])
+   path.write_text(json.dumps(data))
+   result=read_tof(path,now=101)
+   self.assertEqual(result["baseline"],data["baseline"])
+   self.assertEqual(result["rover_ranges"],data["rover_ranges"])
  def test_missing_or_malformed_collector_is_unavailable(self):
   with tempfile.TemporaryDirectory() as directory:
    path=Path(directory)/"missing"

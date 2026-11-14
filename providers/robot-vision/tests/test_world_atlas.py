@@ -165,6 +165,16 @@ class AtlasTests(unittest.TestCase):
         self.assertEqual(len(self.atlas.status()["submaps"]),2)
         self.assertEqual(len(self.atlas.read()["entities"]),36)
 
+    def test_unmatched_pair_is_retried_only_when_its_geometry_changes(self):
+        from unittest.mock import patch
+        self.atlas.update(self.checkpoint('root',landmarks()))
+        with patch('world_atlas.fit_submap',return_value=None) as matcher:
+            self.atlas.update(self.checkpoint('other',landmarks(seed=22)))
+            self.atlas.align_pending()
+            self.assertEqual(matcher.call_count, 1)
+            self.atlas.update(self.checkpoint('other',landmarks(seed=33),revision=2))
+            self.assertEqual(matcher.call_count, 2)
+
     def test_world_pagination_pins_native_map_revisions(self):
         p=landmarks()
         self.atlas.update(self.checkpoint("root",p))
@@ -176,6 +186,21 @@ class AtlasTests(unittest.TestCase):
             self.assertEqual(page["map"]["revision"],first["map"]["revision"])
             rows.extend(page["entities"]);cursor=page["next_cursor"]
         self.assertEqual(len(rows),36)
+
+    def test_compressed_cursor_preserves_old_signed_readers_in_flight(self):
+        import base64, hashlib, hmac, zlib
+        self.atlas.update(self.checkpoint("root", landmarks()))
+        for index in range(120):
+            self.atlas.register("unlocalized-" + str(index))
+        first = self.atlas.read(limit=2)
+        encoded, _ = first["next_cursor"].rsplit(".", 1)
+        self.assertTrue(encoded.startswith("z1."))
+        raw = zlib.decompress(base64.urlsafe_b64decode(encoded[3:]))
+        old = base64.urlsafe_b64encode(raw).decode()
+        sig = hmac.new(self.atlas.cursor_key, old.encode(), hashlib.sha256).hexdigest()
+        self.assertLess(len(encoded), len(old) // 2)
+        self.assertEqual(self.atlas.read(cursor=old+"."+sig,limit=2),
+                         self.atlas.read(cursor=first["next_cursor"],limit=2))
 
     def test_cursor_cannot_supply_an_invented_transform(self):
         self.atlas.update(self.checkpoint("root",landmarks()))

@@ -369,6 +369,25 @@ class VisionStoreTests(unittest.TestCase):
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM checkpoints WHERE id=?",
                                              (saved["checkpoint_id"],)).fetchone()[0], 0)
 
+    def test_automatic_retention_checks_only_the_map_just_published(self):
+        other = self.store.create_map({})["map_id"]
+        source = self.store.data_dir / "native-map.bin"
+        source.write_bytes(b"native")
+        metadata = {"checkpoint_origin":"automatic", "database_mode":"revision_reference"}
+        a = [self.store.checkpoint(self.map_id, source, metadata) for _ in range(3)]
+        b = [self.store.checkpoint(other, source, metadata) for _ in range(3)]
+        from unittest.mock import patch
+        verified = self.store._verified_checkpoint
+        def verify(record):
+            self.assertEqual(record["map_id"], self.map_id)
+            return verified(record)
+        with patch.object(self.store, "_verified_checkpoint", side_effect=verify):
+            result = self.store.retire_superseded_checkpoints(map_id=self.map_id)
+        self.assertIn(a[0]["checkpoint_id"], result["retired"])
+        self.assertEqual(self.store.get_checkpoint(b[0]["checkpoint_id"])["availability"], "available")
+        global_result = self.store.retire_superseded_checkpoints()
+        self.assertIn(b[0]["checkpoint_id"], global_result["retired"])
+
     def test_retention_preserves_each_map_explicit_save_and_rollback(self):
         explicit = self.checkpoint_fixture("explicit")
         automatic = [self.checkpoint_fixture() for _ in range(4)]
