@@ -25,6 +25,41 @@ PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
 
+def reconcile_keyframe_points(keyframe, *, restored=False):
+    """A landmark has one feature observation per keyframe in native pySLAM."""
+    slots = keyframe.points
+    if slots is None:
+        return
+    seen = {}
+    for index, point in enumerate(slots):
+        # During native deserialization slots temporarily hold numeric IDs.
+        if point is None or isinstance(point, (int, np.integer)):
+            continue
+        first = seen.setdefault(id(point), index)
+        if first == index:
+            continue
+        # Existing checkpoints carry the exact feature used by bundle adjustment.
+        # On promotion native observations are created afterwards, in slot order.
+        if restored and point.get_observation_idx(keyframe) == index:
+            slots[first] = None
+            seen[id(point)] = index
+        else:
+            slots[index] = None
+
+
+def install_keyframe_point_ownership(keyframe_type):
+    if keyframe_type.__dict__.get("_biome_unique_points"):
+        return
+    create = keyframe_type.__init__
+
+    def initialize(keyframe, *args, **kwargs):
+        create(keyframe, *args, **kwargs)
+        reconcile_keyframe_points(keyframe)
+
+    keyframe_type.__init__ = initialize
+    keyframe_type._biome_unique_points = True
+
+
 def next_native_frame_index(runtime, fallback):
     """Continue native image IDs after restore or a rejected attempt."""
     with runtime.map.update_lock:
@@ -248,6 +283,8 @@ class SlamBackend:
         self._states = SlamState
         from mapper_checkpoint import install_owner_capture
         from pyslam.slam.local_mapping import LocalMapping
+        from pyslam.slam.keyframe import KeyFrame
+        install_keyframe_point_ownership(KeyFrame)
         install_owner_capture(LocalMapping)
         runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
                        environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
@@ -346,6 +383,9 @@ class SlamBackend:
                 self._slam = self._new_runtime()
                 if manifest is not None:
                     self._slam.load_system_state(str(path))
+                    with self._slam.map.update_lock:
+                        for keyframe in self._slam.map.get_keyframes():
+                            reconcile_keyframe_points(keyframe, restored=True)
                     self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])

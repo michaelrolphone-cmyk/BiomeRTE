@@ -146,6 +146,26 @@ class CollectionAndPersistenceTests(unittest.TestCase):
         self.reg.status(tof,'unrelated-map',1)
         self.assertEqual(self.reg.binding,prior_binding)
 
+    def test_capture_midpoints_and_transient_collector_outage(self):
+        now = time.monotonic()
+        raw = {'target_bssid':'radio','observed':now-.3,'distance_m':2.,'rtt_ns':12,'samples':12}
+        tof = {**self.tof, 'rover_ranges':[raw]}
+        loc = {'valid':True,'map_id':'m','map_revision':1,'T_map_camera':np.eye(4).tolist()}
+        def observe(delay, packet):
+            self.reg.observe({'receive_decode_monotonic_s':now+delay+.2,
+                'capture_host_monotonic_interval_s':[now+delay-.04,now+delay+.04],
+                'frame_id':str(delay)},loc,packet,self.anchors['a'])
+        observe(-.5, tof)
+        observe(-.2, {})
+        observe(-.1, tof)
+        self.assertEqual(len(self.reg.rows),1)
+        self.assertAlmostEqual(self.reg.rows[0]['fraction'],.5,places=5)
+        observe(-.05, {})
+        self.assertEqual(len(self.reg.rows),1)
+        moved = {**tof, 'baseline':{**tof['baseline'], 'epoch':4}}
+        observe(-.03, moved)
+        self.assertEqual(len(self.reg.rows),0)
+
     def test_floor_priors_preserve_different_mounting_heights(self):
         priors={'anchors':{'pi':{'level':0,'floor':'downstairs','mount_height_m':None},'garage':{'level':0},'laundry':{'level':0},'living':{'level':1},'kitchen':{'level':1}}}
         (self.path.parent/'tof-floor-priors.json').write_text(__import__('json').dumps(priors))

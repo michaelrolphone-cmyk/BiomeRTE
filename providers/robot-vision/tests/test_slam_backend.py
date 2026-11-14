@@ -50,6 +50,28 @@ def document():
 
 
 class BackendContractTests(unittest.TestCase):
+    def test_promoted_and_restored_keyframes_have_one_slot_per_landmark(self):
+        from slam_backend import install_keyframe_point_ownership, reconcile_keyframe_points
+        class Point:
+            def get_observation_idx(self, keyframe):
+                return 3
+        class Keyframe:
+            def __init__(self, points):
+                self.points = points.copy()
+        point, other = Point(), Point()
+        source = [point, other, point, point]
+        install_keyframe_point_ownership(Keyframe)
+        install_keyframe_point_ownership(Keyframe)
+        keyframe = Keyframe(source)
+        self.assertEqual(keyframe.points, [point, other, None, None])
+        self.assertEqual(source, [point, other, point, point])
+        self.assertEqual(Keyframe([-1, -1, 7, 7]).points, [-1, -1, 7, 7])
+        keyframe.points = source.copy()
+        reconcile_keyframe_points(keyframe, restored=True)
+        self.assertEqual(keyframe.points, [None, other, None, point])
+        reconcile_keyframe_points(keyframe, restored=True)
+        self.assertEqual(keyframe.points, [None, other, None, point])
+
     def test_absent_relocalization_prior_clears_previous_candidates(self):
         with tempfile.TemporaryDirectory() as root:
             backend = SlamBackend({}, root)
@@ -179,7 +201,8 @@ class BackendContractTests(unittest.TestCase):
     def test_restart_restores_map_but_requires_live_relocalization(self):
         path = self.make_package()
         calls = []
-        runtime = SimpleNamespace(load_system_state=lambda p: calls.append(("load", p)),
+        runtime = SimpleNamespace(map=SimpleNamespace(update_lock=threading.RLock(), get_keyframes=lambda: []),
+                                  load_system_state=lambda p: calls.append(("load", p)),
                                   set_tracking_state=lambda s: calls.append(("state", s)),
                                   loop_closing=SimpleNamespace(last_loop_kf_id=0))
         self.backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
@@ -308,7 +331,7 @@ class BackendContractTests(unittest.TestCase):
         backend = SlamBackend({"calibration":copy.deepcopy(CALIBRATION),"preprocessing":policy},self.root)
         backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
         native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=1),
-            get_keyframes=lambda:[SimpleNamespace(id=10),SimpleNamespace(id=11)],
+            get_keyframes=lambda:[SimpleNamespace(id=10,points=[]),SimpleNamespace(id=11,points=[])],
             num_keyframes=lambda:3,num_points=lambda:1)
         received=[]
         def save(target):

@@ -215,15 +215,23 @@ class FrameRegistration:
     def observe(self, frame, localization, tof, keyframe, attitude=None, mount=None):
         now = time.monotonic(); map_id = localization.get("map_id")
         with self.lock:
-            b = self._base(tof, map_id)
+            b = tof.get("baseline") or {}
             if not b.get("valid") or float(tof.get("collector_age_s", math.inf)) > 5:
                 self.diagnostic = {"valid": False, "status": "baseline_unavailable"}; return
+            self._base(tof, map_id)
             if not localization.get("valid") or not keyframe:
                 self.last_pose = None; self.poses.clear()
                 self.stream_cache = None
                 self.diagnostic.update(status="awaiting_visual_tracking_and_keyframe"); return
             try:
+                capture = frame.get("capture_host_monotonic_interval_s")
                 host_time = float(frame["receive_decode_monotonic_s"])
+                if capture is not None:
+                    low, high = map(float, capture)
+                    if not (math.isfinite(low) and low <= high <= host_time):
+                        return
+                    # Bound the exposure on the host clock using this capture request.
+                    host_time = (low + high) / 2
                 if not 0 <= now-host_time <= 3: return
                 camera = matrix(localization["T_map_camera"]); anchor = matrix(keyframe["T_map_keyframe"])
                 pose = {"time_s": host_time, "anchor_id": str(keyframe["id"]),
@@ -302,7 +310,7 @@ class FrameRegistration:
                    "sample_count": len(resolved), "control_keyframe_count": len(controls)})
         fitted.update(map_id=map_id, map_revision=revision, frame_id=baseline["frame_id"],
                       baseline_epoch=baseline["epoch"], baseline_revision=baseline.get("revision", 1),
-                      navigation_authority=False, clock_basis="mac_monotonic_receive_time_estimates",
+                      navigation_authority=False, clock_basis="mac_monotonic_capture_interval_midpoints_or_legacy_receive_times",
                       physical_capture_clock_alignment="unqualified", antenna_to_camera_offset="unmeasured")
         if fitted["valid"]:
             t = matrix(fitted["T_anchor_map"]); scale = fitted["scale_m_per_map_unit"]; rotation = t[:3, :3]/scale
@@ -402,7 +410,7 @@ class FrameRegistration:
                             control_keyframe_ids=list(controls))
             accepted.pop("controls", None)
             accepted.pop("anchor_reference", None); accepted.pop("calibration_evidence", None)
-            if latest and 0 <= time.monotonic()-latest["time_s"] <= 3:
+            if latest and map_id == (self.binding or (None,))[0] and 0 <= time.monotonic()-latest["time_s"] <= 3:
                 pose = self._resolved(latest, map_id, revision, {})
                 position = transform(t, pose[:3, 3])
                 scale = np.cbrt(np.linalg.det(t[:3, :3])); orientation = t[:3, :3]/scale @ pose[:3, :3]

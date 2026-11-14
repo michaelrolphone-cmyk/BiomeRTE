@@ -673,9 +673,10 @@ class VisionService:
                 events = self._stream_motion_events(frame).get("events", [])
                 frame["tof_floor_motion_eligible"] = not any(e.get("kind") == "pickup" and
                     time.time()-e.get("timestamp", 0) < 5 for e in events)
-                self.tof_registration.observe(frame, localization, read_tof(self.tof_path), keyframe,
+                tof = read_tof(self.tof_path)
+                self.tof_registration.observe(frame, localization, tof, keyframe,
                     attitude, self.pose_estimator.mount if self.pose_estimator.mount_rank >= 3 else None)
-                self.tof_registration.refresh_stream_status(read_tof(self.tof_path), self.map_id, self.revision)
+                self.tof_registration.refresh_stream_status(tof, self.map_id, self.revision)
             except Exception:
                 LOG.exception("ToF registration observation deferred; native mapping preserved")
         self._last_tracking_valid = bool(localization.get("valid"))

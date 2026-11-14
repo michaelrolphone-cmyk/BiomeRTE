@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -315,7 +316,11 @@ class WorldAtlas:
             encoded, signature = cursor.rsplit(".",1)
             if not hmac.compare_digest(signature,hmac.new(self.cursor_key,encoded.encode(),hashlib.sha256).hexdigest()):
                 raise ValueError("invalid_world_cursor")
-            state = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
+            if encoded.startswith("z1."):
+                payload = zlib.decompress(base64.urlsafe_b64decode(encoded[3:]))
+            else:
+                payload = base64.urlsafe_b64decode(encoded)
+            state = json.loads(payload)
             if state["world_id"] != self.world_id:
                 raise ValueError("wrong_world_cursor")
         else:
@@ -366,7 +371,8 @@ class WorldAtlas:
                 state["sonar_offset"] = 0
         next_cursor=None
         if state["index"]<len(state["submaps"]):
-            encoded=base64.urlsafe_b64encode(json.dumps(state,separators=(",",":")).encode()).decode()
+            payload = json.dumps(state, separators=(",", ":")).encode()
+            encoded = "z1." + base64.urlsafe_b64encode(zlib.compress(payload)).decode()
             next_cursor=encoded+"."+hmac.new(self.cursor_key,encoded.encode(),hashlib.sha256).hexdigest()
         return {"map":{"map_id":self.world_id,"revision":state["revision"],
                        "metadata":{"kind":"continuous_world_atlas","units":"arbitrary",

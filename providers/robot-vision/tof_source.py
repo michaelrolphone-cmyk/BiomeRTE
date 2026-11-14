@@ -14,7 +14,6 @@ def _clean(value):
 def read_tof(path, *, now=None):
     try:
         source=Path(path)
-        if source.stat().st_size>262144: raise ValueError("oversized")
         data=json.loads(source.read_text(),parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")))
         if not isinstance(data,dict) or data.get("schema")!="rover.tof.solution/1":
             raise ValueError("schema")
