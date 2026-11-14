@@ -43,7 +43,7 @@ class Rover:
 
     def broadcast(self, lane, message):
         if lane in ('vision', 'map'):
-            metadata, unused = decode(message, 4194304)
+            metadata, unused = decode(message)
             revision = metadata.get('map_revision') if lane == 'vision' else metadata.get('revision')
             identity = metadata.get('map_id')
             if isinstance(identity, str) and type(revision) is int and revision >= 0:
@@ -148,7 +148,7 @@ class Rover:
     async def lane(self, descriptor, lane):
         from websockets.asyncio.client import connect
         headers={'Authorization':'Stream '+descriptor['attachment_credential']}
-        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_queue=1,write_limit=65536) as socket:
+        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_size=None,max_queue=1,write_limit=65536) as socket:
             if lane=='control':
                 self.discard_intent()
                 self.control_ready=not self.require_provider_ready
@@ -165,7 +165,7 @@ class Rover:
                 revision=None
                 async for message in socket:
                     if lane=='control' and self.require_provider_ready:
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message,None if lane in ('vision','map') else descriptor['limits']['max_message_bytes'])
                         if metadata.get('type')=='stream_status':
                             if self.require_provider_ready:
                                 if any(metadata.get(k)!=descriptor[k] for k in ('authority','generation','epoch')):
@@ -178,7 +178,7 @@ class Rover:
                                 self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
                             continue
                     if lane=='map':
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message,None if lane in ('vision','map') else descriptor['limits']['max_message_bytes'])
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:
                             self.broadcast('map',json.dumps({'type':'snapshot_required','map_id':metadata.get('map_id'),
                                                            'revision':metadata.get('revision')}))

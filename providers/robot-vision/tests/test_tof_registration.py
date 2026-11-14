@@ -169,17 +169,17 @@ class WorldIntegrationTests(unittest.TestCase):
                 np.testing.assert_allclose(status['tof_registration']['T_anchor_map'],reference)
             finally:atlas.close()
 
-    def test_stream_budget_preserves_registration_matrices(self):
+    def test_stream_preserves_complete_registration_matrices(self):
         from stream_telemetry import bounded_metadata, size
         t=np.eye(4).tolist()
         packet={'tof':{'registration':{'valid':True,'status':'range_motion_registered',
             'T_anchor_map':t,'floor':{'valid':True,'T_floor_anchor':t},
             'diagnostic_blob':'x'*6000},'baseline':{'valid':True,'epoch':2,'revision':3}},'ahrs':{}}
         result=bounded_metadata(packet,maximum=1800)
-        self.assertLessEqual(size(result),1800)
+        self.assertEqual(result,packet)
         np.testing.assert_allclose(result['tof']['registration']['T_anchor_map'],t)
         np.testing.assert_allclose(result['tof']['registration']['floor']['T_floor_anchor'],t)
-        self.assertTrue(result['tof']['registration']['diagnostics_omitted'])
+        self.assertNotIn('diagnostics_omitted',result['tof']['registration'])
 
 
 if __name__ == '__main__': unittest.main()

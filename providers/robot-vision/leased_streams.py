@@ -80,7 +80,7 @@ class VisionStreams:
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
-                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
+                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_size=None,max_queue=1,write_limit=65536) as wire:
                     stage='local_feed'
                     if stop.is_set():return
                     local=LocalConnection(self.socket_path)
@@ -93,9 +93,9 @@ class VisionStreams:
                         stage='local_read'
                         header=await asyncio.to_thread(exact,response,4)
                         size=struct.unpack('!I',header)[0]
-                        if not 4<=size<=4194304:raise ValueError('live_frame_size')
+                        if size<4:raise ValueError('live_frame_size')
                         value=await asyncio.to_thread(exact,response,size)
-                        metadata,image=decode(value,4194304)
+                        metadata,image=decode(value)
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
