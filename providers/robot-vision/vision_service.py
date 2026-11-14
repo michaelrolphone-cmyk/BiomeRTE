@@ -165,19 +165,52 @@ class VisionService:
         self.tof_registration = FrameRegistration(self.state_dir / 'tof-registration.json', self._sonar_anchor,
                                                   config.get('tof_registration', {}))
         self.atlas.registration_status = self._registration_for_map
+        self.atlas.survey_status = self._survey_for_world
 
     def _registration_for_map(self, map_id, revision):
         registrar = getattr(self, "tof_registration", None)
-        result = (registrar.status(read_tof(self.tof_path), map_id, revision) if registrar is not None else
+        tof = read_tof(self.tof_path)
+        result = (registrar.status(tof, map_id, revision) if registrar is not None else
                   {"valid": False, "status": "registration_unavailable"})
+        self._attach_survey(result, tof)
         result.update(map_id=map_id, map_revision=revision)
         return result
+
+    def _survey_for_world(self):
+        result = {}
+        self._attach_survey(result, read_tof(self.tof_path))
+        return result.get("surveyed_world")
+
+    @staticmethod
+    def _attach_survey(result, tof):
+        baseline = tof.get("baseline") or {}
+        floor = baseline.get("ground_plane")
+        if not floor or not baseline.get("valid"):
+            return
+        result["floor"] = floor
+        model = {"frame_id": floor["frame_id"], "axes": "east_north_up", "units": "m",
+                 "ground_plane": floor, "anchors": baseline.get("positions", []),
+                 "range_status": tof.get("status"), "rover_ground_position": None,
+                 "rover_radio_position": None, "ground_contact": tof.get("ground_contact")}
+        if tof.get("valid") and tof.get("collector_age_s", float("inf")) <= 5:
+            model.update(rover_ground_position=tof.get("ground_position"), rover_radio_position=tof.get("position"))
+        result["surveyed_world"] = model
+        if result.get("valid") and result.get("current_camera") and model["rover_ground_position"]:
+            camera = result["current_camera"]
+            ground = model["rover_ground_position"]
+            # Asynchronous independent positions. Keep diagnostics separate from pose authority.
+            if camera.get("age_s", float("inf")) <= 3 and tof["collector_age_s"] <= 3:
+                p = camera["position_anchor_m"]
+                model["visual_minus_radio_xy_m"] = [p[0]-ground["x_m"], p[1]-ground["y_m"]]
+                model["drift_reference"] = "asynchronous_camera_vs_radio_includes_mount_offset"
+
 
     def _read_tof(self):
         data = read_tof(self.tof_path)
         registrar = getattr(self, "tof_registration", None)
         if registrar is not None:
             data["registration"] = registrar.stream_status(data, self.map_id, self.revision)
+            self._attach_survey(data["registration"], data)
             data["registration"].update(map_id=self.map_id, map_revision=self.revision)
             for anchor in [*data.get("anchor_geometry", []), *(data.get("baseline") or {}).get("positions", [])]:
                 prior = registrar.floor_priors.get(str(anchor.get("bssid", "")).lower())
@@ -577,7 +610,13 @@ class VisionService:
         # small latest-state file contains no images or unbounded history.
         if time.monotonic()-getattr(self, "_rover_motion_written_at", 0.) >= .5:
             try:
-                atomic_json(self.state_dir / "rover-motion.json", motion_evidence(frame, localization))
+                motion = motion_evidence(frame, localization)
+                events = self._stream_motion_events(frame).get("events", [])
+                pickups = [e["timestamp"] for e in events if e.get("kind") == "pickup"
+                           and isinstance(e.get("timestamp"), (float, int))]
+                if pickups:
+                    motion["last_pickup_at"] = max(pickups)
+                atomic_json(self.state_dir / "rover-motion.json", motion)
                 self._rover_motion_written_at = time.monotonic()
             except OSError:
                 LOG.warning("Rover motion evidence write deferred")
