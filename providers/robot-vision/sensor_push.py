@@ -100,7 +100,11 @@ class SensorPushReceiver:
                     if not pending:
                         identity = str(time.monotonic_ns())
                         pending[identity] = time.monotonic()
-                        await socket.send(json.dumps(dict(type='clock', id=identity)))
+                    # Retry the same exchange when a peer misses the request.
+                    # Retain its original send time so delayed replies cannot
+                    # make the capture-age bounds artificially fresh.
+                    identity = next(iter(pending))
+                    await socket.send(json.dumps(dict(type='clock', id=identity)))
                     await asyncio.sleep(1)
             task = asyncio.create_task(synchronize())
             try:

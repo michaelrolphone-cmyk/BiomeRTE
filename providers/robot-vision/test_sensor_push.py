@@ -116,7 +116,8 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
                         clock=json.loads(await ws.recv())
                         # The device may reply after the next synchronization
                         # interval. It still answers the same outstanding ID.
-                        await asyncio.sleep(1.1)
+                        retry=json.loads(await asyncio.wait_for(ws.recv(),3))
+                        self.assertEqual(retry['id'],clock['id'])
                         await ws.send(json.dumps(dict(type='clock',id=clock['id'],boot_id='boot',received_monotonic_us=1000000,served_monotonic_us=1001000)))
                         p=dict(schema='biome.sensor_tick.v1',receiver_id='rover',boot_id='boot',capture_monotonic_us=1001000,
                                stream_sequence=1,ahrs=dict(ahrs=dict(imu_samples=[dict(monotonic_us=1000000)])))
