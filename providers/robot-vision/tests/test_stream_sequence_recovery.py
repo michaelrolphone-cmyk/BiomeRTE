@@ -20,7 +20,7 @@ from biomerte.stream_router import Session, decode, frame
 
 def grant(**changes):
     value = dict(id='session-a', authority='authority-a', epoch='epoch-a',
-                 generation=7, lane='vision', expires_at=time.time()+3600,
+                 resource='robotvision.test.sensor-rig', generation=7, lane='vision', expires_at=time.time()+3600,
                  contract='robot.vision.stream:1', direction='provider_to_server',
                  lanes=['vision', 'map'], limits={'max_message_bytes':4194304,
                  'buffer_depth':1, 'messages_per_second':60})
