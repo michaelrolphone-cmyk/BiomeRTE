@@ -88,13 +88,16 @@ class SensorPushReceiver:
                     request.headers.get('Authorization',''), 'Sensor '+token):
                 return connection.respond(HTTPStatus.UNAUTHORIZED, 'Unauthorized sensor source')
 
+        prior_clock = (None, None, None)
         async def receive(socket):
+            nonlocal prior_clock
             if getattr(getattr(socket,'request',None),'path',None) == '/camera':
                 from camera_push import receive_camera
                 await receive_camera(socket,self.config['receiver_id'],'front',ClockAlignment(),self.stream.push_jpeg)
                 return
             self.diagnostic(state='connected')
             clock = ClockAlignment()
+            clock.boot, clock.bounds, clock.observed = prior_clock
             pending = {}
             previous = None
             async def synchronize():
@@ -120,6 +123,7 @@ class SensorPushReceiver:
                         if sent is not None:
                             clock.observe(value['boot_id'],sent,received,
                                           value['received_monotonic_us'],value['served_monotonic_us'])
+                            prior_clock = (clock.boot, tuple(clock.bounds), clock.observed)
                             self.diagnostic(state='clock_aligned',clock_round_trip_s=received-sent)
                         continue
                     from capture_packet import validate_packet
@@ -131,7 +135,7 @@ class SensorPushReceiver:
                         from device_routes import DeviceRoutes
                         DeviceRoutes(self.stream.service.state_dir/"device-routes.sqlite3").observe(packet["receiver_id"],peer[0],{"kind":"camera"})
                         socket._route_registered=True
-                    if clock.boot is None:
+                    if clock.boot != packet['boot_id']:
                         self.diagnostic(state='awaiting_clock')
                         continue
                     sequence = packet.get('stream_sequence')

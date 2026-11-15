@@ -232,6 +232,10 @@ class RearSensorIngress:
                 await receive_camera(socket,self.config['receiver_id'],'rear',ClockAlignment(),deliver)
                 return
             clock=ClockAlignment()
+            # Prior bounds are usable across TCP reconnects for the same device boot.
+            with self.lock:
+                if self.clock_snapshot:
+                    clock.boot, clock.bounds, clock.observed = self.clock_snapshot
             pending={}
             async def synchronize():
                 while True:
@@ -263,7 +267,7 @@ class RearSensorIngress:
                         continue
                     interval=clock.capture_interval(packet,received)
                     if packet.get("delivery_mode")=="continuous":
-                        readings.put(interval[1], (packet,interval,received))
+                        readings.put(interval[0], (packet,interval,received))
                         self.expired_packets=readings.expired
                         continue
                     self.publish(packet,interval,received)

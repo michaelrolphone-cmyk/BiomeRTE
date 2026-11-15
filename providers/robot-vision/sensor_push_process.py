@@ -19,7 +19,7 @@ class _QueueSink:
         self.error=None
     def publish(self, *args, **kwargs):
         interval=kwargs.get('capture_interval')
-        self.readings.put(interval[1] if interval else args[2], ('packet',args,kwargs))
+        self.readings.put(interval[0] if interval else args[2], ('packet',args,kwargs))
 
     def _write(self):
         while True:
@@ -81,7 +81,7 @@ def _deliver(receiver):
             continue
         _,args,kwargs=message
         interval=kwargs.get('capture_interval')
-        captured=interval[1] if interval else args[2]
+        captured=interval[0] if interval else args[2]
         if time.monotonic()-captured>receiver.delivery_window:
             continue
         try:

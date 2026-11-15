@@ -16,3 +16,13 @@ class DeliveryWindowTests(unittest.TestCase):
         self.assertEqual(slow.expired,2)
         slow.close()
         self.assertIsNone(slow.get())
+
+    def test_clock_uncertainty_cannot_admit_a_reading_as_fresh(self):
+        from types import SimpleNamespace
+        from sensor_push_process import _QueueSink
+        readings = RecentReadings(.2, lambda: 10.)
+        sink = SimpleNamespace(readings=readings)
+        _QueueSink.publish(sink, {}, 10., 10., capture_interval=[9., 10.])
+        self.assertEqual(readings.expired, 1)
+        _QueueSink.publish(sink, {}, 10., 10., capture_interval=[9.95, 10.])
+        self.assertEqual(readings.get()[0], 9.95)

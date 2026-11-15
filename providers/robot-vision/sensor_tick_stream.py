@@ -65,6 +65,8 @@ class SensorTickStream:
             receive_decode_timestamp=datetime.now(timezone.utc).isoformat(),
             source_timestamp=None,source_timestamp_status='sensor_tick_not_camera_exposure',
             sensor_delivery='websocket_push' if capture_interval is not None else 'http_sensor_tick',
+            capture_host_monotonic_interval_s=list(interval),
+            capture_age_upper_s=max(0., received-interval[0]),
             sensor_clock_uncertainty_s=(interval[1]-interval[0])/2,
             sensor_stream_sequence=packet.get('stream_sequence'),
             map_id=self.service.map_id,map_revision=self.service.revision,
