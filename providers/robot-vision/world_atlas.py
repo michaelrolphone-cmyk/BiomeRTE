@@ -329,9 +329,14 @@ class WorldAtlas:
         else:
             status=self.status()
             state={"world_id":self.world_id,"revision":status["revision"],"submaps":status["submaps"],
-                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None,"sonar_offset":0,
+                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None,"sonar_offset":0,"survey_after":"",
                    "tof_registration":status.get("tof_registration")}
         entities=[]
+        seed=getattr(self,'survey_lidar',None)
+        if seed is None:state['survey_after']=None
+        if seed is not None and 'survey_after' in state and state['survey_after'] is not None:
+            entities,more=seed.page(state['revision'],state['survey_after'],limit)
+            state['survey_after']=entities[-1]['entity_id'] if more else None
         while state["index"] < len(state["submaps"]) and len(entities)<limit:
             item=state["submaps"][state["index"]]
             if item["T_world_map"] is None or item["revision"] is None:
@@ -377,7 +382,7 @@ class WorldAtlas:
                 state["index"]+=1
                 state["sonar_offset"] = 0
         next_cursor=None
-        if state["index"]<len(state["submaps"]):
+        if state["index"]<len(state["submaps"]) or state.get("survey_after") is not None:
             payload = json.dumps(state, separators=(",", ":")).encode()
             encoded = "z1." + base64.urlsafe_b64encode(zlib.compress(payload)).decode()
             next_cursor=encoded+"."+hmac.new(self.cursor_key,encoded.encode(),hashlib.sha256).hexdigest()
