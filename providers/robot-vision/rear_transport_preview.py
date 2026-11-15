@@ -1,4 +1,5 @@
 """Arrival-timed rear displays while the ESP capture clock is being aligned."""
+import asyncio
 import datetime
 
 
@@ -28,3 +29,20 @@ def publish_image(ingress,packet,jpeg,received):
               session_id=svc.session_id,calibration_revision=(ingress.rig.config['rear'].get('calibration') or {}).get('calibration_id'),
               width=packet['width'],height=packet['height'],processing_state='awaiting_capture_clock')
     svc.rear_live_frames.publish(data,jpeg)
+
+async def messages_with_idle_recovery(socket, idle_seconds):
+    """The device's clock exchange and actual data both prove a live connection."""
+    messages=socket.__aiter__()
+    try:
+        while True:
+            try:
+                message=await asyncio.wait_for(messages.__anext__(),idle_seconds)
+            except StopAsyncIteration:
+                return
+            yield message
+    except asyncio.TimeoutError:
+        # No application traffic reached the receiver during the entire
+        # window. Release this dead socket so the ESP can reconnect.
+        transport=getattr(socket,'transport',None)
+        if transport is not None:transport.abort()
+        raise ConnectionError('rear device stopped providing messages')
