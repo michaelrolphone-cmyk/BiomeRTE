@@ -96,6 +96,7 @@ class LidarFusion:
         self.config=validate_config(json.loads(self.path.read_text())) if self.path.exists() else defaults()
         self.stamp=None;self.lock=threading.RLock();self.event=threading.Event();self.stop=threading.Event()
         self.pending=None;self.latest=None;self.raw_latest=None;self.visual=deque(maxlen=128);self.scale=None;self.error=None
+        self.scans = {name:deque(maxlen=64) for name in self.config["lidar"]}
         self.processed=0;self.dropped=0;self.last_key=None;self.thread=None
         self.db=sqlite3.connect(str(service.state_dir/"lidar-map.sqlite3"),check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -112,10 +113,57 @@ class LidarFusion:
     def enqueue(self,packet,interval):
         if not packet.get("lidar"):return
         with self.lock:
+            capture=packet.get("capture_monotonic_us")
+            for raw in packet["lidar"].get("sensors",[]):
+                name=raw.get("id")
+                us=raw.get("observed_monotonic_us")
+                if name not in self.config["lidar"] or not isinstance(us,int) or not isinstance(capture,int):
+                    continue
+                history=self.scans.setdefault(name,deque(maxlen=64))
+                identity=(packet.get("receiver_id"),packet.get("boot_id"),us)
+                if history and history[-1][0]==identity:continue
+                if not (0<=capture-us<=1000000 and len(interval)==2):continue
+                dt=(capture-us)/1e6
+                history.append((identity,(interval[0]-dt,interval[1]-dt),raw,capture,self.service.map_id))
             if self.pending:self.dropped+=1
             self.raw_latest=(copy.deepcopy(packet),list(interval),time.monotonic())
             self.pending=(copy.deepcopy(packet),list(interval),self.service.map_id)
         self.event.set()
+    def for_camera(self,frame,name,cal,camera_mount=None):
+        from native_lidar_depth import project_depth
+        packet=frame.get("sensor_packet") or {}
+        boot=(packet.get("receiver_id"),packet.get("boot_id"))
+        image_us=frame.get("capture_monotonic_us")
+        if not isinstance(image_us,int):image_us=packet.get("capture_monotonic_us")
+        interval=frame.get("capture_host_monotonic_interval_s")
+        tick=getattr(getattr(self.service,"sensor_ticks",None),"_push_snapshot",None)
+        if name=="front" and tick and isinstance(image_us,int) and boot==(tick[0].get("receiver_id"),tick[0].get("boot_id")):
+            delta=(image_us-tick[0]["capture_monotonic_us"])/1e6
+            interval=[x+delta for x in tick[1]]
+        with self.lock:
+            history=list(self.scans.get(name,()))
+            mount=copy.deepcopy(self.config["lidar"].get(name))
+            revision=self.config["revision"]
+        if not mount:return None
+        candidates=[]
+        for identity,window,raw,capture,map_id in history:
+            if map_id!=self.service.map_id:continue
+            if identity[:2]==boot and isinstance(image_us,int):
+                error=abs(image_us-identity[2])/1e6
+            elif interval is not None and len(interval)==2:
+                error=max(abs(interval[1]-window[0]),abs(window[1]-interval[0]))
+            else:continue
+            if error<=.18:candidates.append((error,identity,raw,capture))
+        for error,identity,raw,capture in sorted(candidates,key=lambda c:c[0]):
+            points=zone_points(raw,mount,capture)
+            if not points:continue
+            transform=np.asarray(mount["T_front_camera_sensor_m"])
+            if camera_mount is not None:transform=np.linalg.solve(camera_mount,transform)
+            depth,zones=project_depth(points,mount,math.isqrt(raw["resolution"]),cal,transform)
+            return dict(depth=depth,zones=zones,scan_id=":".join(map(str,identity)),rig_revision=revision,
+                        skew_bound_s=error,sensor_id=name,map_id=self.service.map_id)
+        return None
+
     def observe_visual(self,frame,localization):
         if not localization.get("valid"):return
         backend=self.service.backend
@@ -207,6 +255,10 @@ class LidarFusion:
             attachment=self.service.metric.attachment_status(map_id)
             factor=attachment.get("scale_m_per_map_unit") if attachment.get("availability")=="available" else None
             if factor is None and self.scale and self.scale["map_id"]==map_id:factor=self.scale["scale_m_per_map_unit"]
+            if getattr(backend,"_native_birth",None):
+                factor=1.
+                self.scale={"map_id":map_id,"availability":"available","scale_m_per_map_unit":1.,
+                            "source":"native_lidar_visual_initialization"}
             live["scale"]=copy.deepcopy(self.scale);live["mapping_available"]=bool(factor)
             if factor:
                 anchor=backend.rig_anchor(pose)
