@@ -40,6 +40,20 @@ class NativeDepthTest(unittest.TestCase):
         b.depths/=2
         self.assertIsNone(pnp_pair(a,b,zones*0,zones*0))
 
+    def test_flow_requires_repeated_features_and_descriptor_agreement(self):
+        from native_lidar_depth import flow_matches
+        rng=np.random.default_rng(5)
+        image=rng.integers(0,256,(240,320),dtype=np.uint8)
+        points=cv2.goodFeaturesToTrack(image,80,.01,8).reshape(-1,2)
+        descriptors=rng.integers(0,256,(len(points),32),dtype=np.uint8)
+        ref=SimpleNamespace(kps=points,des=descriptors)
+        cur=SimpleNamespace(kps=points.copy(),des=descriptors.copy())
+        cur.des[0]=np.bitwise_not(cur.des[0])
+        matches=flow_matches(ref,cur,image,image,np.arange(len(points)))
+        self.assertNotIn(0,matches)
+        self.assertGreater(len(matches),60)
+        self.assertTrue(all(src==dst for src,dst in matches.items()))
+
 
 if __name__=='__main__':
     unittest.main()
