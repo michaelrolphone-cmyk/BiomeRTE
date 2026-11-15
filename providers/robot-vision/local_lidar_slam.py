@@ -24,13 +24,13 @@ def plane_normals(points, zones, sides, sensor_ids):
     return normals
 
 
-def register_scan(xyz,pose,reference,normals):
+def register_scan(xyz,pose,reference,normals,stationary=False):
     """Floor/support height and tilt come from navigation. Solve observable ENU x,y,yaw."""
     xyz=np.asarray(xyz,float);T=np.asarray(pose,float).copy()
     keep=np.linalg.norm(normals,axis=1)>.9
     if np.count_nonzero(keep)<6:return
     target=np.asarray(reference)[keep];normal=np.asarray(normals)[keep];tree=cKDTree(target)
-    for step in range(6):
+    for step in range(1 if stationary else 6):
         rotated=xyz@T[:3,:3].T
         points=rotated+T[:3,3]
         distance,idx=tree.query(points)
@@ -48,6 +48,10 @@ def register_scan(xyz,pose,reference,normals):
         weight=np.sqrt(np.minimum(1.,.025/np.maximum(np.abs(r),1e-7)))
         u,s,vt=np.linalg.svd(jac*weight[:,None],full_matrices=False)
         good=s>max(.25,s[0]*.05)
+        if stationary:
+            # A quiet IMU supplies a zero-motion constraint. Evaluate LiDAR residuals
+            # at that pose so a geometrically similar surface cannot move the rover.
+            break
         if not good.any():return
         dx=-vt[good].T@((u[:,good].T@(r*weight))/s[good])
         if np.linalg.norm(dx[:2])>.14 or abs(dx[2])>np.deg2rad(12):return
@@ -57,7 +61,7 @@ def register_scan(xyz,pose,reference,normals):
         if np.linalg.norm(dx)<1e-4:break
     error=float(np.median(np.abs(r)))
     if error>.04:return
-    return T,dict(inliers=len(q),observable_dof=int(good.sum()),median_plane_residual_m=error)
+    return T,dict(inliers=len(q),observable_dof=int(good.sum()),median_plane_residual_m=error,stationary_pose_held=bool(stationary))
 
 
 class LocalLidarSlam:
@@ -144,7 +148,8 @@ class LocalLidarSlam:
         if len(xyz)<8:return
         self.last=time.monotonic()
         cells=list(self.cells.values())
-        result=register_scan(xyz,Twb,[v['xyz'] for v in cells],[v['normal_enu'] for v in cells])
+        stationary=nav.get('state')=='stationary' and (nav.get('stationary_reference') or {}).get('imu_quiet') is True
+        result=register_scan(xyz,Twb,[v['xyz'] for v in cells],[v['normal_enu'] for v in cells],stationary=stationary)
         if result is None:
             self.state.update(status='no_observable_scan_match',source_scan=packet['frame_id'])
             return
