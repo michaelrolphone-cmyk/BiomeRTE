@@ -51,18 +51,18 @@ class VisionStreams:
         self.running={}
         self.reported={}
         self.connections={}
-        self.wires={}
+        self.lane_tasks={}
 
     def stop_lane(self, key, stop):
         stop.set()
         connection = self.connections.get(key)
         if connection:
             connection.abort()
-        wire = self.wires.get(key)
-        if wire:
-            loop, transport = wire
+        running = self.lane_tasks.get(key)
+        if running:
+            loop, task = running
             try:
-                loop.call_soon_threadsafe(transport.abort)
+                loop.call_soon_threadsafe(task.cancel)
             except RuntimeError:
                 pass  # The worker already closed its event loop.
 
@@ -94,7 +94,7 @@ class VisionStreams:
                 stage='public_socket'
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
                 async with connect(url+'/'+grant['lane'],additional_headers=headers,max_size=None,max_queue=1,write_limit=65536) as wire:
-                    self.wires[key] = (asyncio.get_running_loop(), wire.transport)
+                    self.lane_tasks[key] = (asyncio.get_running_loop(), asyncio.current_task())
                     stage='local_feed'
                     if stop.is_set():return
                     local=LocalConnection(self.socket_path)
@@ -123,6 +123,10 @@ class VisionStreams:
                                               and metadata.get('image_available') is False else 'frame')
                         stage='publish'
                         await wire.send(frame(metadata,image))
+            except asyncio.CancelledError:
+                if stop.is_set():
+                    return
+                raise
             except Exception as error:
                 report_key=grant['lane']
                 now=time.monotonic()
@@ -133,7 +137,7 @@ class VisionStreams:
                     logging.warning('Vision live lane %s stage=%s failed: %s status=%s',grant['lane'],stage,type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
-                self.wires.pop(key, None)
+                self.lane_tasks.pop(key, None)
                 if response is not None:response.close()
                 if local:local.abort()
                 if self.connections.get(key) is local:self.connections.pop(key,None)
