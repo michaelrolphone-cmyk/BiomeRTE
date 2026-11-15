@@ -1,7 +1,6 @@
 import asyncio
 import json
 import struct
-import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -56,3 +55,34 @@ class CameraPushTest(unittest.IsolatedAsyncioTestCase):
                 finally:
                     camera.close()
         await asyncio.gather(exercise('front'),exercise('rear'))
+
+
+class EnrollmentTest(unittest.TestCase):
+    def test_disconnect_preserves_enrollment_and_route_change_reprovisions_once(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from threading import Lock
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from rear_sensor_push import RearSensorIngress
+
+        with TemporaryDirectory() as directory:
+            ingress = RearSensorIngress.__new__(RearSensorIngress)
+            ingress.service = SimpleNamespace(state_dir=Path(directory))
+            ingress.rig = SimpleNamespace(config={"rear":{"camera":{}}})
+            ingress.config = dict(receiver_id="enrolled", gateway_host="first", port=9878, token="sample")
+            ingress.stop = Mock()
+            ingress.stop.wait.return_value = False
+            ingress.lock = Lock()
+            ingress.latest = {"packet":{}}
+            with patch("camera_telemetry.CameraHTTPClient") as client:
+                client.return_value._request.return_value = dict(receiver_id="enrolled", camera_id="rear")
+                ingress._configure_device()
+                ingress.latest = None
+                ingress._configure_device()
+                client.assert_not_called()
+                ingress.config["gateway_host"] = "changed"
+                ingress._configure_device()
+                self.assertEqual(client.return_value._request.call_count, 2)
+                ingress._configure_device()
+                self.assertEqual(client.return_value._request.call_count, 2)

@@ -173,29 +173,34 @@ class RearSensorIngress:
 
     def _configure_device(self):
         from camera_telemetry import CameraHTTPClient
-        attempted=None
-        while not self.stop.is_set():
-            with self.lock:
-                snapshot=self.latest
-            if snapshot and time.monotonic()-snapshot["received"]<3:
-                self.stop.wait(2)
-                continue
+        import hashlib
+        desired={"host":self.config["gateway_host"],"port":self.config.get("port",9878),"token":self.config["token"]}
+        binding=hashlib.sha256(json.dumps([self.config["receiver_id"],desired],sort_keys=True).encode()).hexdigest()
+        receipt=self.service.state_dir/"rear-socket-enrollment.json"
+        previous=None
+        try:
+            previous=json.loads(receipt.read_text()).get("binding")
+        except (OSError,ValueError):pass
+        if previous==binding:return
+        while not self.stop.wait(2):
             try:
-                client=CameraHTTPClient(self.rig.config["rear"]["camera"],{"network_timeout_s":2.})
-                status=client._request("/api/rear")
-                if status.get("receiver_id")!=self.config["receiver_id"] or status.get("camera_id")!="rear":
-                    raise ValueError("rear_device_identity_mismatch")
-                boot=status["boot_id"]
-                stream=client._request("/api/telemetry/stream")
-                desired={"host":self.config["gateway_host"],"port":self.config.get("port",9878),"token":self.config["token"]}
-                mismatch=not stream.get("configured") or stream.get("host")!=desired["host"] or stream.get("port")!=desired["port"]
-                if mismatch or attempted!=boot:
+                with self.lock:
+                    enrolled=self.latest is not None and previous is None
+                if not enrolled:
+                    # First enrollment only. Authenticate the registered role before
+                    # provisioning its destination. Boot or missing frames do not
+                    # invalidate the socket configuration stored in the ESP's NVS.
+                    client=CameraHTTPClient(self.rig.config["rear"]["camera"],{"network_timeout_s":2.})
+                    status=client._request("/api/rear")
+                    if status.get("receiver_id")!=self.config["receiver_id"] or status.get("camera_id")!="rear":
+                        raise ValueError("rear_device_identity_mismatch")
                     client._request("/api/telemetry/stream",body=json.dumps(desired).encode())
-                    attempted=boot
+                from vision_config import atomic_json
+                atomic_json(receipt,{"binding":binding})
                 self.device_error=None
+                return
             except Exception as exc:
                 self.device_error=type(exc).__name__+":"+str(exc)[:100]
-            self.stop.wait(2)
 
     async def serve(self):
         from websockets.asyncio.server import serve
