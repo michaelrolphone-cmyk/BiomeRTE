@@ -307,7 +307,7 @@ class RearSensorIngress:
                 await asyncio.gather(task,return_exceptions=True)
         try:
             async with serve(receive,self.config.get("listen","0.0.0.0"),self.config.get("port",9878),
-                             process_request=authorize,max_size=None,max_queue=1,ping_interval=None) as server:
+                             process_request=authorize,max_size=None,max_queue=None,ping_interval=None) as server:
                 self.bound_port=server.sockets[0].getsockname()[1]
                 while not self.stop.is_set():
                     await asyncio.sleep(.1)

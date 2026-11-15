@@ -1,0 +1,1054 @@
+{
+  "schema": "rover.parity.capture/1",
+  "captures": [
+    {
+      "label": "Fresh second agent lease after fragment queue correction, 45 second capture",
+      "manifest": {
+        "authority": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+        "epoch": "a6ef8687d06147f7b8b113849b9fb0bd",
+        "generation": 919,
+        "revision": "ba57a999ec5120621eda77d2ef33e3461dca9251f5347678f151f45984fd39f7",
+        "schema": "rover.sensor.manifest/1",
+        "schema_version": {
+          "major": 1,
+          "minor": 1
+        },
+        "sensors": [
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                1,
+                0.047625
+              ],
+              [
+                -1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "camera.front",
+            "last_seen": "2026-11-15T13:42:14.401+00:00",
+            "message_type": "frame",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  1,
+                  0.047625
+                ],
+                [
+                  -1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 5,
+            "role": "front",
+            "schema": "rover.vision.frame/1",
+            "selector": {
+              "camera_id": "front"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "payload",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "camera"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                -0.028575000000000003
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "camera.rear",
+            "last_seen": "2026-11-15T13:42:14.333+00:00",
+            "message_type": "frame",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  -0.028575000000000003
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 5,
+            "role": "rear",
+            "schema": "rover.vision.frame/1",
+            "selector": {
+              "camera_id": "rear"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "payload",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "camera"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                1,
+                0.047625
+              ],
+              [
+                -1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0835
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "lidar.front",
+            "last_seen": "2026-11-15T13:42:14.347+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  1,
+                  0.047625
+                ],
+                [
+                  -1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0835
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "sensor_id": "front"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "lidar.latest.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "lidar"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                -0.028575000000000003
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0835
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "lidar.rear",
+            "last_seen": "2026-11-15T13:42:14.195+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  -0.028575000000000003
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0835
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "rear",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "sensor_id": "rear"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "lidar.latest.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "lidar"
+          },
+          {
+            "T_body_sensor": [
+              [
+                1,
+                0,
+                0,
+                0.091625
+              ],
+              [
+                0,
+                1,
+                0,
+                -0.005
+              ],
+              [
+                0,
+                0,
+                1,
+                0.0254
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "ultrasonic.front",
+            "last_seen": "2026-11-15T13:42:14.241+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  1,
+                  0,
+                  0,
+                  0.091625
+                ],
+                [
+                  0,
+                  1,
+                  0,
+                  -0.005
+                ],
+                [
+                  0,
+                  0,
+                  1,
+                  0.0254
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "id": "front",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "ultrasonic"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                -1,
+                0,
+                -0.0013750000000000012
+              ],
+              [
+                1,
+                0,
+                0,
+                0.043
+              ],
+              [
+                0,
+                0,
+                1,
+                0.0254
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "ultrasonic.left",
+            "last_seen": "2026-11-15T13:42:14.326+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  -1,
+                  0,
+                  -0.0013750000000000012
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0.043
+                ],
+                [
+                  0,
+                  0,
+                  1,
+                  0.0254
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "left",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "id": "left",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "ultrasonic"
+          },
+          {
+            "T_body_sensor": [
+              [
+                -1,
+                0,
+                0,
+                -0.10472500000000001
+              ],
+              [
+                0,
+                -1,
+                0,
+                -0.002
+              ],
+              [
+                0,
+                0,
+                1,
+                0.0508
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "ultrasonic.rear",
+            "last_seen": "2026-11-15T13:42:14.176+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  -1,
+                  0,
+                  0,
+                  -0.10472500000000001
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  -0.002
+                ],
+                [
+                  0,
+                  0,
+                  1,
+                  0.0508
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "rear",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "id": "rear",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "ultrasonic"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                1,
+                0,
+                0.0016250000000000014
+              ],
+              [
+                -1,
+                0,
+                0,
+                -0.043
+              ],
+              [
+                0,
+                0,
+                1,
+                0.0254
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "ultrasonic.right",
+            "last_seen": "2026-11-15T13:42:14.389+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  1,
+                  0,
+                  0.0016250000000000014
+                ],
+                [
+                  -1,
+                  0,
+                  0,
+                  -0.043
+                ],
+                [
+                  0,
+                  0,
+                  1,
+                  0.0254
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "right",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "id": "right",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "sensor_packet.ultrasonic.ultrasonic.sensors",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "ultrasonic"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                0.043625
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "imu.front",
+            "last_seen": "2026-11-15T13:42:14.378+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  0.043625
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 50,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "path": "ahrs.sensors.imu"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "ahrs.sensors.imu",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "imu"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                0.043625
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "ahrs.front",
+            "last_seen": "2026-11-15T13:42:14.378+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  0.043625
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 50,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "path": "ahrs.sensors.attitude"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "ahrs.sensors.attitude",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "ahrs"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                0.043625
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "mag.front",
+            "last_seen": "2026-11-15T13:42:14.380+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  0.043625
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 50,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "path": "ahrs.sensors.mag"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "ahrs.sensors.mag",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "mag"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                -1,
+                0.043625
+              ],
+              [
+                1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "barometer.front",
+            "last_seen": "2026-11-15T13:42:14.362+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  -1,
+                  0.043625
+                ],
+                [
+                  1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": 50,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "path": "ahrs.sensors.barometer"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "ahrs.sensors.barometer",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "barometer"
+          },
+          {
+            "T_body_sensor": [
+              [
+                0,
+                0,
+                1,
+                0.047625
+              ],
+              [
+                -1,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                -1,
+                0,
+                0.0635
+              ],
+              [
+                0,
+                0,
+                0,
+                1
+              ]
+            ],
+            "channel": "/vision",
+            "id": "tof.front",
+            "last_seen": "2026-11-15T13:42:13.784+00:00",
+            "message_type": "sensor_tick",
+            "mount": {
+              "T_body_sensor": [
+                [
+                  0,
+                  0,
+                  1,
+                  0.047625
+                ],
+                [
+                  -1,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  -1,
+                  0,
+                  0.0635
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              ]
+            },
+            "rate_hz": null,
+            "role": "front",
+            "schema": "rover.sensor.tick/1",
+            "selector": {
+              "path": "tof"
+            },
+            "status": "online",
+            "stream": {
+              "capability": "robot.vision.stream:1",
+              "channel": "vision",
+              "path": "tof",
+              "resource": "robotvision.mac.ae3c74c06d1909a1ccdc"
+            },
+            "type": "tof"
+          }
+        ],
+        "sequence": 4723,
+        "type": "sensor_manifest"
+      },
+      "seen_sensor_ids": [
+        "ahrs.front",
+        "barometer.front",
+        "camera.front",
+        "camera.rear",
+        "imu.front",
+        "lidar.front",
+        "lidar.rear",
+        "mag.front",
+        "tof.front",
+        "ultrasonic.front",
+        "ultrasonic.left",
+        "ultrasonic.rear",
+        "ultrasonic.right"
+      ],
+      "missing_sensor_ids": [],
+      "first": {
+        "vision": "sensor_manifest",
+        "map": "world_snapshot"
+      },
+      "jpeg": {
+        "rear": {
+          "count": 59,
+          "rate_hz": 1.3463602703914814
+        },
+        "front": {
+          "count": 201,
+          "rate_hz": 4.645424592957232
+        }
+      },
+      "address_violations": [],
+      "schema_errors": []
+    },
+    {
+      "label": "After header fixes; rear cadence unqualified",
+      "first": {
+        "vision": "sensor_manifest",
+        "map": "world_snapshot"
+      },
+      "derived_fields": {
+        "world_orientation": 334,
+        "tof.display_fit": 334,
+        "lidar.world_hits": 334,
+        "lidar.latest.mapping_available": 334,
+        "lidar.latest.native_landmarks_refined": 334
+      },
+      "schema_errors": [],
+      "address_violations": [],
+      "rig_experiment": {
+        "added": true,
+        "removed": true,
+        "manifest_seen": true,
+        "sample_seen": true,
+        "removed_manifest_seen": true
+      },
+      "missing_sensor_ids": [
+        "camera.rear"
+      ],
+      "jpeg": {
+        "front": {
+          "count": 89,
+          "rate_hz": 4.561660575074558
+        }
+      }
+    }
+  ],
+  "cadence_qualified": false
+}

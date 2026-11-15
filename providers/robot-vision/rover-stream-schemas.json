@@ -5431,10 +5431,6 @@
             ]
           },
           "position": {
-            "type": [
-              "object",
-              "null"
-            ],
             "properties": {
               "frame_id": {},
               "x_m": {},

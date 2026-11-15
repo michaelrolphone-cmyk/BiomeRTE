@@ -44,7 +44,8 @@ class CameraPushTest(unittest.IsolatedAsyncioTestCase):
                                     frame_id='boot:'+str(t),capture_clock='esp_timer',capture_monotonic_us=t,
                                     served_monotonic_us=t,camera_id=role,width=32,height=24)
                                 encoded = json.dumps(meta).encode()
-                                await client.send(struct.pack('!I',len(encoded))+encoded+jpeg)
+                                wire=struct.pack('!I',len(encoded))+encoded+jpeg
+                                await client.send([wire[n:n+97] for n in range(0,len(wire),97)])
                                 self.assertEqual(json.loads(await client.recv())['frame_id'],meta['frame_id'])
                                 frame = await asyncio.to_thread(camera.next_frame,i,2)
                                 self.assertEqual(frame.jpeg_bytes,jpeg)

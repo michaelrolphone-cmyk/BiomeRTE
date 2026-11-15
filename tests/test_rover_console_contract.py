@@ -32,12 +32,23 @@ def compatible(previous, current, before, after, path):
     previous = dereference(previous, before)
     current = dereference(current, after)
     keys = set(previous) | set(current)
+    widened = False
     for key in sorted(keys - {'$defs', '$id', 'version', 'description', 'title', 'properties', 'items', 'required'}):
         if previous.get(key) != current.get(key):
+            if key == 'type':
+                old_types = previous.get('type')
+                new_types = current.get('type')
+                old_types = set(old_types if isinstance(old_types, list) else [old_types])
+                new_types = set(new_types if isinstance(new_types, list) else [new_types])
+                # Correcting nullable wire fields preserves all previously valid values.
+                # Still require a minor bump; narrowing or replacing a type is forbidden.
+                if None not in old_types and old_types < new_types:
+                    widened = True
+                    continue
             raise ValueError(f'Constraint changed at {path}.{key}')
-    if set(current.get('required', [])) - set(previous.get('required', [])):
-        raise ValueError(f'Required field added at {path}')
-    changed = previous.get('required', []) != current.get('required', [])
+    if set(previous.get('required', [])) - set(current.get('required', [])):
+        raise ValueError(f'Published output guarantee removed at {path}')
+    changed = widened or previous.get('required', []) != current.get('required', [])
     old_fields = previous.get('properties', {})
     new_fields = current.get('properties', {})
     for name, old in old_fields.items():
@@ -92,6 +103,33 @@ class PublishedConsumerContract(unittest.TestCase):
             evolution(old, new)
         with self.assertRaises(ValueError):
             evolution(old, {})
+
+    def test_new_output_guarantees_are_additive_but_old_guarantees_cannot_disappear(self):
+        old = {'example/1': {'properties': {'id': {'type': 'string'}}, 'required': ['id'], 'version': {'major': 1, 'minor': 0}}}
+        new = copy.deepcopy(old)
+        new['example/1']['properties']['complete'] = {'type': 'boolean'}
+        new['example/1']['required'].append('complete')
+        with self.assertRaises(ValueError):
+            evolution(old, new)
+        new['example/1']['version']['minor'] = 1
+        evolution(old, new)
+        new['example/1']['required'].remove('id')
+        with self.assertRaises(ValueError):
+            evolution(old, new)
+
+    def test_nullable_correction_needs_minor_and_narrowing_still_fails(self):
+        old = {'example/1': {'properties': {'value': {'type': 'string'}}, 'version': {'major': 1, 'minor': 0}}}
+        new = copy.deepcopy(old)
+        new['example/1']['properties']['value']['type'] = ['string', 'null']
+        with self.assertRaises(ValueError):
+            evolution(old, new)
+        new['example/1']['version']['minor'] = 1
+        evolution(old, new)
+        newer = copy.deepcopy(new)
+        newer['example/1']['properties']['value']['type'] = 'string'
+        newer['example/1']['version']['minor'] = 2
+        with self.assertRaises(ValueError):
+            evolution(new, newer)
 
     @unittest.skipUnless(os.environ.get('ROVER_CONTRACT_BASE'), 'PR base is supplied by the contract CI job')
     def test_catalog_against_pr_base(self):

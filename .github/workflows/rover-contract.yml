@@ -5,6 +5,8 @@ permissions:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: providers/robot-vision:.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,6 +20,7 @@ jobs:
         run: |
           python3 -m unittest discover -s providers/robot-vision/tests -p test_rover_stream_contract.py -v
           python3 -m unittest discover -s providers/robot-vision/tests -p test_parity_derivations.py -v
+          python3 -m unittest discover -s providers/robot-vision/tests -p test_live_capture_contract.py -v
       - name: Check console compatibility and schema evolution
         env:
           ROVER_CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
