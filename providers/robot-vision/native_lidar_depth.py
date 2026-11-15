@@ -45,21 +45,60 @@ def sample(raster, kps, missing=0):
     return out
 
 
-def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None):
+def flow_matches(ref, cur, ref_image, cur_image, indices):
+    """Associate repeat detections using bidirectional image flow and descriptor agreement."""
+    if ref_image is None or cur_image is None or not len(indices) or not len(cur.kps):
+        return {}
+    def grayscale(image):
+        return image if image.ndim==2 else cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    a,b=grayscale(ref_image),grayscale(cur_image)
+    if a.shape!=b.shape:return {}
+    before=np.asarray(ref.kps[indices],np.float32).reshape(-1,1,2)
+    after,ok,_=cv2.calcOpticalFlowPyrLK(a,b,before,None)
+    if after is None:return {}
+    reverse,back,_=cv2.calcOpticalFlowPyrLK(b,a,after,None)
+    if reverse is None:return {}
+    good=ok.ravel().astype(bool)&back.ravel().astype(bool)
+    good &= np.linalg.norm((reverse-before).reshape(-1,2),axis=1)<.75
+    from scipy.spatial import cKDTree
+    distances,detections=cKDTree(cur.kps).query(after.reshape(-1,2))
+    good &= distances<2.
+    accepted={}
+    for j in np.flatnonzero(good):
+        source=int(indices[j]);target=int(detections[j])
+        bits=cv2.norm(ref.des[source],cur.des[target],cv2.NORM_HAMMING)
+        if bits>.25*8*ref.des.shape[1]:continue
+        rank=(float(distances[j]),bits)
+        if target not in accepted or rank<accepted[target][0]:
+            accepted[target]=(rank,source)
+    return {target:source for target,(_,source) in accepted.items()}
+
+
+def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None, images=None):
     """Match two real image observations; cross-check depth in both captures."""
     stats={} if stats is None else stats
     if ref.des is None or cur.des is None or ref.depths is None:
         return
-    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(ref.des, cur.des, k=2)
+    measured=np.flatnonzero(ref.depths>0)
+    if not len(measured) or len(cur.des)<2:return
+    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(ref.des[measured], cur.des, k=2)
     unique = {}
     for row in pairs:
         if len(row)==2 and row[0].distance < .75*row[1].distance:
-            m = row[0]
-            if m.trainIdx not in unique or unique[m.trainIdx].distance>m.distance:
-                unique[m.trainIdx]=m
-    pairs = list(unique.values())
-    a = np.array([m.queryIdx for m in pairs], dtype=int)
-    b = np.array([m.trainIdx for m in pairs], dtype=int)
+            m=row[0]
+            if m.trainIdx not in unique or unique[m.trainIdx][0]>m.distance:
+                unique[m.trainIdx]=(m.distance,int(measured[m.queryIdx]))
+    associations={target:source for target,(_,source) in unique.items()}
+    if images is not None and len(associations)<60:
+        flow=flow_matches(ref,cur,*images,measured)
+        used=set(associations.values())
+        for target,source in flow.items():
+            if target not in associations and source not in used:
+                associations[target]=source
+                used.add(source)
+        stats['flow_verified_matches']=len(associations)-len(unique)
+    b=np.array(list(associations),dtype=int)
+    a=np.array(list(associations.values()),dtype=int)
     keep = ref.depths[a]>0
     if cur_zones is not None and cur.depths is not None:keep &= cur.depths[b]>0
     a,b = a[keep],b[keep]
@@ -141,7 +180,7 @@ def install_initializer(backend, runtime):
             ref,ref_image,ref_zones,ref_scan,rig_revision,survey_reference=previous
             stats['pair_attempts']=stats.get('pair_attempts',0)+1
             fresh_depth=obs is not None and obs['scan_id']!=ref_scan
-            result=pnp_pair(ref,frame,ref_zones,obs['zones'] if fresh_depth else None,stats)
+            result=pnp_pair(ref,frame,ref_zones,obs['zones'] if fresh_depth else None,stats,(ref_image,image))
             if result is not None:
                 points,ai,bi,pose=result
                 ref.update_pose(np.eye(4));frame.update_pose(pose)
