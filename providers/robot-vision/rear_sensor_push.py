@@ -82,6 +82,9 @@ def validate_packet(packet, receiver_id):
     return packet
 
 
+from sensor_delivery import RecentReadings, freshness_window
+
+
 class RearSensorIngress:
     def __init__(self,rig):
         self.rig=rig
@@ -97,6 +100,8 @@ class RearSensorIngress:
         self.lock=threading.Lock()
         self.packets=self.gaps=0
         self.ranging_error=None
+        self.expired_packets=0
+        self.connection_closes=0
         path=self.service.state_dir/"rear-sensor-push.json"
         try:
             if path.exists():
@@ -204,6 +209,19 @@ class RearSensorIngress:
             if request.path not in ("/sensors","/camera") or not hmac.compare_digest(
                 request.headers.get("Authorization",""),"Sensor "+self.config["token"]):
                 return connection.respond(HTTPStatus.UNAUTHORIZED,"Unauthorized sensor source")
+        readings=RecentReadings(freshness_window(self.service))
+        def deliver():
+            while True:
+                reading=readings.get()
+                if reading is None:
+                    return
+                _, arguments=reading
+                try:
+                    self.publish(*arguments)
+                except (ValueError, TypeError, KeyError) as exc:
+                    self.error="rear_packet:"+str(exc)[:120]
+        worker=threading.Thread(target=deliver, name="rear-sensor-delivery",daemon=True)
+        worker.start()
         async def receive(socket):
             if getattr(getattr(socket,'request',None),'path',None) == '/camera':
                 from camera_push import receive_camera
@@ -220,7 +238,7 @@ class RearSensorIngress:
                     if not pending:
                         identity=str(time.monotonic_ns())
                         pending[identity]=time.monotonic()
-                        await socket.send(json.dumps({"type":"clock","id":identity}))
+                    await socket.send(json.dumps({"type":"clock","id":next(iter(pending))}))
                     await asyncio.sleep(1)
             task=asyncio.create_task(synchronize())
             try:
@@ -240,21 +258,33 @@ class RearSensorIngress:
                         from device_routes import DeviceRoutes
                         DeviceRoutes(self.rig.service.state_dir/"device-routes.sqlite3").observe(packet["receiver_id"],peer[0],{"kind":"camera"})
                         socket._route_registered=True
+                    if clock.boot!=packet["boot_id"]:
+                        # A continuous emitter can send before its first clock reply.
+                        continue
                     interval=clock.capture_interval(packet,received)
+                    if packet.get("delivery_mode")=="continuous":
+                        readings.put(interval[1], (packet,interval,received))
+                        self.expired_packets=readings.expired
+                        continue
                     self.publish(packet,interval,received)
                     await socket.send(json.dumps({"type":"ack","boot_id":packet["boot_id"],
                         "stream_sequence":packet["stream_sequence"],
                         "monotonic_us":packet["capture_monotonic_us"]}))
             except Exception as exc:
-                self.error="rear_socket:"+type(exc).__name__
+                self.connection_closes+=1
+                self.error="rear_socket:"+type(exc).__name__+":"+str(exc)[:160]
             finally:
                 task.cancel()
                 await asyncio.gather(task,return_exceptions=True)
-        async with serve(receive,self.config.get("listen","0.0.0.0"),self.config.get("port",9878),
-                         process_request=authorize,max_size=None,max_queue=1,ping_interval=15) as server:
-            self.bound_port=server.sockets[0].getsockname()[1]
-            while not self.stop.is_set():
-                await asyncio.sleep(.1)
+        try:
+            async with serve(receive,self.config.get("listen","0.0.0.0"),self.config.get("port",9878),
+                             process_request=authorize,max_size=None,max_queue=1,ping_interval=15) as server:
+                self.bound_port=server.sockets[0].getsockname()[1]
+                while not self.stop.is_set():
+                    await asyncio.sleep(.1)
+        finally:
+            readings.close()
+            await asyncio.to_thread(worker.join)
 
     def _run(self):
         try:
@@ -303,6 +333,7 @@ class RearSensorIngress:
         return {"configured":self.config is not None,"packets":self.packets,"gaps":self.gaps,
             "error":self.error,"ranging_error":self.ranging_error,"device_setup_error":self.device_error,
             "worker_alive":bool(self.thread and self.thread.is_alive()),
+            "expired_packets":self.expired_packets,"connection_closes":self.connection_closes,
             "last_receive_age_s":None if latest is None else now-latest["received"],
             "latest":latest,"camera_id":"rear"}
 

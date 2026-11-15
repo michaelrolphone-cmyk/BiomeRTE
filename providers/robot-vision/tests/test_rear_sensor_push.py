@@ -106,6 +106,22 @@ class SocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.output),2)
         self.assertEqual(self.output[-1][0]["sensor_delivery"],"websocket_push")
         self.assertEqual(self.output[-1][0]["map_id"],"ONE-MAP")
+    async def test_continuous_source_survives_missing_first_clock_and_needs_no_ack(self):
+        from websockets.asyncio.client import connect
+        auth={'Authorization':'Sensor '+'x'*32}
+        async with connect(self.url,additional_headers=auth) as ws:
+            clock=json.loads(await ws.recv())
+            await ws.send(json.dumps(dict(packet(),delivery_mode='continuous')))
+            retry=json.loads(await asyncio.wait_for(ws.recv(),3))
+            self.assertEqual(retry['id'],clock['id'])
+            await ws.send(json.dumps(dict(type='clock',id=clock['id'],boot_id='boot-a',
+                received_monotonic_us=1000000,served_monotonic_us=1000000)))
+            for seq in (2,3,4):
+                await ws.send(json.dumps(dict(packet(seq,tick=1000000+seq),delivery_mode='continuous')))
+            following=json.loads(await asyncio.wait_for(ws.recv(),3))
+            self.assertEqual(following['type'],'clock')
+            self.assertEqual([row[0]['sensor_stream_sequence'] for row in self.output],[2,3,4])
+
     async def test_socket_rejects_wrong_authentication(self):
         from websockets.asyncio.client import connect
         from websockets.exceptions import InvalidStatus

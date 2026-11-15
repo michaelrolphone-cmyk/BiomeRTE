@@ -127,6 +127,13 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(ack['stream_sequence'],1)
                         self.assertEqual(len(observed),1)
                         self.assertIn('capture_interval',observed[0][1])
+                        for seq in (2,3,4):
+                            await ws.send(json.dumps(dict(p,stream_sequence=seq,delivery_mode='continuous')))
+                        # No ACK traffic may delay the following clock exchange or any sensor.
+                        following=json.loads(await asyncio.wait_for(ws.recv(),3))
+                        self.assertEqual(following['type'],'clock')
+                        self.assertEqual([row[0][0]['stream_sequence'] for row in observed],[1,2,3,4])
+
                 finally:
                     receiver.stop.set();await task
 

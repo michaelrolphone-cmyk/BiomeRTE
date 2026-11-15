@@ -6,15 +6,36 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from sensor_delivery import RecentReadings, freshness_window
 
 class _QueueSink:
-    def __init__(self, state_dir, delivery, images):
+    def __init__(self, state_dir, delivery, images, window):
         self.service=SimpleNamespace(state_dir=Path(state_dir))
         self.delivery=delivery
+        self.readings=RecentReadings(window)
+        self.writer=threading.Thread(target=self._write, name='sensor-ingress-mailbox', daemon=True)
+        self.writer.start()
         self.images=images
         self.error=None
     def publish(self, *args, **kwargs):
-        self.delivery.put(('packet',args,kwargs))
+        interval=kwargs.get('capture_interval')
+        self.readings.put(interval[1] if interval else args[2], ('packet',args,kwargs))
+
+    def _write(self):
+        while True:
+            reading=self.readings.get()
+            if reading is None:
+                return
+            captured, message=reading
+            while not self.readings.closed:
+                remaining=captured+self.readings.window-time.monotonic()
+                if remaining<=0:
+                    break
+                try:
+                    self.delivery.put(message, timeout=min(.1, remaining))
+                    break
+                except queue.Full:
+                    continue
     def push_jpeg(self,*args):
         try:
             self.images.put_nowait(args)
@@ -27,17 +48,19 @@ class _QueueSink:
             self.images.put_nowait(args)
 
     def ingress_metrics(self, metrics):
-        self.delivery.put(('metrics',metrics))
+        self.readings.put(time.monotonic(), ('metrics',dict(metrics)))
 
-def _receiver_process(state_dir, delivery, stop, images):
+def _receiver_process(state_dir, delivery, stop, images, window):
     from sensor_push import SensorPushReceiver
-    receiver=SensorPushReceiver(_QueueSink(state_dir,delivery,images))
+    receiver=SensorPushReceiver(_QueueSink(state_dir,delivery,images,window))
     receiver.stop=stop
     receiver.metrics.update(execution='independent_process',worker_pid=multiprocessing.current_process().pid)
     try:
         receiver._run()
     finally:
         images.cancel_join_thread()
+        receiver.stream.readings.close()
+        receiver.stream.writer.join()
         delivery.put(('end',))
         delivery.close()
         delivery.join_thread()
@@ -57,6 +80,10 @@ def _deliver(receiver):
             receiver.metrics.update(message[1])
             continue
         _,args,kwargs=message
+        interval=kwargs.get('capture_interval')
+        captured=interval[1] if interval else args[2]
+        if time.monotonic()-captured>receiver.delivery_window:
+            continue
         try:
             receiver.stream.publish(*args,**kwargs)
             receiver.metrics['delivery_lag_s']=max(0.,time.monotonic()-args[2])
@@ -75,14 +102,14 @@ def _deliver_images(receiver):
 
 
 def start_isolated_receiver(receiver):
-    # Unbounded transport queue preserves ordered samples during native SLAM
-    # pauses; the consumer, never the socket ACK loop, performs enrichment.
+    # Preserve ordered samples inside the consumer's configured usable window.
     context=multiprocessing.get_context('spawn')
     receiver.stop=context.Event()
-    receiver._delivery_queue=context.Queue()
+    receiver.delivery_window=freshness_window(receiver.stream.service)
+    receiver._delivery_queue=context.Queue(maxsize=1)
     receiver._images=context.Queue(maxsize=1)
     receiver.process=context.Process(target=_receiver_process,
-        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images),
+        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images,receiver.delivery_window),
         name='sensor-websocket-ingress',daemon=True)
     receiver.process.start()
     receiver._image_thread=threading.Thread(target=_deliver_images,args=(receiver,),name='pushed-camera-delivery',daemon=True)

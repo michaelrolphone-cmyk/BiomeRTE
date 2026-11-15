@@ -146,6 +146,8 @@ class SensorPushReceiver:
                                         capture_age_upper_s=received-interval[0],
                                         clock_uncertainty_s=(interval[1]-interval[0])/2)
                     self.diagnostic(state='streaming',last_error=None)
+                    if packet.get('delivery_mode') == 'continuous':
+                        continue
                     samples = ((packet.get('ahrs') or {}).get('ahrs') or {}).get('imu_samples',[])
                     last = samples[-1]['monotonic_us'] if samples else packet['capture_monotonic_us']
                     await socket.send(json.dumps(dict(type='ack',boot_id=packet['boot_id'],
