@@ -75,6 +75,15 @@ class SensorTickStream:
         if getattr(self.service,'lidar',None) is not None:
             self.service.lidar.enqueue(packet,interval)
             metadata['lidar']=self.service.lidar.status()
+        if capture_interval is not None and isinstance(packet.get('ftm'),dict):
+            # Preserve the device capture interval for local and remote ranging solvers.
+            metadata['ranging_observation']={
+                'receiver_id':packet['receiver_id'],'boot_id':packet['boot_id'],
+                'uptime_ms':(packet['capture_monotonic_us']//1000) & 0xffffffff,
+                'capture_host_monotonic_interval_s':list(capture_interval),
+                'ftm':packet['ftm'],'ftm_responder':packet.get('ftm_responder')}
+            if packet.get('wifi'):
+                metadata['ranging_observation']['wifi']=packet['wifi']
         metadata['sensor_enrichment_s']=time.monotonic()-publication_started
         self.service.live_frames.publish(metadata,b'')
         self.last_identity=identity;self.published+=1;self.error=None
