@@ -42,8 +42,7 @@ class CameraSource:
         self._epoch = None
         self._capture_clock_known = False
         self._pending_jpeg = None
-        self._websocket = config.get('capture_transport') == 'websocket_push' or (
-            bool(config.get('device_id')) and config.get('synchronized_capture') is True)
+        self._websocket = config.get('capture_transport') == 'websocket_push'
 
     def start(self):
         if self._thread is None:

@@ -24,8 +24,7 @@ def publish_image(ingress,packet,jpeg,received):
     svc=ingress.service
     now=datetime.datetime.now(datetime.timezone.utc).isoformat()
     data=dict(type='frame',camera_id='rear',source_id='rear-camera',frame_id=packet['frame_id'],image_available=True,
-              capture_timing='device_ticks_only',source_timestamp=None,processing_timestamp=None,
-              receive_decode_timestamp=now,receive_decode_clock='mac_utc_after_packet_validation',processed_monotonic=received,
+              capture_timing='device_ticks_only',receive_decode_timestamp=now,processed_monotonic=received,
               processed_monotonic_basis='camera_packet_receive_time',map_id=svc.map_id,map_revision=svc.revision,
               session_id=svc.session_id,calibration_revision=(ingress.rig.config['rear'].get('calibration') or {}).get('calibration_id'),
               width=packet['width'],height=packet['height'],processing_state='awaiting_capture_clock')
