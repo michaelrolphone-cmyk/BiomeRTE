@@ -126,7 +126,7 @@ def commit_pair(backend,previous,current,triangulation,calibration,rig):
           "native_map_identity":id(runtime.map)}
 
 def metadata(backend):
- return {"schema":"rover.shared-map-rig/1","sources":copy.deepcopy(getattr(backend,"_rig_sources",{})),
+ return {"schema":"rover.shared-map-rig/1","native_lidar_birth":copy.deepcopy(getattr(backend,"_native_birth",None)),"sources":copy.deepcopy(getattr(backend,"_rig_sources",{})),
   "anchors":copy.deepcopy(getattr(backend,"_rig_anchors",{})),
   "calibrations":copy.deepcopy(getattr(backend,"_rig_calibrations",{}))}
 def write_state(target,state):
@@ -134,6 +134,7 @@ def write_state(target,state):
 def restore(backend,target):
  path=Path(target)/"camera_rig.json"
  state=json.loads(path.read_text()) if path.exists() else {}
+ backend._native_birth=state.get("native_lidar_birth")
  backend._rig_sources=state.get("sources",{});backend._rig_anchors=state.get("anchors",{})
  backend._rig_calibrations=state.get("calibrations",{})
  if not backend._rig_sources:return
@@ -163,3 +164,50 @@ def refresh_anchors(backend):
    delta=deltas.get(str(reference.id)) if reference is not None else None
    if delta is not None and not point.is_bad():
     position=point.pt();point.update_position(delta[:3,:3]@position+delta[:3,3])
+
+def commit_rear_depth(backend,current,observation,calibration,rig):
+ """Admit range-backed rear features at a synchronized rigid-body pose."""
+ from native_lidar_depth import depth_camera,sample
+ from pyslam.io.dataset_types import SensorType
+ if not observation or current.get("rig_pose") is None:return
+ with backend._lock:
+  runtime=backend._slam
+  if runtime is None or current["map_id"]!=backend._map_id or current["geometry_epoch"]!=backend._last_loop_id:return
+  factor=current.get("scale_m_per_map_unit")
+  if not factor or factor<=0:return
+  with runtime.map.update_lock:
+   frames=[k for k in runtime.map.get_keyframes() if not k.is_bad()]
+   front=[k for k in frames if getattr(k,"camera_id","front")=="front"]
+   if not front:return
+   for k in frames:
+    if getattr(k,"camera_id","front")!="rear":continue
+    delta=np.linalg.inv(k.Twc())@current["pose"]
+    if np.linalg.norm(delta[:3,3])*factor<.12 and np.trace(delta[:3,:3])>1+2*np.cos(np.deg2rad(12)):return
+   zones=sample(observation["zones"],current["kps"],-1)
+   depths=sample(observation["depth"],current["kps"])/factor
+   occupied={index for _,index in current.get("matches",[])}
+   groups={}
+   for i,(z,zone) in enumerate(zip(depths,zones)):
+    if z>0 and zone>=0 and i not in occupied:
+     group=groups.setdefault(int(zone),[])
+     if len(group)<12:group.append(i)
+   if len(groups)<4 or sum(map(len,groups.values()))<18:return
+   idx=np.asarray([i for g in groups.values() for i in g],dtype=int)
+   cam=camera(calibration);depth_camera(cam);cam.sensor_type=SensorType.RGBD
+   k=_keyframe(backend,cam,current)
+   k.depths=np.where(depths>0,depths,-1.)
+   k.kps_ur=np.where(depths>0,k.kpsu[:,0]-cam.bf/np.maximum(depths,1e-6),-1.)
+   local=np.column_stack((k.kpsn[idx],np.ones(len(idx))))*depths[idx,None]
+   T=current["pose"];xyz=local@T[:3,:3].T+T[:3,3]
+   count=runtime.map.add_stereo_points(xyz,None,k,k,idx,current["image"])
+   ref=max(front,key=lambda x:x.kid)
+   if k.parent is None:k.set_parent(ref)
+   k.update_connections()
+   backend._rig_anchors[str(k.id)]={"reference_keyframe_id":str(ref.id),"T_reference_camera":(np.linalg.inv(ref.Twc())@T).tolist(),
+    "camera_id":"rear","rig_revision":current["mount_revision"],"lidar_scan_id":observation["scan_id"],"depth_points":int(count)}
+   backend._rig_calibrations["rear"]=copy.deepcopy(calibration)
+   runtime.local_mapping.push_keyframe(k,current["image"],None,None)
+   current["native_queued"]=True
+   runtime.rig_next_frame_index=backend._next_frame_index
+   backend._lidar_stats.update(rear_keyframe_id=str(k.id),rear_scan=observation["scan_id"],rear_depth_points=int(count))
+   return {"map_changes":backend._diff(backend._read_entities()),"added_points":int(count)}
