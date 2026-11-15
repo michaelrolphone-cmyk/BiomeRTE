@@ -225,6 +225,7 @@ class SharedCameraRig:
      if not factor and getattr(self.service,"lidar",None) is not None:
       lidar_scale=self.service.lidar.scale
       if lidar_scale and lidar_scale.get("map_id")==self.service.map_id:factor=lidar_scale.get("scale_m_per_map_unit")
+     if getattr(backend,"_native_birth",None):factor=1.
      if not factor or not math.isfinite(factor) or factor<=0:
       self.error="metric_scale_required_for_rig_baseline";continue
      mount=np.asarray(cfg["T_front_camera_rear_camera_m"],float).copy();mount[:3,3]/=factor
@@ -247,7 +248,18 @@ class SharedCameraRig:
       if str(keyframe.id)==self.previous["native_keyframe_id"] and not keyframe.is_bad():self.previous["pose"]=keyframe.Twc();break
     pair=triangulate_pair(self.previous,current,cal) if self.previous and self.previous["map_id"]==current["map_id"] else None
     result={"added_points":0}
-    if pair is not None:
+    if getattr(self.service,"lidar",None) is not None and current.get("rig_pose") is not None:
+     meta=dict(captured.metadata,capture_host_monotonic_interval_s=[t-u,t+u])
+     obs=self.service.lidar.for_camera(meta,"rear",cal,np.asarray(cfg["T_front_camera_rear_camera_m"]))
+     if obs is not None:
+      from rig_native_map import commit_rear_depth
+      with self.service._pipeline_lock:
+       if self.service.backend is backend and self.service.map_id==current["map_id"]:
+        depth_result=commit_rear_depth(backend,current,obs,cal,self.config)
+        if depth_result:
+         result=depth_result
+         self.service._commit_changes(result["map_changes"],"rig_rear_lidar_mapping")
+    if pair is not None and not current.get("native_queued"):
      with self.service._pipeline_lock:
       if self.service.backend is not backend or self.service.map_id!=current["map_id"]:self.previous=None;continue
       from rig_native_map import commit_pair
