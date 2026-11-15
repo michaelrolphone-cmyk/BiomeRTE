@@ -56,9 +56,32 @@ class SeedTest(unittest.TestCase):
             self.assertAlmostEqual(matches[0][1],1.)
             changed=dict(rows[0],points=[dict(points[0],depth_m=1.5)])
             self.assertEqual(seed.visual_depths(seed.last_scan[0],changed),([],0))
+            # A new zero may reuse only cells reobserved at that same surveyed pose.
+            new_zero=dict(world_id='bedroom',id='second-zero',at=now-2)
+            (v/'survey-pose-zero.json').write_text(json.dumps(new_zero))
+            pose['survey_zero_id']=new_zero['id']
+            (q/'latest.json').write_text(json.dumps(dict(updated_at=now,inertial_navigation=nav)))
+            seed.snapshot=None
+            with atlas.lock,db:
+                for zone in range(1,5):
+                    record=dict(first[0]['data'],zone=zone)
+                    db.execute('insert into survey_lidar_landmarks values(?,?,?)',
+                               (f"survey-lidar:2:1:front:16:{zone}",rev,json.dumps(record)))
+            self.assertIsNone(seed.depth_at_verified_start('front',1,[tick,tick]))
+            raw=dict(rows[0]['raw'],observed_monotonic_us=160000,distance_mm=[1000]*5+[0]*11,target_status=[5]*5+[0]*11)
+            row=dict(rows[0],raw=raw,points=zone_points(raw,cfg['front'],160000))
+            packet=dict(frame_id='revisit',receiver_id='range',boot_id='boot',capture_monotonic_us=160000)
+            seed.observe([row],packet,[tick,tick],1)
+            verified,reference=seed.depth_at_verified_start('front',1,[tick,tick])
+            self.assertEqual({v['zone'] for v in verified},set(range(5)))
+            self.assertEqual(reference['zero_id'],'second-zero')
+            raw=dict(raw,observed_monotonic_us=170000,distance_mm=[1800]*5+[0]*11)
+            row=dict(row,raw=raw,points=zone_points(raw,cfg['front'],170000))
+            seed.observe([row],dict(packet,frame_id='changed',capture_monotonic_us=170000),[tick,tick],1)
+            self.assertIsNone(seed.depth_at_verified_start('front',1,[tick,tick]))
             # In nonstationary operation, no newly visible cell can enter the surveyed seed.
             nav['state']='propagating'
             seed.snapshot=None
             (q/'latest.json').write_text(json.dumps(dict(updated_at=now,inertial_navigation=nav)))
             seed.observe(rows,dict(frame_id='frame',receiver_id='range',boot_id='boot',capture_monotonic_us=110000),[tick,tick],2)
-            self.assertEqual(len(seed.page(rev,'',4)[0]),2)
+            self.assertEqual(len(seed.page(rev,'',12)[0]),6)
