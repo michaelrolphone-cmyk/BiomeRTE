@@ -86,3 +86,34 @@ class EnrollmentTest(unittest.TestCase):
                 self.assertEqual(client.return_value._request.call_count, 2)
                 ingress._configure_device()
                 self.assertEqual(client.return_value._request.call_count, 2)
+
+
+class RearSynchronizationTest(unittest.TestCase):
+    def test_slow_front_worker_can_pair_an_earlier_rear_exposure(self):
+        from collections import deque
+        from threading import RLock
+        from types import SimpleNamespace
+        from camera_rig import SharedCameraRig, sensor_clock_bounds
+        from camera_source import CapturedFrame
+        rig = SharedCameraRig.__new__(SharedCameraRig)
+        rig.service = SimpleNamespace(map_id='map')
+        rig.config = {'revision':1}
+        rig.lock = RLock()
+        rig.front = deque()
+        rig.pending_rear = deque(maxlen=8)
+        rig.pending_epoch = rig.last_front_check = rig.previous = None
+        rig.delayed_pairs = 0
+        pose = (np.eye(4),.01)
+        rig._pose_at = lambda t,u: pose if rig.front and t == 1. else None
+        image = np.zeros((8,8,3),np.uint8)
+        jpeg = cv2.imencode('.jpg',image)[1].tobytes()
+        def frame(n):return CapturedFrame(image,{'frame_id':str(n)},float(n),n,jpeg)
+        self.assertIsNone(rig._select_tracking_frame(frame(1),1.,.01,'boot')[3])
+        self.assertIsNone(rig.pending_rear[0][2].image)
+        rig.front.append((1.1,))
+        selected,t,u,paired = rig._select_tracking_frame(frame(2),2.,.01,'boot')
+        self.assertEqual((selected.sequence,t,u),(1,1.,.01))
+        self.assertIs(paired,pose)
+        self.assertEqual(selected.image.shape,(8,8,3))
+        meta=dict(capture_transport='websocket_push',capture_host_monotonic_interval_s=[1.,1.01])
+        self.assertEqual(sensor_clock_bounds(meta,[.5,2.]),meta)

@@ -168,6 +168,7 @@ class CameraSource:
                 capture_time=None,capture_time_status='device_monotonic_capture_known_utc_unmapped',
                 capture_monotonic_us=packet['capture_monotonic_us'],capture_boot_id=packet['boot_id'],
                 capture_clock='esp_timer',capture_timestamp_semantics=packet.get('capture_timestamp_semantics'),
+                capture_transport='websocket_push' if self._websocket else 'http_capture',
                 capture_host_monotonic_interval_s=capture_interval,
                 capture_age_at_decode_upper_s=max(0.,tick-capture_interval[0]),
                 receive_decode_time=utc_now(),receive_decode_clock='mac_utc_after_decode',

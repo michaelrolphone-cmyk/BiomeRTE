@@ -26,6 +26,14 @@ def validate(value):
   if not math.isfinite(float(rear.get(key,DEFAULT["rear"][key]))) or float(rear.get(key,DEFAULT["rear"][key]))<=0:raise ValueError(key)
  return copy.deepcopy(value)
 
+def sensor_clock_bounds(frame, sensor_interval):
+ """Combine independent bounds on the same physical exposure."""
+ if frame.get("capture_transport")!="websocket_push":
+  return dict(frame,capture_host_monotonic_interval_s=sensor_interval)
+ camera_interval=frame["capture_host_monotonic_interval_s"]
+ low=max(camera_interval[0],sensor_interval[0]);high=min(camera_interval[1],sensor_interval[1])
+ return dict(frame,capture_host_monotonic_interval_s=[low,high]) if low<=high else frame
+
 class CaptureClock:
  """Boot-scoped device->host clock fit from capture HTTP timing intervals."""
  def __init__(self):self.boot=None;self.rows=deque(maxlen=120)
@@ -40,6 +48,10 @@ class CaptureClock:
   x=device/1e6
   if self.rows and x<=self.rows[-1][0]:raise ValueError("replayed_capture")
   self.rows.append((x,(lo+hi)/2,(hi-lo)/2))
+  if meta.get("capture_transport")=="websocket_push":
+   # The socket receiver already aligned this boot's device clock. Refitting
+   # midpoints would add network jitter back to the exposure interval.
+   return (lo+hi)/2,(hi-lo)/2,identity
   # Least-jitter samples constrain offset; drift is fitted only over a useful span.
   rows=sorted(self.rows,key=lambda r:r[2])[:max(2,len(self.rows)//2)]
   slope=1.
@@ -97,6 +109,8 @@ class SharedCameraRig:
   self.lock=threading.RLock();self.stop=threading.Event();self.thread=None
   self.publisher=None;self.camera=None;self.latest=None;self.error=None;self.processed=0;self.skipped=0
   self.front_clock=CaptureClock();self.rear_clock=CaptureClock();self.front=deque(maxlen=128)
+  self.pending_rear=deque(maxlen=self.front.maxlen)
+  self.pending_epoch=None;self.last_front_check=None;self.delayed_pairs=0
   self.config=validate(json.loads(self.path.read_text())) if self.path.exists() else copy.deepcopy(DEFAULT)
   self.stamp=None;self.previous=None;self.source_epoch=None;self.snapshot=None
   from rear_sensor_push import RearSensorIngress
@@ -129,7 +143,7 @@ class SharedCameraRig:
  def _clock_metadata(self,metadata):
   interval=self.sensors.capture_interval(metadata.get("sensor_packet") or {},time.monotonic())
   if interval is None:return metadata
-  return dict(metadata,capture_host_monotonic_interval_s=interval)
+  return sensor_clock_bounds(metadata,interval)
 
  def observe_front(self,frame,localization):
   if not localization.get("valid"):return
@@ -140,7 +154,7 @@ class SharedCameraRig:
    if all(source.get(key)==packet.get(key) for key in ("receiver_id","boot_id")) and type(source.get("capture_monotonic_us")) is int:
     delta=(source["capture_monotonic_us"]-packet["capture_monotonic_us"])/1e6
     drift=abs(delta)*.0001
-    frame=dict(frame,capture_host_monotonic_interval_s=[interval[0]+delta-drift,interval[1]+delta+drift])
+    frame=sensor_clock_bounds(frame,[interval[0]+delta-drift,interval[1]+delta+drift])
   try:t,u,boot=self.front_clock.observe(frame)
   except ValueError:return
   backend=self.service.backend
@@ -152,6 +166,7 @@ class SharedCameraRig:
    self.front.append((t,u,anchor,boot,self.service.map_id))
  def _pose_at(self,t,u):
   cfg=self.config["rear"];backend=self.service.backend
+  if backend is None:return None
   with self.lock:rows=list(self.front)
   for a,b in zip(rows,rows[1:]):
    if a[0]<=t<=b[0] and b[0]-a[0]<=cfg.get("max_pose_gap_s",.6):
@@ -163,6 +178,36 @@ class SharedCameraRig:
     pose=interpolate_pose(A,B,(t-a[0])/(b[0]-a[0]))
     return pose,uncertainty
   return None
+ def _select_tracking_frame(self,captured,t,u,boot):
+  from dataclasses import replace
+  import cv2
+  epoch=(self.service.map_id,boot,self.config.get("revision"))
+  if epoch!=self.pending_epoch:
+   self.pending_rear.clear();self.last_front_check=None;self.pending_epoch=epoch
+  pair=self._pose_at(t,u)
+  if pair:
+   self.pending_rear.clear()
+   return captured,t,u,pair
+  # The GUI continues to publish the newest image. Keep compressed exposures
+  # only for matching to valid front poses that finish tracking later.
+  if captured.jpeg_bytes:
+   self.pending_rear.append((t,u,replace(captured,image=None)))
+  with self.lock:
+   watermark=self.front[-1][0] if self.front else None
+  if watermark is not None and watermark!=self.last_front_check:
+   self.last_front_check=watermark
+   previous=self.previous or {}
+   for when,uncertainty,old in reversed(self.pending_rear):
+    if when>watermark:continue
+    if previous.get("map_id")==epoch[0] and when<=previous["time"]:break
+    paired=self._pose_at(when,uncertainty)
+    if paired:
+     image=cv2.imdecode(np.frombuffer(old.jpeg_bytes,dtype=np.uint8),cv2.IMREAD_COLOR)
+     if image is not None:
+      while self.pending_rear and self.pending_rear[0][0]<=when:self.pending_rear.popleft()
+      self.delayed_pairs+=1
+      return replace(old,image=image),when,uncertainty,paired
+  return captured,t,u,None
  def _reload(self):
   stamp=self.path.stat().st_mtime_ns if self.path.exists() else None
   if stamp==self.stamp:return
@@ -198,6 +243,7 @@ class SharedCameraRig:
     if captured.image.shape[:2]!=(cal["height"],cal["width"]):raise ValueError("rear_calibration_size_mismatch")
     t,u,boot=self.rear_clock.observe(self._clock_metadata(captured.metadata))
     if boot!=self.source_epoch:self.previous=None;self.source_epoch=boot
+    captured,t,u,paired=self._select_tracking_frame(captured,t,u,boot)
     from image_preprocessing import preprocess_slam_image
     backend=self.service.backend
     policy=getattr(backend,"_active_preprocessing",{"mode":"none","version":1})
@@ -209,10 +255,6 @@ class SharedCameraRig:
      "sizes":np.float32([k.size for k in keypoints]),"angles":np.float32([k.angle for k in keypoints]),
      "frame_id":captured.metadata["frame_id"],"time":t,"clock_uncertainty_s":u,
      "mount_revision":self.config.get("revision",1),"map_id":self.service.map_id,"matches":[]}
-    paired=self._pose_at(t,u)
-    deadline=time.monotonic()+cfg.get("max_pose_gap_s",.6)
-    while paired is None and not self.stop.is_set() and time.monotonic()<deadline:
-     self.stop.wait(.01);paired=self._pose_at(t,u)
     backend=self.service.backend
     if backend is None:self.error="shared_backend_unavailable";continue
     # Match only landmarks belonging to the ONE existing native map.
@@ -257,7 +299,7 @@ class SharedCameraRig:
      "map_revision":self.service.revision,"frame_id":current["frame_id"],"localization":{
       "valid":True,"T_map_camera":current["pose"].tolist(),"units":"arbitrary","scale_status":"shared_front_map"},
      "clock_uncertainty_s":u,"rig_revision":current["mount_revision"],"added_points":result["added_points"],
-     "processed_monotonic_s":time.monotonic()}
+     "processed_monotonic_s":time.monotonic(),"capture_host_monotonic_s":t}
     if self.publisher:self.publisher.record_processed(captured,self.snapshot)
     self.previous=current;self.processed+=1;self.error=None
    except Exception as exc:
@@ -267,7 +309,7 @@ class SharedCameraRig:
   return {"map_id":self.service.map_id,"map_ownership":"existing_front_backend_same_native_Map",
    "enabled":self.config["rear"]["enabled"],"worker_thread":self.thread.name if self.thread else None,
    "alive":bool(self.thread and self.thread.is_alive()),"processed_frames":self.processed,
-   "skipped_frames":self.skipped,"error":self.error,"camera":self.camera.status() if self.camera else None,
+   "skipped_frames":self.skipped,"delayed_pose_pairs":self.delayed_pairs,"front_pose_samples":len(self.front),"error":self.error,"camera":self.camera.status() if self.camera else None,
    "sensor_rig":self.service.lidar.config if getattr(self.service,"lidar",None) else None,
    "sensor_push":self.sensors.status(),"live_camera":self.publisher.status() if self.publisher else None,
    "configuration":copy.deepcopy(self.config),"clock_sync":"boot_scoped_device_capture_to_shared_host_monotonic"}
@@ -284,7 +326,7 @@ class SharedCameraRig:
    return {"availability":"available","camera_id":"rear","map_id":self.service.map_id,
     "frame":{"frame_id":captured.metadata["frame_id"],"metadata":captured.metadata,
      "mime_type":"image/jpeg","encoding":"base64","data":base64.b64encode(jpeg).decode()}}
-  if snapshot and time.monotonic()-snapshot.get("processed_monotonic_s",0)>self.service.config.get("freshness_threshold_s",2.):
+  if snapshot and time.monotonic()-snapshot.get("capture_host_monotonic_s",snapshot.get("processed_monotonic_s",0))>self.service.config.get("freshness_threshold_s",2.):
    snapshot["availability"]="unavailable";snapshot["localization"]["valid"]=False;snapshot["reason"]="rear_pose_stale"
   return snapshot or {"availability":"unavailable","camera_id":"rear","map_id":self.service.map_id,
                       "reason":self.error or "rear_tracking_not_ready"}
