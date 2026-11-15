@@ -544,9 +544,14 @@ class VisionService:
         self._pending_changes = list(combined.values())
         if self._pending_changes:
             previous = self.revision
+            metadata={"session_id":self.session_id}
+            birth=getattr(getattr(self,"backend",None),"_native_birth",None)
+            if birth and getattr(self.backend,"_map_id",None)==self.map_id:
+                metadata.update(units="m",scale_status="metric",scale_source="native_lidar",scale_m_per_map_unit=1.,
+                    mapping_sources=["visual_features","capture_clock_ahrs","four_mounted_sonars","front_lidar","rear_lidar"],
+                    native_lidar_initialization=birth)
             update = self.store.apply_map_update(
-                self.map_id, self.revision, self._pending_changes, reason=reason,
-                metadata={"session_id": self.session_id})
+                self.map_id, self.revision, self._pending_changes, reason=reason,metadata=metadata)
             self.revision = update["revision"] if isinstance(update, dict) else int(update)
             self.live_maps.publish(self.map_id, previous, self.revision, self._pending_changes)
             self._pending_changes.clear()
@@ -612,6 +617,8 @@ class VisionService:
                 attitude_prior = self.pose_estimator.prior(frame, self.map_id)
                 if hasattr(self.backend, "set_orientation_prior"):
                     self.backend.set_orientation_prior(attitude_prior)
+                if getattr(self,"lidar",None) is not None and hasattr(self.backend,"set_lidar_observation"):
+                    self.backend.set_lidar_observation(self.lidar.for_camera(frame,"front",self.calibration))
                 result = self.backend.track(captured.image, frame_id, measurement_time)
                 result["localization"] = self.pose_estimator.fuse(
                     result.get("localization") or unknown_localization("unavailable"), attitude_prior)
@@ -1768,4 +1775,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
-
