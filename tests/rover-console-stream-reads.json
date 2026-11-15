@@ -25,6 +25,16 @@
     ],
     "path": [
       "ahrs",
+      "availability"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "ahrs",
       "boot_id"
     ]
   },

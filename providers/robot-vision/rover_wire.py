@@ -32,6 +32,10 @@ def public_data(value):
 def envelope(metadata, resource):
     """Bind private route annotations to the leased public resource at egress."""
     value = public_data(metadata)
+    # Older readers consume the same AHRS availability field as robot.ahrs.snapshot.
+    ahrs = value.get("ahrs")
+    if isinstance(ahrs, dict) and isinstance(ahrs.get("state"), str):
+        ahrs.setdefault("availability", ahrs["state"])
     tof = value.get("tof")
     if isinstance(tof, dict) and isinstance(tof.get("camera"), str) and NETWORK.search(metadata["tof"]["camera"]):
         tof["camera"] = resource
