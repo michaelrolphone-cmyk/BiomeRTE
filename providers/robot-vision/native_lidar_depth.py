@@ -89,14 +89,16 @@ def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None, images=None):
             if m.trainIdx not in unique or unique[m.trainIdx][0]>m.distance:
                 unique[m.trainIdx]=(m.distance,int(measured[m.queryIdx]))
     associations={target:source for target,(_,source) in unique.items()}
-    if images is not None and len(associations)<60:
-        flow=flow_matches(ref,cur,*images,measured)
-        used=set(associations.values())
-        for target,source in flow.items():
-            if target not in associations and source not in used:
-                associations[target]=source
-                used.add(source)
-        stats['flow_verified_matches']=len(associations)-len(unique)
+    fitted=fit_correspondences(ref,cur,ref_zones,cur_zones,associations,stats)
+    if fitted is not None or images is None:
+        return fitted
+    flow=flow_matches(ref,cur,*images,measured)
+    stats['flow_verified_matches']=len(flow)
+    if len(flow)<18:return
+    return fit_correspondences(ref,cur,ref_zones,cur_zones,flow,stats)
+
+
+def fit_correspondences(ref,cur,ref_zones,cur_zones,associations,stats):
     b=np.array(list(associations),dtype=int)
     a=np.array(list(associations.values()),dtype=int)
     keep = ref.depths[a]>0
