@@ -36,3 +36,24 @@ class RearPreviewTest(unittest.TestCase):
         self.assertEqual(data['frame_id'],packet['frame_id'])
         self.assertEqual(data['processing_state'],'awaiting_capture_clock')
         self.assertEqual(body,b'jpeg')
+
+class RearSocketLivenessTest(unittest.IsolatedAsyncioTestCase):
+    async def test_clock_and_sensor_traffic_keep_the_same_connection(self):
+        from rear_transport_preview import messages_with_idle_recovery
+        async def readings():
+            for msg in ('clock','telemetry','clock','jpeg'):
+                yield msg
+        self.assertEqual([m async for m in messages_with_idle_recovery(readings(),1.)],
+                         ['clock','telemetry','clock','jpeg'])
+
+    async def test_silent_socket_is_released_for_reconnect(self):
+        import asyncio
+        from rear_transport_preview import messages_with_idle_recovery
+        class Silent:
+            transport=Mock()
+            def __aiter__(self):return self
+            async def __anext__(self):await asyncio.Event().wait()
+        socket=Silent()
+        with self.assertRaisesRegex(ConnectionError,'stopped providing'):
+            async for _ in messages_with_idle_recovery(socket,.01):pass
+        socket.transport.abort.assert_called_once()
