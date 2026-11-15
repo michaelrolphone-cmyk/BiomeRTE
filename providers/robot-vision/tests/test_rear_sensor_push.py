@@ -20,7 +20,8 @@ def packet(sequence=1,boot="boot-a",tick=1000000):
 def rig(path):
     output=[]
     service=SimpleNamespace(state_dir=Path(path),map_id="ONE-MAP",revision=7,session_id="same-session",
-                            live_frames=SimpleNamespace(publish=lambda meta,jpeg:output.append((meta,jpeg))),
+                            live_frames=SimpleNamespace(publish=lambda *args:(_ for _ in ()).throw(AssertionError("rear telemetry entered front stream"))),
+                            rear_live_frames=SimpleNamespace(publish=lambda meta,jpeg:output.append((meta,jpeg))),
                             backend=object(),ahrs=object())
     value=SimpleNamespace(service=service,config={"rear":{"camera":{"url":""}}})
     return value,output

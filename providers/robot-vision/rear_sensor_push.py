@@ -87,7 +87,9 @@ class RearSensorIngress:
         self.rig=rig
         self.service=rig.service
         self.stop=threading.Event()
-        self.thread=self.scheduler=None
+        self.thread=self.scheduler=self.device_thread=None
+        self.clock_snapshot=None
+        self.device_error=None
         self.loop=None
         self.config=None
         self.error=None
@@ -116,6 +118,9 @@ class RearSensorIngress:
         if self.config and not self.thread:
             self.thread=threading.Thread(target=self._run,name="rear-sensor-websocket",daemon=True)
             self.thread.start()
+            if self.config.get("gateway_host"):
+                self.device_thread=threading.Thread(target=self._configure_device,name="rear-device-setup",daemon=True)
+                self.device_thread.start()
             if self.config.get("ftm_peers"):
                 self.scheduler=threading.Thread(target=self._range,name="rear-ftm-schedule",daemon=True)
                 self.scheduler.start()
@@ -148,8 +153,46 @@ class RearSensorIngress:
             "session_id":self.service.session_id,
             "lidar":packet.get("lidar"),"ftm":packet.get("ftm"),
             "ftm_responder":packet.get("ftm_responder"),"uart":packet.get("uart")}
-        self.service.live_frames.publish(metadata,b"")
+        self.service.rear_live_frames.publish(metadata,b"")
         self.error=None
+
+    def capture_interval(self,packet,received):
+        with self.lock:
+            snapshot=self.clock_snapshot
+        if not snapshot or packet.get("receiver_id")!=self.config["receiver_id"] or packet.get("boot_id")!=snapshot[0]:
+            return None
+        boot,bounds,observed=snapshot
+        drift=abs(received-observed)*.0001
+        tick=packet["capture_monotonic_us"]/1e6
+        lower,upper=tick+bounds[0]-drift,tick+bounds[1]+drift
+        if lower>received or upper<lower:return None
+        return [lower,min(upper,received)]
+
+    def _configure_device(self):
+        from camera_telemetry import CameraHTTPClient
+        attempted=None
+        while not self.stop.is_set():
+            with self.lock:
+                snapshot=self.latest
+            if snapshot and time.monotonic()-snapshot["received"]<3:
+                self.stop.wait(2)
+                continue
+            try:
+                client=CameraHTTPClient(self.rig.config["rear"]["camera"],{"network_timeout_s":2.})
+                status=client._request("/api/rear")
+                if status.get("receiver_id")!=self.config["receiver_id"] or status.get("camera_id")!="rear":
+                    raise ValueError("rear_device_identity_mismatch")
+                boot=status["boot_id"]
+                stream=client._request("/api/telemetry/stream")
+                desired={"host":self.config["gateway_host"],"port":self.config.get("port",9878),"token":self.config["token"]}
+                mismatch=not stream.get("configured") or stream.get("host")!=desired["host"] or stream.get("port")!=desired["port"]
+                if mismatch or attempted!=boot:
+                    client._request("/api/telemetry/stream",body=json.dumps(desired).encode())
+                    attempted=boot
+                self.device_error=None
+            except Exception as exc:
+                self.device_error=type(exc).__name__+":"+str(exc)[:100]
+            self.stop.wait(2)
 
     async def serve(self):
         from websockets.asyncio.server import serve
@@ -178,8 +221,14 @@ class RearSensorIngress:
                         if sent is not None:
                             clock.observe(packet["boot_id"],sent,received,
                                 packet["received_monotonic_us"],packet["served_monotonic_us"])
+                            with self.lock:self.clock_snapshot=(clock.boot,tuple(clock.bounds),clock.observed)
                         continue
                     validate_packet(packet,self.config["receiver_id"])
+                    peer=getattr(socket,"remote_address",None)
+                    if peer and not getattr(socket,"_route_registered",False):
+                        from device_routes import DeviceRoutes
+                        DeviceRoutes(self.rig.service.state_dir/"device-routes.sqlite3").observe(packet["receiver_id"],peer[0],{"kind":"camera"})
+                        socket._route_registered=True
                     interval=clock.capture_interval(packet,received)
                     self.publish(packet,interval,received)
                     await socket.send(json.dumps({"type":"ack","boot_id":packet["boot_id"],
@@ -241,13 +290,13 @@ class RearSensorIngress:
             latest=copy.deepcopy(self.latest)
         now=time.monotonic()
         return {"configured":self.config is not None,"packets":self.packets,"gaps":self.gaps,
-            "error":self.error,"ranging_error":self.ranging_error,
+            "error":self.error,"ranging_error":self.ranging_error,"device_setup_error":self.device_error,
             "worker_alive":bool(self.thread and self.thread.is_alive()),
             "last_receive_age_s":None if latest is None else now-latest["received"],
             "latest":latest,"camera_id":"rear"}
 
     def close(self):
         self.stop.set()
-        for thread in (self.thread,self.scheduler):
+        for thread in (self.thread,self.scheduler,self.device_thread):
             if thread:
                 thread.join(timeout=3)

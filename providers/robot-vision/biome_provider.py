@@ -53,13 +53,8 @@ def contract_definitions():
          "Localization and spatial evidence with explicit availability, quality and unknown coverage."),
         ("robot.vision.metadata", {}, "Camera and body metadata; robot.camera.light.set:1 illuminates the view for driving. Capture timestamps are first-DMA events, not calibrated exposure start/midpoint/end."),
         ("robot.vision.status", {}, "Camera, transport, decoding, inference and provider health."),
-        ("robot.radio.status", {"include_observations": field("bool")},
-         "Cached camera radio telemetry, model learning, freshness and coarse localization health."),
-        ("robot.radio.localize", {},
-         "Current radio location hypotheses; heuristic support only, not a visual pose or navigation permission."),
-        ("robot.map.radio.read", {"map_id": field("str"), "revision": field("int"),
-                                  "cursor": field("str"), "limit": field("int"), "source_id": field("str")},
-         "Bounded learned Wi-Fi/BLE signal distributions resolved through current or revision-pinned map anchors."),
+        ("robot.tof.status", {}, "FTM anchor health and fresh ranging evidence; qualification and missing geometry remain explicit."),
+        ("robot.tof.localize", {}, "Current ToF position solution or explicit unavailable status; no unqualified navigation authority."),
         ("robot.camera.light.status", {},
          "Read authenticated camera light command/driver state; physical readback remains as reported."),
         ("robot.camera.light.set", {"on": field("bool"), "brightness": field("int"), "rgb": field("list")},
@@ -123,7 +118,7 @@ def contract_definitions():
          "Read a revision-pinned metric map view with explicit qualification and stale-state reporting."),
     ]
     definitions = [dict(name=name, version=1, description=description, inputs=inputs,
-                        outputs={"result": "obj"}, synchronous=False) for name, inputs, description in specs]
+                        outputs={"result": "obj"}) for name, inputs, description in specs]
     # Existing v1 contracts remain unchanged; v2 adds explicit camera selection.
     for original in list(definitions):
         if original["name"] in ("robot.vision.frame","robot.vision.snapshot","robot.vision.geometry"):
@@ -496,7 +491,7 @@ def serve(cfg):
     remote = Remote(cfg)
     from leased_streams import VisionStreams
     live_streams = VisionStreams(remote, cfg["socket"], cfg.get("stream_local_router_url"),
-                                 sequence_path=worker_state / "stream-sequences.sqlite")
+                                 sequence_path=worker_state / "stream-sequences.sqlite",rear_resource=cfg["resource"]+".rear")
     client = VisionClient(cfg["socket"], cfg.get("health_timeout_seconds", 5))
     local = worker_offers(cfg)
     with open(worker_state / "worker.lock", "a") as lock:
@@ -514,13 +509,14 @@ def serve(cfg):
             stopping.set()
 
         def advertise():
+            retired_withdrawn=set()
             relay_metadata_published = False
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
                 try:
                     try:
-                        status = client.query("robot.vision.status", {})
+                        status = client.query("robot.vision.status", {"provider_only": True})
                         ready = supported_contracts(status)
                     except ServiceError as error:
                         # A busy/late health reply is unknown, not provider loss.
@@ -539,7 +535,16 @@ def serve(cfg):
                     remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
                         "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
                     if stopping.is_set():return
+                    # Withdraw the retired RSSI/BLE implementations before advertising ToF.
+                    for retired in {"robot.radio.status:1","robot.radio.localize:1","robot.map.radio.read:1"}-retired_withdrawn:
+                        remote.call("cap.offer",dict(provider=cfg["provider"],contract=retired,
+                            resource=cfg["resource"],service="robot-vision",capacity=cfg["slots"],state="offline"))
+                        retired_withdrawn.add(retired)
                     remote.call("cap.offer", stream_offer(cfg, status))
+                    rear_offer=stream_offer(cfg,status);rear_offer["resource"]=cfg["resource"]+".rear"
+                    rear_offer["configuration"]["camera_id"]="rear"
+                    if not status.get("streaming",{}).get("rear_enabled"):rear_offer["state"]="offline"
+                    remote.call("cap.offer",rear_offer)
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
@@ -576,6 +581,8 @@ def serve(cfg):
             try:
                 try:
                     remote.call("cap.offer", stream_offer(cfg, {}))
+                    rear_offer=stream_offer(cfg,{});rear_offer["resource"]=cfg["resource"]+".rear"
+                    remote.call("cap.offer",rear_offer)
                 except Exception:
                     pass
                 for contract in sorted(defined):

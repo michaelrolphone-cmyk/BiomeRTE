@@ -40,11 +40,12 @@ def exact(source,size):
 
 
 class VisionStreams:
-    def __init__(self,remote,socket_path,local_router_url=None,sequence_path=None):
+    def __init__(self,remote,socket_path,local_router_url=None,sequence_path=None,rear_resource=None):
         from biomerte.stream_inspection import loopback_url
         self.local_router_url=loopback_url(local_router_url)
         from stream_sequences import StreamSequences
         self.sequences=StreamSequences(sequence_path)
+        self.rear_resource=rear_resource
         self.remote=remote
         self.socket_path=socket_path
         self.running={}
@@ -80,22 +81,22 @@ class VisionStreams:
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
-                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
+                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_size=None,max_queue=1,write_limit=65536) as wire:
                     stage='local_feed'
                     if stop.is_set():return
                     local=LocalConnection(self.socket_path)
                     self.connections[key]=local
                     if stop.is_set():return
-                    await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))
+                    await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else '/rear' if grant.get('resource')==self.rear_resource and self.rear_resource else ''))
                     response=await asyncio.to_thread(local.getresponse)
                     if response.status!=200:raise RuntimeError('live_feed_unavailable')
                     while not stop.is_set():
                         stage='local_read'
                         header=await asyncio.to_thread(exact,response,4)
                         size=struct.unpack('!I',header)[0]
-                        if not 4<=size<=4194304:raise ValueError('live_frame_size')
+                        if size<4:raise ValueError('live_frame_size')
                         value=await asyncio.to_thread(exact,response,size)
-                        metadata,image=decode(value,4194304)
+                        metadata,image=decode(value)
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue

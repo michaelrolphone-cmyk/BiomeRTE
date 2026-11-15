@@ -95,7 +95,7 @@ class SharedCameraRig:
  def __init__(self,service):
   self.service=service;self.path=service.state_dir/"camera-rig.json"
   self.lock=threading.RLock();self.stop=threading.Event();self.thread=None
-  self.camera=None;self.latest=None;self.error=None;self.processed=0;self.skipped=0
+  self.publisher=None;self.camera=None;self.latest=None;self.error=None;self.processed=0;self.skipped=0
   self.front_clock=CaptureClock();self.rear_clock=CaptureClock();self.front=deque(maxlen=128)
   self.config=validate(json.loads(self.path.read_text())) if self.path.exists() else copy.deepcopy(DEFAULT)
   self.stamp=None;self.previous=None;self.source_epoch=None;self.snapshot=None
@@ -109,8 +109,34 @@ class SharedCameraRig:
   if self.thread is None:
    self.thread=threading.Thread(target=self._run,name="slam-rear-tracking",daemon=True);self.thread.start()
   return self
+ def _raw_metadata(self,captured,previous):
+  packet=captured.metadata.get("sensor_packet") or {}
+  same=previous.get("frame_id")==captured.metadata["frame_id"] and previous.get("map_id")==self.service.map_id
+  pose=copy.deepcopy(previous.get("localization")) if same else None
+  pose=pose or {"valid":False,"reason":self.error or "rear_processing_pending"}
+  return dict(captured.metadata,camera_id="rear",source_id="rear-camera",
+   map_id=self.service.map_id,map_revision=self.service.revision,session_id=self.service.session_id,
+   image_available=True,camera_delivery="independent_rear_capture",
+   processed_monotonic=captured.decoded_monotonic,processed_monotonic_basis="camera_receive_decode_time",
+   processing_state="complete" if same else "pending",pose=pose,
+   analysis={key:previous.get(key) for key in ("frame_id","map_id","map_revision","localization","processed_monotonic_s")},
+   sensor_packet=packet,lidar=packet.get("lidar"),ftm=packet.get("ftm"),uart=packet.get("uart"),
+   rig_revision=self.config.get("revision"),T_front_camera_rear_camera_m=self.config["rear"]["T_front_camera_rear_camera_m"])
+ def _clock_metadata(self,metadata):
+  interval=self.sensors.capture_interval(metadata.get("sensor_packet") or {},time.monotonic())
+  if interval is None:return metadata
+  return dict(metadata,capture_host_monotonic_interval_s=interval)
+
  def observe_front(self,frame,localization):
   if not localization.get("valid"):return
+  tick=getattr(getattr(self.service,"sensor_ticks",None),"_push_snapshot",None)
+  if tick:
+   packet,interval=tick
+   source=frame.get("sensor_packet") or {}
+   if all(source.get(key)==packet.get(key) for key in ("receiver_id","boot_id")) and type(source.get("capture_monotonic_us")) is int:
+    delta=(source["capture_monotonic_us"]-packet["capture_monotonic_us"])/1e6
+    drift=abs(delta)*.0001
+    frame=dict(frame,capture_host_monotonic_interval_s=[interval[0]+delta-drift,interval[1]+delta+drift])
   try:t,u,boot=self.front_clock.observe(frame)
   except ValueError:return
   backend=self.service.backend
@@ -138,18 +164,23 @@ class SharedCameraRig:
   if stamp==self.stamp:return
   value=validate(json.loads(self.path.read_text())) if stamp else copy.deepcopy(DEFAULT)
   if self.camera:self.camera.close();self.camera=None
+  if self.publisher:self.publisher.close();self.publisher=None
   self.config=value;self.stamp=stamp;self.previous=None;self.front.clear();self.rear_clock=CaptureClock()
   rear=value["rear"]
   if rear["enabled"]:
    from camera_source import CameraSource
    self.camera=CameraSource(rear["camera"]).start()
+   from live_camera import LiveCamera
+   self.publisher=LiveCamera(self.camera,self.service.rear_live_frames,self._raw_metadata).start()
+   self.publisher._thread.name="rear-live-camera"
  def _run(self):
   import cv2
-  orb=None;sequence=0;feature_count=None
+  orb=None;sequence=0;feature_count=None;camera_source=None
   while not self.stop.is_set():
    try:
     self._reload()
     if not self.camera:self.stop.wait(.2);continue
+    if self.camera is not camera_source:sequence=0;camera_source=self.camera
     captured=self.camera.next_frame(sequence,timeout=.2)
     if captured is None:continue
     self.skipped+=max(0,captured.sequence-sequence-1);sequence=captured.sequence
@@ -161,7 +192,7 @@ class SharedCameraRig:
     if feature_count!=cfg.get("num_features",1600):
      feature_count=cfg.get("num_features",1600);orb=cv2.ORB_create(nfeatures=feature_count)
     if captured.image.shape[:2]!=(cal["height"],cal["width"]):raise ValueError("rear_calibration_size_mismatch")
-    t,u,boot=self.rear_clock.observe(captured.metadata)
+    t,u,boot=self.rear_clock.observe(self._clock_metadata(captured.metadata))
     if boot!=self.source_epoch:self.previous=None;self.source_epoch=boot
     keypoints,des=orb.detectAndCompute(captured.image,None)
     if des is None or len(keypoints)<12:self.error="rear_features_insufficient";continue
@@ -216,6 +247,7 @@ class SharedCameraRig:
       "valid":True,"T_map_camera":current["pose"].tolist(),"units":"arbitrary","scale_status":"shared_front_map"},
      "clock_uncertainty_s":u,"rig_revision":current["mount_revision"],"added_points":result["added_points"],
      "processed_monotonic_s":time.monotonic()}
+    if self.publisher:self.publisher.record_processed(captured,self.snapshot)
     self.previous=current;self.processed+=1;self.error=None
    except Exception as exc:
     self.previous=None
@@ -225,7 +257,7 @@ class SharedCameraRig:
    "enabled":self.config["rear"]["enabled"],"worker_thread":self.thread.name if self.thread else None,
    "alive":bool(self.thread and self.thread.is_alive()),"processed_frames":self.processed,
    "skipped_frames":self.skipped,"error":self.error,"camera":self.camera.status() if self.camera else None,
-   "sensor_push":self.sensors.status(),
+   "sensor_push":self.sensors.status(),"live_camera":self.publisher.status() if self.publisher else None,
    "configuration":copy.deepcopy(self.config),"clock_sync":"boot_scoped_device_capture_to_shared_host_monotonic"}
  def query(self,operation,inputs):
   with self.lock:captured=self.latest;snapshot=copy.deepcopy(self.snapshot)
@@ -248,4 +280,5 @@ class SharedCameraRig:
   self.sensors.close()
   self.stop.set()
   if self.camera:self.camera.close()
+  if self.publisher:self.publisher.close()
   if self.thread:self.thread.join()
