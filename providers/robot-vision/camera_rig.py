@@ -173,7 +173,10 @@ class SharedCameraRig:
   rear=value["rear"]
   if rear["enabled"]:
    from camera_source import CameraSource
-   self.camera=CameraSource(rear["camera"]).start()
+   config=dict(rear["camera"])
+   if self.sensors.config and config.get("device_id")==self.sensors.config.get("receiver_id"):
+    config.setdefault("capture_transport","websocket_push")
+   self.camera=CameraSource(config).start()
    from live_camera import LiveCamera
    self.publisher=LiveCamera(self.camera,self.service.rear_live_frames,self._raw_metadata).start()
    self.publisher._thread.name="rear-live-camera"
