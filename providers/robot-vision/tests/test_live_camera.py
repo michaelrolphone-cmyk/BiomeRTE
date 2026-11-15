@@ -104,6 +104,9 @@ class LiveCameraTests(unittest.TestCase):
                         captured = frame(1)
                         camera.offer(captured)
                         meta, jpeg = unpack(inbox.get(timeout=1))
+                        while meta.get('type') == 'sensor_manifest':
+                            self.assertEqual(jpeg, b'')
+                            meta, jpeg = unpack(inbox.get(timeout=1))
                         self.assertEqual(meta['frame_id'], 'capture:1')
                         self.assertEqual(jpeg, captured.jpeg_bytes)
                         self.assertFalse(meta['pose']['valid'])
