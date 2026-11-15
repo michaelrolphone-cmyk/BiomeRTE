@@ -121,6 +121,31 @@ class SurveyLidarLandmarks:
         self.last_scan=(packet["frame_id"],eligible)
         self.status={'world_id':key[0],'landmarks':len(self.finished),'zero_id':zero['id']}
 
+    def depth_at_verified_start(self,sensor,rig_revision,frame_interval):
+        """Return the saved survey depth only for a currently witnessed revisit to this zero."""
+        wall=time.time()
+        snapshot=self.current(wall)
+        if not snapshot or frame_interval is None or len(frame_interval)!=2:return
+        nav,survey,zero,published=snapshot
+        pose=nav.get('world_body_pose') or {}
+        t=wall-time.monotonic()+sum(frame_interval)/2
+        if not (0<=wall-published<2.5 and 0<=wall-t<1.5 and t>=zero['at']
+                and nav.get('state')=='stationary' and (nav.get('stationary_reference') or {}).get('imu_quiet')
+                and pose.get('world_id')==survey['world_id']==zero['world_id']==self.atlas.world_id
+                and pose.get('survey_zero_id')==zero['id'] and abs(t-pose.get('attitude_observed_at',0))<1.5):return
+        known=np.asarray(survey['reference']['T_enu_body'])
+        p=np.asarray(pose.get('position_enu_m'),float);R=np.asarray(pose.get('rotation_enu_body'),float)
+        if p.shape!=(3,) or R.shape!=(3,3) or np.linalg.norm(p-known[:3,3])>.015 or np.trace(R.T@known[:3,:3])<1+2*np.cos(np.deg2rad(3)):return
+        prefix=f"survey-lidar:{survey['survey_revision']}:{rig_revision}:{sensor}:"
+        with self.atlas.lock:
+            records=[json.loads(v) for v, in self.atlas.db.execute(
+                "SELECT data FROM survey_lidar_landmarks WHERE id LIKE ?",(prefix+'%',))]
+        if not records:return
+        rows=[r for r in records if r.get('zero_id')==zero['id'] and r.get('samples',0)>=6]
+        if len(rows)<4:return
+        return rows,dict(world_id=survey['world_id'],zero_id=zero['id'],survey_revision=survey['survey_revision'],
+                         T_enu_map=survey['reference']['T_enu_camera'])
+
     def visual_depths(self, frame_id, row):
         """Independent repeat observations at the known viewpoint constrain native map scale."""
         if not self.last_scan or self.last_scan[0]!=frame_id or row['sensor_id'] not in self.last_scan[1]:
