@@ -18,6 +18,7 @@ class Rover:
         self.closed = False
         self.tasks = []
         self.map_head = None
+        self.bootstrap = {}
 
     async def call(self, operation, **args):
         return await asyncio.to_thread(self.remote.call, operation, args)
@@ -27,6 +28,11 @@ class Rover:
         # The HTTP adapter authenticates the browser before this call.
         queues = {lane: asyncio.Queue(1 if lane != 'map' else 8)
                   for lane in ('vision', 'map', 'control')}
+        from .vision_mailbox import VisionMailbox
+        queues['vision'] = VisionMailbox(allow_legacy=True)
+        for kind in ('sensor_manifest', 'world_snapshot'):
+            if kind in self.bootstrap:
+                queues['vision'].put_nowait(self.bootstrap[kind])
         record = id(queues)
         member = (record, queues)
         self.browsers.add(record)
@@ -43,7 +49,17 @@ class Rover:
 
     def broadcast(self, lane, message):
         if lane in ('vision', 'map'):
-            metadata, unused = decode(message, 4194304)
+            metadata, unused = decode(message)
+            if lane == 'vision' and metadata.get('type') in ('sensor_manifest', 'world_snapshot'):
+                self.bootstrap[metadata['type']] = message
+            if metadata.get('type') == 'world_snapshot':
+                for queues in getattr(self, '_queues', {}).values():
+                    if lane == 'map':
+                        if queues[lane].full():queues[lane].get_nowait()
+                        queues[lane].put_nowait(message)
+                    else:
+                        queues[lane].put_nowait(message)
+                return
             revision = metadata.get('map_revision') if lane == 'vision' else metadata.get('revision')
             identity = metadata.get('map_id')
             if isinstance(identity, str) and type(revision) is int and revision >= 0:
@@ -112,6 +128,7 @@ class Rover:
                     self.descriptors.pop(contract, None)
                     if descriptor is not None and 'map' in descriptor.get('lanes', []):
                         self.map_head = None
+                        self.bootstrap.clear()
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
                 if descriptor is not None:
                     try:
@@ -148,7 +165,7 @@ class Rover:
     async def lane(self, descriptor, lane):
         from websockets.asyncio.client import connect
         headers={'Authorization':'Stream '+descriptor['attachment_credential']}
-        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_queue=1,write_limit=65536) as socket:
+        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_queue=1,write_limit=65536,**({'max_size':None} if lane in ('vision','map') else {})) as socket:
             if lane=='control':
                 self.discard_intent()
                 self.control_ready=not self.require_provider_ready
@@ -178,7 +195,10 @@ class Rover:
                                 self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
                             continue
                     if lane=='map':
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message)
+                        if metadata.get('type')=='world_snapshot':
+                            self.broadcast(lane, message)
+                            continue
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:
                             self.broadcast('map',json.dumps({'type':'snapshot_required','map_id':metadata.get('map_id'),
                                                            'revision':metadata.get('revision')}))

@@ -52,7 +52,7 @@ CAPABILITIES = [
     "robot.tof.status", "robot.tof.localize",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
-] + ["robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
+] + ["robot.vision.schemas", "robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
 LOG = logging.getLogger("robot-vision")
 
 
@@ -69,7 +69,9 @@ class VisionService:
                  ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
         from dual_camera_feed import DualCameraFrames,RearCameraFrames
-        self.live_frames = DualCameraFrames()
+        from sensor_inventory import SensorInventory
+        self.inventory = SensorInventory()
+        self.live_frames = DualCameraFrames(self.inventory.observe)
         self.rear_live_frames = RearCameraFrames(self.live_frames)
         self.motion_events = MotionEvents(config.get('motion_events'))
         from drive_response import CaptureDriveResponseMonitor
@@ -1271,6 +1273,9 @@ class VisionService:
 
     def query(self, operation, inputs=None):
         inputs = inputs or {}
+        if operation == "robot.vision.schemas":
+            from rover_wire import catalog
+            return catalog(inputs.get("schema"))
         rig = getattr(self,"camera_rig",None)
         if rig is not None:
             if operation=="robot.vision.rig.status":return rig.status()
@@ -1458,6 +1463,14 @@ class VisionService:
                         if evidence:
                             evidence["age_s"] = max(0., time.monotonic()-evidence["sample_monotonic_s"])
                         page["map"]["metadata"]["survey_grid_observation"] = evidence
+            attitude_file = self.state_dir / "attitude-world-reference.json"
+            try:
+                attitude = json.loads(attitude_file.read_text())
+            except (FileNotFoundError, ValueError):
+                attitude = {}
+            if (attitude.get("schema") == "rover.attitude.world-reference/1" and
+                    attitude.get("world_id") == page["map"]["map_id"]):
+                page["map"]["metadata"]["attitude_world_reference"] = attitude
             from stream_telemetry import complete_world_registration
             complete_world_registration(page)
             return page

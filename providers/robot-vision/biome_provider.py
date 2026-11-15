@@ -35,6 +35,7 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.vision.schemas", {"schema":field("str")}, "Discover the public rover stream schemas and their versions. Omit schema for the entire catalog."),
         ("robot.vision.rig.status", {}, "Read shared-map front/rear tracking, clock alignment and rig configuration."),
         ("robot.vision.rig.configure", {"configuration":field("obj",True)}, "Save and hot-reload rear-camera source, intrinsics and rigid mount without reflashing. Both views contribute to the existing shared map."),
         ("robot.camera.exposure.status", {}, "Read live camera auto-exposure, auto-gain and manual driver control values; first-DMA capture stamps are not calibrated photon exposure times."),

@@ -69,13 +69,15 @@ class Session:
         self.sequences = {}
         self.closed = False
         self.revisions = {}
+        self.sensor_manifest = None
         self.world_snapshot = None
         self.world_version = None
 
     def cache_world_snapshot(self, metadata, forwarded):
         world = metadata["data"]["map"]
         survey = world["metadata"].get("survey_baseline") or {}
-        version = (world["map_id"], world["revision"], survey.get("survey_revision"))
+        version = (world["map_id"], world["revision"], survey.get("survey_revision"),
+                   world["metadata"].get("attitude_world_reference"))
         changed = version != self.world_version
         self.world_version = version
         self.world_snapshot = forwarded
@@ -155,7 +157,11 @@ class Session:
                     or not isinstance(meta.get("frame_id"),str) or not meta.get("frame_id")
                     or payload not in (None,b"")):
                 raise Fault("Malformed sensor tick")
-        if lane == 'vision' and not ack and not sensor_tick:
+        manifest = lane == 'vision' and meta.get('type') == 'sensor_manifest'
+        if manifest and (meta.get('schema') != 'rover.sensor.manifest/1' or
+                         not isinstance(meta.get('revision'), str) or not isinstance(meta.get('sensors'), list) or payload):
+            raise Fault('Malformed sensor manifest')
+        if lane == 'vision' and not ack and not sensor_tick and not manifest:
             for field in ('frame_id', 'source_timestamp', 'processing_timestamp',
                           'calibration_revision', 'map_revision'):
                 if field not in meta:
@@ -322,6 +328,12 @@ class Router:
                 raise Fault('Stream subscription released', 403)
         delivery=grant.get('policies', {}).get(lane, grant['delivery'])
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
+        if role == 'server' and lane == 'vision' and grant.get('contract') == 'robot.vision.stream:1':
+            from .vision_mailbox import VisionMailbox
+            peer.queue = VisionMailbox()
+            for bootstrap in (session.sensor_manifest, session.world_snapshot):
+                if bootstrap is not None:
+                    peer.put(bootstrap)
         peer.consumer = grant.get('consumer') or (grant['lease'] if role == 'server' else '')
         session.peers[key] = peer
         if lane == 'map' and role == 'server' and session.world_snapshot is not None:
@@ -344,10 +356,14 @@ class Router:
                     meta, _ = session.check(role, lane, message, sender=identity)
                     if session.quarantined:continue
                     forwarded = session.forward(role, lane, message, identity)
+                    if lane == 'vision' and role == 'provider' and meta.get('type') == 'sensor_manifest':
+                        session.sensor_manifest = forwarded
                     if lane == 'map' and role == 'provider' and grant.get('contract') == 'robot.vision.stream:1':
                         if meta.get('type') == 'world_snapshot':
                             if not session.cache_world_snapshot(meta, forwarded):
                                 continue
+                            for target in session.peers_on('server', 'vision'):
+                                target.put(forwarded)
                     for other in session.peers_on('provider' if role == 'server' else 'server', lane):
                         try:
                             other.put(forwarded)

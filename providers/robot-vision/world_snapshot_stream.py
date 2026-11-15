@@ -44,7 +44,12 @@ class WorldSnapshotFeed:
             survey = stat.st_ino, stat.st_mtime_ns, stat.st_size
         except FileNotFoundError:
             survey = None
-        return map_id, revision, survey
+        try:
+            stat = (Path(self.service.state_dir) / "attitude-world-reference.json").stat()
+            attitude = stat.st_ino, stat.st_mtime_ns, stat.st_size
+        except FileNotFoundError:
+            attitude = None
+        return map_id, revision, (survey, attitude)
 
     def refresh(self):
         key = self.version()
@@ -62,6 +67,10 @@ class WorldSnapshotFeed:
     def run(self):
         while not self.stop.is_set():
             try:
+                if getattr(self.service, "inventory", None) is not None:
+                    manifest = self.service.inventory.snapshot(self.service)
+                    self.service.live_frames.publish_manifest(manifest)
+                    self.service.rear_live_frames.publish_manifest(manifest)
                 self.refresh()
             except Exception:
                 logging.getLogger(__name__).exception("World snapshot refresh deferred")

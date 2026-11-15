@@ -99,15 +99,19 @@ class VisionStreams:
                         metadata,image=decode(value)
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
-                        if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
+                        control = metadata.get('type') == 'sensor_manifest'
+                        live = grant['lane'] == 'vision' and not control
+                        if live and time.monotonic()-metadata['processed_monotonic']>1:continue
                         sequence=self.sequences.next(grant)
                         # Reserving a new range may wait for durable storage.
-                        if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
+                        if live and time.monotonic()-metadata['processed_monotonic']>1:continue
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
-                        if grant['lane']=='vision':
+                        if live:
                             metadata['type']=('sensor_tick' if metadata.get('sensor_tick') is True
                                               and metadata.get('image_available') is False else 'frame')
+                        from rover_wire import envelope
+                        metadata = envelope(metadata, grant['resource'])
                         stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:
