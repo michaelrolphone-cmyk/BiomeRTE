@@ -162,6 +162,24 @@ class LidarFusion:
             depth,zones=project_depth(points,mount,math.isqrt(raw["resolution"]),cal,transform)
             return dict(depth=depth,zones=zones,scan_id=":".join(map(str,identity)),rig_revision=revision,
                         skew_bound_s=error,sensor_id=name,map_id=self.service.map_id)
+        backend=getattr(self.service,"backend",None)
+        if (name=="front" and self.survey_landmarks and getattr(backend,"_state",None)=="initializing"
+                and not getattr(backend,"_native_birth",None) and not backend._geometry.get("keyframe_count")):
+            seed=self.survey_landmarks.depth_at_verified_start(name,revision,interval)
+            if seed:
+                rows,reference=seed
+                resolution=max(r["resolution"] for r in rows)
+                distances=[0.]*resolution;statuses=[0]*resolution
+                for r in rows:
+                    if r["resolution"]==resolution:
+                        distances[r["zone"]]=r["range_m"]*1000
+                        statuses[r["zone"]]=mount["valid_statuses"][0]
+                raw=dict(valid=True,resolution=resolution,distance_mm=distances,target_status=statuses,observed_monotonic_us=0)
+                points=zone_points(raw,mount,0)
+                depth,zones=project_depth(points,mount,math.isqrt(resolution),cal,mount["T_front_camera_sensor_m"])
+                return dict(depth=depth,zones=zones,scan_id="survey:"+reference["zero_id"]+":"+name,
+                            rig_revision=revision,skew_bound_s=None,sensor_id=name,map_id=self.service.map_id,
+                            survey_reference=reference)
         return None
 
     def observe_visual(self,frame,localization):
