@@ -469,7 +469,9 @@ def worker_offers(cfg):
 def stream_offer(cfg, status):
     """Advertise only a service that actually supplies both native live feeds."""
     live = status.get("streaming", {})
-    available = (status.get("state") in ("running", "starting") and
+    # The native data lanes remain available while the mapper rotates submaps
+    # or recovers its backend. Only the live endpoint owns stream readiness.
+    available = (status.get("state") not in ("stopping", "stopped") and
                  live.get("available") is True and
                  set(live.get("lanes", [])) >= {"vision", "map"})
     return dict(provider=cfg["provider"], contract="robot.vision.stream:1",
