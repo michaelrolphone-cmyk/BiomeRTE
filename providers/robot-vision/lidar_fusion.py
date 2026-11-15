@@ -96,6 +96,8 @@ class LidarFusion:
         self.config=validate_config(json.loads(self.path.read_text())) if self.path.exists() else defaults()
         self.stamp=None;self.lock=threading.RLock();self.event=threading.Event();self.stop=threading.Event()
         self.pending=None;self.latest=None;self.raw_latest=None;self.visual=deque(maxlen=128);self.scale=None;self.error=None
+        from local_lidar_slam import LocalLidarSlam
+        self.local_slam=LocalLidarSlam(service,self.survey_landmarks)
         self.scans = {name:deque(maxlen=64) for name in self.config["lidar"]}
         self.processed=0;self.dropped=0;self.last_key=None;self.thread=None
         self.db=sqlite3.connect(str(service.state_dir/"lidar-map.sqlite3"),check_same_thread=False)
@@ -207,9 +209,14 @@ class LidarFusion:
                 if A is not None and B is not None:return interpolate_pose(A,B,(t-a[0])/(b[0]-a[0]))
         return None
     def _run(self):
+        refresh=0.
         while not self.stop.is_set():
             self.event.wait(.2);self.event.clear()
             with self.lock:item=self.pending;self.pending=None
+            if self.survey_landmarks and time.monotonic()>=refresh:
+                refresh=time.monotonic()+2.
+                try:self.local_slam.bootstrap()
+                except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
             if not item:continue
             try:self.process(*item)
             except Exception as exc:self.error=type(exc).__name__+":"+str(exc)[:120]
@@ -233,6 +240,8 @@ class LidarFusion:
               "mounts_qualification":"provisional_until_owner_measurements","pose_available":False}
         if self.survey_landmarks is not None:
             self.survey_landmarks.observe(rows,packet,interval,self.config["revision"])
+            try:self.local_slam.observe(rows,packet,interval,map_id)
+            except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
         pose=self._pose(sum(interval)/2,map_id)
         # LiDAR arrives before the NEXT processed visual pose. Wait on this
         # independent worker for a causal bracket, while the ingress caches
@@ -329,6 +338,7 @@ class LidarFusion:
                 "latest":latest,"configuration":configuration,"scale":copy.deepcopy(self.scale),
                 "processed_scans":self.processed,"superseded_scans":self.dropped,"error":self.error,
                 "worker":"slam-lidar-fusion","same_native_map":True,
+                "local_lidar_slam":dict(self.local_slam.state),
                 "survey_landmarks":dict(self.survey_landmarks.status) if self.survey_landmarks else {}}
     def entities(self,map_id,revision=None):
         backend=self.service.backend
