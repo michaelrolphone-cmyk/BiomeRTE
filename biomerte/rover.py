@@ -23,6 +23,23 @@ class Rover:
     async def call(self, operation, **args):
         return await asyncio.to_thread(self.remote.call, operation, args)
 
+
+    async def read_capability(self, contract, inputs):
+        """Read through the same controller and capability used by agents."""
+        import uuid
+        operation = 'rover-view-' + uuid.uuid4().hex
+        args = dict(contract=contract, resource=self.resources['robot.vision.stream:1'],
+                    operation=operation, inputs=inputs)
+        await asyncio.to_thread(self.remote.call, 'cap.submit', args)
+        while True:
+            receipt = await asyncio.to_thread(self.remote.call, 'cap.status', {'operation':operation})
+            state = receipt.get('state')
+            if state == 'succeeded':
+                return receipt['result']['result']
+            if state in ('failed', 'denied', 'cancelled', 'abandoned', 'uncertain'):
+                raise RuntimeError('Capability read ' + state)
+            await asyncio.sleep(.25)
+
     @contextlib.asynccontextmanager
     async def subscribe(self):
         # The HTTP adapter authenticates the browser before this call.

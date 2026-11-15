@@ -35,6 +35,9 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.video.import.read", {"request": field("obj", True)}, "List recorded-video imports and available calibrations, or inspect a specific job."),
+        ("robot.video.import.write", {"request": field("obj", True)}, "Create, upload, finish, start or cancel a recorded-video import on the vision resource."),
+        ("robot.map.snapshot", {"map_id":field("str",True), "revision":field("int",True)}, "Complete revision-pinned local map in the same envelope delivered to the console."),
         ("robot.vision.schemas", {"schema":field("str")}, "Discover the public rover stream schemas and their versions. Omit schema for the entire catalog."),
         ("robot.vision.rig.status", {}, "Read shared-map front/rear tracking, clock alignment and rig configuration."),
         ("robot.vision.rig.configure", {"configuration":field("obj",True)}, "Save and hot-reload rear-camera source, intrinsics and rigid mount without reflashing. Both views contribute to the existing shared map."),
@@ -147,6 +150,7 @@ CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contrac
 
 
 MUTATING_CONTRACTS = frozenset({
+    "robot.video.import.write:1",
     "robot.vision.rig.configure:1",
     "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
@@ -369,6 +373,17 @@ def execute(action, cfg, remote, client=None):
     if not isinstance(inputs, dict):
         raise ServiceError("invalid_request", "Inputs must be an object.")
     operation = CONTRACTS[contract]["name"]
+    if operation in ("robot.video.import.read", "robot.video.import.write"):
+        from video_jobs import VideoJobs
+        request = inputs.get("request")
+        allowed = {"list", "status"} if operation.endswith(".read") else {"create", "chunk", "finish", "start", "cancel"}
+        if not isinstance(request, dict) or request.get("action") not in allowed:
+            raise ServiceError("invalid_request", "Unknown action for this video capability.")
+        try:
+            response = VideoJobs(cfg["state"]).handle(request)
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            response = {"ok": False, "error": {"code": "VIDEO_INPUT", "message": str(exc)[:500]}}
+        return {"result": response}
     requested = operation == "robot.vision.frame" or (
         operation == "robot.vision.snapshot" and inputs.get("include_frame") is True)
     client = client or VisionClient(cfg["socket"], cfg.get("query_timeout_seconds"))

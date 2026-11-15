@@ -1,5 +1,8 @@
 """Public identities and versioned envelopes for leased rover telemetry."""
 import re
+import json
+from functools import lru_cache
+from pathlib import Path
 
 CAPABILITY = "robot.vision.stream:1"
 SCHEMAS = {
@@ -33,18 +36,46 @@ def envelope(metadata, resource):
     if isinstance(tof, dict) and isinstance(tof.get("camera"), str) and NETWORK.search(metadata["tof"]["camera"]):
         tof["camera"] = resource
     value["schema"] = SCHEMAS[value["type"]]
-    value["schema_version"] = {"major": 1, "minor": 0}
+    value["schema_version"] = dict(_schemas()[value["schema"]]["version"])
     if value["type"] == "sensor_manifest":
         for sensor in value["sensors"]:
             sensor["stream"]["resource"] = resource
     return value
 
+@lru_cache(maxsize=1)
+def _schemas():
+    return json.loads(Path(__file__).with_name("rover-stream-schemas.json").read_text())
+
+
 def catalog(schema=None):
-    import json
-    from pathlib import Path
-    schemas = json.loads(Path(__file__).with_name("rover-stream-schemas.json").read_text())
+    schemas = _schemas()
     if schema is None:
         return {"schemas": schemas}
     if schema not in schemas:
         raise ValueError("unknown_rover_stream_schema")
     return schemas[schema]
+
+def map_snapshot(read, map_id, revision):
+    """Resolve the complete local map at the requested revision for every client."""
+    if not isinstance(map_id, str) or type(revision) is not int or revision < 0:
+        raise ValueError("expected_map_identity_and_revision")
+    entities, seen, cursor = [], set(), None
+    while True:
+        inputs = {"map_id": map_id, "revision": revision, "limit": 500}
+        if cursor is not None:
+            inputs["cursor"] = cursor
+        page = read("robot.map.read", inputs)
+        metadata = page["map"]
+        if metadata.get("map_id", metadata.get("id")) != map_id or metadata["revision"] != revision:
+            raise ValueError("map_snapshot_revision_changed")
+        entities.extend(page["entities"])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+        import json
+        key = json.dumps(cursor, sort_keys=True)
+        if key in seen:
+            raise ValueError("repeated_map_snapshot_cursor")
+        seen.add(key)
+    return {"type":"snapshot", "map_id":map_id, "revision":revision, "complete":True,
+            "data": public_data({"map":metadata,"entities":entities,"next_cursor":None})}

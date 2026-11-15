@@ -111,7 +111,10 @@ class VisionStreams:
                             metadata['type']=('sensor_tick' if metadata.get('sensor_tick') is True
                                               and metadata.get('image_available') is False else 'frame')
                         from rover_wire import envelope
-                        metadata = envelope(metadata, grant['resource'])
+                        resource = grant['resource']
+                        if self.rear_resource and resource == self.rear_resource and resource.endswith('.rear'):
+                            resource = resource[:-5]
+                        metadata = envelope(metadata, resource)
                         stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:

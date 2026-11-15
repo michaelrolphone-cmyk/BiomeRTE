@@ -9,6 +9,7 @@ from .stream_router import decode, frame
 class VisionMailbox:
     def __init__(self, allow_legacy=False):
         self.allow_legacy = allow_legacy
+        self.versioned = False
         self.controls = {}
         self.seen = set()
         self.latest = OrderedDict()
@@ -18,8 +19,11 @@ class VisionMailbox:
     def put_nowait(self, message):
         meta, _ = decode(message)
         kind = meta.get("type", "frame")
-        if kind == "sensor_manifest":
+        if kind == "sensor_manifest" or str(meta.get('schema', '')).startswith('rover.'):
+            self.versioned = True
             self.allow_legacy = False
+        elif (kind in ('frame', 'sensor_tick') and not self.versioned and 'schema_version' not in meta):
+            self.allow_legacy = True
         if kind in ("sensor_manifest", "world_snapshot"):
             self.controls[kind] = message
         else:
@@ -27,7 +31,10 @@ class VisionMailbox:
         self.ready.set()
 
     def _next(self):
-        for kind in ("sensor_manifest", "world_snapshot"):
+        order = ("sensor_manifest", "world_snapshot")
+        if self.seen == {"sensor_manifest"} and not self.allow_legacy:
+            order = ("world_snapshot",)
+        for kind in order:
             if kind in self.controls:
                 self.seen.add(kind)
                 return self.controls.pop(kind)

@@ -52,7 +52,7 @@ CAPABILITIES = [
     "robot.tof.status", "robot.tof.localize",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
-] + ["robot.vision.schemas", "robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
+] + ["robot.video.import.read", "robot.video.import.write", "robot.map.snapshot", "robot.vision.schemas", "robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS
 LOG = logging.getLogger("robot-vision")
 
 
@@ -1273,6 +1273,9 @@ class VisionService:
 
     def query(self, operation, inputs=None):
         inputs = inputs or {}
+        if operation == "robot.map.snapshot":
+            from rover_wire import map_snapshot
+            return map_snapshot(self.query, inputs.get("map_id"), inputs.get("revision"))
         if operation == "robot.vision.schemas":
             from rover_wire import catalog
             return catalog(inputs.get("schema"))
