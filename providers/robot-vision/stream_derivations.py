@@ -283,6 +283,8 @@ class StreamDerivations:
             mount=row.get("mount") or (lidar.get("configuration") or {}).get("lidar",{}).get(sid,{})
             M=matrix(mount.get("T_front_camera_sensor_m"),4)
             if M is None:continue
+            if raw.get("valid") is not True or raw.get("ready") is False:
+                self.hits.pop(sid,None);continue
             observed=raw.get("observed_monotonic_us")
             if type(observed) is not int:continue
             received=(latest or {}).get("received_monotonic",now)
@@ -292,16 +294,13 @@ class StreamDerivations:
             if old and old[0]==key:continue
             if age>2:continue
             points=zone_points(raw,mount,observed)
-            if not points:continue
+            if not points:
+                self.hits.pop(sid,None);continue
             transform=T@front@M;hits=[];stamp=time.time()-age
             for p in points:
                 position=transform[:3,:3]@p["xyz_sensor_m"]+transform[:3,3]
                 hits.append({"sensor_id":sid,"zone":p["zone"],"xyz_m":position.tolist(),
                              "status":p["target_status"],"t":stamp})
-            if old:
-                zones={h["zone"]:h for h in old[1]}
-                zones.update({h["zone"]:h for h in hits})
-                hits=list(zones.values())
             self.hits[sid]=(key,hits)
         lidar["world_hits"]=[hit for _,hits in self.hits.values() for hit in hits]
 

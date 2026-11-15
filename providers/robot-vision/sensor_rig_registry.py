@@ -79,6 +79,8 @@ class RigSampleFeed:
     """Generic configured sources have independent clocks and never impersonate a camera."""
     def __init__(self,service):
         self.service=service;self.stop=threading.Event();self.thread=None;self.sent={};self.sequence=0
+        import uuid
+        self.boot=uuid.uuid4().hex
     def start(self):
         self.thread=threading.Thread(target=self.run,name="rig-sample-feed",daemon=True);self.thread.start()
     def collect(self,now=None):
@@ -108,7 +110,8 @@ class RigSampleFeed:
             self.sequence+=1;now=time.monotonic()
             self.service.live_frames.publish({"type":"sensor_tick","sensor_tick":True,"image_available":False,
                 "frame_id":"rig:"+str(self.sequence),"camera_id":"rig","processed_monotonic":now,
-                "sensor_packet":{"receiver_id":"rig-registry","boot_id":"rig-registry","stream_sequence":self.sequence,"sensors":rows}},b"")
+                "sensor_packet":{"schema":"rover.sensor.samples/1","schema_version":{"major":1,"minor":0},"receiver_id":"rig-registry","boot_id":self.boot,
+                    "clock":"host_monotonic","capture_monotonic_us":int(now*1000000),"stream_sequence":self.sequence,"sensors":rows}},b"")
     def close(self):
         self.stop.set()
         if self.thread:self.thread.join()

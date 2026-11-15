@@ -60,7 +60,7 @@ class WireContract(unittest.IsolatedAsyncioTestCase):
 
     def test_catalog_covers_each_emitted_type(self):
         schemas = catalog()["schemas"]
-        self.assertEqual(set(schemas),set(SCHEMAS.values()))
+        self.assertEqual(set(schemas),(set(SCHEMAS.values()) | {"rover.sensor.samples/1"}))
         for kind, schema in SCHEMAS.items():
             self.assertEqual(kind, schemas[schema]["properties"]["type"]["const"])
             self.assertEqual(schema, catalog(schema)["properties"]["schema"]["const"])

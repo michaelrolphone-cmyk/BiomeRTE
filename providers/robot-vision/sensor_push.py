@@ -84,13 +84,20 @@ class SensorPushReceiver:
             raise ValueError('Sensor ingress token is missing')
 
         async def authorize(connection, request):
-            if request.path != '/sensors' or not hmac.compare_digest(
+            if request.path not in ('/sensors','/camera') or not hmac.compare_digest(
                     request.headers.get('Authorization',''), 'Sensor '+token):
                 return connection.respond(HTTPStatus.UNAUTHORIZED, 'Unauthorized sensor source')
 
+        prior_clock = (None, None, None)
         async def receive(socket):
+            nonlocal prior_clock
+            if getattr(getattr(socket,'request',None),'path',None) == '/camera':
+                from camera_push import receive_camera
+                await receive_camera(socket,self.config['receiver_id'],'front',ClockAlignment(),self.stream.push_jpeg)
+                return
             self.diagnostic(state='connected')
             clock = ClockAlignment()
+            clock.boot, clock.bounds, clock.observed = prior_clock
             pending = {}
             previous = None
             async def synchronize():
@@ -116,6 +123,7 @@ class SensorPushReceiver:
                         if sent is not None:
                             clock.observe(value['boot_id'],sent,received,
                                           value['received_monotonic_us'],value['served_monotonic_us'])
+                            prior_clock = (clock.boot, tuple(clock.bounds), clock.observed)
                             self.diagnostic(state='clock_aligned',clock_round_trip_s=received-sent)
                         continue
                     from capture_packet import validate_packet
@@ -127,7 +135,7 @@ class SensorPushReceiver:
                         from device_routes import DeviceRoutes
                         DeviceRoutes(self.stream.service.state_dir/"device-routes.sqlite3").observe(packet["receiver_id"],peer[0],{"kind":"camera"})
                         socket._route_registered=True
-                    if clock.boot is None:
+                    if clock.boot != packet['boot_id']:
                         self.diagnostic(state='awaiting_clock')
                         continue
                     sequence = packet.get('stream_sequence')
@@ -142,6 +150,8 @@ class SensorPushReceiver:
                                         capture_age_upper_s=received-interval[0],
                                         clock_uncertainty_s=(interval[1]-interval[0])/2)
                     self.diagnostic(state='streaming',last_error=None)
+                    if packet.get('delivery_mode') == 'continuous':
+                        continue
                     samples = ((packet.get('ahrs') or {}).get('ahrs') or {}).get('imu_samples',[])
                     last = samples[-1]['monotonic_us'] if samples else packet['capture_monotonic_us']
                     await socket.send(json.dumps(dict(type='ack',boot_id=packet['boot_id'],
@@ -167,5 +177,7 @@ class SensorPushReceiver:
             process.join()
             self.thread.join()
             self._delivery_queue.close()
+            self._image_thread.join()
+            self._images.close()
         elif self.thread:
             self.thread.join(timeout=3)

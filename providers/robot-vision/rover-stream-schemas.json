@@ -730,7 +730,10 @@
             "type": "string"
           },
           "reason": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "upward_accel_peak_m_s2": {
             "type": "number"
@@ -875,7 +878,10 @@
             "type": "boolean"
           },
           "reason": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "sample_identity": {
             "type": "string"
@@ -1772,7 +1778,10 @@
           "last_assessment": {
             "properties": {
               "reason": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "state": {
                 "type": "string"
@@ -2008,7 +2017,10 @@
                 "type": "string"
               }
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "state": {
             "type": "string"
@@ -2088,7 +2100,10 @@
             "type": "string"
           },
           "last_pickup_at": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "last_sequence": {
             "type": "number"
@@ -2134,7 +2149,10 @@
               },
               "turn_direction": {},
               "turning": {
-                "type": "boolean"
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               },
               "yaw_rate_deg_s": {
                 "type": "number"
@@ -3048,7 +3066,10 @@
             "type": "string"
           },
           "reason": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "upward_accel_peak_m_s2": {
             "type": "number"
@@ -3240,7 +3261,10 @@
             "type": "boolean"
           },
           "reason": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "sample_identity": {
             "type": "string"
@@ -4093,13 +4117,22 @@
       "analysis": {
         "properties": {
           "frame_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "map_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "map_revision": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "pose": {
             "properties": {
@@ -4136,7 +4169,10 @@
                     "type": "boolean"
                   },
                   "reason": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "translation_observed": {
                     "type": "boolean"
@@ -4236,7 +4272,10 @@
           "last_assessment": {
             "properties": {
               "reason": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "state": {
                 "type": "string"
@@ -4475,7 +4514,10 @@
                 "type": "string"
               }
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "state": {
             "type": "string"
@@ -4558,7 +4600,10 @@
             "type": "string"
           },
           "last_pickup_at": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "last_sequence": {
             "type": "number"
@@ -4599,7 +4644,10 @@
                 "type": "number"
               },
               "reason": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "telemetry_age_s": {
                 "type": "number"
@@ -5183,7 +5231,10 @@
             "type": "string"
           },
           "camera_error": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "collector_age_s": {
             "type": "number"
@@ -5252,7 +5303,10 @@
                 "type": "number"
               },
               "last_pickup_at": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "type": "object"
@@ -5371,7 +5425,10 @@
             "type": "boolean"
           },
           "pending_target": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "position": {
             "type": [
@@ -5469,7 +5526,10 @@
                         "type": "number"
                       },
                       "last_pickup_at": {
-                        "type": "number"
+                        "type": [
+                          "number",
+                          "null"
+                        ]
                       }
                     },
                     "type": "object"
@@ -5547,7 +5607,10 @@
                 },
                 "source_boot_id": {},
                 "source_bssid": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "target_bssid": {
                   "type": "string"
@@ -5605,7 +5668,10 @@
                       },
                       "source_boot_id": {},
                       "source_bssid": {
-                        "type": "string"
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "type": "object"
@@ -5644,7 +5710,10 @@
                 },
                 "source_boot_id": {},
                 "source_bssid": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "target_bssid": {
                   "type": "string"
@@ -5728,7 +5797,10 @@
                 "type": "array"
               },
               "reason": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "schema": {
                 "type": "string"
@@ -5755,7 +5827,10 @@
             "type": "object"
           },
           "rover_responder_bssid": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "sample_reference": {
             "type": "string"
@@ -6270,7 +6345,10 @@
                 "type": "number"
               },
               "last_pickup_at": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "type": "object"
@@ -6954,7 +7032,10 @@
                                     "type": "boolean"
                                   },
                                   "reason": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   },
                                   "translation_observed": {
                                     "type": "boolean"
@@ -7024,7 +7105,10 @@
                                         "type": "number"
                                       },
                                       "source_boot_id": {
-                                        "type": "string"
+                                        "type": [
+                                          "string",
+                                          "integer"
+                                        ]
                                       },
                                       "source_bssid": {
                                         "type": "string"
@@ -8063,7 +8147,10 @@
                 "type": "number"
               },
               "last_pickup_at": {
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "type": "object"
@@ -8747,7 +8834,10 @@
                                     "type": "boolean"
                                   },
                                   "reason": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   },
                                   "translation_observed": {
                                     "type": "boolean"
@@ -8817,7 +8907,10 @@
                                         "type": "number"
                                       },
                                       "source_boot_id": {
-                                        "type": "string"
+                                        "type": [
+                                          "string",
+                                          "integer"
+                                        ]
                                       },
                                       "source_bssid": {
                                         "type": "string"
@@ -9725,5 +9818,1128 @@
       "major": 1,
       "minor": 0
     }
+  },
+  "rover.sensor.samples/1": {
+    "properties": {
+      "ahrs": {
+        "$ref": "#/$defs/ahrs_51ae3c8de0"
+      },
+      "boot_id": {
+        "type": "string"
+      },
+      "capture_clock": {
+        "type": "string"
+      },
+      "capture_monotonic_us": {
+        "type": "number"
+      },
+      "capture_timestamp_semantics": {
+        "type": "string"
+      },
+      "frame_id": {
+        "type": "string"
+      },
+      "ftm": {
+        "properties": {
+          "age_ms": {},
+          "busy": {
+            "type": "boolean"
+          },
+          "cancel_error": {
+            "type": "number"
+          },
+          "channel": {
+            "type": "number"
+          },
+          "distance_m": {},
+          "distance_method": {
+            "type": "string"
+          },
+          "recovery": {},
+          "report_id": {
+            "type": "number"
+          },
+          "retiring": {
+            "type": "boolean"
+          },
+          "rtt_ns": {},
+          "samples": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "image_available": {
+        "type": "boolean"
+      },
+      "receiver_id": {
+        "type": "string"
+      },
+      "schema": {
+        "const": "rover.sensor.samples/1"
+      },
+      "served_monotonic_us": {
+        "type": "number"
+      },
+      "stream_sequence": {
+        "type": "number"
+      },
+      "ultrasonic": {
+        "$ref": "#/$defs/ultrasonic_da25798abf"
+      },
+      "sensors": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "rate_hz": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "value": {},
+            "t": {
+              "type": "number"
+            },
+            "T_body_sensor": {}
+          }
+        }
+      },
+      "clock": {
+        "const": "host_monotonic"
+      },
+      "schema_version": {
+        "type": "object",
+        "properties": {
+          "major": {
+            "const": 1
+          },
+          "minor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "major",
+          "minor"
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "schema",
+      "schema_version",
+      "receiver_id",
+      "boot_id",
+      "clock",
+      "capture_monotonic_us",
+      "stream_sequence",
+      "sensors"
+    ],
+    "$defs": {
+      "ahrs_3ad0d5d2d3": {
+        "properties": {
+          "association": {
+            "type": "string"
+          },
+          "attitude": {
+            "$ref": "#/$defs/attitude_a91adb6f68"
+          },
+          "barometer": {
+            "$ref": "#/$defs/barometer_16d2c21f0d"
+          },
+          "bus": {
+            "$ref": "#/$defs/bus_18fd5cb4bd"
+          },
+          "calibration": {
+            "$ref": "#/$defs/calibration_f05f0e9f5b"
+          },
+          "error": {},
+          "freshness_ms": {
+            "properties": {
+              "attitude": {
+                "type": "number"
+              },
+              "barometer": {
+                "type": "number"
+              },
+              "imu": {
+                "type": "number"
+              },
+              "mag": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "hardware_verified": {
+            "type": "boolean"
+          },
+          "history_publish_monotonic_us": {
+            "type": "number"
+          },
+          "imu": {
+            "$ref": "#/$defs/imu_1f3d078e8b"
+          },
+          "imu_history_capacity": {
+            "type": "number"
+          },
+          "imu_history_window_ms": {
+            "type": "number"
+          },
+          "imu_samples": {
+            "items": {
+              "$ref": "#/$defs/imu_samples_item_96a031f1d3"
+            },
+            "type": "array"
+          },
+          "mag": {
+            "$ref": "#/$defs/mag_e9112ff5d9"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "sample_rate_hz": {
+            "type": "number"
+          },
+          "worker_ready": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ahrs_51ae3c8de0": {
+        "properties": {
+          "ahrs": {
+            "$ref": "#/$defs/ahrs_3ad0d5d2d3"
+          },
+          "boot_id": {
+            "type": "string"
+          },
+          "receiver_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "number"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "timestamp_ms": {
+            "type": "number"
+          },
+          "type": {
+            "type": "string"
+          },
+          "uptime_ms": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "attitude_a91adb6f68": {
+        "properties": {
+          "accel_correction_used": {
+            "type": "boolean"
+          },
+          "age_ms": {
+            "type": "number"
+          },
+          "filter": {
+            "type": "string"
+          },
+          "frame": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "gyro_calibration_preserves_orientation": {
+            "type": "boolean"
+          },
+          "heading_absolute": {
+            "type": "boolean"
+          },
+          "heading_quality": {
+            "type": "string"
+          },
+          "magnetic_heading_age_ms": {
+            "type": "number"
+          },
+          "mounting_alignment_applied": {
+            "type": "boolean"
+          },
+          "pitch_deg": {
+            "type": "number"
+          },
+          "quaternion_wxyz": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "reset_reason": {
+            "type": "string"
+          },
+          "roll_deg": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "world_alignment_valid": {
+            "type": "boolean"
+          },
+          "world_id": {
+            "type": "string"
+          },
+          "world_reference_id": {
+            "type": "string"
+          },
+          "world_reference_persistent": {
+            "type": "boolean"
+          },
+          "world_rotation_enu_imu": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "yaw_deg": {
+            "type": "number"
+          },
+          "yaw_origin_uptime_ms": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "barometer_16d2c21f0d": {
+        "properties": {
+          "address": {
+            "type": "number"
+          },
+          "age_ms": {
+            "type": "number"
+          },
+          "altitude_reference": {
+            "type": "string"
+          },
+          "compensation_method": {
+            "type": "string"
+          },
+          "error": {},
+          "error_count": {
+            "type": "number"
+          },
+          "i2c_error": {
+            "type": "number"
+          },
+          "observed_uptime_ms": {
+            "type": "number"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "pressure_altitude_m": {
+            "type": "number"
+          },
+          "pressure_pa": {
+            "type": "number"
+          },
+          "sample_count": {
+            "type": "number"
+          },
+          "sea_level_reference_pa": {
+            "type": "number"
+          },
+          "temp_c": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "who_am_i": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "bus_18fd5cb4bd": {
+        "properties": {
+          "camera_controller": {
+            "type": "number"
+          },
+          "clock_hz": {
+            "type": "number"
+          },
+          "controller": {
+            "type": "number"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "scl": {
+            "type": "number"
+          },
+          "sda": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "calibration_0f57cdd710": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/calibration_f05f0e9f5b"
+          },
+          "reason": {},
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "calibration_f05f0e9f5b": {
+        "properties": {
+          "gyro_bias_rad_s": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "gyro_bias_valid": {
+            "type": "boolean"
+          },
+          "magnetic_calibration_complete": {
+            "type": "boolean"
+          },
+          "max_accel_std_m_s2": {
+            "type": "number"
+          },
+          "max_gyro_rate_deg_s": {
+            "type": "number"
+          },
+          "max_gyro_std_rad_s": {
+            "type": "number"
+          },
+          "persistent": {
+            "type": "boolean"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "restored_from_flash": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "samples": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storage_error": {},
+          "window_ms": {
+            "type": "number"
+          },
+          "world_reference_persistent": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "events_item_cc7aa03bfd": {
+        "properties": {
+          "assessment": {
+            "type": "string"
+          },
+          "boot_id": {
+            "type": "string"
+          },
+          "capture_time_s": {
+            "type": "number"
+          },
+          "direction": {},
+          "event_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/$defs/evidence_c97333ea0f"
+          },
+          "frame_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "evidence_c97333ea0f": {
+        "properties": {
+          "deceleration_m_s2": {
+            "type": "number"
+          },
+          "heading_delta_deg": {
+            "type": "number"
+          },
+          "heading_source": {
+            "type": "string"
+          },
+          "horizontal_accel_m_s2": {
+            "type": "number"
+          },
+          "jerk_m_s3": {
+            "type": "number"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upward_accel_peak_m_s2": {
+            "type": "number"
+          },
+          "vertical_displacement_estimate_m": {
+            "type": "number"
+          },
+          "yaw_rate_deg_s": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "front_af65c45ce5": {
+        "properties": {
+          "T_front_camera_sensor_m": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "camera_id": {
+            "type": "string"
+          },
+          "distance_semantics": {
+            "type": "string"
+          },
+          "flip_x": {
+            "type": "boolean"
+          },
+          "flip_y": {
+            "type": "boolean"
+          },
+          "fov_horizontal_deg": {
+            "type": "number"
+          },
+          "fov_vertical_deg": {
+            "type": "number"
+          },
+          "module_size_m": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "valid_statuses": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "zone_orientation": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "imu_1f3d078e8b": {
+        "properties": {
+          "accel_m_s2": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "accel_range_g": {
+            "type": "number"
+          },
+          "accelerometer_calibrated": {
+            "type": "boolean"
+          },
+          "address": {
+            "type": "number"
+          },
+          "age_ms": {
+            "type": "number"
+          },
+          "error": {},
+          "error_count": {
+            "type": "number"
+          },
+          "frame": {
+            "type": "string"
+          },
+          "gyro_bias_applied": {
+            "type": "boolean"
+          },
+          "gyro_rad_s": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "gyro_range_deg_s": {
+            "type": "number"
+          },
+          "gyro_raw_rad_s": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "i2c_error": {
+            "type": "number"
+          },
+          "observed_uptime_ms": {
+            "type": "number"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "sample_count": {
+            "type": "number"
+          },
+          "temp_c": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "who_am_i": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "imu_6c2e5b07a0": {
+        "properties": {
+          "age_upper_bound_ms": {
+            "type": "number"
+          },
+          "effective_age_ms": {
+            "type": "number"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_identity": {
+            "type": "string"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "imu_samples_item_96a031f1d3": {
+        "properties": {
+          "accel_m_s2": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "attitude_valid": {
+            "type": "boolean"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "gyro_rad_s": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "monotonic_us": {
+            "type": "number"
+          },
+          "quaternion_wxyz": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "sample_count": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "yaw_deg": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "mag_e9112ff5d9": {
+        "properties": {
+          "address": {
+            "type": "number"
+          },
+          "age_ms": {
+            "type": "number"
+          },
+          "calibration": {
+            "type": "string"
+          },
+          "data_overruns": {
+            "type": "number"
+          },
+          "error": {},
+          "error_count": {
+            "type": "number"
+          },
+          "factory_scale": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "field_uT": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "frame": {
+            "type": "string"
+          },
+          "hard_iron_calibrated": {
+            "type": "boolean"
+          },
+          "i2c_error": {
+            "type": "number"
+          },
+          "observed_uptime_ms": {
+            "type": "number"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "sample_count": {
+            "type": "number"
+          },
+          "soft_iron_calibrated": {
+            "type": "boolean"
+          },
+          "used_for_heading": {
+            "type": "boolean"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "who_am_i": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "sensors_item_acea67ec78": {
+        "properties": {
+          "age_ms": {
+            "type": "number"
+          },
+          "completed_monotonic_us": {
+            "type": "number"
+          },
+          "distance_m": {
+            "type": "number"
+          },
+          "echo_gpio": {
+            "type": "number"
+          },
+          "echo_us": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "observed_monotonic_us": {
+            "type": "number"
+          },
+          "observed_uptime_ms": {
+            "type": "number"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "trig_gpio": {
+            "type": "number"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ultrasonic_d62f75e4cd": {
+        "properties": {
+          "capture_monotonic_us": {
+            "type": "number"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "sample_clock": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/$defs/sensors_item_acea67ec78"
+            },
+            "type": "array"
+          },
+          "sound_speed_m_s": {
+            "type": "number"
+          },
+          "stale_after_ms": {
+            "type": "number"
+          },
+          "trigger_interval_ms": {
+            "type": "number"
+          },
+          "worker_ready": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ultrasonic_da25798abf": {
+        "properties": {
+          "boot_id": {
+            "type": "string"
+          },
+          "receiver_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "number"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "timestamp_ms": {
+            "type": "number"
+          },
+          "type": {
+            "type": "string"
+          },
+          "ultrasonic": {
+            "$ref": "#/$defs/ultrasonic_d62f75e4cd"
+          },
+          "uptime_ms": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "lidarCompatibility": {
+        "properties": {
+          "configuration": {
+            "properties": {
+              "lidar": {
+                "properties": {
+                  "front": {
+                    "$ref": "#/$defs/front_af65c45ce5"
+                  },
+                  "rear": {
+                    "$ref": "#/$defs/front_af65c45ce5"
+                  }
+                },
+                "type": "object"
+              },
+              "revision": {
+                "type": "number"
+              },
+              "schema": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "error": {},
+          "latest": {
+            "properties": {
+              "boot_id": {
+                "type": "string"
+              },
+              "capture_host_interval_s": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "fusion_packet_id": {
+                "type": "string"
+              },
+              "map_id": {
+                "type": "string"
+              },
+              "mounts_qualification": {
+                "type": "string"
+              },
+              "packet_id": {
+                "type": "string"
+              },
+              "pose_available": {
+                "type": "boolean"
+              },
+              "received_monotonic": {
+                "type": "number"
+              },
+              "receiver_id": {
+                "type": "string"
+              },
+              "rig_revision": {
+                "type": "number"
+              },
+              "schema": {
+                "type": "string"
+              },
+              "sensors": {
+                "items": {
+                  "properties": {
+                    "mount": {
+                      "$ref": "#/$defs/front_af65c45ce5"
+                    },
+                    "raw": {
+                      "properties": {
+                        "address_7bit": {
+                          "type": "number"
+                        },
+                        "age_ms": {
+                          "type": "number"
+                        },
+                        "distance_mm": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "type": "array"
+                        },
+                        "error": {},
+                        "errors": {
+                          "type": "number"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "initialization_attempts": {
+                          "type": "number"
+                        },
+                        "observed_monotonic_us": {
+                          "type": "number"
+                        },
+                        "ready": {
+                          "type": "boolean"
+                        },
+                        "resolution": {
+                          "type": "number"
+                        },
+                        "sequence": {
+                          "type": "number"
+                        },
+                        "target_status": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "type": "array"
+                        },
+                        "valid": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "sensor_id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "units": {
+                "type": "string"
+              },
+              "mapping_available": {
+                "type": "boolean"
+              },
+              "native_landmarks_refined": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "processed_scans": {
+            "type": "number"
+          },
+          "same_native_map": {
+            "type": "boolean"
+          },
+          "scale": {
+            "properties": {
+              "availability": {
+                "type": "string"
+              },
+              "inliers": {
+                "type": "number"
+              },
+              "map_id": {
+                "type": "string"
+              },
+              "qualification": {
+                "type": "string"
+              },
+              "relative_mad": {
+                "type": "number"
+              },
+              "rig_revision": {
+                "type": "number"
+              },
+              "scale_m_per_map_unit": {
+                "type": "number"
+              },
+              "source": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "state": {
+            "type": "string"
+          },
+          "superseded_scans": {
+            "type": "number"
+          },
+          "worker": {
+            "type": "string"
+          },
+          "world_hits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sensor_id": {
+                  "type": "string"
+                },
+                "zone": {
+                  "type": "integer"
+                },
+                "xyz_m": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                },
+                "status": {
+                  "type": "integer"
+                },
+                "t": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "sensor_id",
+                "zone",
+                "xyz_m",
+                "status",
+                "t"
+              ]
+            }
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$id": "rover.sensor.samples/1",
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
   }
 }

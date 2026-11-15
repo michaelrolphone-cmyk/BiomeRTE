@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 ROOT=pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT/"providers/robot-vision"))
+sys.path.insert(0,str(ROOT))
 from stream_derivations import StreamDerivations,display_fit,range_fit
 from sensor_rig_registry import configured_sensors,RigSampleFeed,manifest
 from lidar_fusion import defaults
@@ -50,6 +51,16 @@ class ParityDerivations(unittest.TestCase):
             "raw":{"valid":True,"ready":True,"resolution":64,"observed_monotonic_us":1,"distance_mm":distances,"target_status":statuses,"age_ms":0}}]}}}
         StreamDerivations(self.service).enrich(m,b"")
         np.testing.assert_allclose([h["xyz_m"] for h in m["lidar"]["world_hits"]],expected,atol=1e-10)
+
+    def test_invalid_lidar_return_cannot_survive_in_the_canonical_current_field(self):
+        d=StreamDerivations(self.service);mount=defaults()["lidar"]["front"]
+        raw={"valid":True,"ready":True,"resolution":64,"observed_monotonic_us":1,"age_ms":0,
+             "distance_mm":[1000]*64,"target_status":[5]*64}
+        m={"lidar":{"latest":{"received_monotonic":time.monotonic(),"sensors":[{"sensor_id":"front","raw":raw,"mount":mount}]}}}
+        d.enrich(m,b"");self.assertEqual(len(m["lidar"]["world_hits"]),64)
+        raw["observed_monotonic_us"]=2;raw["target_status"][0]=255
+        d.enrich(m,b"");self.assertEqual(len(m["lidar"]["world_hits"]),63)
+        raw["valid"]=False;d.enrich(m,b"");self.assertEqual(m["lidar"]["world_hits"],[])
 
     def test_fresh_body_pose_wins_stale_pose_cannot_jump(self):
         d=StreamDerivations(self.service);T=np.eye(4);T[0,3]=2
@@ -143,3 +154,54 @@ class RigTopology(unittest.TestCase):
         rig=json.loads(self.service.lidar.path.read_text());del rig["lidar"]["test"]
         self.service.lidar.path.write_text(json.dumps(rig))
         self.assertNotIn("lidar.test",{row["id"] for row in manifest(self.service,{})["sensors"]})
+
+class RegistryWireContract(unittest.TestCase):
+    setUp=ParityDerivations.setUp
+    def test_automatic_source_passes_native_router_and_published_sample_schema(self):
+        from sensor_inventory import SensorInventory
+        from biomerte.stream_router import Session,frame,decode
+        from rover_wire import envelope
+        import queue
+        self.service.inventory=SensorInventory()
+        self.service.live_frames=DualCameraFrames()
+        configured_sensors(self.service)
+        config=json.loads(self.service.lidar.path.read_text())
+        config["sensors"].append({"id":"test.temperature","type":"temperature","role":"test","rate_hz":2,
+             "source":{"kind":"constant","value":{"celsius":21}}})
+        self.service.lidar.path.write_text(json.dumps(config))
+        feed=RigSampleFeed(self.service)
+        with self.service.live_frames.subscribe() as inbox:
+            feed.start()
+            try:
+                for i in range(3):
+                    raw=inbox.get(timeout=2);m,payload=decode(raw[4:])
+                    if m.get("type")=="sensor_tick":break
+                else:self.fail("registered source produced no sensor sample")
+            finally:feed.close()
+        self.assertEqual(m["sensor_packet"]["sensors"][0]["id"],"test.temperature")
+        self.assertEqual(m["sensor_packet"]["schema"],"rover.sensor.samples/1")
+        grant={"authority":"a"*64,"generation":1,"epoch":"e","contract":"robot.vision.stream:1",
+               "direction":"provider_to_server","lanes":["vision","map"],"id":"session","lease":"lease","resource":"resource","delivery":"supersedable","provider":"p","server":"s","limits":{"max_message_bytes":2097152}}
+        m=envelope(m,"resource");m.update(authority=grant["authority"],generation=1,epoch="e",sequence=1)
+        checked,_=Session(grant).check("provider","vision",frame(m,payload))
+        self.assertEqual(checked["sensor_packet"]["clock"],"host_monotonic")
+
+    def test_rear_preview_reaches_the_router_before_a_capture_clock_is_available(self):
+        from rear_transport_preview import publish_image
+        from biomerte.stream_router import Session,frame,decode
+        from rover_wire import envelope
+        self.service.map_id="map";self.service.revision=2;self.service.session_id="session"
+        self.service.rear_live_frames=DualCameraFrames()
+        ingress=SimpleNamespace(service=self.service,rig=self.service.camera_rig)
+        packet={"frame_id":"boot:1","width":32,"height":24}
+        with self.service.rear_live_frames.subscribe() as inbox:
+            publish_image(ingress,packet,b"jpeg",time.monotonic())
+            raw=inbox.get(timeout=.1)
+        m,payload=decode(raw[4:])
+        self.assertIsNone(m["processing_timestamp"])
+        self.assertEqual(m["capture_timing"],"device_ticks_only")
+        grant={"authority":"a"*64,"generation":1,"epoch":"e","contract":"robot.vision.stream:1",
+               "direction":"provider_to_server","lanes":["vision","map"],"id":"session","lease":"lease","resource":"resource","delivery":"supersedable","provider":"p","server":"s","limits":{"max_message_bytes":2097152}}
+        m=envelope(m,"resource");m.update(authority=grant["authority"],generation=1,epoch="e",sequence=1)
+        checked,body=Session(grant).check("provider","vision",frame(m,payload))
+        self.assertEqual(body,b"jpeg");self.assertEqual(checked["camera_id"],"rear")
