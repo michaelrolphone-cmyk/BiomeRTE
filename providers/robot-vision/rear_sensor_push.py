@@ -201,10 +201,18 @@ class RearSensorIngress:
         from websockets.asyncio.server import serve
         self.loop=asyncio.get_running_loop()
         async def authorize(connection,request):
-            if request.path!="/sensors" or not hmac.compare_digest(
+            if request.path not in ("/sensors","/camera") or not hmac.compare_digest(
                 request.headers.get("Authorization",""),"Sensor "+self.config["token"]):
                 return connection.respond(HTTPStatus.UNAUTHORIZED,"Unauthorized sensor source")
         async def receive(socket):
+            if getattr(getattr(socket,'request',None),'path',None) == '/camera':
+                from camera_push import receive_camera
+                def deliver(packet,jpeg,interval,received):
+                    camera=self.rig.camera
+                    if camera is not None:
+                        camera.push_jpeg(packet,jpeg,interval,received)
+                await receive_camera(socket,self.config['receiver_id'],'rear',ClockAlignment(),deliver)
+                return
             clock=ClockAlignment()
             pending={}
             async def synchronize():

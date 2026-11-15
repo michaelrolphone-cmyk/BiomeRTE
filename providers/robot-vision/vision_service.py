@@ -450,11 +450,11 @@ class VisionService:
         self.metric.start_worker()
         self.atlas.start(self)
         self.world_snapshots.start()
+        self.sensor_ticks.start()
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
         self.lidar.start()
-        self.sensor_ticks.start()
         self.metric_worker.start()
         self.camera_rig.start()
         from live_camera import LiveCamera

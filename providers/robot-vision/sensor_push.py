@@ -84,11 +84,15 @@ class SensorPushReceiver:
             raise ValueError('Sensor ingress token is missing')
 
         async def authorize(connection, request):
-            if request.path != '/sensors' or not hmac.compare_digest(
+            if request.path not in ('/sensors','/camera') or not hmac.compare_digest(
                     request.headers.get('Authorization',''), 'Sensor '+token):
                 return connection.respond(HTTPStatus.UNAUTHORIZED, 'Unauthorized sensor source')
 
         async def receive(socket):
+            if getattr(getattr(socket,'request',None),'path',None) == '/camera':
+                from camera_push import receive_camera
+                await receive_camera(socket,self.config['receiver_id'],'front',ClockAlignment(),self.stream.push_jpeg)
+                return
             self.diagnostic(state='connected')
             clock = ClockAlignment()
             pending = {}
@@ -167,5 +171,7 @@ class SensorPushReceiver:
             process.join()
             self.thread.join()
             self._delivery_queue.close()
+            self._image_thread.join()
+            self._images.close()
         elif self.thread:
             self.thread.join(timeout=3)

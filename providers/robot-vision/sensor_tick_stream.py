@@ -31,10 +31,13 @@ class SensorTickStream:
     def start(self):
         from sensor_push import SensorPushReceiver
         self.push=SensorPushReceiver(self)
-        if self.push.configured:
+        socket_camera = getattr(getattr(self.service, 'camera', None), '_websocket', False)
+        if self.push.configured or socket_camera:
             self.service.ahrs.source.set_push_source(lambda:self.pushed_sensor('ahrs'))
             self.service.ultrasonic.set_push_source(lambda:self.pushed_sensor('ultrasonic'))
         self.push.start()
+        if self.push.configured or socket_camera:
+            return self
         self.thread=threading.Thread(target=self._run,name='sensor-tick-stream',daemon=True)
         self.thread.start()
         return self
@@ -97,4 +100,4 @@ class SensorTickStream:
     def close(self):
         self.stop.set()
         if getattr(self,"push",None) is not None:self.push.close()
-        if self.thread:self.thread.join(timeout=3)
+        if getattr(self,'thread',None):self.thread.join(timeout=3)
