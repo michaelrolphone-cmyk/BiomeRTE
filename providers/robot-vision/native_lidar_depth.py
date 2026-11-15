@@ -48,7 +48,7 @@ def sample(raster, kps, missing=0):
 def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None):
     """Match two real image observations; cross-check depth in both captures."""
     stats={} if stats is None else stats
-    if ref.des is None or cur.des is None or ref.depths is None or cur.depths is None:
+    if ref.des is None or cur.des is None or ref.depths is None:
         return
     pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(ref.des, cur.des, k=2)
     unique = {}
@@ -60,7 +60,8 @@ def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None):
     pairs = list(unique.values())
     a = np.array([m.queryIdx for m in pairs], dtype=int)
     b = np.array([m.trainIdx for m in pairs], dtype=int)
-    keep = (ref.depths[a]>0)&(cur.depths[b]>0)
+    keep = ref.depths[a]>0
+    if cur_zones is not None and cur.depths is not None:keep &= cur.depths[b]>0
     a,b = a[keep],b[keep]
     stats['depth_matches']=len(a)
     if len(a)<18:
@@ -81,9 +82,15 @@ def pnp_pair(ref, cur, ref_zones, cur_zones, stats=None):
     stats['pnp_inliers']=len(ii)
     R=cv2.Rodrigues(r)[0]
     predicted=(xyz[ii]@R.T+t.ravel())[:,2]
-    ii=ii[(predicted>0)&(np.abs(cur.depths[b[ii]]-predicted)<(.035+.065*predicted))]
+    verified=predicted>0
+    if cur_zones is not None and cur.depths is not None:
+        verified &= np.abs(cur.depths[b[ii]]-predicted)<(.035+.065*predicted)
+    ii=ii[verified]
     stats['depth_consistent_inliers']=len(ii)
-    if len(ii)<18 or len(np.unique(cells[ii]))<4 or len(np.unique(sample(cur_zones,cur.kps[b[ii]],-1)))<4:
+    minimum=18 if cur_zones is not None else 30
+    if len(ii)<minimum or len(np.unique(cells[ii]))<4:
+        return
+    if cur_zones is not None and len(np.unique(sample(cur_zones,cur.kps[b[ii]],-1)))<4:
         return
     ok,r,t=cv2.solvePnP(xyz[ii],cur.kpsu[b[ii]],cur.camera.K,None,r,t,True,cv2.SOLVEPNP_ITERATIVE)
     if not ok:
@@ -114,31 +121,41 @@ def install_initializer(backend, runtime):
     original=init.initialize
     previous=None
 
+    def remember(frame,image,obs):
+        nonlocal previous
+        if obs is not None and frame.depths is not None and np.count_nonzero(frame.depths>0)>=18:
+            previous=(frame,image.copy(),obs['zones'],obs['scan_id'],obs['rig_revision'],obs.get('survey_reference'))
+
+    first=init.init
+    def first_frame(frame,image,*args,**kwargs):
+        remember(frame,image,getattr(backend,'_native_scan',None))
+        return first(frame,image,*args,**kwargs)
+
     def initialize(frame, image, *args, **kwargs):
         nonlocal previous
         obs=getattr(backend,'_native_scan',None)
+        stats=backend._lidar_stats
         if obs is not None:
-            stats=backend._lidar_stats
             stats['initializer_depth_frames']=stats.get('initializer_depth_frames',0)+1
-            zones=obs['zones']
-            if previous is not None and previous[0].img_id!=frame.img_id and previous[3]!=obs['scan_id']:
-                ref,ref_image,ref_zones,_=previous
-                stats['pair_attempts']=stats.get('pair_attempts',0)+1
-                result=pnp_pair(ref,frame,ref_zones,zones,stats)
-                if result is not None:
-                    points,ai,bi,pose=result
-                    ref.update_pose(np.eye(4));frame.update_pose(pose)
-                    out=InitializerOutput()
-                    out.kf_ref=KeyFrame(ref,ref_image);out.kf_cur=KeyFrame(frame,image)
-                    out.idxs_ref=ai;out.idxs_cur=bi;out.pts=points
-                    backend._native_birth={'source':'front_lidar_visual_pnp','initial_inliers':len(ai),
-                        'reference_scan':previous[3],'current_scan':obs['scan_id'],
-                        'source_frame':backend._source_frames.get(str(ref.img_id)),
-                        'rig_revision':obs['rig_revision']}
-                    enable_native_rgbd(runtime)
-                    previous=None
-                    return out,True
-            if frame.depths is not None and np.count_nonzero(frame.depths>0)>=18:
-                previous=(frame,image.copy(),zones,obs['scan_id'])
+        if previous is not None and previous[0].img_id!=frame.img_id:
+            ref,ref_image,ref_zones,ref_scan,rig_revision,survey_reference=previous
+            stats['pair_attempts']=stats.get('pair_attempts',0)+1
+            fresh_depth=obs is not None and obs['scan_id']!=ref_scan
+            result=pnp_pair(ref,frame,ref_zones,obs['zones'] if fresh_depth else None,stats)
+            if result is not None:
+                points,ai,bi,pose=result
+                ref.update_pose(np.eye(4));frame.update_pose(pose)
+                out=InitializerOutput()
+                out.kf_ref=KeyFrame(ref,ref_image);out.kf_cur=KeyFrame(frame,image)
+                out.idxs_ref=ai;out.idxs_cur=bi;out.pts=points
+                backend._native_birth={'source':'front_lidar_visual_pnp','initial_inliers':len(ai),
+                    'reference_scan':ref_scan,'current_scan':obs['scan_id'] if fresh_depth else None,
+                    'survey_reference':survey_reference,
+                    'source_frame':backend._source_frames.get(str(ref.img_id)),'rig_revision':rig_revision}
+                enable_native_rgbd(runtime)
+                previous=None
+                return out,True
+        remember(frame,image,obs)
         return original(frame,image,*args,**kwargs)
+    init.init=first_frame
     init.initialize=initialize
