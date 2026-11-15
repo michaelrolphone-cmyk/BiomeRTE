@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import shutil
+import socket
 import socketserver
 import threading
 import time
@@ -1607,6 +1608,24 @@ class LocalServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     block_on_close = True
 
 
+def write_live_frame(peer, value, stop, closed):
+    """Finish an in-flight frame while the subscriber's inbox replaces older readings."""
+    remaining = memoryview(value)
+    while remaining:
+        if stop.is_set() or closed.is_set():
+            return False
+        try:
+            written = peer.send(remaining)
+        except socket.timeout:
+            # This client's flow control only delays this client's writer.
+            # Retain the offset so an earlier partial send is never duplicated.
+            continue
+        if not written:
+            raise ConnectionError("live subscriber closed")
+        remaining = remaining[written:]
+    return True
+
+
 def handler_for(service):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -1627,8 +1646,8 @@ def handler_for(service):
                             value=inbox.get(timeout=1)
                         except __import__('queue').Empty:
                             continue
-                        self.wfile.write(value)
-                        self.wfile.flush()
+                        if not write_live_frame(self.connection, value, service._stop, feed.closed):
+                            return
             except (OSError, RuntimeError):
                 self.close_connection=True
 
