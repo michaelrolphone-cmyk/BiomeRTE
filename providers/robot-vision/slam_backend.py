@@ -222,6 +222,9 @@ class SlamBackend:
         self._radio_prior = ()
         self._last_radio_prior = ()
         self._orientation_prior = None
+        self._native_birth = None
+        self._native_scan = None
+        self._lidar_stats = {}
 
     def _empty_localization(self, frame_id=None, timestamp_s=None):
         return {
@@ -290,6 +293,9 @@ class SlamBackend:
         install_owner_capture(LocalMapping)
         runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
                        environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
+        from native_lidar_depth import depth_camera, install_initializer
+        depth_camera(runtime.camera)
+        install_initializer(self,runtime)
         runtime.preserve_map_on_tracking_loss = True
         return runtime
 
@@ -372,6 +378,9 @@ class SlamBackend:
         with self._lock:
             if self._slam is not None:
                 raise RuntimeError("Close the existing backend before starting another map")
+            self._native_birth=None
+            self._native_scan=None
+            self._lidar_stats={}
             self._map_id = str(map_id)
             self._radio_prior = self._last_radio_prior = ()
             self._entities = {}
@@ -399,6 +408,9 @@ class SlamBackend:
                             reconcile_keyframe_points(keyframe, restored=True)
                     from rig_native_map import restore
                     restore(self,path)
+                    if self._native_birth:
+                        from native_lidar_depth import enable_native_rgbd
+                        enable_native_rgbd(self._slam)
                     self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])
@@ -443,6 +455,9 @@ class SlamBackend:
         return entities
 
     def _diff(self, entities, complete=False):
+        if getattr(self,"_native_birth",None):
+            for data in entities.values():
+                data.update(units="m",scale_status="metric")
         changes = []
         for key in sorted(entities):
             if complete or key not in self._entities or entities[key] != self._entities[key]:
@@ -451,6 +466,8 @@ class SlamBackend:
             changes.append({"op": "delete", "kind": key[0], "entity_id": key[1], "data": {}})
         self._entities = copy.deepcopy(entities)
         self._geometry = self._geometry_summary(entities, complete)
+        if getattr(self,"_native_birth",None):
+            self._geometry.update(units="m",scale_status="metric",scale_m_per_map_unit=1.,scale_source="native_lidar")
         return changes
 
     def _current_pose(self):
@@ -500,6 +517,10 @@ class SlamBackend:
     def set_orientation_prior(self, T_map_camera):
         with self._lock:
             self._orientation_prior = None if T_map_camera is None else np.asarray(T_map_camera, float).copy()
+
+    def set_lidar_observation(self, observation):
+        with self._lock:
+            self._native_scan = observation if observation and observation["map_id"]==self._map_id else None
 
     def track(self, image_bgr, frame_id, timestamp_s):
         with self._lock:
@@ -570,8 +591,19 @@ class SlamBackend:
                         parameters = Parameters
                         parameters.kRelocalizationDoPoseOpt2NumInliers = max(18, (count+1)//2)
                 try:
-                    self._slam.track(image, None, None, index, timestamp_s)
+                    scan=getattr(self,"_native_scan",None)
+                    if known_keyframe_ids and not getattr(self,"_native_birth",None):
+                        scan=None
+                        self._native_scan=None
+                    depth=scan["depth"] if scan is not None else None
+                    self._slam.track(image, None, depth, index, timestamp_s)
+                    if scan is not None:
+                        feature_depths=getattr(self._slam.tracking.f_cur,"depths",None)
+                        self._lidar_stats.update(last_front_scan=scan["scan_id"],skew_bound_s=scan["skew_bound_s"],
+                            front_features_with_depth=int(np.count_nonzero(feature_depths>0)) if feature_depths is not None else 0,
+                            front_depth_frames=self._lidar_stats.get("front_depth_frames",0)+1)
                 finally:
+                    self._native_scan=None
                     if parameters is not None:
                         parameters.kRelocalizationDoPoseOpt2NumInliers = original
                     if motion is not None:
@@ -590,6 +622,8 @@ class SlamBackend:
                     if native_state == "OK":
                         transform, reference = self._current_pose()
                         if transform is not None:
+                            if getattr(self,"_native_birth",None):
+                                self._localization.update(units="m",scale_status="metric")
                             self._localization.update(valid=True, T_map_camera=transform.tolist(),
                                                       reference_keyframe_id=reference)
                         else:
@@ -664,7 +698,7 @@ class SlamBackend:
                     self._descriptor_preprocessing_history or [self._active_preprocessing]),
                 "next_frame_index": self._next_frame_index,
                 "source_frames": {k: self._source_frames[k] for k in used_indices if k in self._source_frames},
-                "units": "arbitrary", "scale_status": "unobserved", "files": files,
+                "units": self._geometry["units"], "scale_status": self._geometry["scale_status"], "files": files,
                 "created_at_unix_s": time.time(), "geometry_source": "saved_map_json",
             }
             temporary = target / "backend_manifest.json.tmp"
@@ -719,7 +753,7 @@ class SlamBackend:
             "descriptor_preprocessing_history": ticket["preprocessing_history"],
             "next_frame_index": ticket["next_frame_index"],
             "source_frames": {k: ticket["source_frames"][k] for k in used_indices if k in ticket["source_frames"]},
-            "units": "arbitrary", "scale_status": "unobserved", "files": files,
+            "units": ticket["geometry"]["units"], "scale_status": ticket["geometry"]["scale_status"], "files": files,
             "created_at_unix_s": time.time(), "geometry_source": "saved_map_json",
         }
         temporary = target / "backend_manifest.json.tmp"
@@ -738,6 +772,7 @@ class SlamBackend:
         with self._lock:
             return {"backend": "pyslam", "pyslam_commit": PYSLAM_COMMIT, "runtime_loaded": self._slam is not None,
                     "status": self._state, "reason": self._reason, "map_id": self._map_id,
+                    "native_lidar": dict(getattr(self,"_lidar_stats",{}),initialization=getattr(self,"_native_birth",None)),
                     "tracking_quality": {"features": native_frame_feature_count(getattr(getattr(self._slam,'tracking',None),'f_cur',None)),
                                          "feature_count_basis": "native_frame.kps"},
                     "localization": copy.deepcopy(self._localization), "geometry": copy.deepcopy(self._geometry),
@@ -769,4 +804,3 @@ class SlamBackend:
             self._state = "closed"
             self._reason = None
             self._localization = self._empty_localization()
-
