@@ -22,7 +22,7 @@ def unpack_capture(message, receiver_id, role):
     return packet, jpeg
 
 
-async def receive_camera(socket, receiver_id, role, clock, deliver, boot_hint=None, preview=None):
+async def receive_camera(socket, receiver_id, role, clock, deliver, boot_hint=None, preview=None, messages=None):
     pending = {}
     ready_boot=None
     async def synchronize():
@@ -39,7 +39,7 @@ async def receive_camera(socket, receiver_id, role, clock, deliver, boot_hint=No
             await asyncio.sleep(1)
     sync = asyncio.create_task(synchronize())
     try:
-        async for message in socket:
+        async for message in (messages if messages is not None else socket):
             received = time.monotonic()
             if isinstance(message, str):
                 reply = json.loads(message)
