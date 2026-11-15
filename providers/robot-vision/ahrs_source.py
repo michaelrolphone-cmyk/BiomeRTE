@@ -134,7 +134,10 @@ def _sensor(source_id, telemetry, name, received, duration):
             _text(row.get("reset_reason"), "reset_reason", 128)
             if (row.get("reference") != "relative_yaw"
                     or row.get("frame") != "MPU_axes_to_gravity_aligned_initial_yaw"
-                    or row.get("heading_absolute") is not False
+                    or type(row.get("heading_absolute")) is not bool
+                    or (row.get("heading_absolute") and not (row.get("world_alignment_valid") is True
+                        and isinstance(row.get("world_id"),str) and row["world_id"]
+                        and isinstance(row.get("world_reference_id"),str) and row["world_reference_id"]))
                     or row.get("mounting_alignment_applied") is not False):
                 raise ValueError("unsupported attitude frame")
             _vector(row.get("quaternion_wxyz"), 4, "quaternion_wxyz", valid)
@@ -165,7 +168,7 @@ def _sensor(source_id, telemetry, name, received, duration):
                     _vector(row.get(key), 3, key, valid)
                 _number(row.get("temp_c"), "temp_c", valid)
             elif name == "mag":
-                if row.get("frame") != "ak8963_native_xyz" or row.get("used_for_heading") is not False:
+                if row.get("frame") != "ak8963_native_xyz" or type(row.get("used_for_heading")) is not bool:
                     raise ValueError("unsupported magnetic frame")
                 _vector(row.get("field_uT"), 3, "field_uT", valid)
                 _text(row.get("calibration"), "mag calibration", 64)
@@ -210,8 +213,11 @@ def _calibration(state):
         _boolean(row.get("gyro_bias_valid"), "gyro_bias_valid")
         _vector(row.get("gyro_bias_rad_s"), 3, "gyro_bias_rad_s", True)
         _integer(row.get("samples"), "samples")
-        if type(row.get("window_ms")) is not int or row["window_ms"] != 2000 or row.get("persistent") is not False:
+        if type(row.get("window_ms")) is not int or row["window_ms"] != 2000 or type(row.get("persistent")) is not bool:
             return result
+        if row["persistent"]:
+            _integer(row.get("revision"), "revision", minimum=1)
+            _boolean(row.get("restored_from_flash"), "restored_from_flash")
         result.update(valid=True, reason=None)
     except (ValueError, TypeError, OverflowError):
         pass

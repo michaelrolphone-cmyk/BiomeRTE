@@ -68,8 +68,9 @@ class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
                  ahrs_source=None, defer_backend_start=False):
         from leased_publish import LiveFrames
-        self.live_frames = LiveFrames()
-        self.rear_live_frames = LiveFrames()
+        from dual_camera_feed import DualCameraFrames,RearCameraFrames
+        self.live_frames = DualCameraFrames()
+        self.rear_live_frames = RearCameraFrames(self.live_frames)
         self.motion_events = MotionEvents(config.get('motion_events'))
         from drive_response import CaptureDriveResponseMonitor
         self.drive_response = CaptureDriveResponseMonitor(None,config.get('drive_response',{}))
@@ -181,6 +182,8 @@ class VisionService:
 
         from camera_rig import SharedCameraRig
         self.camera_rig = SharedCameraRig(self)
+        from lidar_fusion import LidarFusion
+        self.lidar = LidarFusion(self)
 
     def _registration_for_map(self, map_id, revision):
         registrar = getattr(self, "tof_registration", None)
@@ -450,6 +453,7 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.lidar.start()
         self.sensor_ticks.start()
         self.metric_worker.start()
         self.camera_rig.start()
@@ -734,6 +738,7 @@ class VisionService:
         self._performance_stages["sensor_fusion"] = (time.monotonic()-stage_started)*1000
         frame["processing_performance"] = dict(self._performance_stages)
         if getattr(self,"camera_rig",None) is not None:self.camera_rig.observe_front(frame,localization)
+        if getattr(self,'lidar',None) is not None:self.lidar.observe_visual(frame,localization)
         self._last_geometry = copy.deepcopy(geometry)
         spatial = {
             "sparse_geometry": geometry,
@@ -851,6 +856,7 @@ class VisionService:
                         'map_id', 'map_revision', 'pose')},
                     detections=previous.get('detections', []) if same_frame else [], pose=pose,
                     tof=tof, ahrs=self._stream_ahrs(frame),
+                    lidar=self.lidar.status() if getattr(self,'lidar',None) else None,
                     motion_events=motion,
                     **self._drive_response_telemetry(),
                     ultrasonic=self._stream_ultrasonic(),
@@ -951,6 +957,7 @@ class VisionService:
                     "sensor_id":ray["sensor_id"],"beam_half_angle_deg":ray["beam_half_angle_deg"],
                     "lateral_uncertainty_m":ray["lateral_uncertainty_m"],"units":"arbitrary",
                     "scale_status":qualification}})
+        if getattr(self,'lidar',None) is not None:entities.extend(self.lidar.entities(map_id,revision))
         return entities
 
     def _stream_ultrasonic(self):
@@ -1237,6 +1244,27 @@ class VisionService:
                   "qualification_status": definition.get("qualification_status", "unqualified"),
                   "source": "versioned_robot_configuration"}
         if not summary:
+            if not definition.get("camera"):
+                result["definition"]=definition
+                return result
+            front=definition["camera"]
+            T=np.asarray(front.get("T_robot_camera",np.eye(4)),float)
+            rig=getattr(self,"camera_rig",None)
+            definition["cameras"]={"front":copy.deepcopy(front)}
+            if rig is not None:
+                rearT=T@np.asarray(rig.config["rear"]["T_front_camera_rear_camera_m"])
+                definition["cameras"]["rear"]={"source_id":rig.config["rear"]["camera"].get("source_id"),
+                    "T_robot_camera":rearT.tolist(),"position_body_m":rearT[:3,3].tolist(),
+                    "optical_axis_body":rearT[:3,2].tolist(),"mounting_qualification":rig.config["rear"].get("mount_qualification"),
+                    "module_size_m":[.025,.025,.012],"calibration":rig.config["rear"].get("calibration")}
+            lidar=getattr(self,"lidar",None)
+            if lidar is not None:
+                definition["sensor_rig"]=copy.deepcopy(lidar.config)
+                definition["lidar_poses"]={}
+                for name,mount in lidar.config["lidar"].items():
+                    pose=T@np.asarray(mount["T_front_camera_sensor_m"])
+                    definition["lidar_poses"][name]={**copy.deepcopy(mount),"T_robot_sensor":pose.tolist(),
+                        "position_body_m":pose[:3,3].tolist(),"direction_body":pose[:3,2].tolist()}
             result["definition"] = definition
         return result
 
@@ -1312,6 +1340,7 @@ class VisionService:
             return {
                 "availability": "available", "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
                 "capabilities": CAPABILITIES,
+                "lidar": self.lidar.status() if getattr(self,"lidar",None) else None,
                 "camera_rig": self.camera_rig.status() if getattr(self,"camera_rig",None) is not None else None,
                 "streaming": {"available": not self._stop.is_set(), "lanes": ["vision", "map"],
                               "transport": "native_leased_stream", "per_message_actions": False,
@@ -1524,6 +1553,7 @@ class VisionService:
     def close(self):
         if getattr(self,"camera_rig",None) is not None:self.camera_rig.close()
         self.sensor_ticks.close()
+        if getattr(self,'lidar',None) is not None:self.lidar.close()
         self.applied_controls.close()
         self._stop.set()
         if getattr(self, "world_snapshots", None) is not None:

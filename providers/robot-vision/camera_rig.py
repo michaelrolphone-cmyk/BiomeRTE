@@ -102,6 +102,8 @@ class SharedCameraRig:
   from rear_sensor_push import RearSensorIngress
   self.sensors=RearSensorIngress(self)
  def configure(self,value):
+  if "sensor_rig" in value:
+   self.service.lidar.configure(value["sensor_rig"])
   value=validate(value);atomic_json(self.path,value)
   return {"availability":"available","configuration":value,"applied":"worker_hot_reload"}
  def start(self):
@@ -116,11 +118,13 @@ class SharedCameraRig:
   pose=pose or {"valid":False,"reason":self.error or "rear_processing_pending"}
   return dict(captured.metadata,camera_id="rear",source_id="rear-camera",
    map_id=self.service.map_id,map_revision=self.service.revision,session_id=self.service.session_id,
+   source_timestamp=captured.metadata.get("source_timestamp"),processing_timestamp=previous.get("processing_timestamp") if same else None,
+   calibration_revision=(self.config["rear"].get("calibration") or {}).get("calibration_id"),
    image_available=True,camera_delivery="independent_rear_capture",
    processed_monotonic=captured.decoded_monotonic,processed_monotonic_basis="camera_receive_decode_time",
    processing_state="complete" if same else "pending",pose=pose,
    analysis={key:previous.get(key) for key in ("frame_id","map_id","map_revision","localization","processed_monotonic_s")},
-   sensor_packet=packet,lidar=packet.get("lidar"),ftm=packet.get("ftm"),uart=packet.get("uart"),
+   sensor_packet=packet,lidar=packet.get("lidar"),lidar_fusion=self.service.lidar.status() if getattr(self.service,"lidar",None) else None,ftm=packet.get("ftm"),uart=packet.get("uart"),
    rig_revision=self.config.get("revision"),T_front_camera_rear_camera_m=self.config["rear"]["T_front_camera_rear_camera_m"])
  def _clock_metadata(self,metadata):
   interval=self.sensors.capture_interval(metadata.get("sensor_packet") or {},time.monotonic())
@@ -194,10 +198,14 @@ class SharedCameraRig:
     if captured.image.shape[:2]!=(cal["height"],cal["width"]):raise ValueError("rear_calibration_size_mismatch")
     t,u,boot=self.rear_clock.observe(self._clock_metadata(captured.metadata))
     if boot!=self.source_epoch:self.previous=None;self.source_epoch=boot
-    keypoints,des=orb.detectAndCompute(captured.image,None)
+    from image_preprocessing import preprocess_slam_image
+    backend=self.service.backend
+    policy=getattr(backend,"_active_preprocessing",{"mode":"none","version":1})
+    tracking_image,preprocessing=preprocess_slam_image(captured.image,policy)
+    keypoints,des=orb.detectAndCompute(tracking_image,None)
     if des is None or len(keypoints)<12:self.error="rear_features_insufficient";continue
     kps=np.float32([k.pt for k in keypoints])
-    current={"image":captured.image,"kps":kps,"des":des,"octaves":np.uint8([k.octave for k in keypoints]),
+    current={"image":tracking_image,"preprocessing":preprocessing,"kps":kps,"des":des,"octaves":np.uint8([k.octave for k in keypoints]),
      "sizes":np.float32([k.size for k in keypoints]),"angles":np.float32([k.angle for k in keypoints]),
      "frame_id":captured.metadata["frame_id"],"time":t,"clock_uncertainty_s":u,
      "mount_revision":self.config.get("revision",1),"map_id":self.service.map_id,"matches":[]}
@@ -214,6 +222,9 @@ class SharedCameraRig:
     if paired:
      scale=self.service.metric.attachment_status(self.service.map_id)
      factor=scale.get("scale_m_per_map_unit") if scale.get("availability")=="available" else None
+     if not factor and getattr(self.service,"lidar",None) is not None:
+      lidar_scale=self.service.lidar.scale
+      if lidar_scale and lidar_scale.get("map_id")==self.service.map_id:factor=lidar_scale.get("scale_m_per_map_unit")
      if not factor or not math.isfinite(factor) or factor<=0:
       self.error="metric_scale_required_for_rig_baseline";continue
      mount=np.asarray(cfg["T_front_camera_rear_camera_m"],float).copy();mount[:3,3]/=factor
@@ -257,6 +268,7 @@ class SharedCameraRig:
    "enabled":self.config["rear"]["enabled"],"worker_thread":self.thread.name if self.thread else None,
    "alive":bool(self.thread and self.thread.is_alive()),"processed_frames":self.processed,
    "skipped_frames":self.skipped,"error":self.error,"camera":self.camera.status() if self.camera else None,
+   "sensor_rig":self.service.lidar.config if getattr(self.service,"lidar",None) else None,
    "sensor_push":self.sensors.status(),"live_camera":self.publisher.status() if self.publisher else None,
    "configuration":copy.deepcopy(self.config),"clock_sync":"boot_scoped_device_capture_to_shared_host_monotonic"}
  def query(self,operation,inputs):

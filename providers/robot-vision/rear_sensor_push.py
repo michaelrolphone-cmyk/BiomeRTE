@@ -153,6 +153,9 @@ class RearSensorIngress:
             "session_id":self.service.session_id,
             "lidar":packet.get("lidar"),"ftm":packet.get("ftm"),
             "ftm_responder":packet.get("ftm_responder"),"uart":packet.get("uart")}
+        if getattr(self.service,"lidar",None) is not None:
+            self.service.lidar.enqueue(packet,interval)
+            metadata["lidar_fusion"]=self.service.lidar.status()
         self.service.rear_live_frames.publish(metadata,b"")
         self.error=None
 

@@ -55,7 +55,7 @@ class SensorTickStream:
             receive_decode_monotonic_s=received,capture_age_at_decode_upper_s=max(0.,received-interval[0]))
         events=(self.service._stream_motion_events(frame)
                 if hasattr(self.service,'_stream_motion_events') else [])
-        metadata=dict(frame_id=packet['frame_id'],sensor_tick=True,image_available=False,
+        metadata=dict(frame_id=packet['frame_id'],sensor_packet=packet,sensor_tick=True,image_available=False,
             type='telemetry',camera_delivery='independent_sensor_tick',
             camera=packet.get('camera') or {},processed_monotonic=received,
             processed_monotonic_basis='sensor_packet_receive_time',
@@ -69,6 +69,9 @@ class SensorTickStream:
             ultrasonic=self.service._capture_sensor_stream(frame,'ultrasonic'),
             motion_events=events,**(self.service._drive_response_telemetry()
                 if hasattr(self.service,'_drive_response_telemetry') else {}))
+        if getattr(self.service,'lidar',None) is not None:
+            self.service.lidar.enqueue(packet,interval)
+            metadata['lidar']=self.service.lidar.status()
         metadata['sensor_enrichment_s']=time.monotonic()-publication_started
         self.service.live_frames.publish(metadata,b'')
         self.last_identity=identity;self.published+=1;self.error=None
