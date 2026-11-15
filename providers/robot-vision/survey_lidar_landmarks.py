@@ -18,6 +18,7 @@ class SurveyLidarLandmarks:
         self.snapshot = None
         self.last_scan = None
         self.depths = {}
+        self.reconfirmed = {}
         self.status = {}
         with atlas.lock, atlas.db:
             atlas.db.execute("""CREATE TABLE IF NOT EXISTS survey_lidar_landmarks
@@ -55,12 +56,14 @@ class SurveyLidarLandmarks:
                 or np.trace(rotation.T@transform[:3,:3]) < 1+2*np.cos(np.deg2rad(3))
                 or not 0<=wall-published<2.5):
             self.samples.clear()
+            self.reconfirmed.clear()
             return
         key=(self.atlas.world_id,survey['survey_revision'],rig_revision,zero['id'])
         if self.key!=key:
             self.key=key
             self.samples.clear()
             self.seen.clear()
+            self.reconfirmed.clear()
             with self.atlas.lock:
                 self.depths={i:json.loads(d)['range_m'] for i,d in self.atlas.db.execute("SELECT id,data FROM survey_lidar_landmarks")}
                 self.finished=set(self.depths)
@@ -87,7 +90,14 @@ class SurveyLidarLandmarks:
             for p in row['points']:
                 # One immutable landmark for each calibrated cell at this surveyed viewpoint.
                 entity=f"survey-lidar:{key[1]}:{rig_revision}:{sid}:{raw['resolution']}:{p['zone']}"
-                if entity in self.finished:continue
+                if entity in self.finished:
+                    measured = float(p['depth_m'])
+                    saved = self.depths[entity]
+                    if np.isfinite(measured) and abs(measured - saved) <= max(.035, .04 * saved):
+                        self.reconfirmed[entity] = (zero['id'], at)
+                    else:
+                        self.reconfirmed.pop(entity, None)
+                    continue
                 history=self.samples[entity]
                 if history and at<=history[-1][0]:continue
                 history.append((at,p['xyz_sensor_m']))
@@ -138,10 +148,15 @@ class SurveyLidarLandmarks:
         if p.shape!=(3,) or R.shape!=(3,3) or np.linalg.norm(p-known[:3,3])>.015 or np.trace(R.T@known[:3,:3])<1+2*np.cos(np.deg2rad(3)):return
         prefix=f"survey-lidar:{survey['survey_revision']}:{rig_revision}:{sensor}:"
         with self.atlas.lock:
-            records=[json.loads(v) for v, in self.atlas.db.execute(
-                "SELECT data FROM survey_lidar_landmarks WHERE id LIKE ?",(prefix+'%',))]
+            records=[(i,json.loads(v)) for i,v in self.atlas.db.execute(
+                "SELECT id,data FROM survey_lidar_landmarks WHERE id LIKE ?",(prefix+'%',))]
         if not records:return
-        rows=[r for r in records if r.get('zero_id')==zero['id'] and r.get('samples',0)>=6]
+        rows=[]
+        for entity,row in records:
+            if row.get('samples',0)<6:continue
+            seen_zero,seen_at=self.reconfirmed.get(entity,(None,0.))
+            if row.get('zero_id')==zero['id'] or (seen_zero==zero['id'] and abs(t-seen_at)<=1.):
+                rows.append(row)
         if len(rows)<4:return
         return rows,dict(world_id=survey['world_id'],zero_id=zero['id'],survey_revision=survey['survey_revision'],
                          T_enu_map=survey['reference']['T_enu_camera'])
