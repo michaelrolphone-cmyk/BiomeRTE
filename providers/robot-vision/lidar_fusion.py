@@ -56,11 +56,12 @@ def zone_points(row,mount,capture_us):
         out.append({"zone":i,"xyz_sensor_m":point.tolist(),"depth_m":float(point[2]),"target_status":status})
     return out
 
-def scale_matches(native_camera_points,points,mount):
+def scale_matches(native_camera_points,points,mount,side=8,scale=None):
     """Associate only interior-zone, frontmost visual landmarks with measured depth."""
-    T=np.asarray(mount["T_front_camera_sensor_m"]);q=np.asarray(native_camera_points)@T[:3,:3]
-    if q.size==0:return []
-    side=8;tx=math.tan(math.radians(mount["fov_horizontal_deg"])/2);ty=math.tan(math.radians(mount["fov_vertical_deg"])/2)
+    T=np.asarray(mount["T_front_camera_sensor_m"]);native=np.asarray(native_camera_points)
+    if native.size==0:return []
+    q=(native-T[:3,3]/scale)@T[:3,:3] if scale else native@T[:3,:3]
+    tx=math.tan(math.radians(mount["fov_horizontal_deg"])/2);ty=math.tan(math.radians(mount["fov_vertical_deg"])/2)
     bins={}
     for index,p in enumerate(q):
         if not np.isfinite(p).all() or p[2]<=0:continue
@@ -77,16 +78,27 @@ def scale_matches(native_camera_points,points,mount):
     for point in points:
         found=bins.get(point["zone"])
         if found:
-            index,z=found;factor=(point["depth_m"]+shift)/z
+            index,z=found
+            native_z=z+(shift/scale if scale else 0.)
+            if native_z<=0:continue
+            factor=(point["depth_m"]+shift)/native_z
             if math.isfinite(factor) and factor>0:matches.append((index,factor,point["zone"]))
     return matches
 
 class LidarFusion:
     def __init__(self,service):
+        self.survey_landmarks = None
+        if getattr(service,'atlas',None) is not None:
+            from survey_lidar_landmarks import SurveyLidarLandmarks
+            self.survey_landmarks=SurveyLidarLandmarks(service.state_dir,service.atlas)
+            service.atlas.survey_lidar=self.survey_landmarks
         self.service=service;self.path=service.state_dir/"sensor-rig.json"
         self.config=validate_config(json.loads(self.path.read_text())) if self.path.exists() else defaults()
         self.stamp=None;self.lock=threading.RLock();self.event=threading.Event();self.stop=threading.Event()
         self.pending=None;self.latest=None;self.raw_latest=None;self.visual=deque(maxlen=128);self.scale=None;self.error=None
+        from local_lidar_slam import LocalLidarSlam
+        self.local_slam=LocalLidarSlam(service,self.survey_landmarks)
+        self.scans = {name:deque(maxlen=64) for name in self.config["lidar"]}
         self.processed=0;self.dropped=0;self.last_key=None;self.thread=None
         self.db=sqlite3.connect(str(service.state_dir/"lidar-map.sqlite3"),check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
@@ -103,10 +115,75 @@ class LidarFusion:
     def enqueue(self,packet,interval):
         if not packet.get("lidar"):return
         with self.lock:
+            capture=packet.get("capture_monotonic_us")
+            for raw in packet["lidar"].get("sensors",[]):
+                name=raw.get("id")
+                us=raw.get("observed_monotonic_us")
+                if name not in self.config["lidar"] or not isinstance(us,int) or not isinstance(capture,int):
+                    continue
+                history=self.scans.setdefault(name,deque(maxlen=64))
+                identity=(packet.get("receiver_id"),packet.get("boot_id"),us)
+                if history and history[-1][0]==identity:continue
+                if not (0<=capture-us<=1000000 and len(interval)==2):continue
+                dt=(capture-us)/1e6
+                history.append((identity,(interval[0]-dt,interval[1]-dt),raw,capture,self.service.map_id))
             if self.pending:self.dropped+=1
             self.raw_latest=(copy.deepcopy(packet),list(interval),time.monotonic())
             self.pending=(copy.deepcopy(packet),list(interval),self.service.map_id)
         self.event.set()
+    def for_camera(self,frame,name,cal,camera_mount=None):
+        from native_lidar_depth import project_depth
+        packet=frame.get("sensor_packet") or {}
+        boot=(packet.get("receiver_id"),packet.get("boot_id"))
+        image_us=frame.get("capture_monotonic_us")
+        if not isinstance(image_us,int):image_us=packet.get("capture_monotonic_us")
+        interval=frame.get("capture_host_monotonic_interval_s")
+        tick=getattr(getattr(self.service,"sensor_ticks",None),"_push_snapshot",None)
+        if name=="front" and tick and isinstance(image_us,int) and boot==(tick[0].get("receiver_id"),tick[0].get("boot_id")):
+            delta=(image_us-tick[0]["capture_monotonic_us"])/1e6
+            interval=[x+delta for x in tick[1]]
+        with self.lock:
+            history=list(self.scans.get(name,()))
+            mount=copy.deepcopy(self.config["lidar"].get(name))
+            revision=self.config["revision"]
+        if not mount:return None
+        candidates=[]
+        for identity,window,raw,capture,map_id in history:
+            if map_id!=self.service.map_id:continue
+            if identity[:2]==boot and isinstance(image_us,int):
+                error=abs(image_us-identity[2])/1e6
+            elif interval is not None and len(interval)==2:
+                error=max(abs(interval[1]-window[0]),abs(window[1]-interval[0]))
+            else:continue
+            if error<=.18:candidates.append((error,identity,raw,capture))
+        for error,identity,raw,capture in sorted(candidates,key=lambda c:c[0]):
+            points=zone_points(raw,mount,capture)
+            if not points:continue
+            transform=np.asarray(mount["T_front_camera_sensor_m"])
+            if camera_mount is not None:transform=np.linalg.solve(camera_mount,transform)
+            depth,zones=project_depth(points,mount,math.isqrt(raw["resolution"]),cal,transform)
+            return dict(depth=depth,zones=zones,scan_id=":".join(map(str,identity)),rig_revision=revision,
+                        skew_bound_s=error,sensor_id=name,map_id=self.service.map_id)
+        backend=getattr(self.service,"backend",None)
+        if (name=="front" and self.survey_landmarks and getattr(backend,"_state",None)=="initializing"
+                and not getattr(backend,"_native_birth",None) and not backend._geometry.get("keyframe_count")):
+            seed=self.survey_landmarks.depth_at_verified_start(name,revision,interval)
+            if seed:
+                rows,reference=seed
+                resolution=max(r["resolution"] for r in rows)
+                distances=[0.]*resolution;statuses=[0]*resolution
+                for r in rows:
+                    if r["resolution"]==resolution:
+                        distances[r["zone"]]=r["range_m"]*1000
+                        statuses[r["zone"]]=mount["valid_statuses"][0]
+                raw=dict(valid=True,resolution=resolution,distance_mm=distances,target_status=statuses,observed_monotonic_us=0)
+                points=zone_points(raw,mount,0)
+                depth,zones=project_depth(points,mount,math.isqrt(resolution),cal,mount["T_front_camera_sensor_m"])
+                return dict(depth=depth,zones=zones,scan_id="survey:"+reference["zero_id"]+":"+name,
+                            rig_revision=revision,skew_bound_s=None,sensor_id=name,map_id=self.service.map_id,
+                            survey_reference=reference)
+        return None
+
     def observe_visual(self,frame,localization):
         if not localization.get("valid"):return
         backend=self.service.backend
@@ -132,9 +209,14 @@ class LidarFusion:
                 if A is not None and B is not None:return interpolate_pose(A,B,(t-a[0])/(b[0]-a[0]))
         return None
     def _run(self):
+        refresh=0.
         while not self.stop.is_set():
             self.event.wait(.2);self.event.clear()
             with self.lock:item=self.pending;self.pending=None
+            if self.survey_landmarks and time.monotonic()>=refresh:
+                refresh=time.monotonic()+2.
+                try:self.local_slam.bootstrap()
+                except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
             if not item:continue
             try:self.process(*item)
             except Exception as exc:self.error=type(exc).__name__+":"+str(exc)[:120]
@@ -156,6 +238,10 @@ class LidarFusion:
               "receiver_id":packet["receiver_id"],"boot_id":packet["boot_id"],"map_id":map_id,
               "packet_id":packet["frame_id"],"sensors":rows,"rig_revision":self.config["revision"],"units":"m",
               "mounts_qualification":"provisional_until_owner_measurements","pose_available":False}
+        if self.survey_landmarks is not None:
+            self.survey_landmarks.observe(rows,packet,interval,self.config["revision"])
+            try:self.local_slam.observe(rows,packet,interval,map_id)
+            except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
         pose=self._pose(sum(interval)/2,map_id)
         # LiDAR arrives before the NEXT processed visual pose. Wait on this
         # independent worker for a causal bracket, while the ingress caches
@@ -176,7 +262,14 @@ class LidarFusion:
                     q=(xyz-pose[:3,3])@pose[:3,:3]
                     geometry_epoch=backend._last_loop_id
             matches=[]
-            for row in rows:matches.extend(scale_matches(q,row["points"],row["mount"]))
+            prior=(self.scale or {}).get("scale_m_per_map_unit") if (self.scale or {}).get("map_id")==map_id else None
+            supported=0
+            for row in rows:
+                depths,hits=self.survey_landmarks.visual_depths(packet["frame_id"],row) if self.survey_landmarks else (row["points"],0)
+                supported+=hits
+                side=math.isqrt(row["raw"].get("resolution",64))
+                if side in (4,8):matches.extend(scale_matches(q,depths,row["mount"],side,prior))
+            live["survey_depth_zones_used"]=supported
             if len(matches)>=6:
                 factors=np.array([m[1] for m in matches]);median=float(np.median(factors))
                 inliers=np.abs(factors-median)<=.12*median
@@ -189,6 +282,10 @@ class LidarFusion:
             attachment=self.service.metric.attachment_status(map_id)
             factor=attachment.get("scale_m_per_map_unit") if attachment.get("availability")=="available" else None
             if factor is None and self.scale and self.scale["map_id"]==map_id:factor=self.scale["scale_m_per_map_unit"]
+            if getattr(backend,"_native_birth",None):
+                factor=1.
+                self.scale={"map_id":map_id,"availability":"available","scale_m_per_map_unit":1.,
+                            "source":"native_lidar_visual_initialization"}
             live["scale"]=copy.deepcopy(self.scale);live["mapping_available"]=bool(factor)
             if factor:
                 anchor=backend.rig_anchor(pose)
@@ -232,6 +329,8 @@ class LidarFusion:
         if raw:
             packet,interval,received=raw
             latest=latest or {}
+            latest.setdefault("mapping_available",False)
+            latest.setdefault("native_landmarks_refined",0)
             latest["fusion_packet_id"]=latest.get("packet_id")
             latest.update(packet_id=packet["frame_id"],received_monotonic=received,
                           capture_host_interval_s=interval,sensors=[
@@ -240,7 +339,9 @@ class LidarFusion:
         return {"state":"streaming" if latest and time.monotonic()-latest["received_monotonic"]<2 else "awaiting_sensor_push",
                 "latest":latest,"configuration":configuration,"scale":copy.deepcopy(self.scale),
                 "processed_scans":self.processed,"superseded_scans":self.dropped,"error":self.error,
-                "worker":"slam-lidar-fusion","same_native_map":True}
+                "worker":"slam-lidar-fusion","same_native_map":True,
+                "local_lidar_slam":dict(self.local_slam.state),
+                "survey_landmarks":dict(self.survey_landmarks.status) if self.survey_landmarks else {}}
     def entities(self,map_id,revision=None):
         backend=self.service.backend
         if backend is None:return []

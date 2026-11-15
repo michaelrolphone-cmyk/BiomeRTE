@@ -103,7 +103,12 @@ class LiveCameraTests(unittest.TestCase):
                         self.assertTrue(entered.wait(1))
                         captured = frame(1)
                         camera.offer(captured)
+                        manifest, _ = unpack(inbox.get(timeout=1))
+                        self.assertEqual(manifest['type'],'sensor_manifest')
+                        self.assertEqual(manifest['schema'],'rover.sensor.manifest/1')
                         meta, jpeg = unpack(inbox.get(timeout=1))
+                        while meta.get('type')=='sensor_manifest':
+                            meta,jpeg=unpack(inbox.get(timeout=1))
                         self.assertEqual(meta['frame_id'], 'capture:1')
                         self.assertEqual(jpeg, captured.jpeg_bytes)
                         self.assertFalse(meta['pose']['valid'])

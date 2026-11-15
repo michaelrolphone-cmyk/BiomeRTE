@@ -10,6 +10,7 @@ SCHEMAS = {
     "world_snapshot": "rover.world.snapshot/1",
     "frame": "rover.vision.frame/1",
     "sensor_tick": "rover.sensor.tick/1",
+    "snapshot": "rover.map.snapshot/1",
     "map_delta": "rover.map.delta/1",
     "snapshot_required": "rover.map.snapshot-required/1",
 }

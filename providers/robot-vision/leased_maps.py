@@ -12,6 +12,7 @@ class LiveMap:
         self.current={"type":"snapshot_required","map_id":None,"revision":None}
         self.world_enabled = world
         self.world_snapshot = None
+        self.local_snapshot = None
         self.closed=threading.Event()
 
     @contextlib.contextmanager
@@ -22,11 +23,22 @@ class LiveMap:
             self.subscribers.add(inbox)
             if self.world_snapshot is not None:
                 inbox.put_nowait(self.world_snapshot)
+            if self.local_snapshot is not None:
+                inbox.put_nowait(self.local_snapshot)
             if not self.world_enabled:
                 inbox.put_nowait(packet(self.current))
         try:yield inbox
         finally:
             with self.lock:self.subscribers.discard(inbox)
+
+    def publish_local(self, value):
+        with self.lock:
+            self.local_snapshot = value
+            for inbox in self.subscribers:
+                if inbox.full():
+                    while not inbox.empty():inbox.get_nowait()
+                    if self.world_snapshot is not None:inbox.put_nowait(self.world_snapshot)
+                inbox.put_nowait(value)
 
     def publish_world(self, value):
         with self.lock:

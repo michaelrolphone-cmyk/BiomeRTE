@@ -12,6 +12,7 @@ import logging
 import os
 import signal
 import shutil
+import socket
 import socketserver
 import threading
 import time
@@ -71,7 +72,9 @@ class VisionService:
         from dual_camera_feed import DualCameraFrames,RearCameraFrames
         from sensor_inventory import SensorInventory
         self.inventory = SensorInventory()
-        self.live_frames = DualCameraFrames(self.inventory.observe)
+        from stream_derivations import StreamDerivations
+        self.stream_derivations = StreamDerivations(self)
+        self.live_frames = DualCameraFrames(self._prepare_stream)
         self.rear_live_frames = RearCameraFrames(self.live_frames)
         self.motion_events = MotionEvents(config.get('motion_events'))
         from drive_response import CaptureDriveResponseMonitor
@@ -451,12 +454,16 @@ class VisionService:
         self.applied_controls.start()
         self.metric.start_worker()
         self.atlas.start(self)
+        from sensor_rig_registry import RigSampleFeed
+        self.rig_samples = RigSampleFeed(self)
+        self.live_frames.publish_manifest(self.inventory.snapshot(self))
+        self.rig_samples.start()
         self.world_snapshots.start()
+        self.sensor_ticks.start()
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
         self.lidar.start()
-        self.sensor_ticks.start()
         self.metric_worker.start()
         self.camera_rig.start()
         from live_camera import LiveCamera
@@ -544,9 +551,14 @@ class VisionService:
         self._pending_changes = list(combined.values())
         if self._pending_changes:
             previous = self.revision
+            metadata={"session_id":self.session_id}
+            birth=getattr(getattr(self,"backend",None),"_native_birth",None)
+            if birth and getattr(self.backend,"_map_id",None)==self.map_id:
+                metadata.update(units="m",scale_status="metric",scale_source="native_lidar",scale_m_per_map_unit=1.,
+                    mapping_sources=["visual_features","capture_clock_ahrs","four_mounted_sonars","front_lidar","rear_lidar"],
+                    native_lidar_initialization=birth)
             update = self.store.apply_map_update(
-                self.map_id, self.revision, self._pending_changes, reason=reason,
-                metadata={"session_id": self.session_id})
+                self.map_id, self.revision, self._pending_changes, reason=reason,metadata=metadata)
             self.revision = update["revision"] if isinstance(update, dict) else int(update)
             self.live_maps.publish(self.map_id, previous, self.revision, self._pending_changes)
             self._pending_changes.clear()
@@ -612,6 +624,8 @@ class VisionService:
                 attitude_prior = self.pose_estimator.prior(frame, self.map_id)
                 if hasattr(self.backend, "set_orientation_prior"):
                     self.backend.set_orientation_prior(attitude_prior)
+                if getattr(self,"lidar",None) is not None and hasattr(self.backend,"set_lidar_observation"):
+                    self.backend.set_lidar_observation(self.lidar.for_camera(frame,"front",self.calibration))
                 result = self.backend.track(captured.image, frame_id, measurement_time)
                 result["localization"] = self.pose_estimator.fuse(
                     result.get("localization") or unknown_localization("unavailable"), attitude_prior)
@@ -816,6 +830,12 @@ class VisionService:
             self._live_camera.record_processed(captured, live_metadata)
         self._performance_stages["live_publication"] = (time.monotonic()-stage_started)*1000
         return snapshot
+
+    def _prepare_stream(self, metadata, image):
+        if not isinstance(metadata.get("lidar"),dict) or metadata["lidar"].get("latest") is None:
+            metadata["lidar"] = self.lidar.status()
+        self.stream_derivations.enrich(metadata, image)
+        self.inventory.observe(metadata, image)
 
     def _raw_live_metadata(self, captured, previous):
         """Live pixels and sensors; older analysis keeps its own frame identity."""
@@ -1572,6 +1592,8 @@ class VisionService:
         if getattr(self,'lidar',None) is not None:self.lidar.close()
         self.applied_controls.close()
         self._stop.set()
+        if getattr(self, "rig_samples", None) is not None:
+            self.rig_samples.close()
         if getattr(self, "world_snapshots", None) is not None:
             self.world_snapshots.close()
         if getattr(self, "atlas", None) is not None:
@@ -1623,6 +1645,24 @@ class LocalServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     block_on_close = True
 
 
+def write_live_frame(peer, value, stop, closed):
+    """Finish an in-flight frame while the subscriber's inbox replaces older readings."""
+    remaining = memoryview(value)
+    while remaining:
+        if stop.is_set() or closed.is_set():
+            return False
+        try:
+            written = peer.send(remaining)
+        except socket.timeout:
+            # This client's flow control only delays this client's writer.
+            # Retain the offset so an earlier partial send is never duplicated.
+            continue
+        if not written:
+            raise ConnectionError("live subscriber closed")
+        remaining = remaining[written:]
+    return True
+
+
 def handler_for(service):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -1643,8 +1683,8 @@ def handler_for(service):
                             value=inbox.get(timeout=1)
                         except __import__('queue').Empty:
                             continue
-                        self.wfile.write(value)
-                        self.wfile.flush()
+                        if not write_live_frame(self.connection, value, service._stop, feed.closed):
+                            return
             except (OSError, RuntimeError):
                 self.close_connection=True
 

@@ -64,6 +64,9 @@ class SensorInventory:
                     (lidar.get("boot_id"), sample.get("observed_monotonic_us"), sample.get("sequence")),
                     lidar.get("received_monotonic", received) - (sample.get("age_ms") or 0) / 1000,
                     status="online" if sample.get("ready") else "error")
+        tof=meta.get("tof") or {}
+        if tof.get("schema")=="rover.tof.solution/1" and isinstance(tof.get("collector_age_s"),(int,float)):
+            add("tof","front","tof",tof.get("updated_at"),received-tof["collector_age_s"])
         # Self-describing producers can introduce sensor kinds without a consumer change.
         for sample in packet.get("sensors") or []:
             if isinstance(sample, dict) and all(isinstance(sample.get(k), str) for k in ("id", "type", "role")):
@@ -77,50 +80,7 @@ class SensorInventory:
                     self.samples[key] = (identity, when, row)
 
     def snapshot(self, service):
-        definition = service._robot_model().get("definition", {})
-        cameras = definition.get("cameras", {})
-        rig = service.camera_rig.config["rear"]
-        configured = {"camera.front": ("camera", "front", "payload")}
-        if rig["enabled"]:
-            configured["camera.rear"] = ("camera", "rear", "payload")
+        from sensor_rig_registry import manifest
         with self.lock:
             observations = dict(self.samples)
-        for key in observations:
-            row = observations[key][2]
-            configured[key] = (row["type"], row["role"], row["stream"]["path"])
-        sensors = []
-        now = time.monotonic()
-        epoch = time.time() - now
-        for key, (kind, role, path) in sorted(configured.items()):
-            sample = observations.get(key)
-            row = copy.deepcopy(sample[2]) if sample else {
-                "id": key, "type": kind, "role": role, "schema": SCHEMAS["frame"],
-                "stream": {"capability": CAPABILITY, "channel": "vision", "path": path},
-                "rate_hz": None, "mount": {"T_body_sensor": None}, "status": "offline"}
-            when = sample[1] if sample else None
-            row["last_seen"] = (datetime.fromtimestamp(epoch + when, timezone.utc).isoformat(timespec="milliseconds")
-                                if when is not None else None)
-            if kind == "camera":
-                camera_config = rig["camera"] if role == "rear" else service.config["camera"]
-                row["rate_hz"] = camera_config.get("expected_fps")
-                row["mount"]["T_body_sensor"] = cameras.get(role, {}).get("T_robot_camera")
-            elif kind == "lidar":
-                row["mount"]["T_body_sensor"] = definition.get("lidar_poses", {}).get(role, {}).get("T_robot_sensor")
-            elif kind in ("imu", "ahrs", "mag", "barometer"):
-                imu = definition.get("ahrs_mounting", {})
-                rotation, position = imu.get("R_body_from_imu"), imu.get("position_body_m")
-                if rotation and position:
-                    row["mount"]["T_body_sensor"] = [list(axis) + [offset] for axis, offset in zip(rotation, position)] + [[0, 0, 0, 1]]
-            elif kind == "ultrasonic":
-                pose = definition.get("sonar_poses", {}).get(role, {})
-                heading, pos = pose.get("direction_body"), pose.get("position_body_m")
-                if heading and pos and heading[2] == 0:
-                    x, y, _ = heading
-                    row["mount"]["T_body_sensor"] = [[x,-y,0,pos[0]],[y,x,0,pos[1]],[0,0,1,pos[2]],[0,0,0,1]]
-            if when is None or now - when > max(2.0, 3 / (row["rate_hz"] or 1)):
-                row["status"] = "offline"
-            sensors.append(row)
-        # Heartbeats advance last_seen. Inventory revision covers topology, mounts and health.
-        identity = [{k:v for k,v in s.items() if k != "last_seen"} for s in sensors]
-        revision = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-        return {"type":"sensor_manifest", "schema":SCHEMAS["sensor_manifest"], "revision":revision, "sensors":sensors}
+        return manifest(service, observations)

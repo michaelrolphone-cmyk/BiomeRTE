@@ -21,7 +21,7 @@ def snapshot_message(read, limit=500):
         data["entities"].extend(page["entities"])
         cursor = page["next_cursor"]
     data["next_cursor"] = None
-    return {"type":"world_snapshot", "map_id":key[0], "revision":key[1], "data":data}
+    return {"type":"world_snapshot", "complete":True, "map_id":key[0], "revision":key[1], "data":data}
 
 
 class WorldSnapshotFeed:
@@ -30,6 +30,7 @@ class WorldSnapshotFeed:
         self.stop = threading.Event()
         self.thread = None
         self.key = None
+        self.local_key = None
 
     def start(self):
         self.thread = threading.Thread(target=self.run, name="world-snapshot-stream", daemon=True)
@@ -52,6 +53,12 @@ class WorldSnapshotFeed:
         return map_id, revision, (survey, attitude)
 
     def refresh(self):
+        local_key = (self.service.map_id, self.service.revision)
+        if local_key != self.local_key:
+            from rover_wire import map_snapshot
+            local = map_snapshot(self.service.query, *local_key)
+            self.service.live_maps.publish_local(packet(local))
+            self.local_key = local_key
         key = self.version()
         if key == self.key:
             return

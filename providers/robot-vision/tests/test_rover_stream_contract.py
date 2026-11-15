@@ -5,7 +5,7 @@ import re
 import sys
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "providers/robot-vision"))
 from biomerte.stream_router import Session, decode, frame
 from biomerte.vision_mailbox import VisionMailbox
@@ -72,6 +72,16 @@ class WireContract(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(_robot_model=lambda:{"definition":{}},
                                   camera_rig=SimpleNamespace(config={"rear":{"enabled":True,"camera":{}}}),
                                   config={"camera":{"expected_fps":5}})
+        import tempfile,threading
+        from lidar_fusion import defaults
+        from sensor_rig_registry import configured_sensors
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        service.state_dir=pathlib.Path(temporary.name)
+        service.lidar=SimpleNamespace(lock=threading.RLock(),config=defaults(),path=service.state_dir/"sensor-rig.json")
+        service.camera_rig.config["rear"]["T_front_camera_rear_camera_m"]=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+        configured_sensors(service)
+        service.lidar.config["sensors"].append({"id":"ambient.probe","type":"temperature","role":"outside"})
+        service.lidar.path.write_text(json.dumps(service.lidar.config))
         inventory = SensorInventory()
         meta = {"camera_id":"rear","processed_monotonic":now,"frame_id":"rear#1",
                 "sensor_packet":{"boot_id":"boot","stream_sequence":1,

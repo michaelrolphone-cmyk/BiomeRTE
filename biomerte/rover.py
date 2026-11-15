@@ -56,8 +56,11 @@ class Rover:
         if not hasattr(self, '_queues'):
             self._queues = {}
         self._queues[record] = queues
-        if self.map_head is not None:
-            queues['map'].put_nowait(json.dumps(dict(type='snapshot_required', **self.map_head)))
+        for kind in ('world_snapshot', 'snapshot'):
+            if kind in self.bootstrap:queues['map'].put_nowait(self.bootstrap[kind])
+        if 'snapshot' not in self.bootstrap and self.map_head is not None:
+            queues['map'].put_nowait(json.dumps(dict(type='snapshot_required',
+                schema='rover.map.snapshot-required/1',schema_version={'major':1,'minor':0},**self.map_head)))
         try:
             yield queues
         finally:
@@ -68,6 +71,8 @@ class Rover:
         if lane in ('vision', 'map'):
             metadata, unused = decode(message)
             if lane == 'vision' and metadata.get('type') in ('sensor_manifest', 'world_snapshot'):
+                self.bootstrap[metadata['type']] = message
+            if lane == 'map' and metadata.get('type') in ('world_snapshot','snapshot'):
                 self.bootstrap[metadata['type']] = message
             if metadata.get('type') == 'world_snapshot':
                 for queues in getattr(self, '_queues', {}).values():
@@ -213,7 +218,8 @@ class Rover:
                             continue
                     if lane=='map':
                         metadata,_=decode(message)
-                        if metadata.get('type')=='world_snapshot':
+                        if metadata.get('type') in ('world_snapshot','snapshot'):
+                            if metadata.get('type')=='snapshot':revision=metadata['revision']
                             self.broadcast(lane, message)
                             continue
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:

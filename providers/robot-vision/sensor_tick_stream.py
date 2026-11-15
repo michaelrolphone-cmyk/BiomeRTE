@@ -31,10 +31,13 @@ class SensorTickStream:
     def start(self):
         from sensor_push import SensorPushReceiver
         self.push=SensorPushReceiver(self)
-        if self.push.configured:
+        socket_camera = getattr(getattr(self.service, 'camera', None), '_websocket', False)
+        if self.push.configured or socket_camera:
             self.service.ahrs.source.set_push_source(lambda:self.pushed_sensor('ahrs'))
             self.service.ultrasonic.set_push_source(lambda:self.pushed_sensor('ultrasonic'))
         self.push.start()
+        if self.push.configured or socket_camera:
+            return self
         self.thread=threading.Thread(target=self._run,name='sensor-tick-stream',daemon=True)
         self.thread.start()
         return self
@@ -62,6 +65,8 @@ class SensorTickStream:
             receive_decode_timestamp=datetime.now(timezone.utc).isoformat(),
             source_timestamp=None,source_timestamp_status='sensor_tick_not_camera_exposure',
             sensor_delivery='websocket_push' if capture_interval is not None else 'http_sensor_tick',
+            capture_host_monotonic_interval_s=list(interval),
+            capture_age_upper_s=max(0., received-interval[0]),
             sensor_clock_uncertainty_s=(interval[1]-interval[0])/2,
             sensor_stream_sequence=packet.get('stream_sequence'),
             map_id=self.service.map_id,map_revision=self.service.revision,
@@ -72,6 +77,15 @@ class SensorTickStream:
         if getattr(self.service,'lidar',None) is not None:
             self.service.lidar.enqueue(packet,interval)
             metadata['lidar']=self.service.lidar.status()
+        if capture_interval is not None and isinstance(packet.get('ftm'),dict):
+            # Preserve the device capture interval for local and remote ranging solvers.
+            metadata['ranging_observation']={
+                'receiver_id':packet['receiver_id'],'boot_id':packet['boot_id'],
+                'uptime_ms':(packet['capture_monotonic_us']//1000) & 0xffffffff,
+                'capture_host_monotonic_interval_s':list(capture_interval),
+                'ftm':packet['ftm'],'ftm_responder':packet.get('ftm_responder')}
+            if packet.get('wifi'):
+                metadata['ranging_observation']['wifi']=packet['wifi']
         metadata['sensor_enrichment_s']=time.monotonic()-publication_started
         self.service.live_frames.publish(metadata,b'')
         self.last_identity=identity;self.published+=1;self.error=None
@@ -97,4 +111,4 @@ class SensorTickStream:
     def close(self):
         self.stop.set()
         if getattr(self,"push",None) is not None:self.push.close()
-        if self.thread:self.thread.join(timeout=3)
+        if getattr(self,'thread',None):self.thread.join(timeout=3)

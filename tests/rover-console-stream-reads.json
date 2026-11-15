@@ -180,10 +180,38 @@
   },
   {
     "schemas": [
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
+    ],
+    "path": [
+      "complete"
+    ]
+  },
+  {
+    "schemas": [
       "rover.world.snapshot/1"
     ],
     "path": [
       "data"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
+    ],
+    "path": [
+      "data"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
+    ],
+    "path": [
+      "data",
+      "entities"
     ]
   },
   {
@@ -193,6 +221,16 @@
     "path": [
       "data",
       "entities"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
+    ],
+    "path": [
+      "data",
+      "next_cursor"
     ]
   },
   {
@@ -314,16 +352,6 @@
   },
   {
     "schemas": [
-      "rover.vision.frame/1",
-      "rover.sensor.tick/1"
-    ],
-    "path": [
-      "lidar",
-      "latest"
-    ]
-  },
-  {
-    "schemas": [
       "rover.sensor.tick/1",
       "rover.vision.frame/1"
     ],
@@ -340,7 +368,23 @@
     "path": [
       "lidar",
       "latest",
-      "sensors"
+      "sensors",
+      "[]",
+      "mount"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "lidar",
+      "latest",
+      "sensors",
+      "[]",
+      "mount",
+      "valid_statuses"
     ]
   },
   {
@@ -358,11 +402,42 @@
   },
   {
     "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "lidar",
+      "lidar"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "lidar",
+      "lidar_fusion"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "lidar",
+      "world_hits"
+    ]
+  },
+  {
+    "schemas": [
       "rover.map.delta/1",
       "rover.map.snapshot-required/1",
       "rover.sensor.tick/1",
       "rover.vision.frame/1",
-      "rover.world.snapshot/1"
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
     ],
     "path": [
       "map_id"
@@ -473,7 +548,8 @@
       "rover.map.delta/1",
       "rover.map.snapshot-required/1",
       "rover.sensor.manifest/1",
-      "rover.world.snapshot/1"
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
     ],
     "path": [
       "revision"
@@ -486,10 +562,30 @@
       "rover.sensor.manifest/1",
       "rover.sensor.tick/1",
       "rover.vision.frame/1",
-      "rover.world.snapshot/1"
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
     ],
     "path": [
       "schema"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.sensor.tick/1",
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "sensor_packet"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.sensor.tick/1",
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "sensor_packet",
+      "sensors"
     ]
   },
   {
@@ -588,7 +684,8 @@
       "rover.sensor.manifest/1",
       "rover.sensor.tick/1",
       "rover.vision.frame/1",
-      "rover.world.snapshot/1"
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
     ],
     "path": [
       "sequence"
@@ -654,6 +751,190 @@
     ],
     "path": [
       "tof",
+      "anchor_geometry"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "anchors"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "approximate"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "estimate"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "estimate",
+      "refined"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "estimate",
+      "residual"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "estimate",
+      "sessions"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "floor"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "floor",
+      "separation"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "fresh"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "point"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "display_fit",
+      "source"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "tof",
+      "frame"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "tof",
+      "frame",
+      "frame_id"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "position"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "tof",
+      "position",
+      "frame_id"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "tof",
       "schema"
     ]
   },
@@ -673,7 +954,8 @@
       "rover.sensor.manifest/1",
       "rover.sensor.tick/1",
       "rover.vision.frame/1",
-      "rover.world.snapshot/1"
+      "rover.world.snapshot/1",
+      "rover.map.snapshot/1"
     ],
     "path": [
       "type"
@@ -783,6 +1065,98 @@
     "path": [
       "ultrasonic",
       "ultrasonic"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.sensor.tick/1",
+      "rover.vision.frame/1"
+    ],
+    "path": [
+      "world_orientation"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "pose"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "pose",
+      "x"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "pose",
+      "y"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "pose",
+      "yaw"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "pose",
+      "z"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "valid"
+    ]
+  },
+  {
+    "schemas": [
+      "rover.vision.frame/1",
+      "rover.sensor.tick/1"
+    ],
+    "path": [
+      "world_orientation",
+      "world_id"
     ]
   }
 ]
