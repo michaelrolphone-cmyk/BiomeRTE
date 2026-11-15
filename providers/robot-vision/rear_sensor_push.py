@@ -215,7 +215,11 @@ class RearSensorIngress:
             if request.path not in ("/sensors","/camera") or not hmac.compare_digest(
                 request.headers.get("Authorization",""),"Sensor "+self.config["token"]):
                 return connection.respond(HTTPStatus.UNAUTHORIZED,"Unauthorized sensor source")
+        from rear_transport_preview import messages_with_idle_recovery
         readings=RecentReadings(freshness_window(self.service))
+        # This device already exchanges clock probes once per second. A delayed
+        # protocol PONG must not terminate a connection carrying real readings.
+        idle_seconds=max(12.,6*freshness_window(self.service))
         def deliver():
             while True:
                 reading=readings.get()
@@ -237,6 +241,7 @@ class RearSensorIngress:
                         camera.push_jpeg(packet,jpeg,interval,received)
                 from rear_transport_preview import publish_image
                 await receive_camera(socket,self.config['receiver_id'],'rear',ClockAlignment(),deliver,
+                    messages=messages_with_idle_recovery(socket,idle_seconds),
                     boot_hint=lambda:getattr(self,'last_wire_boot',None),preview=lambda p,j,t:publish_image(self,p,j,t))
                 return
             clock=ClockAlignment()
@@ -257,7 +262,7 @@ class RearSensorIngress:
                     await asyncio.sleep(1)
             task=asyncio.create_task(synchronize())
             try:
-                async for message in socket:
+                async for message in messages_with_idle_recovery(socket,idle_seconds):
                     received=time.monotonic()
                     packet=json.loads(message)
                     if packet.get("type")=="clock":
@@ -302,7 +307,7 @@ class RearSensorIngress:
                 await asyncio.gather(task,return_exceptions=True)
         try:
             async with serve(receive,self.config.get("listen","0.0.0.0"),self.config.get("port",9878),
-                             process_request=authorize,max_size=None,max_queue=1,ping_interval=15) as server:
+                             process_request=authorize,max_size=None,max_queue=1,ping_interval=None) as server:
                 self.bound_port=server.sockets[0].getsockname()[1]
                 while not self.stop.is_set():
                     await asyncio.sleep(.1)
