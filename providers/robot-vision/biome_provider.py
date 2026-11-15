@@ -137,9 +137,10 @@ def contract_definitions():
     for item in definitions:
         if item["version"] == 1 and item["name"] in legacy_descriptions:
             item["description"] = legacy_descriptions[item["name"]]
-            item["usage"] = legacy_guidance[item["name"]]
     return definitions
 
+
+LEGACY_GUIDANCE = {'robot.vision.metadata:1': {'before': 'Read robot.body.model:1 and robot.metric.status:1. robot.camera.light.set:1 illuminates the view for driving. First-DMA capture timestamps are not calibrated exposure times.'}, 'robot.camera.light.set:1': {'before': 'The onboard LED illuminates the camera view for driving. Partial on/brightness/rgb update; inspect uncertain outcomes before retry.'}, 'robot.vision.project_ground:1': {'before': 'Legacy v1 schema; use robot.vision.project_ground:2 to project onto the floor plane without a caller contact assertion.'}}
 
 CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contract_definitions()}
 
@@ -409,6 +410,7 @@ def offer(cfg, contract, state):
     for name, guidance in {**SCALE_GUIDANCE.get(contract, {}),
                            **AHRS_GUIDANCE.get(contract, {})}.items():
         usage[name] += " " + guidance
+    usage.update(LEGACY_GUIDANCE.get(contract, {}))
     usage.update(CONTRACTS[contract].get("usage", {}))
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
                 service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)

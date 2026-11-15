@@ -1,5 +1,6 @@
 import asyncio,unittest
-from types import SimpleNamespace
+import sys
+from types import SimpleNamespace,ModuleType
 from unittest.mock import patch
 from biomerte import stream_router
 from biomerte.control_clock import ControlClock
@@ -14,9 +15,14 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
   class Listener:
    async def __aenter__(self):listening.set();return self
    async def __aexit__(self,*args):closed.set();return False
+  ws=ModuleType("websockets");ws.__path__=[]
+  wa=ModuleType("websockets.asyncio");wa.__path__=[]
+  server=ModuleType("websockets.asyncio.server");server.serve=lambda *a,**k:Listener()
+  ws.asyncio=wa;wa.server=server
+  modules={"websockets":ws,"websockets.asyncio":wa,"websockets.asyncio.server":server}
   app=SimpleNamespace(node="test",config={"stream_router_secret":"test"})
   config=dict(controllers=["test"],control_ntp=True,transport="private_http",listen="127.0.0.1",port=0)
-  with patch("biomerte.app.Application",return_value=app),patch("biomerte.stream_inspection.add_remote"),patch("biomerte.control_clock.ControlClock",PendingClock),patch("websockets.asyncio.server.serve",return_value=Listener()):
+  with patch("biomerte.app.Application",return_value=app),patch("biomerte.stream_inspection.add_remote"),patch("biomerte.control_clock.ControlClock",PendingClock),patch.dict(sys.modules,modules):
    task=asyncio.create_task(stream_router.serve(config))
    try:
     await asyncio.wait_for(listening.wait(),1)

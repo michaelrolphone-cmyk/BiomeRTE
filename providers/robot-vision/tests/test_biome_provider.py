@@ -160,7 +160,10 @@ class ScaleContractTests(unittest.TestCase):
             "robot.camera.exposure.status:1", "robot.camera.exposure.set:1",
             "robot.body.model:1", "robot.control.model:1", "robot.sonar.snapshot:1", "robot.metric.status:1",
             "robot.world.read:1", "robot.world.status:1", "robot.map.obstacles:1",
-            "robot.radio.status:1", "robot.radio.localize:1", "robot.map.radio.read:1",
+            "robot.vision.rig.status:1", "robot.vision.rig.configure:1",
+            "robot.tof.status:1", "robot.tof.localize:1",
+            "robot.vision.frame:2", "robot.vision.snapshot:2", "robot.vision.geometry:2",
+            "robot.vision.project_ground:2",
             "robot.camera.light.status:1", "robot.camera.light.set:1",
             "robot.ahrs.status:1", "robot.ahrs.snapshot:1", "robot.ahrs.calibrate:1",
         }
@@ -457,7 +460,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual(len(offers), 38)
+        self.assertEqual(len(offers), 43)
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])
