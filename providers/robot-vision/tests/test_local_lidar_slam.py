@@ -15,3 +15,11 @@ class GeometricRegistration(unittest.TestCase):
         pose,fit=register_scan(pts,T,pts,normals)
         self.assertEqual(3,fit['observable_dof'])
         np.testing.assert_allclose(pose,np.eye(4),atol=1e-6)
+
+    def test_stationary_floor_agrees_without_changing_position_or_heading(self):
+        xy=np.array([[x,y,0.] for x in np.arange(0,.5,.08) for y in np.arange(0,.5,.08)])
+        T=np.eye(4);T[:2,3]=[.03,-.02]
+        pose,fit=register_scan(xy,T,xy,np.tile([0.,0.,1.],(len(xy),1)),stationary=True)
+        np.testing.assert_equal(pose,T)
+        self.assertTrue(fit['stationary_pose_held'])
+        self.assertEqual(fit['observable_dof'],0)
