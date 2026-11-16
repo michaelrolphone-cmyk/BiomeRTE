@@ -431,9 +431,13 @@ class Store:
         """
         db = None
         with _CONNECTIONS_LOCK:
-            for index in range(len(_IDLE_CONNECTIONS) - 1, -1, -1):
-                if _IDLE_CONNECTIONS[index][0] is self._connection_key:
-                    unused, db = _IDLE_CONNECTIONS.pop(index)
+            # A cyclic Store finalizer can reenter this RLock and remove other
+            # owners' idle handles during allocation. Iterate a stable snapshot;
+            # this live Store's matching entry cannot be finalized underneath us.
+            for entry in reversed(tuple(_IDLE_CONNECTIONS)):
+                if entry[0] is self._connection_key:
+                    _IDLE_CONNECTIONS.remove(entry)
+                    unused, db = entry
                     break
         if db is None:
             db = self.connect()
@@ -676,3 +680,4 @@ class Store:
                 raise
             finally:
                 self._clear_writer_diagnostic(owner)
+

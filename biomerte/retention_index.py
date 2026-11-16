@@ -146,7 +146,7 @@ def _scan(db, kind, ident, chunk_chars):
                     db.execute('INSERT OR REPLACE INTO retention_exact_order VALUES(?,?,?,?)',
                                (ident, value.get('kind'), value.get('key'), value['completed_order']))
         if isinstance(value, dict):
-            ignored |= int(kind in ('actions', 'runs', '_receipt', '_submissions') and bool(value.get('result_expired')))
+            ignored |= int(kind in ('actions', 'runs', '_receipt', '_submissions', '_completion_receipts') and bool(value.get('result_expired')))
             ignored |= int(kind == 'leases' and value.get('state') == 'released')
         if kind == '_submission_leases' and isinstance(value, str):
             submission = value
@@ -248,3 +248,4 @@ def status(db):
             'dirty_records': dirty, 'legacy_keys_remaining': remaining,
             'partial_records': db.execute('SELECT count(*) FROM retention_ref_progress').fetchone()[0],
             'partial_characters': db.execute('SELECT coalesce(sum(offset),0) FROM retention_ref_progress').fetchone()[0]}
+

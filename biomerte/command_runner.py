@@ -59,7 +59,11 @@ def inspect(directory):
     handle = locked(os.path.join(directory, 'custody.lock'))
     if handle is None:
         return state
-    handle.close()
+    with handle:
+        # Completion may commit after the first read and before custody releases.
+        # Recheck under the acquired lock before declaring the executor lost.
+        if os.path.exists(result_path):
+            return read(result_path)
     # A released custody lock with no completion cannot prove the effect.
     return {'state': 'interrupted', 'reason': 'runner lost custody; effect requires reconciliation',
             'last_observation': state, 'replay_allowed': False}
@@ -142,3 +146,4 @@ def run(directory):
 if __name__ == '__main__':
     os.umask(0o077)
     run(sys.argv[1])
+
