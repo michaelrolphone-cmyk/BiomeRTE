@@ -1,0 +1,42 @@
+{
+  "checks": [
+    {
+      "check": "initial active service",
+      "passed": true,
+      "worker": "qa-a-28dfd19d6c"
+    },
+    {
+      "check": "new service automatically reaches standby",
+      "passed": true,
+      "revision": "6defa7e1f32fa05d3de3fef4fc28ba2ff3ac90ef261199fbbed1bbbac7b56fdd"
+    },
+    {
+      "check": "paused primary takeover and stale output rejection",
+      "failover_seconds": 6.847,
+      "passed": true
+    },
+    {
+      "check": "recovered worker stays standby",
+      "passed": true
+    },
+    {
+      "check": "service crash triggers takeover",
+      "failover_seconds": 6.237,
+      "passed": true
+    },
+    {
+      "check": "gateway restart invalidates old epoch and recovers",
+      "passed": true,
+      "recovery_seconds": 10.738
+    }
+  ],
+  "coordinator_source_sha256": "d54f3b8d84c43a9a589e909981288a903138b6f34e43336c46fedc7a2cd98746",
+  "docker_version": "24.0.7",
+  "image_id": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+  "pi_hardware_qualified": false,
+  "platform": "linux/arm64",
+  "qualification": "two Docker workers on one physical host",
+  "relay_hardware_qualified": false,
+  "result": "passed",
+  "runner_source_sha256": "7aab087221119681d6e701b34565f12ab60911d537b547a88734eae201274f2d"
+}
