@@ -97,7 +97,9 @@ class FakeDocker:
         self.removed.append(container)
         del self.children[container]
 
-    def create(self, value, image_ref, worker, incarnation, grant, overrides=None):
+    def create(self, value, image_ref, worker, incarnation, grant, overrides=None, **options):
+        if options.get("admit") is not None and not options["admit"]():
+            raise ds.DockerError("grant no longer admitted")
         if self.start_error is not None:
             raise self.start_error
         container = "managed-child-" + str(len(self.created) + 1)
@@ -107,6 +109,8 @@ class FakeDocker:
             "incarnation": incarnation, "grant": copy.deepcopy(grant),
         })
         self.add_child(container, worker)
+        if options.get("on_created") is not None:
+            options["on_created"](container)
         if self.after_create is not None:
             self.after_create()
         return container
@@ -166,6 +170,9 @@ class DeferredThread(InlineThread):
 
 class RunnerCase(unittest.TestCase):
     def setUp(self):
+        threads = mock.patch.object(ds.threading, "Thread", InlineThread)
+        threads.start()
+        self.addCleanup(threads.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.clock = Clock()

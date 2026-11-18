@@ -25,6 +25,10 @@ import uuid
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+try:
+    from . import service_adapters as adapters
+except ImportError:  # The minimal supervisor image executes this module directly.
+    import service_adapters as adapters
 
 LOG = logging.getLogger("biomerte.docker_services")
 PIN = re.compile(r"^(?:[^\s]+@)?sha256:[a-f0-9]{64}$")
@@ -33,6 +37,14 @@ MANAGED = "org.biomerte.service.managed"
 WORKER = "org.biomerte.service.worker"
 SERVICE = "org.biomerte.service.id"
 GRANT = "org.biomerte.service.grant"
+
+
+def container_name(manifest, worker_id, incarnation, grant):
+    # The same full binding always has the same name, including after a lost reply.
+    identity = [manifest["id"], manifest["revision"], worker_id, incarnation,
+                grant["boot_epoch"], grant["grant_token"]]
+    digest = hashlib.sha256(canonical(identity).encode("utf-8")).hexdigest()
+    return "biome-" + manifest["id"] + "-" + digest[:24]
 
 
 def canonical(value):
@@ -68,13 +80,7 @@ def validate_manifest(value):
     if "command" in value and (not isinstance(value["command"], list) or
                               any(not isinstance(x, str) for x in value["command"])):
         raise ValueError("command is an argv list, not a shell string")
-    for mount in value.get("mounts", []):
-        if (not isinstance(mount, dict) or not isinstance(mount.get("source"), str) or
-            not isinstance(mount.get("target"), str) or not os.path.isabs(mount["source"]) or
-            not os.path.isabs(mount["target"])):
-            raise ValueError("Mount source and target must be absolute")
-        if not mount.get("read_only", True) and not mount.get("cache_only", False):
-            raise ValueError("Writable local mounts require explicit disposable cache_only")
+    adapters.validate(value)
     if value.get("restart_policy") not in (None, "no"):
         raise ValueError("Only the grant-aware runner may restart the service")
     for key in ("lease_ttl_s", "worker_ttl_s", "startup_grace_s"):
@@ -106,8 +112,9 @@ class UnixConnection(http.client.HTTPConnection):
 
 class DockerEngine:
     """Docker Engine API 1.24 works with the existing 17.06 and 24.x engines."""
-    def __init__(self, socket_path="/var/run/docker.sock", timeout=4):
+    def __init__(self, socket_path="/var/run/docker.sock", timeout=4, operation_timeout=30):
         self.socket_path, self.timeout = socket_path, timeout
+        self.operation_timeout = operation_timeout
 
     def request(self, method, path, value=None, timeout="default", stream=False):
         conn = UnixConnection(self.socket_path, self.timeout if timeout == "default" else timeout)
@@ -174,12 +181,18 @@ class DockerEngine:
         if labels.get(MANAGED) != "true" or labels.get(WORKER) != worker_id:
             raise DockerError("Refusing to stop a container outside this worker's managed scope")
         if current.get("State", {}).get("Running"):
-            self.request("POST", "/v1.24/containers/" + container + "/kill?signal=SIGKILL")
-        self.request("DELETE", "/v1.24/containers/" + container)
+            self.request("POST", "/v1.24/containers/" + container + "/kill?signal=SIGKILL",
+                         timeout=getattr(self, "operation_timeout", 30))
+        self.request("DELETE", "/v1.24/containers/" + container,
+                     timeout=getattr(self, "operation_timeout", 30))
 
-    def create(self, manifest, image_ref, worker_id, incarnation, grant, binding_overrides=None):
+    def create(self, manifest, image_ref, worker_id, incarnation, grant, binding_overrides=None,
+               mount_bindings=None, initial_phase=None, checkpoint=None, adapter_url=None,
+               admit=None, on_created=None):
         labels = {MANAGED: "true", WORKER: worker_id, SERVICE: manifest["id"],
-                  GRANT: grant["grant_token"], "org.biomerte.service.revision": manifest["revision"]}
+                  GRANT: grant["grant_token"], "org.biomerte.service.revision": manifest["revision"],
+                  "org.biomerte.service.incarnation": incarnation,
+                  "org.biomerte.service.boot_epoch": grant["boot_epoch"]}
         environment = dict(manifest.get("environment", {}))
         environment.update({
             "BIOME_SERVICE_ID": manifest["id"],
@@ -188,12 +201,20 @@ class DockerEngine:
             "BIOME_SERVICE_GRANT": grant["grant_token"],
             "BIOME_SERVICE_WORKER": worker_id,
             "BIOME_SERVICE_INCARNATION": incarnation})
+        if initial_phase is not None:
+            if initial_phase != "preparing" or not adapters.staged(manifest):
+                raise ValueError("Only an explicitly staged service may start in preparation")
+            environment["BIOME_SERVICE_PHASE"] = initial_phase
+            environment["BIOME_SERVICE_CHECKPOINT"] = checkpoint
+            if adapter_url is not None:
+                environment["BIOME_SERVICE_ADAPTER_URL"] = adapter_url
+        mounts = adapters.resolve_mounts(manifest, mount_bindings or {})
         host = {"RestartPolicy": {"Name": "no"},
                 "LogConfig": {"Type": "json-file", "Config": {
                     "max-size": str(manifest.get("log_max_size", "8m")),
                     "max-file": str(manifest.get("log_max_files", 3))}},
                 "Binds": [m["source"] + ":" + m["target"] + (":ro" if m.get("read_only", True) else ":rw")
-                          for m in manifest.get("mounts", [])]}
+                          for m in mounts]}
         host["NetworkMode"] = manifest.get("network", "bridge")
         if manifest.get("extra_hosts"):
             host["ExtraHosts"] = list(manifest["extra_hosts"])
@@ -226,10 +247,25 @@ class DockerEngine:
                 "Interval": int(health.get("interval_s", 2) * 1000000000),
                 "Timeout": int(health.get("timeout_s", 1) * 1000000000),
                 "Retries": int(health.get("retries", 2))}
-        name = "biome-" + manifest["id"] + "-" + incarnation[:8] + "-" + grant["grant_token"][:8]
-        created = self.request("POST", "/v1.24/containers/create?" + urlencode({"name": name}), config)
+        name = container_name(manifest, worker_id, incarnation, grant)
+        if admit is not None and not admit():
+            raise DockerError("Service grant expired before Docker create")
         try:
-            self.request("POST", "/v1.24/containers/" + created["Id"] + "/start")
+            created = self.request("POST", "/v1.24/containers/create?" + urlencode({"name": name}),
+                                   config, timeout=getattr(self, "operation_timeout", 30))
+        except Exception as error:
+            # A transport timeout cannot prove whether the named create happened.
+            # Do not replay it under another name; retain this exact cleanup reference.
+            if getattr(error, "status", None) not in (400, 401, 403, 404, 422):
+                error.container_id, error.creation_uncertain = name, True
+            raise
+        try:
+            if on_created is not None:
+                on_created(created["Id"])
+            if admit is not None and not admit():
+                raise DockerError("Service grant expired before Docker start")
+            self.request("POST", "/v1.24/containers/" + created["Id"] + "/start",
+                         timeout=getattr(self, "operation_timeout", 30))
         except Exception as error:
             try:
                 self.remove_managed(created["Id"], worker_id)
@@ -276,6 +312,25 @@ class State:
         with sqlite3.connect(path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS services (id TEXT PRIMARY KEY, revision TEXT, state TEXT, observation TEXT, updated REAL)")
             db.execute("CREATE TABLE IF NOT EXISTS manifests (id TEXT PRIMARY KEY, revision TEXT, manifest TEXT)")
+            db.execute("CREATE TABLE IF NOT EXISTS children (service TEXT PRIMARY KEY, container TEXT, uncertain INTEGER)")
+
+    def children(self):
+        with sqlite3.connect(self.path) as db:
+            return {row[0]: {"container": row[1], "uncertain": bool(row[2])}
+                    for row in db.execute("SELECT service,container,uncertain FROM children")}
+
+    def save_child(self, service_id, container, uncertain):
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT OR REPLACE INTO children VALUES (?,?,?)",
+                       (service_id, container, int(uncertain)))
+
+    def forget_child(self, service_id, container=None):
+        with sqlite3.connect(self.path) as db:
+            if container is None:
+                db.execute("DELETE FROM children WHERE service=?", (service_id,))
+            else:
+                db.execute("DELETE FROM children WHERE service=? AND container=?",
+                           (service_id, container))
 
     def manifests(self):
         with sqlite3.connect(self.path) as db:
@@ -296,7 +351,8 @@ class State:
 class Runner:
     def __init__(self, config, engine=None, client=None, clock=None):
         self.config = config
-        for name, default in (("heartbeat_interval_s", 1), ("request_timeout_s", 3), ("image_retry_s", 10)):
+        for name, default in (("heartbeat_interval_s", 1), ("request_timeout_s", 3), ("image_retry_s", 10),
+                              ("docker_request_timeout_s", 30)):
             value = config.get(name, default)
             if (isinstance(value, bool) or not isinstance(value, (int, float)) or
                 not math.isfinite(value) or value <= 0):
@@ -305,7 +361,8 @@ class Runner:
         if not ID.match(self.worker_id):
             raise ValueError("Invalid worker_id")
         self.incarnation = config.get("test_incarnation") or uuid.uuid4().hex
-        self.engine = engine or DockerEngine(config.get("docker_socket", "/var/run/docker.sock"))
+        self.engine = engine or DockerEngine(config.get("docker_socket", "/var/run/docker.sock"),
+                        operation_timeout=config.get("docker_request_timeout_s", 30))
         self.client = client or CoordinatorClient(config["coordinator_url"], config["coordinator_key_file"],
                         config.get("request_timeout_s", 3), config.get("allow_http_for_testing", False))
         self.clock = clock or time.monotonic
@@ -313,9 +370,18 @@ class Runner:
         self.lock = threading.RLock()
         self.grants = {}
         self.containers = {}
+        self.start_jobs = {}
+        self.start_bindings = {}
+        self.starting_refs = {}
+        self.pending_cleanup = self.state.children()
+        self.cleanup_jobs = {}
         self.pulls = {}
         self.fence_jobs = {}
         self.fence_acks = {}
+        self.adapter_jobs = {}
+        self.state_proofs = {}
+        self.activation_acks = {}
+        self.binding_errors = {}
         self.manifests = {}
         self.prepared = {}
         self.stop_event = threading.Event()
@@ -368,12 +434,16 @@ class Runner:
         return True
 
     def _health(self, service_id):
+        if service_id in self.pending_cleanup or service_id in self.start_jobs:
+            return None
         container = self.containers.get(service_id)
         if not container:
             return None
         info = self.engine.inspect(container)
         if not info or not info.get("State", {}).get("Running"):
             return False
+        if adapters.staged(self.manifests.get(service_id, {})) and service_id not in self.activation_acks:
+            return None  # An inert preparation process is not an active service.
         health = info["State"].get("Health", {}).get("Status")
         if health == "starting":
             return None
@@ -385,8 +455,18 @@ class Runner:
         if not self.cleaned:
             # A new supervisor incarnation must not inherit orphaned authority.
             for container in self.engine.containers(self.worker_id):
-                self.engine.remove_managed(container["Id"], self.worker_id)
+                info = self.engine.inspect(container["Id"]) or {}
+                service_id = info.get("Config", {}).get("Labels", {}).get(SERVICE)
+                retained = self.pending_cleanup.get(service_id)
+                aliases = {container["Id"], info.get("Name", "").lstrip("/")}
+                if retained and retained["container"] in aliases:
+                    self._queue_cleanup(service_id, container["Id"])
+                else:
+                    # Multiple orphans for one logical service need distinct custody.
+                    self._queue_cleanup("_orphan:" + container["Id"], container["Id"])
             self.cleaned = True
+        for service_id in list(self.pending_cleanup):
+            self._begin_cleanup(service_id)
         result = []
         for service_id, manifest in sorted(self.manifests.items()):
             image_ref = manifest["images"].get(self.platform)
@@ -400,7 +480,9 @@ class Runner:
                 thread.daemon = True
                 self.pulls[image_ref] = thread
                 thread.start()
-            dependencies = prepared and self._dependencies(manifest)
+            dependencies = (prepared and not any(k.startswith("_orphan:") for k in self.pending_cleanup) and
+                            service_id not in self.pending_cleanup and
+                            self._bindings_ready(manifest) and self._dependencies(manifest))
             self.prepared[service_id] = bool(prepared and dependencies)
             current = self.grants.get(service_id, {})
             entry = {"manifest": manifest, "manifest_revision": manifest["revision"],
@@ -411,13 +493,299 @@ class Runner:
                 entry.update({"grant_token": current["grant_token"], "boot_epoch": current["boot_epoch"]})
             if service_id in self.fence_acks:
                 entry["fence_ack"] = self.fence_acks[service_id]
+            if adapters.staged(manifest):
+                proof = self.state_proofs.get(service_id)
+                state_ready = adapters.proof_matches(proof, current)
+                entry.update(state_ready=state_ready, state_proof=proof if state_ready else None)
             result.append(entry)
         return result
+
+
+    def _bindings_ready(self, manifest):
+        try:
+            adapters.resolve_mounts(manifest, self.config.get("bindings", {}))
+            if adapters.staged(manifest):
+                adapters.AdapterClient(self.config, manifest)
+            self.binding_errors.pop(manifest["id"], None)
+            return True
+        except (ValueError, TypeError, AttributeError) as error:
+            reason = str(error)
+            if self.binding_errors.get(manifest["id"]) != reason:
+                LOG.warning("Service %s host bindings unavailable: %s", manifest["id"], reason)
+            self.binding_errors[manifest["id"]] = reason
+            return False
+
+    def _current(self, grant):
+        try:
+            current = self.grants.get(grant["service_id"], {})
+            manifest = self.manifests.get(grant["service_id"], {})
+            return (not self.stop_event.is_set() and
+                    adapters.binding(current) == adapters.binding(grant) and
+                    manifest.get("revision") == grant["manifest_revision"] and
+                    self.clock() < current["deadline"])
+        except (ValueError, KeyError):
+            return False
+
+    def _adapter_job(self, service_id, grant, operation, job_key):
+        try:
+            with self.lock:
+                if not self._current(grant):
+                    return
+                manifest = self.manifests[service_id]
+                if operation == "activate":
+                    proof = self.state_proofs.get(service_id)
+                    ack = self.fence_acks.get(service_id)
+                    if (not adapters.fence_matches(ack, grant, proof) or
+                            grant.get("effect_ready") is not True or
+                            grant.get("state") not in ("starting", "active")):
+                        return
+                    body = adapters.request(operation, grant,
+                                            checkpoint=proof["checkpoint"], fence_ack=ack)
+                else:
+                    body = adapters.request(operation, grant)
+            client = adapters.AdapterClient(self.config, manifest)
+            result = client.call(body)
+            proof = (adapters.prepared(body, result) if operation == "prepare"
+                     else adapters.activated(body, result))
+            with self.lock:
+                if self._current(grant):
+                    if operation == "prepare":
+                        self.state_proofs[service_id] = proof
+                    else:
+                        current_proof = self.state_proofs.get(service_id)
+                        current = self.grants[service_id]
+                        if (adapters.proof_matches(current_proof, grant) and
+                                current.get("effect_ready") is True and
+                                current.get("state") in ("starting", "active") and
+                                current_proof["checkpoint"] == proof["checkpoint"]):
+                            self.activation_acks[service_id] = proof
+        except Exception as error:
+            # Adapter URLs, credentials, and arbitrary exception bodies are not logged.
+            LOG.warning("Service %s %s remains pending (%s)",
+                        service_id, operation, type(error).__name__)
+        finally:
+            with self.lock:
+                self.adapter_jobs.pop(job_key, None)
+
+    def _begin_adapter(self, service_id, grant, operation):
+        # A new binding never waits for an unrelated, slow prior incarnation.
+        identity = adapters.request(operation, grant)["id"]
+        job_key = (service_id, operation, identity)
+        with self.lock:
+            if job_key in self.adapter_jobs or not self._current(grant):
+                return
+            thread = threading.Thread(target=self._adapter_job,
+                                      args=(service_id, dict(grant), operation, job_key))
+            thread.daemon = True
+            self.adapter_jobs[job_key] = thread
+        try:
+            thread.start()
+        except Exception:
+            with self.lock:
+                self.adapter_jobs.pop(job_key, None)
+            raise
+
+    def _admit_start(self, service_id, grant, staging):
+        with self.lock:
+            if (not self._current(grant) or not self.prepared.get(service_id) or
+                    service_id in self.pending_cleanup):
+                return False
+            current = self.grants[service_id]
+            if staging:
+                return (current.get("state_ready") is True and
+                        adapters.proof_matches(self.state_proofs.get(service_id), current))
+            if current.get("state", "active") not in ("starting", "active"):
+                return False
+            return (self.manifests[service_id]["effect_policy"] == "stateless" or
+                    current.get("effect_ready") is True)
+
+    def _queue_cleanup(self, service_id, container, uncertain=False):
+        record = {"container": container, "uncertain": uncertain}
+        with self.lock:
+            self.pending_cleanup[service_id] = record
+        try:
+            self.state.save_child(service_id, container, uncertain)
+        except Exception as error:
+            # Keep memory custody even when the local disk cannot accept a record.
+            LOG.error("Service %s cleanup persistence failed (%s)", service_id, type(error).__name__)
+        self._begin_cleanup(service_id)
+
+    def _cleanup_child(self, service_id, record):
+        try:
+            if record["uncertain"] and self.engine.inspect(record["container"]) is None:
+                # An unanswered create can finish later. Absence now is not a result.
+                return
+            self.engine.remove_managed(record["container"], self.worker_id)
+            self.state.forget_child(service_id, record["container"])
+            with self.lock:
+                if self.pending_cleanup.get(service_id) == record:
+                    self.pending_cleanup.pop(service_id, None)
+        except Exception as error:
+            LOG.warning("Service %s cleanup remains pending (%s)", service_id, type(error).__name__)
+        finally:
+            with self.lock:
+                self.cleanup_jobs.pop(service_id, None)
+
+    def _begin_cleanup(self, service_id):
+        with self.lock:
+            record = self.pending_cleanup.get(service_id)
+            if not record or service_id in self.cleanup_jobs:
+                return
+            thread = threading.Thread(target=self._cleanup_child,
+                                      args=(service_id, dict(record)))
+            thread.daemon = True
+            self.cleanup_jobs[service_id] = thread
+        try:
+            thread.start()
+        except Exception:
+            with self.lock:
+                self.cleanup_jobs.pop(service_id, None)
+            raise
+
+    def _created_child(self, service_id, grant, container):
+        record = {"container": container, "uncertain": False}
+        self.state.save_child(service_id, container, False)
+        with self.lock:
+            self.starting_refs[service_id] = record
+            if service_id in self.pending_cleanup or not self._current(grant):
+                self.pending_cleanup[service_id] = record
+        if service_id in self.pending_cleanup:
+            self._begin_cleanup(service_id)
+
+    def _create_child(self, service_id, grant, staging, manifest, extra):
+        container = None
+        try:
+            with self.lock:
+                if not self._admit_start(service_id, grant, staging):
+                    return
+                name = container_name(manifest, self.worker_id, self.incarnation, grant)
+                self.starting_refs[service_id] = {"container": name, "uncertain": True}
+            # Durability precedes effects, but slow storage does not hold the grant lock.
+            self.state.save_child(service_id, name, True)
+            container = self.engine.create(
+                manifest, manifest["images"][self.platform], self.worker_id,
+                self.incarnation, grant,
+                self.config.get("port_overrides", {}).get(service_id),
+                admit=lambda: self._admit_start(service_id, grant, staging),
+                on_created=lambda cid: self._created_child(service_id, grant, cid), **extra)
+            self.state.save_child(service_id, container, False)
+            with self.lock:
+                admitted = self._admit_start(service_id, grant, staging)
+                if admitted:
+                    self.containers[service_id] = container
+            if not admitted:
+                self._queue_cleanup(service_id, container)
+        except Exception as error:
+            if getattr(error, "container_id", None):
+                self._queue_cleanup(service_id, error.container_id,
+                                    getattr(error, "creation_uncertain", False))
+            elif container is not None:
+                self._queue_cleanup(service_id, container)
+            else:
+                # The Engine create method established either no create or completed cleanup.
+                try:
+                    self.state.forget_child(service_id)
+                except Exception as persistence_error:
+                    LOG.error("Service %s cleanup record remains (%s)",
+                              service_id, type(persistence_error).__name__)
+                with self.lock:
+                    self.pending_cleanup.pop(service_id, None)
+            LOG.error("Service %s start failed: %s", service_id, error)
+        finally:
+            with self.lock:
+                self.starting_refs.pop(service_id, None)
+                self.start_jobs.pop(service_id, None)
+                self.start_bindings.pop(service_id, None)
+            if service_id in self.pending_cleanup:
+                self._begin_cleanup(service_id)
+
+    def _start_child(self, service_id, grant, staging=False):
+        with self.lock:
+            if service_id in self.containers:
+                return True
+            if service_id in self.start_jobs or not self._admit_start(service_id, grant, staging):
+                return False
+            manifest = self.manifests[service_id]
+            extra = {}
+            if staging or any("binding" in m for m in manifest.get("mounts", [])):
+                extra["mount_bindings"] = self.config.get("bindings", {})
+            if staging:
+                proof = self.state_proofs[service_id]
+                adapter = adapters.AdapterClient(self.config, manifest)
+                extra.update(initial_phase="preparing", checkpoint=proof["checkpoint"],
+                             adapter_url=adapter.url)
+            thread = threading.Thread(target=self._create_child,
+                       args=(service_id, dict(grant), staging, manifest, extra))
+            thread.daemon = True
+            self.start_jobs[service_id] = thread
+            self.start_bindings[service_id] = adapters.binding(grant)
+        try:
+            thread.start()
+        except Exception:
+            with self.lock:
+                self.start_jobs.pop(service_id, None)
+                self.start_bindings.pop(service_id, None)
+            raise
+        return service_id in self.containers
+
+    def _record_stage(self, service_id, grant, phase):
+        proof = self.state_proofs.get(service_id, {})
+        self.state.save(service_id, grant["manifest_revision"], phase, {
+            "worker_id": self.worker_id, "incarnation": self.incarnation,
+            "container": self.containers.get(service_id),
+            "checkpoint": proof.get("checkpoint"),
+            "state_ready": adapters.proof_matches(proof, grant),
+            "boot_epoch": grant["boot_epoch"]})
+
+    def _staged(self, service_id, grant):
+        if (service_id in self.pending_cleanup or
+                (service_id in self.start_jobs and
+                 self.start_bindings.get(service_id) != adapters.binding(grant))):
+            return False
+        if not self.prepared.get(service_id) or not self._current(grant):
+            return False
+        proof = self.state_proofs.get(service_id)
+        if not adapters.proof_matches(proof, grant):
+            self._begin_adapter(service_id, grant, "prepare")
+            self._record_stage(service_id, grant, "preparing_state")
+            return False
+        if grant.get("state_ready") is not True:
+            self._record_stage(service_id, grant, "awaiting_state_admission")
+            return False
+        if not self._start_child(service_id, grant, staging=True):
+            return False
+        ack = self.fence_acks.get(service_id)
+        if not adapters.fence_matches(ack, grant, proof):
+            if service_id not in self.fence_jobs:
+                thread = threading.Thread(target=self._fence, args=(service_id, dict(grant)))
+                thread.daemon = True
+                self.fence_jobs[service_id] = thread
+                thread.start()
+            self._record_stage(service_id, grant, "fencing")
+            return False
+        if grant.get("state") not in ("starting", "active") or grant.get("effect_ready") is not True:
+            self._record_stage(service_id, grant, "awaiting_effect_admission")
+            return False
+        activated = self.activation_acks.get(service_id)
+        if (not isinstance(activated, dict) or activated.get("binding") != proof["binding"] or
+                activated.get("checkpoint") != proof["checkpoint"] or activated.get("active") is not True):
+            self._begin_adapter(service_id, grant, "activate")
+            self._record_stage(service_id, grant, "activating")
+            return False
+        return True
 
     def _fence(self, service_id, grant):
         manifest = self.manifests[service_id]
         hook = manifest["fence_hook"]
         try:
+            with self.lock:
+                if not self._current(grant):
+                    return
+                state_proof = self.state_proofs.get(service_id)
+                if adapters.staged(manifest) and (
+                        not adapters.proof_matches(state_proof, grant) or
+                        self.grants[service_id].get("state_ready") is not True):
+                    return
             parsed = urlsplit(hook["url"])
             if parsed.scheme != "https" and not self.config.get("allow_http_for_testing"):
                 raise ValueError("Fence acknowledgement requires HTTPS")
@@ -429,14 +797,17 @@ class Runner:
                        "worker_incarnation": self.incarnation,
                        "manifest_revision": manifest["revision"],
                        "boot_epoch": grant["boot_epoch"], "grant_token": grant["grant_token"]}
+            if adapters.staged(manifest):
+                payload["prepared_state"] = state_proof
             req = Request(hook["url"], canonical(payload).encode("utf-8"), headers)
             with urlopen(req, timeout=hook.get("timeout_s", 3)) as response:
                 ack = json.loads(response.read().decode("utf-8"))
             if ack.get("fenced") is not True or ack.get("grant_token") != grant["grant_token"] or ack.get("boot_epoch") != grant["boot_epoch"]:
                 raise ValueError("Fence hook did not acknowledge this exact grant")
+            if adapters.staged(manifest) and not adapters.fence_matches(ack, grant, state_proof):
+                raise ValueError("Fence hook did not bind the prepared checkpoint and full service grant")
             with self.lock:
-                current = self.grants.get(service_id, {})
-                if current.get("grant_token") == grant["grant_token"] and self.clock() < current["deadline"]:
+                if self._current(grant):
                     self.fence_acks[service_id] = ack
         except Exception as error:
             LOG.warning("Service %s remains fenced: %s", service_id, error)
@@ -444,29 +815,34 @@ class Runner:
             self.fence_jobs.pop(service_id, None)
 
     def stop_service(self, service_id, expired_only=False):
-        # Serialize removal with renewal so an expiry snapshot cannot kill a
-        # grant whose deadline was renewed before the watchdog acquired custody.
+        # Withdraw local admission immediately. Slow Docker removal happens outside
+        # the grant lock, so other services' renewal and expiry keep progressing.
         with self.lock:
             grant = self.grants.get(service_id)
             if expired_only and (not grant or self.clock() < grant["deadline"]):
                 return True
-            container = self.containers.get(service_id)
-            if container:
-                try:
-                    self.engine.remove_managed(container, self.worker_id)
-                except Exception as error:
-                    LOG.error("Service %s stop unresolved: %s", service_id, error)
-                    return False
-            self.containers.pop(service_id, None)
+            container = self.containers.pop(service_id, None)
+            record = ({"container": container, "uncertain": False} if container
+                      else self.starting_refs.get(service_id))
             self.grants.pop(service_id, None)
             self.fence_acks.pop(service_id, None)
-        return True
+            self.state_proofs.pop(service_id, None)
+            self.activation_acks.pop(service_id, None)
+            if record:
+                self.pending_cleanup[service_id] = dict(record)
+        if record:
+            self._queue_cleanup(service_id, record["container"], record["uncertain"])
+        else:
+            self._begin_cleanup(service_id)
+        return service_id not in self.pending_cleanup and service_id not in self.start_jobs
 
     def expire(self):
         with self.lock:
             expired = [sid for sid, grant in self.grants.items() if self.clock() >= grant["deadline"]]
         for service_id in expired:
             self.stop_service(service_id, expired_only=True)
+        for service_id in list(self.pending_cleanup):
+            self._begin_cleanup(service_id)
 
     def accept(self, response, request_started):
         assignments = response.get("assignments", [])
@@ -497,7 +873,7 @@ class Runner:
             old = dict(self.grants)
         for sid, grant in old.items():
             new = received.get(sid)
-            if not new or new["grant_token"] != grant["grant_token"] or new["boot_epoch"] != grant["boot_epoch"]:
+            if not new or adapters.binding(new) != adapters.binding(grant):
                 if not self.stop_service(sid):
                     received.pop(sid, None)
         for sid, grant in received.items():
@@ -505,7 +881,10 @@ class Runner:
                 self.grants[sid] = grant
             manifest = self.manifests[sid]
             phase = grant.get("state", "active")
-            if manifest["effect_policy"] != "stateless":
+            if adapters.staged(manifest):
+                if not self._staged(sid, grant):
+                    continue
+            elif manifest["effect_policy"] != "stateless":
                 ack = self.fence_acks.get(sid, {})
                 if ack.get("grant_token") != grant["grant_token"] or ack.get("boot_epoch") != grant["boot_epoch"]:
                     if sid not in self.fence_jobs:
@@ -520,24 +899,7 @@ class Runner:
                 continue
             if not self.prepared.get(sid) or self.clock() >= grant["deadline"]:
                 continue
-            if sid not in self.containers:
-                try:
-                    container = self.engine.create(manifest, manifest["images"][self.platform],
-                                                   self.worker_id, self.incarnation, grant,
-                                                   self.config.get("port_overrides", {}).get(sid))
-                    with self.lock:
-                        current = self.grants.get(sid, {})
-                        if (self.clock() >= grant["deadline"] or
-                            current.get("grant_token") != grant["grant_token"] or
-                            current.get("boot_epoch") != grant["boot_epoch"]):
-                            self.engine.remove_managed(container, self.worker_id)
-                        else:
-                            self.containers[sid] = container
-                except Exception as error:
-                    if getattr(error, "container_id", None):
-                        with self.lock:
-                            self.containers[sid] = error.container_id
-                    LOG.error("Service %s start failed: %s", sid, error)
+            self._start_child(sid, grant)
             self.state.save(sid, manifest["revision"], phase, {
                 "worker_id": self.worker_id, "incarnation": self.incarnation,
                 "platform": self.platform, "container": self.containers.get(sid),
@@ -561,6 +923,23 @@ class Runner:
             except Exception:
                 LOG.exception("Expiry check failed")
 
+    def close(self):
+        self.stop_event.set()
+        for service_id in list(self.grants):
+            self.stop_service(service_id)
+        # Let in-flight creates report their exact child and complete cleanup.
+        until = time.monotonic() + self.config.get("docker_request_timeout_s", 30) * 2 + 5
+        while True:
+            with self.lock:
+                jobs = list(self.start_jobs.values()) + list(self.cleanup_jobs.values())
+            if not jobs or time.monotonic() >= until:
+                break
+            for job in jobs:
+                if hasattr(job, "join"):
+                    job.join(max(0, min(.2, until - time.monotonic())))
+        if self.pending_cleanup:
+            LOG.warning("Unresolved managed child custody retained for next supervisor startup")
+
     def run(self):
         watchdog = threading.Thread(target=self.watchdog)
         watchdog.daemon = True
@@ -576,9 +955,7 @@ class Runner:
                 interval = self.config.get("heartbeat_interval_s", 1)
                 self.stop_event.wait(max(0, interval - (self.clock() - started)))
         finally:
-            self.stop_event.set()
-            for service_id in list(self.grants):
-                self.stop_service(service_id)
+            self.close()
 
 
 def main(argv=None):
@@ -594,8 +971,7 @@ def main(argv=None):
         try:
             runner.tick()
         finally:
-            for service_id in list(runner.grants):
-                runner.stop_service(service_id)
+            runner.close()
     else:
         signal.signal(signal.SIGTERM, lambda *_: runner.stop_event.set())
         signal.signal(signal.SIGINT, lambda *_: runner.stop_event.set())

@@ -22,8 +22,9 @@ Every manifest has `id`, `images`, `effect_policy`, `state_policy`, and a
 Compute with `biomerte.docker_services.revision(manifest)`. Optional fields:
 
 - `command`, `entrypoint`, `environment`, `working_dir`
-- `mounts` with absolute source/target and read_only; writable local binds must
-  explicitly be disposable `cache_only`, never unreplicated authoritative state
+- `mounts` with absolute source/target and read_only, or named host-local bindings
+  described below; legacy writable local binds must explicitly be disposable
+  `cache_only`, never unreplicated authoritative state
 - `ports` with container/host/listen/protocol; default listen is loopback
 - `readiness`: HTTP dependency probes; `health`: in-container argv health check
 - `lease_ttl_s`, `worker_ttl_s`, `startup_grace_s`, `preferred_workers`
@@ -41,7 +42,8 @@ A host-local runner configuration contains:
   "manifest_files": ["/config/services/example.json"],
   "state_file": "/state/current.sqlite",
   "heartbeat_interval_s": 1,
-  "request_timeout_s": 3
+  "request_timeout_s": 3,
+  "docker_request_timeout_s": 30
 }
 ```
 
@@ -76,6 +78,20 @@ starts a service only when the coordinator returns its exact manifest grant.
 Heartbeat responses cannot extend a lease by spending time in transit: local
 deadlines start at the request's monotonic send time. An independent expiry
 watchdog continues while image preparation or network reconciliation is delayed.
+Docker create/start and kill/delete run in separate jobs, outside the grant lock.
+Their transport budget is `docker_request_timeout_s` (default30 seconds; configure
+60 seconds for the measured slow Pi). The heartbeat interval and grant expiry do
+not grow with that budget. Fast Docker inspection requests retain a four-second
+budget. Docker startup rechecks the full grant before create, before start, and
+after completion; a renewed matching grant may survive a long start.
+
+The runner persists one current child reference per service in local SQLite.
+An unanswered create retains its deterministic name and blocks another create;
+a single absent inspect does not prove that a delayed create cannot finish.
+Once the named child appears, the runner removes it before trying again. This
+custody survives supervisor restart. A permanently unknown create stays pending
+for explicit reconciliation instead of replaying under another name. Removal
+also withdraws admission immediately and keeps cleanup pending until confirmed.
 
 On expiry, revocation, manifest mismatch, or a changed owner token, the runner
 kills and removes its managed child. It never stops unrelated containers. Its
@@ -91,7 +107,8 @@ A watchdog is not an output fence. A paused or partitioned host may run old code
 until its scheduler resumes. Therefore:
 
 - `effect_policy: stateless` means duplicate execution is safe.
-- `externally_fenced` requires a pre-start HTTPS `fence_hook`. It receives the
+- `externally_fenced` requires an HTTPS `fence_hook`. Without staged activation,
+  this hook runs before process startup. It receives the
   exact service, manifest, worker incarnation, boot epoch and grant token. It must
   atomically reject prior owners at the resource that accepts effects and return
   `{fenced:true,boot_epoch,grant_token}`. The runner forwards that acknowledgement
@@ -103,7 +120,8 @@ until its scheduler resumes. Therefore:
 - `state_policy: externally_managed` requires a qualified portable state backend.
   This runtime does not replicate arbitrary local directories or databases.
 
-An unknown or unacknowledged fence keeps the service stopped. An existing
+An unknown or unacknowledged fence prevents active service admission. A staged
+adapter may have an inert child running solely for preparation and fence traffic. An existing
 capability invocation is never replayed under a new controller automatically.
 
 ## Relay adoption
@@ -155,3 +173,198 @@ Docker workers on one physical machine, pauses one, tests stale output rejection
 at a test gate, verifies automatic manifest distribution, fails an active service,
 and restarts the witness. It never qualifies physical Pi/Mac or relay behavior.
 The report explicitly identifies those remaining hardware boundaries.
+
+## Stateful preparation and host-local bindings
+
+A portable authority opts into `activation` with the exact protocol below.
+This is a contract with an application adapter, not a flag that makes arbitrary
+SQLite databases portable. The independently available adapter receives
+checkpoints on every intended standby before the owner is lost. It verifies
+checkpoint freshness and complete invocation custody before answering prepare.
+A state directory cannot be relabeled as disposable cache to bypass this check.
+
+A shared manifest declares logical bindings. Each worker resolves them using
+its own private configuration, so different Mac and Pi paths do not alter the
+manifest revision:
+
+```json
+{
+  "activation": {
+    "protocol": "biomerte-service-adapter/1",
+    "binding": "relay-authority"
+  },
+  "effect_policy": "externally_fenced",
+  "state_policy": "externally_managed",
+  "mounts": [
+    {"binding": "relay-private", "target": "/config", "role": "private", "read_only": true},
+    {"binding": "relay-state", "target": "/state", "role": "state", "read_only": false}
+  ]
+}
+```
+
+These fields are added to a complete ordinary manifest, including its pinned
+images, fence hook, and computed revision. The matching runner configuration
+contains:
+
+```json
+{
+  "bindings": {
+    "relay-private": {
+      "source": "/absolute/host/private",
+      "role": "private",
+      "service_id": "relay-authority"
+    },
+    "relay-state": {
+      "source": "/absolute/host/state",
+      "role": "state",
+      "service_id": "relay-authority"
+    }
+  },
+  "adapters": {
+    "relay-authority": {
+      "service_id": "relay-authority",
+      "url": "https://local-adapter.example/control",
+      "token_file": "/config/adapter.key",
+      "timeout_s": 3
+    }
+  }
+}
+```
+
+The installer accepts these private settings with `--host-settings PATH` and
+supports `--docker-request-timeout-s 60` for a slow engine. It permits only
+`bindings`, `adapters`, and `port_overrides` in that file; worker and coordinator
+identity still come from the existing controller configuration.
+
+The binding role and service identity must match exactly. Supported roles are
+`config`, `private`, `state`, and `cache`. Config and private bindings are
+read-only. Writable authoritative state requires this staged protocol and
+`externally_managed`; it must never use `cache_only`. The source is an absolute
+Docker-host path. The adapter must verify that the mounted state is the expected
+state for the service; path syntax alone does not establish that.
+
+Adapter transport defaults to HTTPS. A per-adapter `allow_local_http: true`
+allows loopback/private literal IP addresses and Docker's host/gateway internal
+names. Use this only on the intended protected local network. Credential files
+are read inside the runner, and secrets never belong in the manifest. The
+adapter is a separate, always-available host service; killing a placement child
+must not kill the standby checkpoint receiver.
+
+### Exact grant and checkpoint protocol
+
+Let B be the JSON object with exactly these fields:
+
+```json
+{
+  "service_id": "...",
+  "manifest_revision": "<64 lowercase hex>",
+  "worker_id": "...",
+  "worker_incarnation": "...",
+  "boot_epoch": "...",
+  "grant_token": "..."
+}
+```
+
+The runner POSTs requests to the adapter's configured URL. The id is SHA-256 of
+canonical JSON `[protocol, operation, B]` (sorted object keys, compact separators).
+A retry uses the same id, including after a lost response. The adapter must make
+each operation idempotent and revalidate current authority before returning an
+earlier outcome.
+
+Prepare request:
+
+```json
+{
+  "protocol": "biomerte-service-adapter/1",
+  "operation": "prepare",
+  "id": "<stable request digest>",
+  "binding": "<B object>"
+}
+```
+
+Prepare reply:
+
+```json
+{
+  "protocol": "biomerte-service-adapter/1",
+  "id": "<same request digest>",
+  "binding": "<same B object>",
+  "phase": "prepared",
+  "state": {
+    "checkpoint": "<64 lowercase hex>",
+    "fresh": true,
+    "custody_complete": true,
+    "ready": true
+  }
+}
+```
+
+The literal placeholders above stand for objects and strings, not alternate
+wire encodings. Missing, stale, unavailable, malformed, or incomplete custody
+proofs fail closed. Uncertain prior operations must remain recorded as uncertain;
+preparation must not promote them to successful or automatically replay them.
+
+The runner then follows this order:
+
+1. Cache the proof only while all six grant fields, manifest revision, and local
+   monotonic deadline still match.
+2. Wait for the coordinator to return `state_ready:true` for this exact grant.
+   This acknowledges the reported baseline checkpoint before fence traffic can
+   advance the service checkpoint head. A proof that finishes during a heartbeat
+   waits for its next acknowledged report.
+3. Create one inert child with `BIOME_SERVICE_PHASE=preparing`,
+   `BIOME_SERVICE_CHECKPOINT`, `BIOME_SERVICE_ADAPTER_URL` from the host adapter
+   configuration, and the existing `BIOME_SERVICE_*` grant variables.
+   Ordinary process health does not advertise an active service in this phase.
+4. Call the fence hook with B's six fields at the top level plus
+   `prepared_state` set to the flat proof below.
+5. Require `{fenced:true,boot_epoch,grant_token,binding:B,checkpoint}` with the
+   same checkpoint. Report it to the coordinator.
+6. Wait for the exact coordinator grant to have `effect_ready:true` and state
+   `starting` or `active`, then request activation.
+7. Advertise ordinary child health only after an exact activation reply.
+
+The heartbeat proof is one exact shape:
+
+```json
+{
+  "state_ready": true,
+  "state_proof": {
+    "protocol": "biomerte-service-adapter/1",
+    "binding": "<B object>",
+    "checkpoint": "<same checkpoint>",
+    "fresh": true,
+    "custody_complete": true,
+    "ready": true
+  }
+}
+```
+
+The coordinator may select a provisional owner before this B-bound proof exists,
+but must require the proof and matching fence acknowledgment before admitting
+effects. Its preparation validation endpoint admits preparation/fence traffic
+only; normal validation remains strict.
+
+Activate request uses the same request envelope with `operation:"activate"`,
+plus `checkpoint` and the exact `fence_ack`. Its reply repeats protocol, id, and
+binding, with `phase:"active"` and the same checkpoint. A lost activation reply
+causes a retry with the same id, never a second child or a replay of outputs.
+
+The service adapter must enforce the preparing/active boundary inside the
+application and validate authority independently. Environment variables and
+runner health alone cannot make a stateful process inert. Preparation and fence
+endpoints must not admit normal relay or application effects. Expiry, changed
+grant, changed witness boot, changed manifest, and supervisor restart clear
+prepared/activation proofs and stop managed children. A late network or Docker
+reply is rejected. The independent watchdog remains active while adapter calls
+are blocked.
+
+Run the deterministic failure-boundary suite with:
+
+```sh
+python3 -m unittest tests.test_docker_services tests.test_service_adapters tests.test_docker_service_jobs -v
+```
+
+These tests qualify the generic protocol and lifecycle. Actual checkpoint
+replication, sink fencing, authority startup, and Pi/Mac network failover still
+require service-specific integration and hardware qualification.

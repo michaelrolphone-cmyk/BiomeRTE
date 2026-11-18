@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -37,7 +38,11 @@ def main():
     parser.add_argument("--docker", default=shutil.which("docker") or "/usr/local/bin/docker")
     parser.add_argument("--container-name", default="biomerte-service-runner")
     parser.add_argument("--build-only", action="store_true")
+    parser.add_argument("--docker-request-timeout-s", type=float, default=30)
+    parser.add_argument("--host-settings", help="Private JSON containing bindings, adapters, and port_overrides")
     args = parser.parse_args()
+    if not math.isfinite(args.docker_request_timeout_s) or args.docker_request_timeout_s <= 0:
+        raise ValueError("Docker request timeout must be positive and finite")
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     controller_home = os.path.abspath(os.path.expanduser(args.controller_home))
     config_dir = os.path.abspath(os.path.expanduser(args.config_dir))
@@ -77,13 +82,22 @@ def main():
                      "coordinator_key_file": "/config/coordinator.key",
                      "docker_socket": "/var/run/docker.sock", "manifest_files": manifest_paths,
                      "state_file": "/state/current.sqlite", "heartbeat_interval_s": 1,
-                     "request_timeout_s": 3}
+                     "request_timeout_s": 3, "docker_request_timeout_s": args.docker_request_timeout_s}
+    if args.host_settings:
+        with open(args.host_settings) as source:
+            host_settings = json.load(source)
+        if not isinstance(host_settings, dict) or set(host_settings) - {"bindings", "adapters", "port_overrides"}:
+            raise ValueError("Host settings may contain only bindings, adapters, and port_overrides")
+        if any(not isinstance(value, dict) for value in host_settings.values()):
+            raise ValueError("Each host settings section must be an object")
+        configuration.update(host_settings)
     private_json(os.path.join(config_dir, "runner.json"), configuration)
     context = tempfile.mkdtemp(prefix="biomerte-runner-build-")
     try:
         os.makedirs(os.path.join(context, "biomerte"))
-        shutil.copyfile(os.path.join(root, "biomerte", "docker_services.py"),
-                        os.path.join(context, "biomerte", "docker_services.py"))
+        for module in ("docker_services.py", "service_adapters.py"):
+            shutil.copyfile(os.path.join(root, "biomerte", module),
+                            os.path.join(context, "biomerte", module))
         shutil.copyfile(os.path.join(root, "deploy", "docker-services", "Dockerfile"),
                         os.path.join(context, "Dockerfile"))
         command([args.docker, "build", "--build-arg", "PYTHON_IMAGE=" + args.base_image,
