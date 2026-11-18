@@ -138,18 +138,18 @@ def migrate(tx, ctx, run, expected_rev, target_rev, nodes, variables=None):
 
 
 @op('cap.prepare', 'contract:str resource?:str placement?:obj')
-def prepare(tx, ctx, contract, resource='', placement=None):
+def prepare(tx, ctx, contract, resource='', placement=None, maintenance_deployment=''):
     """Arrange activation of a configurable offer. Provider confirms before use."""
     resource, placement = providers.selection.normalize(resource, placement)
     offers = [o for o in tx.rows('offers') if o['contract'] == contract and
               providers.selection.matches(o, resource, placement)]
     for off in offers:
-        if providers.admitted(tx, off):
+        if providers.admitted(tx, off, maintenance_deployment):
             return {'state': 'ready', 'offer': off['id']}
     for off in offers:
         if off['state'] != 'available_after_setup' or off.get('activation_error'):
             continue
-        if not providers.admitted(tx, dict(off, state='ready')):
+        if not providers.admitted(tx, dict(off, state='ready'), maintenance_deployment):
             continue
         if providers.active_on(tx, off['resource']):
             continue
@@ -162,6 +162,9 @@ def prepare(tx, ctx, contract, resource='', placement=None):
         tx.put('activations', a['id'], a)
         tx.emit('offer.activation_requested', a)
         return a
+    holds = sorted(set(h['id'] for o in offers for h in [providers.redeployment.current(tx, o['resource'])] if h))
+    if holds and not maintenance_deployment:
+        return {'state': 'held', 'contract': contract, 'resource': resource, 'redeployments': holds}
     return {'state': 'unmet' if offers else 'missing', 'contract': contract, 'resource': resource}
 
 

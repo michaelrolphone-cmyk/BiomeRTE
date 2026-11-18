@@ -219,7 +219,7 @@ def finish(tx, run, state, result):
         if held:
             waiting = tx.get('leases', held)
             if waiting and waiting['state'] != 'released':
-                providers.release(tx, waiting)
+                providers.release(tx, waiting, cancel_held=True)
     run.update(state=state, result=result)
     if run['parent'].startswith('action:'):
         a = tx.need('actions', run['parent'][7:])
@@ -405,7 +405,7 @@ def advance(tx, ctx, r, t, n, version):
                 holder = digest([r['id'], t['id'], t['at']]) if scoped else (r['task'] or r['id'])
                 try:
                     lease = providers.acquire(tx, ctx, holder, contract, resource, placement=placement)
-                    if lease['state'] == 'queued':
+                    if lease['state'] in ('queued', 'held'):
                         t['queued_lease'] = lease['id']
                         raise Fault('Waiting for queued lease ' + lease['id'], 409)
                 except Fault as e:
@@ -434,7 +434,7 @@ def advance(tx, ctx, r, t, n, version):
                 t.pop('blocked', None)
                 return True
             a = tx.need('actions', t['action'])
-            if a['state'] in ('queued', 'claimed', 'uncertain'):
+            if a['state'] in ('queued', 'claimed', 'uncertain', 'held'):
                 return False
             if n.get('capture_outcome'):
                 result = continuation.outcome(r, t, ctx.scope, contract, resource, a, ev(n.get('success_equals')))
@@ -685,7 +685,10 @@ def cancel(tx, ctx, run):
         for t in r['tokens']:
             if 'action' in t:
                 a = tx.need('actions', t['action'])
-                if a['state'] == 'queued':
+                if a['state'] == 'held':
+                    from .redeployment import cancel_action
+                    cancel_action(tx, ctx, a, 'Workflow cancelled during redeployment')
+                elif a['state'] == 'queued':
                     a.update(state='failed', result={'cancelled': True})
                 elif a['state'] == 'claimed':
                     if a['contract'] == 'human.decision:1' and a['provider'] == 'builtin':

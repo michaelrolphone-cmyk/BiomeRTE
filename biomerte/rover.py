@@ -89,7 +89,7 @@ class Rover:
                 lease = await self.call('cap.acquire', contract=contract, resource=resource,
                                         task=self.task+':'+contract)
                 while lease['state'] != 'bound':
-                    if lease['state'] not in ('queued', 'fencing'):
+                    if lease['state'] not in ('queued', 'fencing', 'held'):
                         raise ConnectionError('Lease unavailable')
                     await asyncio.sleep(.5)
                     lease = await self.call('cap.lease', lease=lease['id'])
@@ -113,14 +113,23 @@ class Rover:
                     if descriptor is not None and 'map' in descriptor.get('lanes', []):
                         self.map_head = None
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
-                if descriptor is not None:
+                preserve_reservation = False
+                if lease is not None and not self.closed:
+                    try:
+                        current = await self.call('cap.lease', lease=lease['id'])
+                        preserve_reservation = (current['state'] == 'held' or
+                            current['state'] in ('bound', 'fencing') and
+                            current.get('generation') != lease.get('generation'))
+                    except Exception:
+                        pass
+                if descriptor is not None and not preserve_reservation:
                     try:
                         await self.call('stream.close', session=descriptor['id'], lease=lease['id'])
                     except Exception:
                         pass
                 # Also release queued/fencing leases on shutdown or failed startup.
                 # A retry must not queue behind capacity retained by this owner.
-                if lease is not None:
+                if lease is not None and not preserve_reservation:
                     try:
                         await self.call('cap.release', lease=lease['id'])
                     except Exception:

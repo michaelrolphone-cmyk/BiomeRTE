@@ -7,7 +7,7 @@ import time
 from .api import op, ident
 from .store import Fault, uid, encode
 from . import lifecycle
-from . import shared_streams
+from . import shared_streams, redeployment
 import re
 
 
@@ -31,7 +31,7 @@ def authorize(tx, ctx, grant, role='server'):
 def valid(tx, ctx, grant):
     lease = tx.need('leases', grant['lease'])
     guard = tx.need('guards', lease['guard'])
-    if (grant['state'] != 'open' or grant['expires_at'] <= time.time() or
+    if (grant['state'] != 'open' or redeployment.current(tx, grant['resource']) or grant['expires_at'] <= time.time() or
             grant['authority'] != ctx.app.node or grant['realm'] != ctx.scope or
             lease['state'] != 'bound' or
             (guard['holder'], guard['generation']) != (lease['id'], grant['generation'])):
@@ -60,7 +60,7 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
     l = tx.need('leases', lease)
     if ctx.permissions is not None and l.get('owner') != ctx.actor:
         raise Fault('Lease belongs to another task owner', 403)
-    if l['state'] != 'bound' or lifecycle.policy(tx, l)['lease_class'] != 'persistent':
+    if l['state'] != 'bound' or redeployment.current(tx, l['resource']) or lifecycle.policy(tx, l)['lease_class'] != 'persistent':
         raise Fault('Streaming requires a bound persistent lease', 409)
     subscription = l
     l = shared_streams.root(tx, l)

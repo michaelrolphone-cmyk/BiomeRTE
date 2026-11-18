@@ -267,11 +267,15 @@ def sweep(tx, ctx, now):
         for key in tx.expired_keys(kind, now):
             drop_expired(tx, kind, key)
     for key in tx.expired_keys('actions', now, 64):
+        if tx.need('actions', key).get('state') == 'held':
+            continue
         if key not in referenced:
             drop_expired(tx, 'actions', key)
             for kind in ('_submissions', '_submission_active'):
                 drop_expired(tx, kind, key)
     for key in tx.expired_keys('leases', now):
+        if tx.need('leases', key).get('state') == 'held':
+            continue
         if key not in protected_leases:
             for kind in ('leases', '_reservation_activity', '_submission_leases'):
                 drop_expired(tx, kind, key)
@@ -317,6 +321,11 @@ def kill(tx, ctx, operation):
     if action['state'] not in TERMINAL:
         action['kill_requested'] = True
         tx.put('actions', operation, action)
+        if action['state'] == 'held':
+            from .redeployment import cancel_action
+            from .providers import finish_submission
+            cancel_action(tx, ctx, action, 'Explicitly cancelled during redeployment')
+            finish_submission(tx, ctx, operation)
         if action['state'] == 'queued':
             abandon(tx, ctx, tx.need('leases', action['lease']), 'explicit_kill', time.time())
     return {'operation': operation, 'state': action['state'], 'kill_requested': True}
