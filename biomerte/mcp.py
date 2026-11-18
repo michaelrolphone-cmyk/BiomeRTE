@@ -8,8 +8,9 @@ CALLER_GUIDE = {
     'placement': 'Omit resource and placement for automatic eligible selection. cap.acquire, cap.submit and cap.prepare accept optional placement {provider, host, resource}; every supplied constraint is required. Host is advertised execution host. A specific workspace/device requires resource affinity. Retry the same operation without moving its execution.',
     'caller': ['cap.discover', 'cap.acquire', 'cap.lease', 'cap.invoke', 'cap.status', 'cap.release'],
     'provider_only': ['provider.poll', 'cap.fenced', 'provider.claim', 'provider.result'],
-    'lease': 'Use a distinct task ID per session. Queued means waiting for capacity; fencing means the provider is preparing the slot; bound means usable. Subscribe to lease.available using the reply_to inbox supplied to cap.acquire.',
+    'lease': 'Use a distinct task ID per session. Queued means waiting for capacity; fencing means the provider is preparing the slot; bound means usable; held means preserved during redeployment. Keep the same lease ID while held. Subscribe to lease.available using the reply_to inbox supplied to cap.acquire.',
     'command': 'Use a fresh operation ID for each logical command. Repeat it only to retry the same command. Read cap.status with that ID until succeeded, failed, or uncertain. The result is retained after release.',
+    'redeployment': 'Before updating firmware, a resource or a service, call cap.redeploy.begin with a unique id and resource/resources/provider/service selector. Pending reservations are held. Read cap.redeploy.status; reconcile actual executing work and record observed stream quiescence when required. cap.redeploy.prepare and cap.redeploy.submit permit scoped maintenance. Complete with per-resource observed healthy/version evidence, or call cap.redeploy.fail to keep reservations held for retry or verified rollback.',
     'outstanding_work': 'provider.poll lists outstanding work for a worker. Empty means nothing is outstanding; it does not describe the result of a completed command.'
 }
 
@@ -22,12 +23,14 @@ def caller_view(op, value, realm):
     result = dict(value)
     key = result['id']
     if op in ('cap.acquire', 'cap.lease'):
-        if result['state'] not in ('queued', 'fencing'):
+        if result['state'] not in ('queued', 'fencing', 'held'):
             result['next_action'] = ('Submit a command with cap.invoke.' if result['state'] == 'bound'
                                      else 'The lease is released.')
             return result
         operation, args = 'cap.lease', {'lease': key}
-        result['next_action'] = 'Wait for bound. The provider acknowledges its own fence.'
+        result['next_action'] = ('Held during redeployment; keep this lease ID and wait for bound.'
+                                 if result['state'] == 'held' else
+                                 'Wait for bound. The provider acknowledges its own fence.')
     else:
         operation, args = 'cap.status', {'operation': key}
         result['next_action'] = ('Read the result below.' if result['state'] in ('succeeded', 'failed')

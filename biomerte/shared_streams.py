@@ -10,9 +10,9 @@ def root(tx, lease):
     return tx.need('leases', lease.get('shared_parent', lease['id']))
 
 def members(tx, anchor):
-    values = [anchor] + [l for l in tx.matching('leases', ('bound', 'fencing'))
+    values = [anchor] + [l for l in tx.matching('leases', ('bound', 'fencing', 'held'))
                         if l.get('shared_parent') == anchor['id']]
-    return [l for l in values if l['state'] in ('bound', 'fencing')
+    return [l for l in values if l['state'] in ('bound', 'fencing', 'held')
             and not l.get('shared_owner_released')]
 
 def join(tx, ctx, request, offer):
@@ -58,7 +58,7 @@ def recover(tx, lease):
     if not lease.get('shared_parent'):
         return False
     anchor = tx.get('leases', lease['shared_parent'], {})
-    if anchor.get('state') not in ('bound', 'fencing'):
+    if anchor.get('state') not in ('bound', 'fencing', 'held'):
         lease.update(state='released', released_at=time.time(), expires_at=time.time()+300)
         tx.put('leases', lease['id'], lease)
     return True

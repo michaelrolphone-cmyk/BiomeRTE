@@ -140,6 +140,12 @@ def status(tx,ctx,resource):
                               generation=lease['generation'],guard=lease['guard'],
                               state='fencing' if lease['state']=='fencing' else 'reserved',
                               reassignable=False,next_action='Finish fence or release unused reservation'))
+    from . import redeployment
+    deployment = redeployment.current(tx, resource)
+    if deployment:
+        view = redeployment.snapshot(tx, deployment)
+        return dict(resource=resource, state=view['state'], redeployment=view,
+                    owners=items, observed_at=now)
     return dict(resource=resource,state='held' if leases else 'free',owners=items,
                 providers=[dict(provider=o['provider'],state=o['state'],
                                 execution_custody=bool(o.get('configuration',{}).get('execution_custody')))
