@@ -1,0 +1,123 @@
+{
+  "checks": [
+    {
+      "check": "initial service runs on the actual Pi",
+      "passed": true,
+      "startup_observed_seconds": 22.507,
+      "worker": "qa-pi-pi-mac-20261118-03"
+    },
+    {
+      "check": "manifest automatically reaches the actual Mac standby",
+      "passed": true,
+      "revision": "54a707c5a5577536b56257260e342ebbf919979b44140715125e44058473dac5"
+    },
+    {
+      "candidates": [
+        {
+          "reason": "dependencies_not_ready",
+          "worker_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+          "worker_incarnation": "e6186ca8a0154513aa127c570544df9d"
+        },
+        {
+          "reason": "dependencies_not_ready",
+          "worker_id": "687eda586198b9e7c2bdad0c6f69731b63552e6a650e6514c663f3d472c8f714",
+          "worker_incarnation": "cc31cd405a0f4f438f120d5b01069198"
+        }
+      ],
+      "check": "production supervisors are ineligible for the test",
+      "passed": true
+    },
+    {
+      "active_worker": "qa-mac-pi-mac-20261118-03",
+      "check": "actual Pi to Mac failover after an unresponsive QA supervisor",
+      "effect_policy": "stateless",
+      "failover_seconds": 15.129,
+      "old_grant_rejected": true,
+      "passed": true
+    },
+    {
+      "check": "recovered Pi stays standby and removes its stale child",
+      "passed": true
+    },
+    {
+      "active_worker": "qa-pi-pi-mac-20261118-03",
+      "check": "actual Mac to Pi failover after test-child failure",
+      "failover_seconds": 27.798,
+      "passed": true
+    }
+  ],
+  "cleanup": {
+    "mac_qa_containers_removed": true,
+    "pi_qa_containers_removed": true,
+    "production_supervisors_unchanged": true,
+    "retained_declaration": "retired; deletion not supported",
+    "retired_revision": "a1f8481042f70ef360bb6f283884fe522c540c432ef58949b86c7a9051eb3eca"
+  },
+  "completed_utc": "2026-11-18T14:12:46Z",
+  "coordinator_url": "https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com",
+  "failure_injection": "pause only the dedicated Pi QA supervisor; kill only the dedicated Mac test child",
+  "hosts": [
+    {
+      "engine": "17.06.2-ce",
+      "host": "pi",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "platform": "linux/arm/v7"
+    },
+    {
+      "engine": "24.0.7",
+      "host": "mac",
+      "image": "sha256:5d7f7df07cf4166175a35c74c23fa15f3ca984db0f56fdc86b622662dbdc908c",
+      "platform": "linux/arm64"
+    }
+  ],
+  "initial_revision": "54a707c5a5577536b56257260e342ebbf919979b44140715125e44058473dac5",
+  "lease_ttl_s": 12,
+  "physical_relay_tested": false,
+  "production_after": [
+    {
+      "id": "301fb26071e49429aa432c4a09ec2c28197c2564c086cf1c5438cc077e357b7a",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "production_before": [
+    {
+      "id": "301fb26071e49429aa432c4a09ec2c28197c2564c086cf1c5438cc077e357b7a",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "qualification": "actual Pi and Mac Docker hosts with the deployed HTTPS coordinator",
+  "result": "passed",
+  "run_id": "pi-mac-20261118-03",
+  "runner_source_sha256": "35072a2d1af9f52c6269fc2d80be936fff3a938c72eb582d9488bc0408e4a4bf",
+  "service_id": "qa-two-host-pi-mac-20261118-03",
+  "started_utc": "2026-11-18T14:10:53Z",
+  "whole_host_power_failure_tested": false
+}

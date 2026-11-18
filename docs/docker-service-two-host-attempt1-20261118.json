@@ -1,0 +1,80 @@
+{
+  "checks": [],
+  "cleanup": {
+    "pi_qa_containers_removed": true,
+    "production_supervisors_unchanged": true,
+    "retained_declaration": "retired; deletion not supported",
+    "retired_revision": "73a5649ac0a1cd47866477f06ffa0dbf824e48153bb0c7ac4e5ef79e8d993fd9"
+  },
+  "completed_utc": "2026-11-18T13:37:53Z",
+  "coordinator_url": "https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com",
+  "error": "AssertionError: Qualification observation did not settle: Pi initially owns the harmless service",
+  "failure_injection": "pause only the dedicated Pi QA supervisor; kill only the dedicated Mac test child",
+  "hosts": [
+    {
+      "engine": "17.06.2-ce",
+      "host": "pi",
+      "image": "sha256:03fea04f4d2d309cfd404883cc7502349d2f30ab885c9536d2ab6183aab3f174",
+      "platform": "linux/arm/v7"
+    },
+    {
+      "engine": "24.0.7",
+      "host": "mac",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "platform": "linux/arm64"
+    }
+  ],
+  "initial_revision": "c9af950fffbcaec4c04ba2a45e63f10566985e060087a3d3835e3b2b35de1df1",
+  "lease_ttl_s": 12,
+  "physical_relay_tested": false,
+  "production_after": [
+    {
+      "id": "9de9aede1e22df709ce57f1833f33f739c7acf213152ab2023b7720a14d0237f",
+      "image": "sha256:03fea04f4d2d309cfd404883cc7502349d2f30ab885c9536d2ab6183aab3f174",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "production_before": [
+    {
+      "id": "9de9aede1e22df709ce57f1833f33f739c7acf213152ab2023b7720a14d0237f",
+      "image": "sha256:03fea04f4d2d309cfd404883cc7502349d2f30ab885c9536d2ab6183aab3f174",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "qualification": "actual Pi and Mac Docker hosts with the deployed HTTPS coordinator",
+  "result": "failed",
+  "run_id": "pi-mac-20261118-01",
+  "runner_logs": {
+    "biomerte-qa-pi-pi-mac-20261118-01": ""
+  },
+  "runner_source_sha256": "7aab087221119681d6e701b34565f12ab60911d537b547a88734eae201274f2d",
+  "service_id": "qa-two-host-pi-mac-20261118-01",
+  "started_utc": "2026-11-18T13:33:57Z",
+  "whole_host_power_failure_tested": false
+}
