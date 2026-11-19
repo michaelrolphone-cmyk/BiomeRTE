@@ -31,15 +31,10 @@ def source(config, release):
         if pid <= 0:
             raise ValueError('controller_not_running')
         cwd = os.path.realpath(os.readlink('/proc/{}/cwd'.format(pid)))
-        with open('/proc/{}/environ'.format(pid), 'rb') as stream:
-            entries = stream.read().split(b'\0')
-        env = dict(item.split(b'=', 1) for item in entries if b'=' in item)
-        paths = env.get(b'PYTHONPATH', b'').decode('utf-8').split(os.pathsep)
-        selected = next((os.path.realpath(path) for path in paths
-                         if path and os.path.isfile(os.path.join(path, 'biomerte', '__init__.py'))), None)
-        # The original Pi trace wrapper deliberately uses PYTHONPATH; after
-        # adoption the stable launcher pins both cwd and that path physically.
-        valid = selected == expected
+        # The stable launcher pins the process cwd to its physical release.
+        # Do not read cmdline/environ: proc process-memory reads can page in
+        # controller memory and block behind an unhealthy device's disk I/O.
+        valid = cwd == expected
     elif service['manager'] == 'launchd':
         target = service.get('domain', 'gui/' + str(os.getuid())) + '/' + service['label']
         match = re.search(r'^\s*pid\s*=\s*(\d+)\s*$', output(['/bin/launchctl', 'print', target]), re.M)
