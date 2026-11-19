@@ -1,4 +1,5 @@
-import {limitedJSON,reply,runTool} from './bridge.mjs';
+import {maintenancePhone} from './maintenance.mjs';
+import {reply,runTool} from './bridge.mjs';
 
 // Phone keys are enrolled and verified by Biome. This ingress cannot select a
 // controller operation, realm, or privileged identity from caller input.
@@ -6,11 +7,14 @@ export async function mobileDecision(req,env){
  if(req.method!=='POST')return reply({error:'Use POST'},405);
  const origin=req.headers.get('Origin');
  if(origin&&origin!==new URL(req.url).origin)return reply({error:'Untrusted origin'},403);
- let e;try{e=await limitedJSON(req,96000)}catch{return reply({error:'Invalid decision envelope'},400)}
+ let e;try{e=await req.json()}catch{return reply({error:'Invalid decision envelope'},400)}
  if(!e||Array.isArray(e)||!['enroll','inbox','respond'].includes(e.command))return reply({error:'Unsupported decision command'},400);
  if(e.command!=='enroll'&&(!/^[0-9a-f]{64}$/.test(e.device||'')||typeof e.signature!=='string'||typeof e.payload!=='string'||typeof e.id!=='string'))return reply({error:'Signed phone identity required'},401);
  // Do not key bridge result caching by a caller's unverified ID. The controller
  // verifies signatures first, then applies its authenticated response receipt.
+ if(e.command!=='enroll'){
+  try{const maintenance=await maintenancePhone(env,e);if(maintenance)return reply(maintenance)}catch{return reply({error:'Signed maintenance confirmation rejected'},403)}
+ }
  const result=await runTool(env,'biome_invoke',{operation:e.command==='inbox'?'decision.mobile.inbox':'decision.mobile',arguments:{envelope:e},realm:'site',request_id:crypto.randomUUID()});
  if(result.isError){
   const detail=(result.content??[]).filter(c=>c.type==='text').map(c=>c.text).join(' ');

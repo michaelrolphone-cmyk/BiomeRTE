@@ -15,6 +15,20 @@
       "when": 1793751800000,
       "tag": "0001_controller_ha",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794000000000,
+      "tag": "0002_bridge_result_chunks",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794247994979,
+      "tag": "0003_bridge_live_claims",
+      "breakpoints": true
     }
   ]
 }

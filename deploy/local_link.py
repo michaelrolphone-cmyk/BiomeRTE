@@ -9,6 +9,7 @@ import os
 import socket
 import threading
 import time
+from biomerte.network_addresses import registration as network_registration
 
 
 def local_settings(conf):
@@ -32,7 +33,20 @@ def verify_destination(conf, settings, values):
 
 def heartbeat_payload(health):
     return {'position': 0, 'ready': health.get('realms', {}).get('site') == 'ready',
-            'load': os.getloadavg()[0] / (os.cpu_count() or 1), 'host': socket.gethostname()}
+            'load': os.getloadavg()[0] / (os.cpu_count() or 1), 'host': socket.gethostname(),
+            'network': network_registration()}
+
+
+def heartbeat_once(local, fetch, send):
+    # The independent gateway link still knows its interfaces when controller
+    # startup fails. Keep that registration fresh without admitting work.
+    try:
+        health = fetch(local + '/health', timeout=3)
+    except Exception:
+        health = {}
+    payload = heartbeat_payload(health)
+    send('ha/heartbeat', payload)
+    return payload['ready']
 
 
 def session_packet_result(service, values):
@@ -73,9 +87,7 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     def heartbeat():
         while True:
             try:
-                payload = heartbeat_payload(fetch(local + '/health'))
-                send('ha/heartbeat', payload)
-                ready.set() if payload['ready'] else ready.clear()
+                ready.set() if heartbeat_once(local, fetch, send) else ready.clear()
             except Exception:
                 ready.clear()
             time.sleep(settings.get('heartbeat_interval', 2))

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BiomeRTE · Operations</title><link rel="stylesheet" href="/dashboard/ui.css"></head>
+<body>
+<aside class="sidebar"><div class="brand"><img src="/dashboard/logo.png" alt="Biome" width="38" height="38"><div>BiomeRTE<small>OPERATIONS CONSOLE</small></div></div>
+<div class="instance"><strong id="instance-name">My Biome</strong><span><i class="dot"></i><span id="instance-state">Connecting</span></span></div>
+<nav aria-label="Main navigation"><div class="navlabel">WORKSPACE</div>
+<button data-view="overview" class="active"><span>▦</span>Overview</button>
+<button data-view="workflows"><span>⑂</span>Workflows</button>
+<button data-view="runs"><span>▷</span>Process runs</button>
+<button data-view="decisions"><span>◇</span>Human decisions <em id="decision-count" hidden></em></button>
+<button data-view="work"><span>✓</span>Work plan</button>
+<button data-view="knowledge"><span>▤</span>Knowledge</button>
+<div class="navlabel">INSTANCE</div>
+<button data-view="capabilities"><span>⬡</span>Capabilities</button>
+<button data-view="resources"><span>▥</span>Resources</button>
+<a id="connections" href="/oauth/connections"><span>♙</span>Access &amp; connections</a>
+<button data-view="activity"><span>≡</span>Activity</button>
+<button data-view="settings"><span>⚙</span>Settings</button>
+<button data-view="advanced"><span>⌘</span>Advanced</button></nav>
+<div class="profile"><div class="avatar">B</div><div>Instance owner<small>Signed in with ChatGPT</small><a href="/signout-with-chatgpt?return_to=%2Fdashboard%2F">Sign out</a></div></div></aside>
+<main><header class="top"><div><span id="top-instance">My Biome</span><span class="separator">/</span><strong id="crumb">Overview</strong></div><div class="topright"><input id="search" type="search" aria-label="Search this view" placeholder="Search this view…"><label class="realm-label"><span class="sr-only">Workspace</span><select id="realm"><option value="site">Shared workspace</option><option value="local">Local workspace</option></select></label><button id="refresh" aria-label="Refresh workspace">↻ Refresh</button></div></header>
+<div class="content"><div id="status" role="status" aria-live="polite">Connecting to controller…</div>
+<form id="login" class="connection"><span class="spinner" aria-hidden="true"></span><div><strong id="connection-title">Opening your workspace</strong><p>Using your authenticated owner connection.</p></div><button id="connect" type="submit">Connect</button></form>
+<noscript>Enable JavaScript to use the operations console.</noscript>
+<div id="workspace" hidden><div class="page-heading"><div><p class="eyebrow" id="eyebrow">INSTANCE MANAGEMENT</p><h1 id="page-title">Operations overview</h1><p id="page-subtitle">Your processes, people, and capabilities. Working together.</p></div><div class="page-actions"><button class="primary" id="start-process">＋ Start a process</button></div></div><section id="view" aria-label="Workspace content"></section></div>
+<footer>BiomeRTE · Live instance data <span id="updated-at"></span></footer></div></main>
+<dialog id="modal"><form id="modal-form"><div class="modal-head"><div><p class="eyebrow" id="modal-eyebrow">DETAILS</p><h2 id="modal-title"></h2></div><button id="modal-close" type="button" aria-label="Close dialog">×</button></div><div id="modal-body"></div><p id="modal-error" role="alert"></p><div class="modal-actions"><button id="modal-submit" class="primary" type="submit">Save</button><button id="modal-cancel" type="button">Cancel</button></div></form></dialog>
+<div id="toast" role="alert" hidden></div><script type="module" src="/dashboard/ui.js"></script></body></html>

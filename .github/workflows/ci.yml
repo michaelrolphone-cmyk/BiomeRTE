@@ -31,13 +31,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --test tests/*.test.mjs
-        working-directory: gateway
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: |
           mkdir -p .openai
           cp hosting.example.json .openai/hosting.json
           npm run build
           npm run validate
+        working-directory: gateway
+      - run: node --test tests/*.test.mjs
         working-directory: gateway
   replicated-recovery:
     runs-on: ubuntu-latest

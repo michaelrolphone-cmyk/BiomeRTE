@@ -27,3 +27,11 @@ const decisionProbe = await workerModule.default.fetch(new Request('https://biom
   method: 'POST', headers: {'content-type': 'application/json'}, body: '{"command":"not-a-decision-command"}'
 }), {});
 assert.equal(decisionProbe.status, 400, 'Built decision ingress must reject arbitrary commands without reaching a controller');
+
+for(const name of ['ownershipBootstrapDigest','ownershipBootstrapAuthorized','ownershipSchema','resolveOwnershipRoute','ownershipTransfer'])assert.equal(typeof workerModule[name],'function',name+' must survive bundling');
+const ownershipProbe={unit:'bundle-qualification'};
+const ownershipDigest=await workerModule.ownershipBootstrapDigest(ownershipProbe);
+assert.equal(await workerModule.ownershipBootstrapAuthorized({},ownershipProbe),false);
+assert.equal(await workerModule.ownershipBootstrapAuthorized({OWNERSHIP_BOOTSTRAP_AUTHORIZATIONS:JSON.stringify({'bundle-qualification':ownershipDigest})},ownershipProbe),true);
+assert.equal(await workerModule.ownershipBootstrapAuthorized({OWNERSHIP_BOOTSTRAP_AUTHORIZATIONS:JSON.stringify({'bundle-qualification':'0'.repeat(64)})},ownershipProbe),false);
+console.log('Bundled ownership exports and exact adoption authorization verified');
