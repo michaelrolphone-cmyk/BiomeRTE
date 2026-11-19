@@ -25,7 +25,8 @@ INTERVAL_FIELDS = frozenset(("capture_host_monotonic_interval_s",
                              "capture_host_interval_s"))
 POINT_FIELDS = frozenset(("received_monotonic", "received_monotonic_s",
                           "request_started_monotonic", "measurement_monotonic_s",
-                          "processed_monotonic", "host_receive_monotonic_s"))
+                          "processed_monotonic", "host_receive_monotonic_s",
+                          "receive_decode_monotonic_s"))
 
 def _finite(value):
     return type(value) in (int, float) and math.isfinite(value)
@@ -99,6 +100,14 @@ class ClockBounds:
         _, drift = self._check(source_clock_id, now)
         return [interval[0] - self.offset_high - drift,
                 interval[1] - self.offset_low + drift]
+
+    def to_host_interval(self, interval, now=None):
+        if (not isinstance(interval, (list, tuple)) or len(interval) != 2 or
+                not all(_finite(v) for v in interval) or interval[0] > interval[1]):
+            raise ValueError("invalid consumer monotonic interval")
+        _, drift = self._check(now=now)
+        return [interval[0] + self.offset_low - drift,
+                interval[1] + self.offset_high + drift]
 
     def age(self, host_monotonic, source_clock_id=None, now=None):
         if not _finite(host_monotonic):
