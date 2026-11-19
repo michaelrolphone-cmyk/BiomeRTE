@@ -4,7 +4,7 @@ The existing service coordinator and Docker supervisor remain the deployment mec
 
 ## Build and preserve a release now
 
-Use Python 3.9+ on the build host and a committed source revision. The utility exports that Git tree into an isolated build context, excluding ignored credentials, runtime state, model files and unrelated workspace files. OCI labels identify source and revision. Public base images are resolved to the requested platform\'s registry manifest digest before building, avoiding ambiguous multi-architecture tags in classic Docker stores.
+Use Python 3.9+ on the build host and a committed source revision. The utility exports that Git tree into an isolated build context, excluding ignored credentials, runtime state, model files and unrelated workspace files. OCI labels identify source and revision. Public base images are resolved to the requested platform's registry manifest digest before building, avoiding ambiguous multi-architecture tags in classic Docker stores.
 
 Build architectures sequentially with the existing Docker daemon. A classic image store loads one architecture per build. The initial catalog contains the supervisor and service authority; add qualified application Dockerfiles as they are migrated.
 
