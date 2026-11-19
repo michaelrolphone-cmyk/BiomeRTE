@@ -17,7 +17,7 @@ def router_manifest(images, *, service_id="stream-router", network="biomerte-ser
         "mounts": [{"binding": service_id + "-private", "target": "/config", "role": "private", "read_only": True}],
         "network": network, "ports": [{"container": 8751, "host": host_port, "listen": "127.0.0.1", "protocol": "tcp"}],
         "health": {"command": ["python", "/app/probe.py"], "interval_s": 5, "timeout_s": 4, "retries": 3},
-        "read_only_root": True, "memory_bytes": 268435456, "restart_policy": "no",
+        "read_only_root": True, "restart_policy": "no",
         "log_max_size": "8m", "log_max_files": 3,
         "lease_ttl_s": 15, "worker_ttl_s": 20, "startup_grace_s": 60
     }

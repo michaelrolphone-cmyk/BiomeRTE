@@ -86,7 +86,7 @@ candidate private directory outside the build context and mount it read-only.
 The tool refuses to overwrite an existing candidate directory.
 
 During qualification run the host I/O service with route refresh disabled
-(`routes_refresh_s: 0`) so the native router remains the sole provisioning
+(`route_refresh_interval_s: 0`) so the native router remains the sole provisioning
 writer. At cutover, stop the native router first, then enable the existing
 ARP refresh and telemetry provisioning loop on host I/O at five seconds. It uses the original
 DeviceRoutes database in the native OS. The container's `/device-routes`
@@ -112,7 +112,9 @@ unused loopback port; verify inspection, control UTC and host I/O; preserve
 existing provider and outbound bridge endpoint references; stop the old router; enable the
 native host adapter's five-second route refresh; then declare the qualified
 container. Do not overlap the old and new provisioning writers. Keep the old release/config/launch definition for rollback.
-A rollback drains/removes the new runner child before restoring the old listener.
+A rollback drains/removes the new runner child, disables host I/O route refresh,
+then restores the old native listener. The native and host-adapter provisioning
+loops must never run together.
 No source/build/test command in this directory performs that cutover.
 
 ## Rover state, clocks and effects
