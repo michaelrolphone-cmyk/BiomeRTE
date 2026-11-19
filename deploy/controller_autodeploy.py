@@ -410,12 +410,14 @@ class Watcher:
                 time.sleep(min(self.config['probe_interval'],
                                max(0, deadline - time.monotonic())))
 
-    def _rollback(self, reason):
+    def _rollback(self, reason, preserve_rejection=False):
         pending = self.state['pending']
         previous = pending['previous']
         failed = pending['candidate']
+        rejected_commit = self.state.get('rejected_commit') if preserve_rejection else failed['commit']
+        rejected_release = self.state.get('rejected_release') if preserve_rejection else failed
         self._save(phase='rolling_back', last_error=reason,
-                   rejected_commit=failed['commit'], rejected_release=failed)
+                   rejected_commit=rejected_commit, rejected_release=rejected_release)
         try:
             atomic_link(self.current_link, previous['path'])
             self._save(current=previous)
@@ -433,7 +435,10 @@ class Watcher:
     def _recover(self):
         if self.state.get('pending'):
             with file_lock(self.lock_path):
-                return self._rollback('interrupted_deployment_rolled_back')
+                preserve = (self.state['phase'] in ('rollback_failed', 'staging_repair')
+                            and self.state.get('rejected_commit') is not None)
+                return self._rollback('interrupted_deployment_rolled_back',
+                                      preserve_rejection=preserve)
         if self.state['phase'] == 'staging':
             self._save(phase='idle', last_error='interrupted_staging', next_retry_at=0)
         return True

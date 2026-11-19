@@ -432,5 +432,20 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'wrong_process_source')
 
 
+    def test_older_pending_rollback_does_not_forget_rejected_repair(self):
+        self.worker.bad.update([A, None])
+        self.worker.tick()
+        self.worker.head = B
+        with mock.patch.object(self.worker, '_stage',
+                               side_effect=watcher.DeployError('bad_repair', permanent=True)):
+            self.worker.tick()
+        self.assertEqual(self.worker.state['rejected_commit'], B)
+        with mock.patch.object(self.worker, '_stage') as stage:
+            self.worker.tick()
+        self.assertEqual(stage.call_count, 0)
+        self.assertEqual(self.worker.state['rejected_commit'], B)
+        self.assertEqual(self.worker.state['pending']['candidate']['commit'], A)
+
+
 if __name__ == '__main__':
     unittest.main()
