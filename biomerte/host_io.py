@@ -332,10 +332,14 @@ class HostIO:
 
     def health(self):
         vision = Path(self.settings["vision_directory"]) / "vision.sock"
+        provisioning = bool(self.settings.get("device_provisioning") and
+                            self.settings.get("route_refresh_interval_s", 0) >= 1)
+        device_effects = self.settings.get("enable_effects") is True
         return dict(host_id=self.host_id, clock_id=self.clock_id,
                     routes_available=True, route_refresh=self.route_health,
                     vision_available=vision.exists(), anchors_active=self.anchors.sock is not None,
-                    effects_active=self.settings.get("enable_effects") is True)
+                    provisioning_active=provisioning, device_commands_active=device_effects,
+                    effects_active=provisioning or device_effects or self.anchors.sock is not None)
 
     def call(self, operation, arguments):
         methods = {"clock": self.clock, "health": self.health,
@@ -406,7 +410,8 @@ def make_server(settings, backend):
                 if body.get("protocol") != PROTOCOL or not isinstance(body.get("arguments"), dict):
                     raise ValueError("invalid protocol")
                 result = backend.call(body["operation"], body["arguments"])
-                self.reply(200, dict(protocol=PROTOCOL, result=result))
+                self.reply(200, dict(protocol=PROTOCOL, host_id=backend.host_id,
+                                     clock_id=backend.clock_id, result=result))
             except PermissionError:
                 self.reply(403, {"error": "operation_not_active"})
             except (ValueError, TypeError, KeyError):

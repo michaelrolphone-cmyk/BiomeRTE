@@ -140,6 +140,53 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             wrong.clock()
 
+    def test_every_reply_pins_host_and_invalidates_old_boot_bounds(self):
+        bounds = self.client.clock()
+        self.backend.host_id = "other-host"
+        with self.assertRaises(ValueError):
+            self.client.list_routes()
+        self.backend.host_id = "registered-host"
+        self.backend.clock_id = "registered-host:boot-two"
+        self.client.list_routes()
+        self.assertFalse(bounds.valid)
+        fresh = self.client.clock()
+        self.assertEqual(fresh.clock_id, "registered-host:boot-two")
+        self.assertTrue(fresh.valid)
+
+    def test_redirects_do_not_forward_credentials(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        destination = self.url + "/v1/host-io/call"
+        class Redirect(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header("Location", destination)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+        redirect = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        worker = threading.Thread(target=redirect.serve_forever, daemon=True)
+        worker.start()
+        try:
+            client = HostIOClient(dict(url="http://127.0.0.1:" + str(redirect.server_port),
+                token_file=str(self.token), allow_local_http=True, host_id="registered-host"))
+            with self.assertRaises(HTTPError) as error:
+                client.clock()
+            self.assertEqual(error.exception.code, 302)
+        finally:
+            redirect.shutdown()
+            redirect.server_close()
+            worker.join(timeout=2)
+
+    def test_provisioning_has_separate_truthful_health_gate(self):
+        self.backend.settings.update(route_refresh_interval_s=5,
+                                     device_provisioning={"camera": "/fixture-only.json"})
+        health = self.client.health()
+        self.assertTrue(health["provisioning_active"])
+        self.assertTrue(health["effects_active"])
+        self.assertFalse(health["device_commands_active"])
+        self.assertFalse(health["anchors_active"])
+
     def test_anchor_candidates_retain_native_station_variants(self):
         self.backend.neighbors = lambda: [
             ("192.168.50.10", "a2:bb:cc:dd:ee:10"),

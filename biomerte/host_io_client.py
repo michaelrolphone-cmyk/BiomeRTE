@@ -16,7 +16,8 @@ import ssl
 import struct
 import time
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener
 
 PROTOCOL = "biomerte-host-io/1"
 MAX_JSON = 1024 * 1024
@@ -50,12 +51,18 @@ def read_exact(stream, size):
         size -= len(block)
     return b"".join(chunks)
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, source, code, message, headers, new_url):
+        source.close()
+        raise HTTPError(request.full_url, code, "host I/O redirects are not permitted", headers, None)
+
 class ClockBounds:
     """An NTP-style bound: host-minus-client monotonic offset is [low, high]."""
     def __init__(self, clock_id, offset_low, offset_high, sampled_at, *,
                  max_age_s=10., max_uncertainty_s=.25, drift_ppm=500.,
                  wall_offset_low=0., wall_offset_high=0., clock=time.monotonic, host_id=None):
         self.clock_id = clock_id
+        self._invalid = False
         self.host_id = host_id
         self.offset_low, self.offset_high = float(offset_low), float(offset_high)
         self.sampled_at = float(sampled_at)
@@ -69,7 +76,12 @@ class ClockBounds:
                 drift_ppm < 0 or wall_offset_low > wall_offset_high):
             raise ValueError("invalid host clock bounds")
 
+    def invalidate(self):
+        self._invalid = True
+
     def _check(self, source_clock_id=None, now=None):
+        if self._invalid:
+            raise ValueError("host clock binding was invalidated")
         now = self._clock() if now is None else now
         age = now - self.sampled_at
         drift = max(0., age) * self.drift_ppm / 1e6
@@ -167,10 +179,11 @@ class HostIOClient:
         self.timeout = self.config.get("timeout_s", 3.)
         if not _finite(self.timeout) or self.timeout <= 0:
             raise ValueError("host I/O timeout must be finite and positive")
-        self._opener = opener or urlopen
         self._monotonic, self._wall = monotonic, wall
         self._bounds = None
         self.context = ssl.create_default_context(cafile=self.config.get("ca_file"))
+        self._opener = opener or build_opener(ProxyHandler({}), _NoRedirect(),
+                                               HTTPSHandler(context=self.context)).open
 
     @classmethod
     def from_config(cls, path, **kwargs):
@@ -186,8 +199,6 @@ class HostIOClient:
             body, allow_nan=False, separators=(",", ":")).encode()
         request = Request(self.url + path, raw, headers)
         kwargs = {"timeout": self.timeout if timeout is None else timeout}
-        if self.url.startswith("https:"):
-            kwargs["context"] = self.context
         return self._opener(request, **kwargs)
 
     def _call(self, operation, **arguments):
@@ -197,6 +208,10 @@ class HostIOClient:
         if len(raw) > MAX_JSON:
             raise ValueError("host I/O response exceeds limit")
         value = json.loads(raw)
+        if self.config.get("host_id") and value.get("host_id") != self.config["host_id"]:
+            raise ValueError("host I/O identity does not match configured binding")
+        if self._bounds is not None and value.get("clock_id") != self._bounds.clock_id:
+            self._bounds.invalidate()
         if value.get("protocol") != PROTOCOL or "result" not in value:
             raise ValueError("invalid host I/O response")
         return value
