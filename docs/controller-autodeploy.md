@@ -311,7 +311,11 @@ A paired configuration uses the existing extension points:
 * `gateway.require_network: true` after the compatible gateway is deployed.
   Acceptance then requires a current self-reported snapshot from the selected
   registered controller. An empty successful snapshot is valid; stale, missing
-  or unavailable metadata fails the optional gate.
+  or unavailable metadata fails the optional gate. The selected link must keep
+  the same PID and physical source while its self-report receipt timestamp
+  advances beyond the first observed gateway timestamp. Cached metadata from
+  the previous process cannot satisfy this check. Both timestamps come from
+  the gateway, avoiding dependence on clock agreement between hosts.
 
 The staged link import check starts no link threads, controller instances or
 network requests. It imports the entrypoint and local/HA dispatch dependency

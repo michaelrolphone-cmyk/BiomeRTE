@@ -111,7 +111,7 @@ class NetworkGateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.check(network)
     def test_current_empty_snapshot_is_valid_and_does_not_reuse_old_addresses(self):
-        result = self.check({'self_report': {'current': True, 'status': 'current', 'addresses': []}})
+        result = self.check({'self_report': {'current': True, 'status': 'current', 'addresses': [], 'observed_at': 990}})
         self.assertTrue(result['network_report_current'])
     def test_old_gateway_remains_supported_when_gate_is_not_enabled(self):
         self.config['gateway'].pop('require_network')
@@ -154,6 +154,42 @@ class PairedRecoveryTests(unittest.TestCase):
         self.assertIsNone(resumed.state['pending'])
         self.assertEqual(calls[-2:], [
             ('/fixture/controller', self.base.C), ('/fixture/link', self.base.C)])
+
+
+class RegistrationAdvancementTests(unittest.TestCase):
+    def setUp(self):
+        self.config = {'linked_services': [{'manager': 'launchd', 'label': 'controller-link'}],
+                       'gateway': {'require_network': True}}
+        self.proof = {'pid': 123, 'source': '/candidate'}
+        self.baseline = {'node': 'mac', 'network_report_current': True, 'network_observed_at': 990}
+    def test_constant_current_timestamp_cannot_promote_a_new_link(self):
+        def gateway(config, after=None):
+            if after is None:
+                return dict(self.baseline)
+            self.assertEqual(after, 990)
+            raise probe.RegistrationNotAdvanced('gateway_network_report_not_advanced')
+        with mock.patch.object(probe, 'source', return_value=self.proof):
+            with mock.patch.object(probe, 'gateway', side_effect=gateway):
+                with mock.patch.object(probe.time, 'sleep'):
+                    with mock.patch.object(probe.time, 'monotonic', side_effect=[100, 100, 106]):
+                        with self.assertRaises(probe.RegistrationNotAdvanced):
+                            probe.deployment_gateway(self.config, '/candidate')
+    def test_advanced_self_report_is_accepted_only_with_same_link_process(self):
+        advanced = dict(self.baseline, network_observed_at=992)
+        with mock.patch.object(probe, 'source', return_value=self.proof) as source:
+            with mock.patch.object(probe, 'gateway', side_effect=[dict(self.baseline), advanced]) as gateway:
+                with mock.patch.object(probe.time, 'sleep'):
+                    result = probe.deployment_gateway(self.config, '/candidate')
+        self.assertEqual(result['network_observed_at'], 992)
+        self.assertEqual(source.call_count, 3)
+        self.assertEqual(gateway.call_args_list[1], mock.call(self.config, after=990))
+    def test_link_restart_during_observation_cannot_promote_the_release(self):
+        with mock.patch.object(probe, 'source', side_effect=[self.proof, dict(self.proof, pid=124)]):
+            with mock.patch.object(probe, 'gateway', return_value=dict(self.baseline)) as gateway:
+                with mock.patch.object(probe.time, 'sleep'):
+                    with self.assertRaises(ValueError):
+                        probe.deployment_gateway(self.config, '/candidate')
+        self.assertEqual(gateway.call_count, 1)
 
 
 if __name__ == '__main__':
