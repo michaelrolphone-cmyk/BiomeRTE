@@ -29,11 +29,11 @@ def authorize(tx, ctx, grant, role='server'):
 
 
 def valid(tx, ctx, grant):
-    lease = tx.need('leases', grant['lease'])
-    guard = tx.need('guards', lease['guard'])
+    lease = tx.get('leases', grant['lease'])
+    guard = tx.get('guards', lease.get('guard', '')) if lease else None
     if (grant['state'] != 'open' or redeployment.current(tx, grant['resource']) or grant['expires_at'] <= time.time() or
             grant['authority'] != ctx.app.node or grant['realm'] != ctx.scope or
-            lease['state'] != 'bound' or
+            not lease or lease['state'] != 'bound' or not guard or
             (guard['holder'], guard['generation']) != (lease['id'], grant['generation'])):
         raise Fault('Stream authority superseded', 409)
     peer = tx.get('peers', grant['server'])
@@ -75,9 +75,25 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         raise Fault('Paired server required', 403)
     from .authorization import guard
     guard(tx, 'stream-' + lease, l['contract'], l['resource'], {}, ctx)
+    current_guard = tx.need('guards', l['guard'])
+    if (current_guard['holder'], current_guard['generation']) != (lease, l['generation']):
+        raise Fault('Provider stream reservation is superseded', 409)
     for prior in tx.rows('_stream_grants'):
         if prior['lease'] == lease and prior['state'] == 'open':
+            # A persistent lease may be fenced again under the same ID. Its
+            # previous grant must not block every reconnect until its TTL ends.
+            # Retire only stale authority; valid consumers still share one grant.
+            if prior['generation'] != l['generation'] or prior['expires_at'] <= time.time():
+                prior.update(state='closed', expires_at=time.time(),
+                             closed_reason='lease_refenced_or_grant_expired')
+                tx.put('_stream_grants', prior['id'], prior)
+                continue
             valid(tx, ctx, prior)
+            if (subscription['id'] in prior.get('closed_consumers', [])
+                    and not subscription.get('shared_owner_released')):
+                prior['closed_consumers'] = [item for item in prior['closed_consumers']
+                                             if item != subscription['id']]
+                tx.put('_stream_grants', prior['id'], prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
             return dict(shared_streams.public(tx, prior), url=url.rstrip('/') + '/' + prior['id'],
                         role='server', attachment_credential=token(ctx, prior, 'server', member['id']))

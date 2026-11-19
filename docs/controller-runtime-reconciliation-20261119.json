@@ -1,0 +1,220 @@
+{
+  "baseline_commit": "a4c1c218afcd8501cd88e843ce9aee0813031528",
+  "branch": "work/controller-runtime-reconcile-20261119",
+  "diff_check": "passed",
+  "files": [
+    {
+      "baseline_sha256": "6dfa109f2df1b951cc2f41b90d35eac86848514281b22b69293c2660ace6fb21",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "116334c1320a306350ec4f13077aa2ffcbf3d22794d1427c1475ac2e32768fc5",
+      "path": "biomerte/command_runner.py",
+      "pi_sha256": "116334c1320a306350ec4f13077aa2ffcbf3d22794d1427c1475ac2e32768fc5",
+      "reconciled_sha256": "6850b66414ec93f8ee7167c1127890a8fc8007eb0f9c19c10c65f90e1bd8d27f"
+    },
+    {
+      "baseline_sha256": null,
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "1b8a6cbf75516f6dfb39ae7794a3675cc5c6249b6f99712df351936eba43ff49",
+      "path": "biomerte/completion_receipts.py",
+      "pi_sha256": "1b8a6cbf75516f6dfb39ae7794a3675cc5c6249b6f99712df351936eba43ff49",
+      "reconciled_sha256": "1b8a6cbf75516f6dfb39ae7794a3675cc5c6249b6f99712df351936eba43ff49"
+    },
+    {
+      "baseline_sha256": "3bb627d85bfb2bfbbe68e0ea2dbc815fc64d96243da4d25de9a72513b35062c7",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "3bb627d85bfb2bfbbe68e0ea2dbc815fc64d96243da4d25de9a72513b35062c7",
+      "path": "biomerte/control_clock.py",
+      "pi_sha256": null,
+      "reconciled_sha256": "3bb627d85bfb2bfbbe68e0ea2dbc815fc64d96243da4d25de9a72513b35062c7"
+    },
+    {
+      "baseline_sha256": "fea4b1da4739d8183f9dbd6d7cbd855583737d506222b5bbdb667e4e4c03d400",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "e6d4f1324cedf2327f930715b36f8a50f3ea23f644cbf68bcd29b1460b52a510",
+      "path": "biomerte/discovery.py",
+      "pi_sha256": "e6d4f1324cedf2327f930715b36f8a50f3ea23f644cbf68bcd29b1460b52a510",
+      "reconciled_sha256": "e6d4f1324cedf2327f930715b36f8a50f3ea23f644cbf68bcd29b1460b52a510"
+    },
+    {
+      "baseline_sha256": "fd2cdf180227e08656abd9c835de212567780896cfb354055029eaca5e5892ea",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "a07aef90abffe9cfdb567282981de70fda14dcf9ca7d220fb705d93c7190a4c7",
+      "path": "biomerte/extensions.py",
+      "pi_sha256": "a07aef90abffe9cfdb567282981de70fda14dcf9ca7d220fb705d93c7190a4c7",
+      "reconciled_sha256": "fd2cdf180227e08656abd9c835de212567780896cfb354055029eaca5e5892ea"
+    },
+    {
+      "baseline_sha256": "e2db204423290155bbaa4541736920daab4cc1d55bb157a1ed57ca6229500083",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "ebbd46e0763285624a7ae2c3f27472cf25c4fc6c9b7ea815a6866c3fdfc1f42d",
+      "path": "biomerte/lifecycle.py",
+      "pi_sha256": "ebbd46e0763285624a7ae2c3f27472cf25c4fc6c9b7ea815a6866c3fdfc1f42d",
+      "reconciled_sha256": "b864a615c2163fabac17215d3598f5fa12695f036c28c75719ab0931f9de715e"
+    },
+    {
+      "baseline_sha256": "2c8638b4c086c307383fd30bb90510831270adbd63132334ac434fed4292c964",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "c5dfaf0b1c703187f65436874644023bd9c2cd90b6ba2fdf63728d747d485b3c",
+      "path": "biomerte/mcp.py",
+      "pi_sha256": "c5dfaf0b1c703187f65436874644023bd9c2cd90b6ba2fdf63728d747d485b3c",
+      "reconciled_sha256": "2c8638b4c086c307383fd30bb90510831270adbd63132334ac434fed4292c964"
+    },
+    {
+      "baseline_sha256": "7ad2bb0759fdb4885bc236c3b06c05c392a2712782ce318d531d885336da9ab5",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "c433c8a88b8f85afb1fc7812c17f4251306b6173acab08fa31fc5b2036cd9655",
+      "path": "biomerte/process.py",
+      "pi_sha256": "c433c8a88b8f85afb1fc7812c17f4251306b6173acab08fa31fc5b2036cd9655",
+      "reconciled_sha256": "7ad2bb0759fdb4885bc236c3b06c05c392a2712782ce318d531d885336da9ab5"
+    },
+    {
+      "baseline_sha256": "1156300879d317114617074570230a862756749f4661ee313c65241b4712903b",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "7699600b55560d1775d084cd4f5a0904c9903017caa43903e577d5d1730bb014",
+      "path": "biomerte/providers.py",
+      "pi_sha256": "7699600b55560d1775d084cd4f5a0904c9903017caa43903e577d5d1730bb014",
+      "reconciled_sha256": "c3481b3e38ee730d8f29383a084bbc3e7f96a003449878a9008fcc8b94691348"
+    },
+    {
+      "baseline_sha256": "e1a83b8d3964c6ff328f807bdccdde89f29a9a8e4c10f4872d1da6b40f76e114",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": null,
+      "path": "biomerte/redeployment.py",
+      "pi_sha256": null,
+      "reconciled_sha256": "e1a83b8d3964c6ff328f807bdccdde89f29a9a8e4c10f4872d1da6b40f76e114"
+    },
+    {
+      "baseline_sha256": "9209ddc86c2b6cccb85edb04b311cf7b8fdb57c74c19078aa436bec922071532",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "020929cb88648b38c36db010c64b559e12a8d5919111857524fee1b4363ad004",
+      "path": "biomerte/resource_recovery.py",
+      "pi_sha256": "020929cb88648b38c36db010c64b559e12a8d5919111857524fee1b4363ad004",
+      "reconciled_sha256": "9209ddc86c2b6cccb85edb04b311cf7b8fdb57c74c19078aa436bec922071532"
+    },
+    {
+      "baseline_sha256": "c2a473923680b5f5a9ea91256bc3485c64f719f7597bacf36965646026dff7ad",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "e677676f045751ee829aac395a69492dfb0611ef97df1bebb47ccc9d11fb6be0",
+      "path": "biomerte/retention_index.py",
+      "pi_sha256": "e677676f045751ee829aac395a69492dfb0611ef97df1bebb47ccc9d11fb6be0",
+      "reconciled_sha256": "e677676f045751ee829aac395a69492dfb0611ef97df1bebb47ccc9d11fb6be0"
+    },
+    {
+      "baseline_sha256": "4da535f09128052323ed000fe4296b9e40990583aef96efb3100ac7fdfb15128",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "b12f63f34bb86dc4526cf912b2359faae49f706ebd38d2ba6b66cb158521991b",
+      "path": "biomerte/rover.py",
+      "pi_sha256": "b12f63f34bb86dc4526cf912b2359faae49f706ebd38d2ba6b66cb158521991b",
+      "reconciled_sha256": "4da535f09128052323ed000fe4296b9e40990583aef96efb3100ac7fdfb15128"
+    },
+    {
+      "baseline_sha256": "ae79fd6490c5e7e4d36a487b54815a452cc005ad59049d1b93d4907eb71e415f",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "11a4a104e6974b9fd30e30c227868011cb93829a45500589db0def60d0d18714",
+      "path": "biomerte/shared_streams.py",
+      "pi_sha256": "11a4a104e6974b9fd30e30c227868011cb93829a45500589db0def60d0d18714",
+      "reconciled_sha256": "ae79fd6490c5e7e4d36a487b54815a452cc005ad59049d1b93d4907eb71e415f"
+    },
+    {
+      "baseline_sha256": "c1f63c3996d942cbd8a685e5059a68ae0e29fcf547316ded1266ea8f9a408a79",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "100b58ad1446ccfdd04234f760fb8a66194855c55d211cb9e809a0479ea79be1",
+      "path": "biomerte/store.py",
+      "pi_sha256": "c1f63c3996d942cbd8a685e5059a68ae0e29fcf547316ded1266ea8f9a408a79",
+      "reconciled_sha256": "c1f63c3996d942cbd8a685e5059a68ae0e29fcf547316ded1266ea8f9a408a79"
+    },
+    {
+      "baseline_sha256": "f2c15d0cc6a744255f83883b4fc9ae36a15784b4d47696f3aad3cb60b0efdf11",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": null,
+      "path": "biomerte/stream_inspection.py",
+      "pi_sha256": null,
+      "reconciled_sha256": "f2c15d0cc6a744255f83883b4fc9ae36a15784b4d47696f3aad3cb60b0efdf11"
+    },
+    {
+      "baseline_sha256": "6c99c5d4134a67894071f2344bca5f30bf22436cebfd49fc5889309d476e098a",
+      "decision": "retain_newer_main_source",
+      "mac_sha256": "bef70c9d3c4b62bc4a919d62d304075125b8315ed5da8055a1ad1aece790a3fa",
+      "path": "biomerte/stream_router.py",
+      "pi_sha256": "44c2dbe2670108edc26a44cab3c9d9fecdbed63802020b4399c00fdbebd1c7b9",
+      "reconciled_sha256": "6c99c5d4134a67894071f2344bca5f30bf22436cebfd49fc5889309d476e098a"
+    },
+    {
+      "baseline_sha256": "5c2c2cd12da8c775b5f98c81f8ff7ab78dcd8c8eab7e0ab82ee1901e944d398d",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "fc98fa3953e81671253ef1346e9b48493197e9a18fb0ebd6544205adf528fcec",
+      "path": "biomerte/streams.py",
+      "pi_sha256": "31d35f56460dc664a834580e13b88c854a385225c35e289108addf9d04091644",
+      "reconciled_sha256": "508e8496171f3086c65cea765ea41563ceea9a4d46cf9e10c82be0e33ac4a0f8"
+    },
+    {
+      "baseline_sha256": "b7e1b8604d77b5bf3b2482042cab7a92a23255fe7cecba1285ba7d47ed3a9d83",
+      "decision": "preserve_deployed_fix_with_main_features",
+      "mac_sha256": "1992e93d17bd9fffdad89f541ffd4ab948dbf7599a534d1e5ac0f2871a35807d",
+      "path": "biomerte/supervised_commands.py",
+      "pi_sha256": "1992e93d17bd9fffdad89f541ffd4ab948dbf7599a534d1e5ac0f2871a35807d",
+      "reconciled_sha256": "1992e93d17bd9fffdad89f541ffd4ab948dbf7599a534d1e5ac0f2871a35807d"
+    }
+  ],
+  "live_source": {
+    "Mac": "$HOME/.local/share/biomerte-releases/generic-contracts-66357933/controller",
+    "Pi": "$HOME/.local/share/biomerte-releases/generic-contracts-native-09485891"
+  },
+  "preserved_live_behaviors": [
+    "Completion digests survive output expiry for exact late acknowledgement without replay.",
+    "Completed runner is rechecked under custody lock before classifying it as interrupted.",
+    "Unknown authoritative receipt parks delivery while retaining original executor evidence.",
+    "Discovery accepts an explicit positive item limit and retains it through pagination.",
+    "A shared stream owner can rejoin an existing live subscriber.",
+    "Stale or expired stream grants are retired on refence without closing valid shared consumers.",
+    "A deleted stream lease reports superseded authority instead of a missing-record error."
+  ],
+  "qualification": [
+    {
+      "existing_passed": 99,
+      "existing_skipped": 7,
+      "existing_tests": 106,
+      "host": "Mac",
+      "interpreter": "Python 3.9",
+      "log_sha256": "50be6918b9b4cd5aa037003bcf68e5ea3893a29eecd6e6bcf840c120c3271abd",
+      "maintenance_request_id": "reconcile-tests-20261119-09",
+      "note": "All existing tests had no failures. New test scaffold errors in this initial combined run were corrected in subsequent test-only edits."
+    },
+    {
+      "host": "Mac",
+      "interpreter": "Python 3.9",
+      "log_sha256": "bff5c8b231eb5012b5a0d145373a56689c77354cc3a74f503826548713c4f4ac",
+      "maintenance_request_id": "reconcile-final-custom-20261119-15",
+      "passed": 8,
+      "skipped": 0,
+      "tests": 8
+    },
+    {
+      "controller_import": "passed",
+      "host": "Pi",
+      "interpreter": "Python 3.4.2",
+      "log_sha256": "bc56f545304182b88db53e611e9009932468763ffb5cfd08289abb6dd381d66f",
+      "maintenance_request_id": "reconcile-pi-tests-final-20261119-16",
+      "passed": 14,
+      "skipped": 0,
+      "temporary_directory": "/dev/shm, removed after test completion",
+      "tests": 14
+    }
+  ],
+  "required_runtime_resources": [
+    "biomerte/assistant_catalog.json",
+    "biomerte/workspace-contracts.json",
+    "biomerte/static/*",
+    "examples/capability-followup.bpmn"
+  ],
+  "retained_main_behaviors": [
+    "Resource redeployment holds and held-operation cancellation.",
+    "Warm SQLite connection reuse already present on the Pi.",
+    "Rover provider readiness, stream subscription ownership and map snapshot revision.",
+    "Stream inspection, error reporting, peer diagnostics and control clock."
+  ],
+  "runtime_modified": false,
+  "schema": "biomerte-controller-source-reconciliation/1",
+  "scope": "Controller package sources only; providers, state, secrets, services and diagnostics wrappers untouched.",
+  "source_normalization": "Removed an extra trailing blank line from deployed command_runner.py; behavior is unchanged."
+}
