@@ -138,21 +138,30 @@ def archive_source(repo, revision, destination):
     return source
 
 def resolve_base(docker, image, platform):
-    try:
-        data = inspect_image(docker, image, platform)
-    except (RuntimeError, ValueError, IndexError, KeyError):
-        call([docker, "pull", "--platform", platform, image])
-        data = inspect_image(docker, image, platform)
-    digests = data.get("RepoDigests") or []
-    if not digests:
-        # An archive-loaded, correctly tagged base can match the architecture
-        # while having no registry receipt. Pull it before assigning provenance.
-        call([docker, "pull", "--platform", platform, image])
-        data = inspect_image(docker, image, platform)
-        digests = data.get("RepoDigests") or []
-    if not digests or not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", digests[0]):
-        raise ValueError("Base image has no immutable registry digest: " + image)
-    return digests[0]
+    # Classic Docker stores cannot reliably attach one index digest to images
+    # of several architectures. Resolve the platform manifest at the registry;
+    # Docker then builds FROM that exact digest, regardless of a cached tag.
+    payload = json.loads(call([docker, "manifest", "inspect", "--verbose", image]))
+    manifests = payload if isinstance(payload, list) else [payload]
+    arch, variant = PLATFORMS[platform]
+    repository = image.split("@", 1)[0]
+    if ":" in repository.rsplit("/", 1)[-1]:
+        repository = repository.rsplit(":", 1)[0]
+    matches = set()
+    for manifest in manifests:
+        descriptor = manifest.get("Descriptor") or {}
+        candidate = descriptor.get("platform") or {}
+        if candidate.get("os") != "linux" or candidate.get("architecture") != arch:
+            continue
+        if variant and candidate.get("variant") != variant:
+            continue
+        digest = descriptor.get("digest", "")
+        if not DIGEST.fullmatch(digest):
+            raise ValueError("Registry returned a non-immutable base manifest")
+        matches.add(repository + "@" + digest)
+    if len(matches) != 1:
+        raise ValueError("Registry must provide one base manifest for " + platform)
+    return matches.pop()
 
 def engine_platform(docker):
     info = json.loads(call([docker, "info", "--format", "{{json .}}"]))

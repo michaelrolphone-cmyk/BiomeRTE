@@ -116,15 +116,23 @@ class ImageReleaseTests(unittest.TestCase):
                             images.publish(args)
                         mutation.assert_not_called()
 
-    def test_archive_loaded_base_is_pulled_for_registry_provenance(self):
-        digest = "python@sha256:" + "d" * 64
-        with patch.object(images, "inspect_image",
-                          side_effect=[{"RepoDigests": []}, {"RepoDigests": [digest]}]):
-            with patch.object(images, "call") as command:
-                self.assertEqual(images.resolve_base("docker", "python:3.11-alpine",
-                                                     "linux/arm/v7"), digest)
-                command.assert_called_once_with(["docker", "pull", "--platform",
-                                                 "linux/arm/v7", "python:3.11-alpine"])
+    def test_base_digest_uses_requested_registry_platform_not_cached_tag(self):
+        def manifest(arch, variant, letter):
+            return {"Descriptor": {"platform": {"os": "linux", "architecture": arch,
+                    "variant": variant}, "digest": "sha256:" + letter * 64}}
+        payload = [manifest("arm", "v6", "a"), manifest("arm", "v7", "b"),
+                   manifest("arm64", "v8", "c"), manifest("unknown", "", "d")]
+        with patch.object(images, "call", return_value=json.dumps(payload)) as command:
+            self.assertEqual(images.resolve_base("docker", "registry.example:5000/python:3.11",
+                                                "linux/arm/v7"),
+                             "registry.example:5000/python@sha256:" + "b" * 64)
+            command.assert_called_once_with(["docker", "manifest", "inspect", "--verbose",
+                                             "registry.example:5000/python:3.11"])
+        with patch.object(images, "call", return_value=json.dumps(payload)):
+            self.assertEqual(images.resolve_base("docker", "python:3.11-alpine", "linux/arm64"),
+                             "python@sha256:" + "c" * 64)
+            with self.assertRaisesRegex(ValueError, "one base manifest"):
+                images.resolve_base("docker", "python:3.11-alpine", "linux/amd64")
 
     def test_engine_architecture_is_detected_without_host_names(self):
         for architecture, expected in [("aarch64", "linux/arm64"),
