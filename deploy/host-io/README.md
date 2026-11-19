@@ -124,3 +124,14 @@ and uncertainty rejection, original metadata/JPEG forwarding, unchanged
 survey request identity and UDP peer preservation. They do not activate a live
 collector, write the production registry, send a device command, certify an
 application state checkpoint, or qualify cross-host failover.
+
+## Boundary review hardening
+
+Every RPC response repeats host_id and clock_id; the client verifies the pinned
+host before returning a route or health result. A changed boot invalidates the
+previous ClockBounds object immediately. Credentialed requests reject redirects
+and do not use ambient HTTP proxies. Health distinguishes provisioning_active,
+device_commands_active and anchors_active, with effects_active as their union.
+The native route/provision loop uses its own explicit interval gate; enabling
+that loop is a transfer of the previous router's ownership even when optional
+ToF device/UDP operations remain disabled.
