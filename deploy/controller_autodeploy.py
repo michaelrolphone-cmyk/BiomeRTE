@@ -30,7 +30,7 @@ DEFAULTS = {
     'branch': 'main', 'interval': 60, 'git_timeout': 60,
     'command_timeout': 60, 'preflight_timeout': 120,
     'startup_timeout': 120, 'probe_timeout': 10, 'probe_interval': 2,
-    'retry_seconds': 60, 'include_paths': ['biomerte'],
+    'retry_seconds': 60, 'include_paths': ['biomerte', 'examples'],
     'enabled': True
 }
 
@@ -56,6 +56,18 @@ def sync_directory(path):
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def sync_tree(path):
+    # Pay the durability cost once for an update, never for unchanged polls.
+    for directory, unused, files in os.walk(path, topdown=False):
+        for name in files:
+            descriptor = os.open(os.path.join(directory, name), os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        sync_directory(directory)
 
 
 def atomic_json(path, value):
@@ -258,6 +270,9 @@ class Watcher:
         # The existing running controller, its identity and request path must
         # actually work before they become the initial rollback destination.
         self._health(bootstrap)
+        if self.config.get('bootstrap_source_command'):
+            run_command(self._expand(self.config['bootstrap_source_command'], bootstrap),
+                        self.config['probe_timeout'], env=self._env())
         atomic_link(self.current_link, target)
         self.state = {'schema': 1, 'root': self.root, 'home': self.home,
                       'identity': identity, 'phase': 'idle',
@@ -265,7 +280,7 @@ class Watcher:
                       'last_good': bootstrap, 'previous_good': None,
                       'desired_commit': None, 'attempted_commit': None,
                       'rejected_commit': None, 'rejected_release': None,
-                      'pending': None, 'last_error': None, 'next_retry_at': 0,
+                      'pending': None, 'last_error': None, 'poll_error': None, 'next_retry_at': 0,
                       'changed_at': time.time()}
         atomic_json(self.state_path, self.state)
         return self.state
@@ -290,13 +305,11 @@ class Watcher:
             return False
 
     def _preflight(self, path):
-        program = (
-            "import os; "
-            "files=[os.path.join(r,n) for r,d,ns in os.walk('biomerte') "
-            "for n in ns if n.endswith('.py')]; "
-            "assert files; "
-            "[compile(open(p,'rb').read(),p,'exec') for p in files]; "
-            "import biomerte.app; import biomerte.__main__")
+        # Import the real controller dependency closure with this host's Python.
+        # Optional rover/async providers may require a newer Python and are not
+        # loaded by the controller; compiling every file would reject valid Pi
+        # releases. Imports do not instantiate Application or initialize state.
+        program = "import biomerte.app; import biomerte.__main__"
         try:
             run_command([self.config['python'], '-S', '-B', '-c', program],
                         self.config['preflight_timeout'], cwd=path,
@@ -345,6 +358,7 @@ class Watcher:
             self._preflight(candidate)
             atomic_json(os.path.join(candidate, '.biomerte-release.json'),
                         {'schema': SCHEMA, 'owner': self.root, 'commit': commit})
+            sync_tree(candidate)
             os.rename(candidate, destination)
             sync_directory(self.releases)
             return {'commit': commit, 'path': destination}
@@ -483,19 +497,28 @@ class Watcher:
             raise DeployError('current_link_missing')
         if os.path.realpath(self.current_link) != os.path.realpath(self.state['current']['path']):
             raise DeployError('current_link_changed_externally')
-        head = self._remote_head()
+        try:
+            head = self._remote_head()
+        except Exception as error:
+            self._save(poll_error=getattr(error, 'code', type(error).__name__))
+            return self.state
+        if self.state.get('poll_error') is not None:
+            self._save(poll_error=None)
         if head != self.state.get('desired_commit'):
             self._save(desired_commit=head, next_retry_at=0)
         if head in (self.state['current'].get('commit'), self.state.get('rejected_commit')):
             return self.state
         if time.time() < self.state.get('next_retry_at', 0):
             return self.state
-        self._save(phase='staging', attempted_commit=head, last_error=None)
+        pending_recovery = self.state.get('pending') is not None
+        self._save(phase='staging_repair' if pending_recovery else 'staging',
+                   attempted_commit=head, last_error=None)
         try:
             candidate = self._stage(head)
         except Exception as error:
             permanent = getattr(error, 'permanent', False)
-            self._save(phase='idle', last_error=getattr(error, 'code', type(error).__name__),
+            self._save(phase='rollback_failed' if pending_recovery else 'idle',
+                       last_error=getattr(error, 'code', type(error).__name__),
                        rejected_commit=head if permanent else self.state.get('rejected_commit'),
                        next_retry_at=0 if permanent else time.time() + self.config['retry_seconds'])
             return self.state
@@ -531,7 +554,8 @@ def main(argv=None):
                 report = {'phase': state['phase'],
                           'current_commit': state['current'].get('commit'),
                           'desired_commit': state.get('desired_commit'),
-                          'last_error': state.get('last_error')}
+                          'last_error': state.get('last_error'),
+                          'poll_error': state.get('poll_error')}
             except Busy:
                 report = {'phase': 'recovery_lock_busy'}
             except Exception as error:
@@ -542,7 +566,7 @@ def main(argv=None):
                 sys.stdout.flush()
                 last_report = report
             if options.once:
-                return 0 if report.get('phase') == 'idle' and not report.get('last_error') else 1
+                return 0 if report.get('phase') == 'idle' and not report.get('last_error') and not report.get('poll_error') else 1
             time.sleep(watcher.config['interval'])
 
 

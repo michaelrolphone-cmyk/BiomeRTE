@@ -6,6 +6,8 @@ controller or connector launchd service; provider processes and journals remain
 untouched. Diagnostic deadlines apply to probes, never to user jobs.
 """
 import argparse
+import errno
+import fcntl
 import json
 import os
 import plistlib
@@ -25,6 +27,10 @@ DEFAULTS = {'interval': 15, 'probe_timeout': 15, 'failure_threshold': 3,
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+class RecoveryDeferred(Exception):
+    """An independent deployer owns the shared restart lock."""
 
 
 class ProbeError(Exception):
@@ -171,6 +177,12 @@ class Recovery:
                 restart(target)
                 self.state['last_action']['outcome'] = 'restart_issued'
                 self.state['status'] = 'recovering'
+            except RecoveryDeferred:
+                self.state['restarts'][target] = attempts
+                self.state['next_restart'][target] = now
+                self.state['failures'][target] = self.config['failure_threshold']
+                self.state['last_action']['outcome'] = 'deferred'
+                self.state['status'] = 'deferred'
             except Exception as error:
                 self.state['last_action']['outcome'] = 'restart_failed'
                 self.state['last_action']['error'] = type(error).__name__
@@ -178,15 +190,28 @@ class Recovery:
         return self.state
 
 
-def restart_service(service):
-    label = LABELS[service]
-    target = 'gui/{}/{}'.format(os.getuid(), label)
-    # A deliberately unloaded service stays unloaded. No arbitrary executables,
-    # scripts, capability calls, job termination, or journal edits are accepted.
-    subprocess.run(['/bin/launchctl', 'print', target], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-    subprocess.run(['/bin/launchctl', 'kickstart', '-k', target], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+def restart_service(service, recovery_lock=None):
+    descriptor = None
+    try:
+        if recovery_lock:
+            descriptor = os.open(str(recovery_lock), os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno in (errno.EACCES, errno.EAGAIN):
+                    raise RecoveryDeferred()
+                raise
+        label = LABELS[service]
+        target = 'gui/{}/{}'.format(os.getuid(), label)
+        # A deliberately unloaded service stays unloaded. Never run capability
+        # commands or alter provider jobs while supervising controller services.
+        subprocess.run(['/bin/launchctl', 'print', target], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        subprocess.run(['/bin/launchctl', 'kickstart', '-k', target], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def install(home, origin, key, python):
@@ -231,7 +256,8 @@ def main():
             state = dict(recovery.state, status='paused', observed_at=time.time())
         else:
             try:
-                state = recovery.observe(Probes(config).collect(), restart_service)
+                state = recovery.observe(Probes(config).collect(),
+                                         lambda service: restart_service(service, config.get('recovery_lock')))
             except Exception as error:
                 state = dict(recovery.state, status='probe_error', observed_at=time.time(),
                              error=error.kind if isinstance(error, ProbeError) else type(error).__name__)
