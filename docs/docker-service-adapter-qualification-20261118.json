@@ -1,0 +1,28 @@
+{
+  "baseline_public_commit": "74d476a73d8833c53c8664f060ec5b4aa9a8f581",
+  "baseline_tree": "9b66deff705722d0c42e04a7cee13a14e0116f60",
+  "date_utc": "2026-11-18",
+  "duration_seconds": 1.528,
+  "executor_host": "Micahels-Mac-mini.local",
+  "production_python_3_4_grammar": true,
+  "python_3_4_runtime_tested": false,
+  "scope": "Generic Docker service adapter and operation custody tests; no physical effects",
+  "source_sha256": {
+    "biomerte/docker_services.py": "35072a2d1af9f52c6269fc2d80be936fff3a938c72eb582d9488bc0408e4a4bf",
+    "biomerte/service_adapters.py": "53a48512ae80de824f33911580dbf15ac6ba4705e2f23f06b91ed7131b522a4e",
+    "deploy/docker-services/Dockerfile": "432d7c842b3496de6bbb4f9cc58e551af5556a857ed343f189ac73504a442198",
+    "deploy/docker-services/README.md": "6bcd1fe265de20627fc7c085b493bc5e8d7906c3f7598bdddc3365abef379486",
+    "deploy/docker-services/install.py": "dfc7f59ba5a28dca82229d966c6b35d6b8f6651900c39020fa3974dbbc47135e",
+    "tests/test_docker_service_jobs.py": "d5aa11c21ae029a33ddb2e7bdafcd042ab9279476a241a9a743710bcbb6dd347",
+    "tests/test_docker_services.py": "f1db3159572193ca586f788bbe90c2693c69dc4e7dcf161aa36466160befeb26",
+    "tests/test_service_adapters.py": "6704c1500c90b07aa5e3e966393384648ddb529f4405b81e0589fa971a3ebe9b"
+  },
+  "success": true,
+  "terminal_operation": "runner-adapter-freeze-20261118-11",
+  "tests_run": 81,
+  "unqualified": [
+    "Actual relay authority checkpoint replication and custody cutoff",
+    "Physical relay fence and activation",
+    "Two physical controller failover using this final source"
+  ]
+}

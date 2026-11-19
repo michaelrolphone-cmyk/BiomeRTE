@@ -1,0 +1,78 @@
+{
+  "checks": [],
+  "cleanup": {
+    "pi_qa_containers_removed": true,
+    "production_supervisors_unchanged": true
+  },
+  "completed_utc": "2026-11-18T14:08:06Z",
+  "coordinator_url": "https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com",
+  "error": "AssertionError: Qualification observation did not settle: Pi initially owns the harmless service",
+  "failure_injection": "pause only the dedicated Pi QA supervisor; kill only the dedicated Mac test child",
+  "hosts": [
+    {
+      "engine": "17.06.2-ce",
+      "host": "pi",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "platform": "linux/arm/v7"
+    },
+    {
+      "engine": "24.0.7",
+      "host": "mac",
+      "image": "sha256:5d7f7df07cf4166175a35c74c23fa15f3ca984db0f56fdc86b622662dbdc908c",
+      "platform": "linux/arm64"
+    }
+  ],
+  "initial_revision": "c0582b55eec31e641cbcce5ab04c2442e4afca08813f12114d1c1f67876b1134",
+  "lease_ttl_s": 12,
+  "physical_relay_tested": false,
+  "production_after": [
+    {
+      "id": "301fb26071e49429aa432c4a09ec2c28197c2564c086cf1c5438cc077e357b7a",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "production_before": [
+    {
+      "id": "301fb26071e49429aa432c4a09ec2c28197c2564c086cf1c5438cc077e357b7a",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    {
+      "id": "66a5313723bd5093c45a28bb5c7efb956768536b458bde3d30ce43a4ea76943c",
+      "image": "sha256:a832e039d615894df7451a40fd5f9603ffe1f57840a96824b25a403ad26f04ba",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    }
+  ],
+  "qualification": "actual Pi and Mac Docker hosts with the deployed HTTPS coordinator",
+  "result": "failed",
+  "run_id": "pi-mac-20261118-02",
+  "runner_logs": {
+    "biomerte-qa-pi-pi-mac-20261118-02": "** WARNING: connection is not using a post-quantum key exchange algorithm.\r\n** This session may be vulnerable to \"store now, decrypt later\" attacks.\r\n** The server may need to be upgraded. See https://openssh.com/pq.html\r\nTraceback (most recent call last):\n  File \"/app/docker_services.py\", line 29, in <module>\n    from . import service_adapters as adapters\nImportError: attempted relative import with no known parent package\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/config/qa-wrapper.py\", line 11, in <module>\n    runpy.run_path('/app/docker_services.py',run_name='__main__')\n  File \"<frozen runpy>\", line 291, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/app/docker_services.py\", line 31, in <module>\n    import service_adapters as adapters\nModuleNotFoundError: No module named 'service_adapters'"
+  },
+  "runner_source_sha256": "35072a2d1af9f52c6269fc2d80be936fff3a938c72eb582d9488bc0408e4a4bf",
+  "service_id": "qa-two-host-pi-mac-20261118-02",
+  "started_utc": "2026-11-18T14:04:21Z",
+  "whole_host_power_failure_tested": false
+}
