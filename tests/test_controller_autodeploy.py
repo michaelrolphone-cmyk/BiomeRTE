@@ -445,6 +445,12 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(stage.call_count, 0)
         self.assertEqual(self.worker.state['rejected_commit'], B)
         self.assertEqual(self.worker.state['pending']['candidate']['commit'], A)
+        # A watcher crash during that older rollback must preserve B as well.
+        self.worker._save(phase='rolling_back')
+        with mock.patch.object(self.worker, '_stage') as stage:
+            self.worker.tick()
+        self.assertEqual(stage.call_count, 0)
+        self.assertEqual(self.worker.state['rejected_commit'], B)
 
 
 if __name__ == '__main__':

@@ -435,7 +435,7 @@ class Watcher:
     def _recover(self):
         if self.state.get('pending'):
             with file_lock(self.lock_path):
-                preserve = (self.state['phase'] in ('rollback_failed', 'staging_repair')
+                preserve = (self.state['phase'] in ('rollback_failed', 'staging_repair', 'rolling_back')
                             and self.state.get('rejected_commit') is not None)
                 return self._rollback('interrupted_deployment_rolled_back',
                                       preserve_rejection=preserve)
