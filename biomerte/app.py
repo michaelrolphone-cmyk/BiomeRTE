@@ -11,6 +11,7 @@ from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support, discovery
 from . import streams
 from . import retention, session_api
+from .release import identity as release_identity
 assistant_support.install_hooks()
 
 
@@ -217,6 +218,7 @@ def approve(tx, ctx, fingerprint, scopes):
 @op('system.info', write=False)
 def info(tx, ctx):
     return {'node': ctx.app.node, 'site': ctx.app.site, 'realm': ctx.scope, 'version': '0.1.0',
+            'release': release_identity(),
             'shared_backend': 'etcd' if ctx.app.stores['site'].remote else 'sqlite',
             'position': tx.db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0]}
 
