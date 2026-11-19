@@ -3,6 +3,7 @@
 from __future__ import print_function
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -10,6 +11,10 @@ import sys
 import time
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlparse
+
+class RegistrationNotAdvanced(ValueError):
+    pass
+
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, message, headers, newurl):
@@ -51,7 +56,7 @@ def source(config, release):
         raise ValueError('controller_source_mismatch')
     return {'check': 'process_source', 'pid': pid, 'source': expected}
 
-def gateway(config):
+def gateway(config, after=None):
     options = config['gateway']
     origin = options['origin'].rstrip('/')
     parsed = urlparse(origin)
@@ -91,7 +96,13 @@ def gateway(config):
                 or report.get('status') != 'current'
                 or not isinstance(report.get('addresses'), list)):
             raise ValueError('gateway_network_report_not_current')
+        observed = report.get('observed_at')
+        if type(observed) not in (int, float) or not math.isfinite(observed) or observed <= 0:
+            raise ValueError('gateway_network_report_time_missing')
+        if after is not None and observed <= after:
+            raise RegistrationNotAdvanced('gateway_network_report_not_advanced')
         result['network_report_current'] = True
+        result['network_observed_at'] = observed
     return result
 
 def link_preflight(config, release):
@@ -129,8 +140,35 @@ def deployment_gateway(config, release=None):
         raise ValueError('linked_service_release_required')
     proofs = [source({'service': service}, release) for service in services]
     result = gateway(config)
-    if proofs:
-        result['linked_sources'] = proofs
+    if not proofs:
+        return result
+    if config.get('gateway', {}).get('require_network', False):
+        # A cached report from the previous process can remain current briefly.
+        # Compare gateway receipt times, not the host clock, and require a new
+        # report while the same physical link process remains established.
+        baseline = result['network_observed_at']
+        budget = config.get('gateway', {}).get('advancement_timeout', 5)
+        if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
+            raise ValueError('invalid_registration_advancement_timeout')
+        deadline = time.monotonic() + budget
+        identity = [(proof['pid'], proof['source']) for proof in proofs]
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RegistrationNotAdvanced('gateway_network_report_not_advanced')
+            time.sleep(min(0.5, remaining))
+            checked = [source({'service': service}, release) for service in services]
+            if [(proof['pid'], proof['source']) for proof in checked] != identity:
+                raise ValueError('linked_service_changed_during_probe')
+            try:
+                result = gateway(config, after=baseline)
+            except RegistrationNotAdvanced:
+                continue
+            checked = [source({'service': service}, release) for service in services]
+            if [(proof['pid'], proof['source']) for proof in checked] != identity:
+                raise ValueError('linked_service_changed_during_probe')
+            break
+    result['linked_sources'] = proofs
     return result
 
 
