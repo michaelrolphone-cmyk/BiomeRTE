@@ -1,0 +1,39 @@
+{
+  "commit": "b738a0bf36cf741c623b30cc832be9e662a177d8",
+  "deployment": {
+    "after": {
+      "id": "301fb26071e49429aa432c4a09ec2c28197c2564c086cf1c5438cc077e357b7a",
+      "image": "sha256:e5ddd5f2cc178b8bb4ce23f451bb6fab8f16c2c47529a84f0ac2676bb16f904e",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    "before": {
+      "id": "9de9aede1e22df709ce57f1833f33f739c7acf213152ab2023b7720a14d0237f",
+      "image": "sha256:03fea04f4d2d309cfd404883cc7502349d2f30ab885c9536d2ab6183aab3f174",
+      "restart_policy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "running": true
+    },
+    "config_backup": "/home/pi/.local/share/biomerte-docker-services/config/runner.json.before-b738a0bf-20261118",
+    "docker_request_timeout_s": 60,
+    "native_services_untouched": true,
+    "phase": "pi_supervisor_updated",
+    "production_children_before": 0
+  },
+  "operation": "pi-docker-compatible-supervisor-install-20261118-16",
+  "probe": {
+    "api": "1.30",
+    "engine": "17.06.2-ce",
+    "passed": true,
+    "probe": "actual Pi imports and Docker API",
+    "source_sha256": {
+      "/app/docker_services.py": "35072a2d1af9f52c6269fc2d80be936fff3a938c72eb582d9488bc0408e4a4bf",
+      "/app/service_adapters.py": "53a48512ae80de824f33911580dbf15ac6ba4705e2f23f06b91ed7131b522a4e"
+    }
+  }
+}

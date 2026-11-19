@@ -1,0 +1,20 @@
+{
+  "host_id": "REGISTERED_HOST_REFERENCE",
+  "token_file": "/private/host-io.token",
+  "listen": "127.0.0.1",
+  "port": 8765,
+  "device_routes_module_directory": "/native/vision-source",
+  "device_routes": "/native/vision-state/device-routes.sqlite3",
+  "vision_directory": "/native/vision-state",
+  "route_refresh_interval_s": 0,
+  "device_provisioning": {},
+  "enable_effects": false,
+  "anchors": {
+    "enabled": false,
+    "listen": "0.0.0.0",
+    "port": 7446
+  },
+  "survey_control": {
+    "socket": "/native/vision-state/survey-pose.sock"
+  }
+}

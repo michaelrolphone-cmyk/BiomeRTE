@@ -1,0 +1,48 @@
+{
+  "schema": "biomerte-container-builds/1",
+  "images": [
+    {
+      "id": "service-runner",
+      "dockerfile": "deploy/docker-services/Dockerfile",
+      "platforms": [
+        "linux/arm64",
+        "linux/arm/v7",
+        "linux/amd64"
+      ],
+      "base_argument": "PYTHON_IMAGE",
+      "base_image": "python:3.11-alpine",
+      "smoke": [
+        "--help"
+      ]
+    },
+    {
+      "id": "service-authority",
+      "dockerfile": "deploy/service-authority/Dockerfile",
+      "platforms": [
+        "linux/arm64",
+        "linux/arm/v7",
+        "linux/amd64"
+      ],
+      "base_argument": "PYTHON_IMAGE",
+      "base_image": "python:3.11-alpine",
+      "smoke": [
+        "--help"
+      ]
+    },
+    {
+      "id": "portable-services",
+      "dockerfile": "deploy/portable-services/Dockerfile",
+      "platforms": [
+        "linux/arm64",
+        "linux/arm/v7",
+        "linux/amd64"
+      ],
+      "base_argument": "PYTHON_IMAGE",
+      "base_image": "python:3.11-alpine@sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1",
+      "smoke": [
+        "-c",
+        "import router, rover; print('portable-services imports ready')"
+      ]
+    }
+  ]
+}

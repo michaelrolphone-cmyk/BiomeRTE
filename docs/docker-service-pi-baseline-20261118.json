@@ -1,0 +1,67 @@
+{
+  "date": "2026-11-18",
+  "first_qualification": {
+    "cleanup_completed": true,
+    "exit_code": 1,
+    "manifest_retained_disabled": true,
+    "observed_error": "Service start failed: timed out",
+    "operation": "pi-mac-docker-failover-live-20261118-06",
+    "report": "docker-service-two-host-attempt1-20261118.json",
+    "result": "initial Pi child did not become healthy",
+    "retired_revision": "73a5649ac0a1cd47866477f06ffa0dbf824e48153bb0c7ac4e5ef79e8d993fd9",
+    "stdout_sha256": "e9fe4d4f323187e047864c47432eddd02f3cb03e0b46123f9ccf0dfa43a87cfd"
+  },
+  "image_probe": {
+    "coordinator_https_health": 200,
+    "docker_socket_api": true,
+    "openssl": "3.5.9",
+    "python": "3.11.18",
+    "sqlite": "3.53.4",
+    "sqlite_transaction": true,
+    "thread_start_join": true
+  },
+  "local_equivalent_commit": "5bfa82381522989c1f4b59cb49d20d734c13ba55",
+  "next_configuration": {
+    "docker_request_timeout_s": 60,
+    "health_timeout_s": 5,
+    "note": "Docker transport and health budgets are independent of heartbeat, ownership expiry and job execution lifetime."
+  },
+  "physical_relay_tested": false,
+  "pi": {
+    "docker_api": "1.30",
+    "docker_engine": "17.06.2-ce",
+    "host": "ProximityRF",
+    "image": "sha256:03fea04f4d2d309cfd404883cc7502349d2f30ab885c9536d2ab6183aab3f174",
+    "ip": "192.168.1.23",
+    "kernel": "4.4.48-v7+",
+    "os": "Raspbian 8 Jessie",
+    "platform": "linux/arm/v7",
+    "restart_policy": "unless-stopped",
+    "runner_api": "1.24",
+    "runner_source_sha256": "7aab087221119681d6e701b34565f12ab60911d537b547a88734eae201274f2d",
+    "supervisor_container": "9de9aede1e22df709ce57f1833f33f739c7acf213152ab2023b7720a14d0237f"
+  },
+  "probe": {
+    "cleanup_completed": true,
+    "container": "263f476175293b2620b27a390cc33a774bdfccee796ee66aca490d868076f558",
+    "create_seconds": 0.29,
+    "exit_code": 0,
+    "health_timeout_seconds": 2,
+    "healthy_after_seconds": 11.815,
+    "initial_health_timeouts": 2,
+    "note": "This probe omitted host port publishing. Its quick create/start does not locate the earlier QA transport timeout substep.",
+    "operation": "pi-docker-create-start-latency-20261118-09",
+    "removal_seconds": 31.101,
+    "start_seconds": 1.603,
+    "stdout_sha256": "62156a4ce585be53ef344693fcd8dde57f7f250b082132b94e6866c7f8f724b9"
+  },
+  "production_mac_untouched": true,
+  "published_head": "74d476a73d8833c53c8664f060ec5b4aa9a8f581",
+  "published_pr": 117,
+  "published_tree": "9b66deff705722d0c42e04a7cee13a14e0116f60",
+  "qualification_status": "passed; see docker-service-two-host-qualification-20261118.json; original baseline observations retained",
+  "result": "supervisor_deployed_and_harmless_child_execution_verified",
+  "runtime_repository": "michaelrolphone-cmyk/BiomeRTE",
+  "schema": "biomerte.pi-docker-baseline.v1",
+  "whole_host_power_failure_tested": false
+}

@@ -1,0 +1,17 @@
+{
+  "transport": "private_docker_http",
+  "network_scope": "private",
+  "listen": "0.0.0.0",
+  "port": 8751,
+  "control_ntp": true,
+  "peer_status": true,
+  "host_io_config": "/config/host-io.json",
+  "remote_controllers": {
+    "REPLACE_WITH_REGISTERED_CONTROLLER_ID": {
+      "secret": "REPLACE_WITH_EXISTING_ROUTER_SECRET_IN_PRIVATE_CONFIG_ONLY",
+      "inspect_url": "https://existing-stream-gateway.example/stream/inspect"
+    }
+  },
+  "service_authority_secret": "REPLACE_WITH_EXISTING_SERVICE_SECRET_IN_PRIVATE_CONFIG_ONLY",
+  "service_inspect_url": "https://existing-stream-gateway.example/stream/inspect"
+}

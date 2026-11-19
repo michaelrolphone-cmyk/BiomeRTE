@@ -1,0 +1,75 @@
+{
+  "activation": {
+    "binding": "relay6ch-authority",
+    "protocol": "biomerte-service-adapter/1"
+  },
+  "authority": {
+    "id": "9651e4d53733a9ccd5834743ec065b5c8afa04a608393e84b9253976c86b9d04",
+    "providers": [
+      "62635dec6c6c5da4e5f250cab7288e4c8cb6027f0bcbeba87d396dec20835055"
+    ],
+    "resources": [
+      "relay6ch.30eda0d95f24"
+    ]
+  },
+  "command": [
+    "--role",
+    "authority",
+    "--config",
+    "/config/service.json"
+  ],
+  "effect_policy": "externally_fenced",
+  "fence_hook": {
+    "timeout_s": 20,
+    "token_file": "/config/relay6ch-helper.key",
+    "url": "https://biomerte-relay-state:8870/fence"
+  },
+  "health": {
+    "command": [
+      "python",
+      "-c",
+      "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8871/health',timeout=12).read()"
+    ],
+    "interval_s": 5,
+    "retries": 2,
+    "timeout_s": 15
+  },
+  "id": "relay6ch-authority",
+  "images": {
+    "linux/arm/v7": "sha256:ecaca2de0aa304f807c84f908125dd91804fa2e418a29dcb3613f383141cff22",
+    "linux/arm64": "sha256:09229fa3e213ef980c1a4f6c8a1ae464731ae0f1ad7b9f53b179db04c7e36462"
+  },
+  "lease_ttl_s": 20,
+  "log_max_files": 3,
+  "log_max_size": "8m",
+  "mounts": [
+    {
+      "binding": "relay6ch-private",
+      "read_only": true,
+      "role": "private",
+      "target": "/config"
+    },
+    {
+      "binding": "relay6ch-state",
+      "read_only": false,
+      "role": "state",
+      "target": "/state"
+    }
+  ],
+  "network": "biomerte-services",
+  "preferred_workers": [
+    "687eda586198b9e7c2bdad0c6f69731b63552e6a650e6514c663f3d472c8f714",
+    "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b"
+  ],
+  "readiness": [
+    {
+      "status": 200,
+      "timeout_s": 5,
+      "url": "https://biomerte-relay-state:8870/health"
+    }
+  ],
+  "revision": "73774bd5c32b8a3ba40674fedd720c431466a59ff0fde907c73b71a7a024ec5d",
+  "startup_grace_s": 120,
+  "state_policy": "externally_managed",
+  "worker_ttl_s": 10
+}
