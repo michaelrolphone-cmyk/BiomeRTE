@@ -1,10 +1,13 @@
 """Run portable closure tests in isolation from the native controller package."""
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 
+@unittest.skipUnless(importlib.util.find_spec("aiohttp") and importlib.util.find_spec("websockets"),
+                     "Portable transport tests run with dependencies in live-streaming CI")
 class PortableClosure(unittest.TestCase):
     def test_portable_transport_and_recovery_boundaries(self):
         root = Path(__file__).resolve().parents[1]
