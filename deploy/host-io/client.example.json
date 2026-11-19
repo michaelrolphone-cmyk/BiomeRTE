@@ -1,0 +1,10 @@
+{
+  "host_id": "REGISTERED_HOST_REFERENCE",
+  "url": "http://host.docker.internal:8765",
+  "token_file": "/private/host-io.token",
+  "allow_local_http": true,
+  "timeout_s": 3,
+  "clock_max_age_s": 10,
+  "clock_max_uncertainty_s": 0.25,
+  "clock_drift_ppm": 500
+}
