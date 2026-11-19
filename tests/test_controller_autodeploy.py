@@ -336,11 +336,13 @@ class WatcherTests(unittest.TestCase):
     def test_bootstrap_source_proof_failure_never_initializes_state(self):
         root = os.path.join(self.temporary, 'another-updater')
         config = dict(self.config, root=root, bootstrap_source_command=['/fixture/source-check'])
-        fresh = Harness(config)
-        with mock.patch.object(watcher, 'run_command',
-                               side_effect=watcher.DeployError('wrong_process_source')):
-            with self.assertRaises(watcher.DeployError):
-                fresh.initialize(self.original)
+        fresh = watcher.Watcher(config)
+        reply = {'result': {'structuredContent': {'node': 'fixture-node', 'site': 'fixture-site'}}}
+        with mock.patch.object(watcher, 'request_json', return_value=reply):
+            with mock.patch.object(watcher, 'run_command',
+                                   side_effect=watcher.DeployError('wrong_process_source')):
+                with self.assertRaises(watcher.DeployError):
+                    fresh.initialize(self.original)
         self.assertFalse(os.path.exists(os.path.join(root, 'status.json')))
         self.assertFalse(os.path.lexists(os.path.join(root, 'current')))
 
@@ -416,6 +418,18 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(process.returncode, 1)
         self.assertEqual(output, b'')
         self.assertIn(b'existing_node_required', error)
+
+
+    def test_bootstrap_rollback_requires_effective_source_proof(self):
+        real = watcher.Watcher(dict(self.config, bootstrap_source_command=['/fixture/source-check']))
+        reply = {'result': {'structuredContent': {
+            'node': 'fixture-node', 'site': 'fixture-site', 'release': {'commit': A}}}}
+        with mock.patch.object(watcher, 'request_json', return_value=reply):
+            with mock.patch.object(watcher, 'run_command',
+                                   side_effect=watcher.DeployError('wrong_process_source')):
+                with self.assertRaises(watcher.DeployError) as caught:
+                    real._health(real.state['bootstrap'])
+        self.assertEqual(caught.exception.code, 'wrong_process_source')
 
 
 if __name__ == '__main__':

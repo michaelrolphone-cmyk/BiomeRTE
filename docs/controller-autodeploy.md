@@ -45,8 +45,15 @@ Use a mode-0600 JSON file, with absolute paths appropriate to that host:
   "controller_argv": ["/absolute/stable/python3", "-S", "-m", "biomerte", "--home", "/absolute/existing/controller-home", "serve"],
   "extra_pythonpaths": [],
   "restart_commands": [
-    ["/absolute/restart-helper"]
+    ["/absolute/stable/python3", "-S", "/absolute/private/controller_autodeploy_service.py", "--config", "/absolute/private/config.json"]
   ],
+  "service": {
+    "manager": "launchd",
+    "label": "org.biomerte.controller",
+    "domain": "gui/501",
+    "plist": "/absolute/Library/LaunchAgents/org.biomerte.controller.plist",
+    "reload_on_restart": false
+  },
   "recovery_lock": "/absolute/private/biomerte-autodeploy/recovery.lock",
   "health_command": [
     "/absolute/stable/python3", "-S", "/absolute/private/gateway-readiness.py",
@@ -63,7 +70,16 @@ Use a mode-0600 JSON file, with absolute paths appropriate to that host:
 directly, without a shell. For the Mac the normal controller restart is
 `/bin/launchctl kickstart -k gui/<actual-uid>/org.biomerte.controller`. On the Pi
 it is the existing service manager's controller restart, with the required
-local privilege already configured. Do not substitute a service installer:
+local privilege already configured. The optional standalone
+`controller_autodeploy_service.py` implements both: launchd checks whether the
+exact configured job is loaded, bootstraps its saved plist if missing, then
+kickstarts it. `reload_on_restart: true` first unloads the loaded job and reads
+its updated plist; use that during initial launcher adoption, then set it false.
+For the Pi configure `service` as
+`{"manager":"systemd","unit":"biomerte.service","sudo":true}`. The helper runs
+`sudo -n systemctl daemon-reload` and restarts only that unit. Use the actual
+Mac UID/domain and plist path; `gui/501` above is an example. The helper never
+restarts providers or edits service files. Do not substitute a service installer:
 the historical installer may initialize identities or replace working service
 settings.
 
@@ -77,7 +93,9 @@ placeholders.
 
 `bootstrap_source_command` is an optional read-only check that the existing
 process really uses the supplied initial source tree. It runs before that
-tree is accepted as the bootstrap rollback target. Inspect effective service
+tree is accepted as the bootstrap rollback target and whenever that unmarked
+bootstrap is used for rollback. This prevents a no-op restart from accepting a
+still-running candidate as the legacy fallback. Inspect effective service
 settings and the live process independently even when this hook is omitted.
 
 Other settings:
@@ -234,7 +252,7 @@ without repeatedly writing the SD card; successful polling clears it.
 Run the isolated recovery tests from a checkout:
 
 ```text
-python3 -S -m unittest tests.test_controller_autodeploy
+python3 -S -m unittest tests.test_controller_autodeploy tests.test_controller_autodeploy_service
 python3 -S -m unittest tests.test_controller_watchdog tests.test_controller_watchdog_deployment_lock
 ```
 
@@ -243,5 +261,7 @@ polls, failed deployment followed by a repair, interrupted switches before and
 after link activation, offline rollback, failed rollback followed by a new
 patch, safe retention, source identity, physical import pinning, diagnostic subprocess timeout, and
 authenticated readiness requirements. The Mac watchdog suite separately
-checks shared restart-lock deferral. Production qualification still requires
+checks shared restart-lock deferral. Native service-hook tests mock manager
+commands to verify unloaded-service recovery and exact unit scope. Production
+qualification still requires
 observing the actual services and independently authenticated recovery route.

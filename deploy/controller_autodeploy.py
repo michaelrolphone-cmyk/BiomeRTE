@@ -270,9 +270,6 @@ class Watcher:
         # The existing running controller, its identity and request path must
         # actually work before they become the initial rollback destination.
         self._health(bootstrap)
-        if self.config.get('bootstrap_source_command'):
-            run_command(self._expand(self.config['bootstrap_source_command'], bootstrap),
-                        self.config['probe_timeout'], env=self._env())
         atomic_link(self.current_link, target)
         self.state = {'schema': 1, 'root': self.root, 'home': self.home,
                       'identity': identity, 'phase': 'idle',
@@ -391,6 +388,9 @@ class Watcher:
             raise DeployError('local_identity_mismatch')
         if release.get('commit') and info.get('release', {}).get('commit') != release['commit']:
             raise DeployError('running_release_mismatch')
+        if not release.get('commit') and self.config.get('bootstrap_source_command'):
+            run_command(self._expand(self.config['bootstrap_source_command'], release),
+                        self.config['probe_timeout'], env=self._env())
         guide = invoke('site', 'system.discovery', {'section': 'guide'})
         if guide.get('section') != 'guide' or not guide.get('items'):
             raise DeployError('site_request_path_failed')
