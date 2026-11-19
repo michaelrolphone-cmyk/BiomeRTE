@@ -1,0 +1,7 @@
+{
+  "tests": 306,
+  "status": "passed",
+  "runtime": "Native Pi Node22; real Python3.4/OpenSSL1.0 with UTF8 I/O",
+  "log": "master-map-release-tests.log",
+  "source_parent": "13dcd6d9588212a701b0c9504407b38583b5c906"
+}

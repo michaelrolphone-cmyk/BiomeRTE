@@ -1,5 +1,5 @@
 import {digest} from './oauth.mjs';
-import {enqueue} from './bridge.mjs';
+import {enqueue,resolveControllerOwner} from './bridge.mjs';
 
 const name='workflow.delegation.requested';
 const properties={delegation_id:{type:'string'},run_id:{type:'string'},workflow:{type:'string'},
@@ -39,6 +39,12 @@ export async function changeSubscription(env,method,params,owner,grant){
     !params.delivery||params.delivery.mode!=='webhook'||typeof params.delivery.url!=='string'||params.delivery.url.length>2048)
   return {error:{code:-32602,message:'Invalid event subscription'}};
  const args={owner,grant,method,params:{name:params.name,arguments:params.arguments,delivery:params.delivery}};
+ if(params.controller!==undefined){
+  try{await resolveControllerOwner(env,params.controller)}catch(error){return {error:{code:-32602,message:error.message}}}
+  // Routing metadata is outside event filters, but travels with the producer's
+  // subscription so renewal, unsubscribe and signed delivery name one owner.
+  args.controller=params.controller;args.params.controller=params.controller;
+ }
  if(params.ttlMs!==undefined)args.params.ttlMs=params.ttlMs;
  if(params.cursor!==undefined)args.params.cursor=params.cursor;
  const result=await enqueue(env,'mcp_event_change',args,'event-'+crypto.randomUUID());

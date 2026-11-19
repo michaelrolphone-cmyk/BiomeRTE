@@ -1,3 +1,4 @@
+import {privateHeaders} from './access.mjs';
 // Direct MCP OAuth. Browser identity remains owned by Sites; grants never accept
 // a caller-supplied principal. Only SHA-256 token/code digests are persisted.
 export const SCOPE='biomerte';
@@ -128,9 +129,13 @@ export async function oauth(req,env,action){
   return json({access_token:at,token_type:'Bearer',expires_in:TTL,refresh_token:rt,scope:SCOPE});
  }
  if(action==='connections'&&method==='GET'){
-  const principal=await browserPrincipal(req,env);if(!principal)return new Response(null,{status:303,headers:{Location:'/signin-with-chatgpt?return_to=%2Foauth%2Fconnections'}});
+  const principal=await browserPrincipal(req,env);
+  if(!principal){
+   if(req.headers.get('oai-authenticated-user-id'))return failure('access_denied','Only the controller owner can manage connections',403);
+   return new Response('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Owner sign-in required</title></head><body><h1>Owner sign-in required</h1><p>Connection management is restricted to the controller owner.</p><p><a href="/signin-with-chatgpt?return_to=%2Foauth%2Fconnections" target="_top">Sign in with ChatGPT</a></p></body></html>',{status:401,headers:{...privateHeaders,'Content-Type':'text/html; charset=utf-8','X-Frame-Options':'DENY','X-Content-Type-Options':'nosniff'}});
+  }
   const grants=await env.DB.prepare("SELECT DISTINCT t.grant_id,t.client_id,c.metadata FROM biome_oauth_tokens t LEFT JOIN biome_oauth_clients c ON c.id=t.client_id WHERE t.principal=? AND t.expires>?").bind(principal,now()).all();
-  return new Response('<!doctype html><html><head><meta charset="utf-8"><title>BiomeRTE connections</title></head><body><h1>BiomeRTE connections</h1>'+grants.results.map(g=>'<form method="post" action="/oauth/disconnect"><p>'+safe(registeredClients.get(g.client_id)?.client_name || (g.metadata?JSON.parse(g.metadata).client_name:'MCP client'))+'</p><input type="hidden" name="grant_id" value="'+safe(g.grant_id)+'"><button>Revoke access</button></form>').join('')+'<p><a href="/">Return to BiomeRTE</a></p></body></html>',{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",'Referrer-Policy':'same-origin'}});
+  return new Response('<!doctype html><html><head><meta charset="utf-8"><title>BiomeRTE connections</title></head><body><h1>BiomeRTE connections</h1>'+grants.results.map(g=>'<form method="post" action="/oauth/disconnect"><p>'+safe(registeredClients.get(g.client_id)?.client_name || (g.metadata?JSON.parse(g.metadata).client_name:'MCP client'))+'</p><input type="hidden" name="grant_id" value="'+safe(g.grant_id)+'"><button>Revoke access</button></form>').join('')+'<p><a href="/dashboard/">Return to BiomeRTE dashboard</a></p></body></html>',{headers:{'Content-Type':'text/html; charset=utf-8',...privateHeaders,'X-Frame-Options':'DENY','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",'Referrer-Policy':'same-origin'}});
  }
  if(action==='disconnect'&&method==='POST'){
   const principal=await browserPrincipal(req,env);if(!principal||req.headers.get('origin')!==configuration(env).origin)return failure('access_denied','Same-origin owner request required',403);

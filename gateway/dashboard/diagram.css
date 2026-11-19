@@ -1,0 +1,53 @@
+/* Shared process canvas: presentation only; execution states remain authoritative. */
+body .diagram-viewport{height:clamp(520px,68vh,780px);padding:28px;background-color:#f7f9fb;background-image:radial-gradient(#c8d2dc80 .7px,transparent .7px);background-size:22px 22px;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b9c5ce transparent}
+body .process-svg.polished-diagram{display:block;margin-inline:auto;overflow:visible;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body .polished-diagram .flow-edge-halo{fill:none;stroke:#f7f9fb;stroke-width:7;stroke-linejoin:round}
+body .polished-diagram .flow-edge{fill:none;stroke:#90a2b3;stroke-width:1.7;stroke-linejoin:round}
+body .polished-diagram marker path{fill:none;stroke:#90a2b3;stroke-width:1.6}
+body .polished-diagram .feedback .flow-edge{stroke:#b09b77;stroke-dasharray:5 5}
+body .polished-diagram .edge-caption rect{fill:#fff;stroke:#e0e6ec;stroke-width:1}
+body .polished-diagram .edge-caption text{fill:#536477;font:500 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body .polished-diagram .node-shadow{fill:white;filter:url(#node-elevation)}
+body .polished-diagram .node-shape{fill:url(#node-neutral);stroke:#d2dce4;stroke-width:1.2;transition:stroke .15s,stroke-width .15s}
+body .polished-diagram .kind-service .node-shape{fill:url(#node-service);stroke:#c3d6ec}
+body .polished-diagram .kind-call .node-shape{fill:url(#node-call);stroke:#d6caed}
+body .polished-diagram .kind-decision .node-shape{fill:url(#node-decision);stroke:#ead5b0}
+body .polished-diagram .kind-human .node-shape{fill:url(#node-human);stroke:#eacbd7}
+body .polished-diagram .kind-event .node-shape{fill:url(#node-event);stroke:#c5dfd0}
+body .polished-diagram .node-grain{fill:url(#node-fibre);pointer-events:none}
+body .polished-diagram .node-sheen{fill:none;stroke:white;stroke-width:1.5;stroke-linecap:round;opacity:.9}
+body .polished-diagram .node-icon rect{fill:#dce6ee;opacity:.7}
+body .polished-diagram .node-icon path{fill:none;stroke:#607789;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+body .polished-diagram .kind-service .node-icon rect{fill:#d6e6fc}body .polished-diagram .kind-service .node-icon path{stroke:#507ba7}
+body .polished-diagram .kind-call .node-icon rect{fill:#e5dafa}body .polished-diagram .kind-call .node-icon path{stroke:#8866b4}
+body .polished-diagram .kind-decision .node-icon rect{fill:#f6e5c4}body .polished-diagram .kind-decision .node-icon path{stroke:#a58042}
+body .polished-diagram .kind-human .node-icon rect{fill:#f7dae5}body .polished-diagram .kind-human .node-icon path{stroke:#b36c88}
+body .polished-diagram .kind-event .node-icon rect{fill:#d3eadc}body .polished-diagram .kind-event .node-icon path{stroke:#5e8c72}
+body .polished-diagram .flow-node .node-title{fill:#253747;font:600 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.25px}
+body .polished-diagram .flow-node .node-type{fill:#647588;font:600 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:.2px}
+body .polished-diagram .flow-node .node-status{fill:#5d6c7b;font:500 10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body .polished-diagram .flow-node.completed .node-shape{stroke:#79ad91;stroke-width:2}
+body .polished-diagram .flow-node.active .node-shape{stroke:#4c8ed4;stroke-width:2.5}
+body .polished-diagram .flow-node.waiting .node-shape{stroke:#c89d48;stroke-width:2.5}
+body .polished-diagram .flow-node.failed .node-shape{stroke:#ce7b78;stroke-width:2.5}
+body .polished-diagram .state-marker{fill:#69a082}body .polished-diagram .active .state-marker{fill:#4286d0}body .polished-diagram .waiting .state-marker{fill:#c69a3f}body .polished-diagram .failed .state-marker{fill:#cd7471}
+body .polished-diagram .flow-node:hover .node-shape,body .polished-diagram .flow-node:focus .node-shape,body .polished-diagram .flow-node.selected .node-shape{stroke:#39759c;stroke-width:3}
+body .diagram-toolbar{padding:16px 20px;background:linear-gradient(#fff,#fbfcfd);border-bottom:1px solid #e5eaee;gap:14px}
+body .diagram-toolbar .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:#6b7b89}
+body .diagram-toolbar .legend>span{display:inline-flex;align-items:center;gap:6px}
+body .diagram-toolbar .legend i{margin:0;width:6px;height:6px;box-shadow:0 0 0 3px #f0f4f6}
+body .diagram-toolbar .canvas-controls{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+body .diagram-toolbar button{border:1px solid #dfe5eb;background:#fff;color:#536778;border-radius:9px;padding:8px 11px;font-size:11px;box-shadow:0 1px 2px #233f5010;cursor:pointer;transition:background .15s}
+body .diagram-toolbar button:hover{background:#edf3f8}body .diagram-toolbar button:focus-visible{outline:2px solid #5c9ed5;outline-offset:2px}
+body .diagram-toolbar .zoom-control{display:flex;gap:0;border:1px solid #dfe5eb;border-radius:10px;background:white;overflow:hidden}
+body .diagram-toolbar .zoom-control button{border:0;border-radius:0;box-shadow:none;min-width:34px}
+body .diagram-toolbar [data-zoom-value]{font-variant-numeric:tabular-nums;min-width:52px;font-size:11px}
+body .canvas-guidance{display:flex;gap:22px;flex-wrap:wrap;padding:10px 22px;border-bottom:1px solid #e8edf1;background:#fbfcfd;color:#8996a3;font-size:10px}
+body [data-live-diagram]:fullscreen,body .diagram-panel:fullscreen{background:#fff;overflow:auto}body [data-live-diagram]:fullscreen .diagram-viewport,body .diagram-panel:fullscreen .diagram-viewport{height:calc(100vh - 160px)}
+@media(max-width:700px){body .diagram-toolbar{padding:13px}body .diagram-toolbar .legend{gap:10px}body .canvas-guidance{padding:10px 14px;gap:12px}body .diagram-viewport{height:60vh;min-height:440px;padding:18px}}
+@media(prefers-reduced-motion:reduce){body .polished-diagram .node-shape,body .diagram-toolbar button{transition:none}}
+
+body .diagram-expanded{position:fixed!important;inset:12px!important;z-index:10000!important;display:flex!important;flex-direction:column!important;margin:0!important;width:auto!important;height:calc(100dvh - 24px)!important;max-height:none!important;background:#fff;border:1px solid #dfe5eb!important;border-radius:18px!important;box-shadow:0 20px 100px #173b3240!important;overflow:hidden!important}
+body .diagram-expanded .diagram-viewport{flex:1;min-height:0;height:auto}body .diagram-expanded .nodeinspect{max-height:23vh;overflow:auto;flex-shrink:0}body:has(.diagram-expanded){overflow:hidden}body .diagram-expanded .diagram-toolbar,body .diagram-expanded .panelhead,body .diagram-expanded .canvas-guidance{flex-shrink:0}
+
+body .diagram-toolbar .direction-control{display:flex;gap:0;border:1px solid #dfe5eb;border-radius:10px;overflow:hidden;background:white}body .diagram-toolbar .direction-control button{border:0;border-radius:0;box-shadow:none}body .diagram-toolbar .direction-control button[aria-pressed="true"]{background:#e8f0f7;color:#315e7e;font-weight:600}

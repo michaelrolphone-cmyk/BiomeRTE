@@ -26,7 +26,7 @@ test('completion stream requires OAuth and rejects invalid work before submissio
 });
 test('one streaming request submits once and delivers completion; same identity resumes',async()=>{
  const {sql,send}=fixture();let submissions=0,statuses=0;
- const body={contract:'chat.private.exchange:2',resource:'privatechat.mac',envelope:{id:'same-operation',kind:'hello'}};
+ const body={contract:'chat.private.exchange:2',resource:'privatechat.mac',envelope:{id:'same-operation',kind:'hello',data:'x'.repeat(413161)}};
  const seen=new Set();
  const timer=setInterval(()=>{
   for(const job of sql.prepare("SELECT id,request FROM bridge_jobs WHERE state='queued'").all()){
