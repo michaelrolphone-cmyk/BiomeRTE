@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import threading
 import time
+from biomerte.network_addresses import registration as network_registration
 
 TABLES = ('subscriptions', 'receiver_receipts', 'failed_events')
 
@@ -35,6 +36,12 @@ def restore(db, body):
             db.executemany(query, item['rows'])
 
 
+def heartbeat_payload(health, position):
+    return {'position': position, 'ready': health.get('realms', {}).get('site') == 'ready',
+            'load': os.getloadavg()[0] / (os.cpu_count() or 1), 'host': socket.gethostname(),
+            'network': network_registration()}
+
+
 def run(args, origin, token, site_access, fetch, dispatch, event_service, event_change):
     with open(os.path.join(args.home, 'node.json')) as handle:
         conf = json.load(handle)
@@ -56,17 +63,19 @@ def run(args, origin, token, site_access, fetch, dispatch, event_service, event_
     def heartbeat():
         while True:
             try:
-                health = fetch(local + '/health')
+                try:
+                    health = fetch(local + '/health', timeout=3)
+                except Exception:
+                    health = {}
                 db = sqlite3.connect(os.path.join(args.home, 'gateway-' + conf['site'] + '.sqlite'))
                 try:
                     position = db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0]
                 finally:
                     db.close()
-                observed = call('ha/heartbeat', {'position': position,
-                    'ready': health.get('realms', {}).get('site') == 'ready',
-                    'load': os.getloadavg()[0] / (os.cpu_count() or 1), 'host': socket.gethostname()})
+                payload = heartbeat_payload(health, position)
+                observed = call('ha/heartbeat', payload)
                 status.update(observed)
-                status['ready'] = health.get('realms', {}).get('site') == 'ready'
+                status['ready'] = payload['ready']
             except Exception:
                 status['ready'] = False
             time.sleep(settings.get('heartbeat_interval', 2))
