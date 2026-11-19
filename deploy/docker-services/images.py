@@ -144,6 +144,12 @@ def resolve_base(docker, image, platform):
         call([docker, "pull", "--platform", platform, image])
         data = inspect_image(docker, image, platform)
     digests = data.get("RepoDigests") or []
+    if not digests:
+        # An archive-loaded, correctly tagged base can match the architecture
+        # while having no registry receipt. Pull it before assigning provenance.
+        call([docker, "pull", "--platform", platform, image])
+        data = inspect_image(docker, image, platform)
+        digests = data.get("RepoDigests") or []
     if not digests or not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", digests[0]):
         raise ValueError("Base image has no immutable registry digest: " + image)
     return digests[0]

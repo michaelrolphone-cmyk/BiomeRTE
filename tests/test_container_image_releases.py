@@ -116,6 +116,16 @@ class ImageReleaseTests(unittest.TestCase):
                             images.publish(args)
                         mutation.assert_not_called()
 
+    def test_archive_loaded_base_is_pulled_for_registry_provenance(self):
+        digest = "python@sha256:" + "d" * 64
+        with patch.object(images, "inspect_image",
+                          side_effect=[{"RepoDigests": []}, {"RepoDigests": [digest]}]):
+            with patch.object(images, "call") as command:
+                self.assertEqual(images.resolve_base("docker", "python:3.11-alpine",
+                                                     "linux/arm/v7"), digest)
+                command.assert_called_once_with(["docker", "pull", "--platform",
+                                                 "linux/arm/v7", "python:3.11-alpine"])
+
     def test_engine_architecture_is_detected_without_host_names(self):
         for architecture, expected in [("aarch64", "linux/arm64"),
                                        ("x86_64", "linux/amd64"),
