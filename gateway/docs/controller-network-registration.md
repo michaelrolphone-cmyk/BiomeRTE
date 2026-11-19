@@ -85,3 +85,14 @@ special; scope never proves an installed service or an inbound route.
 
 Provider locator refresh also checks server receipt order, so an older
 overlapping same-owner observation cannot replace newer registration metadata.
+
+## Device delivery checks
+
+The existing authenticated `POST /bridge/check` route resolves a registered
+transport to its unique application controller reference in `CONTROLLER_NODE_MAP`
+and sends `biome_status` to that owner. A device therefore verifies its own
+round trip even when the gateway's default controller is offline. The request
+body cannot select another owner or operation. Missing or ambiguous mappings
+fail before queueing; controller errors remain errors. Unregistered legacy
+bridge credentials retain their existing default-controller behavior. This
+keeps the watchdog's real delivery probe and restart policy intact.
