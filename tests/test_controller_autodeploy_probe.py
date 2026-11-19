@@ -63,5 +63,36 @@ class RegistrationTests(unittest.TestCase):
                 probe.gateway(self.config)
         self.assertEqual(request.call_count, 0)
 
+
+class SourceProofTests(unittest.TestCase):
+    def setUp(self):
+        self.release = os.path.realpath(tempfile.mkdtemp(prefix='autodeploy-source-'))
+        self.config = {'service': {'manager': 'systemd', 'unit': 'biomerte.service'}}
+    def tearDown(self):
+        shutil.rmtree(self.release)
+    def test_matching_physical_cwd_requires_no_process_memory_read(self):
+        forbidden = AssertionError('source probe must not open process memory')
+        with mock.patch.object(probe, 'output', return_value='MainPID=883\n') as output:
+            with mock.patch.object(probe.os, 'readlink', return_value=self.release) as readlink:
+                with mock.patch.object(probe, 'open', create=True, side_effect=forbidden) as opened:
+                    with mock.patch.object(probe.os, 'open', side_effect=forbidden) as raw_opened:
+                        result = probe.source(self.config, self.release)
+        self.assertEqual(result, {'check': 'process_source', 'pid': 883, 'source': self.release})
+        output.assert_called_once_with(['systemctl', 'show', 'biomerte.service', '-p', 'MainPID'])
+        readlink.assert_called_once_with('/proc/883/cwd')
+        self.assertEqual(opened.call_count, 0)
+        self.assertEqual(raw_opened.call_count, 0)
+    def test_wrong_cwd_is_rejected_without_environment_fallback(self):
+        forbidden = AssertionError('source probe must not open process memory')
+        with mock.patch.object(probe, 'output', return_value='MainPID=883\n'):
+            with mock.patch.object(probe.os, 'readlink', return_value=self.release + '-different'):
+                with mock.patch.object(probe, 'open', create=True, side_effect=forbidden) as opened:
+                    with mock.patch.object(probe.os, 'open', side_effect=forbidden) as raw_opened:
+                        with self.assertRaises(ValueError) as caught:
+                            probe.source(self.config, self.release)
+        self.assertEqual(str(caught.exception), 'controller_source_mismatch')
+        self.assertEqual(opened.call_count, 0)
+        self.assertEqual(raw_opened.call_count, 0)
+
 if __name__ == '__main__':
     unittest.main()

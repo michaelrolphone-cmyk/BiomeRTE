@@ -98,6 +98,16 @@ bootstrap is used for rollback. This prevents a no-op restart from accepting a
 still-running candidate as the legacy fallback. Inspect effective service
 settings and the live process independently even when this hook is omitted.
 
+The Linux source probe uses systemd `MainPID` and the physical `/proc/PID/cwd`
+link only. It never reads process command-line or environment memory, which can
+block behind SD I/O stalls. A legacy Pi service whose working directory differs
+from its selected package cannot pass this strict probe before launcher
+adoption. Establish its explicit one-time bootstrap proof from separately
+captured authoritative service routing, exact PID, and source hash. After
+adopting the stable launcher, replace that temporary proof hook with the strict
+physical-source probe before enabling branch updates; the launcher guarantees
+that the working directory is the selected physical release.
+
 Other settings:
 
 | Field | Default | Meaning |
