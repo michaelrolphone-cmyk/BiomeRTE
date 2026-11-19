@@ -112,9 +112,19 @@ export async function device(req, env, path) {
   return reply({allowed:await canDeliver(env.DB,owner,grant)});
  }
  if (path === '/bridge/check') {
-  // A device can verify its own round trip. This credential cannot choose an
-  // operation or use the client MCP endpoint.
-  return reply(await runTool(env, 'biome_status'));
+  // A registered device verifies its own round trip, independently of the
+  // gateway default. Only its authenticated transport selects the existing
+  // application reference; request data cannot choose an owner or operation.
+  let args={};
+  if(node){
+   let mapping;try{mapping=JSON.parse(env.CONTROLLER_NODE_MAP??'{}')}catch{return reply({error:'Invalid controller routing configuration'},503)}
+   if(!mapping||typeof mapping!=='object'||Array.isArray(mapping))return reply({error:'Invalid controller routing configuration'},503);
+   const identities=Object.entries(mapping).filter(([identity,transport])=>/^[a-f0-9]{64}$/.test(identity)&&transport===node.id);
+   if(identities.length!==1)return reply({error:'Device check requires one configured application identity'},409);
+   args={controller:identities[0][0]};
+  }
+  // Unregistered legacy bridge credentials retain their previous default check.
+  return reply(await runTool(env, 'biome_status',args));
  }
  const db = env.DB, time = epoch();
  if (path === '/bridge/next') {
