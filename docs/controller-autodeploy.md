@@ -24,9 +24,9 @@ patch merged to the configured branch.
   its interpreter, `-S`, diagnostic wrapper, arguments, environment, user, home,
   logs, and any existing service overrides. Physical paths prevent old
   processes from lazily importing files from a new release during a switch.
-* The gateway link, maintenance agent, providers, and installed watcher remain
-  on their existing independent source paths. This watcher only restarts the
-  explicitly configured services.
+* The gateway link initially remains on its independent source path. Optional
+  paired deployment is described below. Maintenance, providers and the installed
+  watcher remain independent; only explicitly configured services restart.
 * The installed watcher does not replace itself from a newly fetched release.
   Updates to the recovery mechanism require their own verified installation.
 
@@ -275,3 +275,77 @@ checks shared restart-lock deferral. Native service-hook tests mock manager
 commands to verify unloaded-service recovery and exact unit scope. Production
 qualification still requires
 observing the actual services and independently authenticated recovery route.
+
+## Optional paired gateway-link deployment
+
+The same watcher can update the registered gateway link with the controller.
+This is opt-in: existing installations keep their original single-service
+restart and gateway-readiness checks.
+
+Add `deploy` to `include_paths` before staging the first paired release. The
+gateway link imports its entrypoint, dispatch adapters and vendored WebSocket
+transport from that directory. Changing `include_paths` does not rebuild a
+previously cached immutable commit.
+
+Use a separate private link launch configuration with the same `root` and
+`home` as the controller updater. Preserve the link interpreter, `-S`, origin,
+key path, home, environment and extra Python paths. Set its `controller_argv`
+script argument to the relative path `deploy/gateway-agent.py`. The existing
+stable exec helper resolves `current` to a physical release, changes directory
+there, and executes that command. This preserves physical import pinning while
+allowing a later commit to select a new link source.
+
+A paired configuration uses the existing extension points:
+
+* `include_paths: ["biomerte", "examples", "deploy"]`.
+* A `preflight_commands` entry that runs the stable
+  `controller_autodeploy_probe.py --config <controller-config>
+  --mode link-preflight --release {release}`.
+* A second `restart_commands` entry invoking the existing native-service helper
+  with the private link configuration. Activation and rollback run the same
+  ordered controller and link restart list.
+* `linked_services` containing the link's native service descriptor, plus
+  `--release {release}` on the existing `--mode gateway` health command.
+  The probe checks the running link's physical source before accepting gateway
+  registration.
+* `gateway.require_network: true` after the compatible gateway is deployed.
+  Acceptance then requires a current self-reported snapshot from the selected
+  registered controller. An empty successful snapshot is valid; stale, missing
+  or unavailable metadata fails the optional gate.
+
+The staged link import check starts no link threads, controller instances or
+network requests. It imports the entrypoint and local/HA dispatch dependency
+closure under the configured Python with site packages disabled.
+
+### Adopt in two phases
+
+A controller-only release usually lacks `deploy/gateway-agent.py`. It cannot be
+a rollback destination for a link that has already adopted the shared pointer.
+Do not mutate that old release or reset the watcher's durable state to disguise
+the missing source.
+
+First preserve the original link plist/unit, updater configuration and stable
+probe. At an idle checkpoint with no pending transaction, pause the native
+watcher while retaining independent maintenance and the running controller/link.
+Install the optional probe and the phase-one updater configuration: include
+`deploy` and the link import preflight, but keep the original controller-only
+restart and health behavior. Merge the new tested commit, then use the existing
+watcher's `--once` mode to stage and verify it while the old pinned link remains
+running. Confirm that `current == last_good`, the accepted commit is the intended
+new main commit, no transaction is pending, and the immutable release contains
+the gateway entrypoint and its dependencies.
+
+Only then adopt the link's stable exec launcher and reload that exact native
+service. Verify its physical source, fresh authenticated network registration
+and an explicitly addressed controller RPC. Enable the phase-two restart list,
+source gate and current-network gate, and resume the existing native watcher.
+The next deployment's rollback destination is now the accepted complete release.
+
+If initial link adoption fails, restore the original link service definition
+and reload that exact service; retain the accepted controller release and the
+phase-one updater configuration. Do not activate paired restart hooks until
+the complete baseline is verified. Future paired failures use the normal
+watcher transaction to restart both services from its last-good release.
+
+The maintenance agent, providers, gateway credentials and independently
+installed watcher program remain outside this paired source switch.

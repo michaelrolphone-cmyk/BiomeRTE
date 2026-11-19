@@ -83,18 +83,72 @@ def gateway(config):
             or age < -30 or age > options.get('freshness_seconds', 60)):
         raise ValueError('gateway_node_not_ready')
     # This proves authenticated registration, not a controller RPC round trip.
-    return {'check': 'gateway_registration', 'node': node['id'], 'age_seconds': round(age, 2)}
+    result = {'check': 'gateway_registration', 'node': node['id'], 'age_seconds': round(age, 2)}
+    if options.get('require_network', False):
+        network = node.get('network')
+        report = network.get('self_report') if isinstance(network, dict) else None
+        if (not isinstance(report, dict) or report.get('current') is not True
+                or report.get('status') != 'current'
+                or not isinstance(report.get('addresses'), list)):
+            raise ValueError('gateway_network_report_not_current')
+        result['network_report_current'] = True
+    return result
+
+def link_preflight(config, release):
+    """Import the staged gateway entrypoint without starting services or I/O."""
+    physical = os.path.realpath(release)
+    if (not os.path.isfile(os.path.join(physical, 'deploy', 'gateway-agent.py'))
+            or not os.path.isfile(os.path.join(physical, 'biomerte', 'network_addresses.py'))):
+        raise ValueError('gateway_link_source_missing')
+    program = (
+        "import os,runpy,sys; "
+        "root=os.path.realpath(sys.argv[1]); "
+        "sys.path.insert(0,os.path.join(root,'deploy')); "
+        "runpy.run_path(os.path.join(root,'deploy','gateway-agent.py'),"
+        "run_name='biomerte_gateway_preflight'); "
+        "modules=('local_link','ha_link','native_call','session_service',"
+        "'persistent_link','controller_inbox','provider_ingress',"
+        "'dashboard_proxy','grok_receivers','checkpoint_maintenance','websocket'); "
+        "[__import__(name) for name in modules]"
+    )
+    environment = dict(os.environ)
+    environment['PYTHONPATH'] = physical
+    environment['PYTHONDONTWRITEBYTECODE'] = '1'
+    subprocess.check_output([config['python'], '-S', '-B', '-c', program, physical],
+                            cwd=physical, env=environment, stderr=subprocess.DEVNULL,
+                            timeout=config.get('preflight_timeout', 120))
+    return {'check': 'gateway_link_imports', 'source': physical}
+
+
+def deployment_gateway(config, release=None):
+    """Optional paired-service proof; old installations keep their prior gate."""
+    services = config.get('linked_services', [])
+    if not isinstance(services, list):
+        raise ValueError('linked_services_must_be_list')
+    if services and not release:
+        raise ValueError('linked_service_release_required')
+    proofs = [source({'service': service}, release) for service in services]
+    result = gateway(config)
+    if proofs:
+        result['linked_sources'] = proofs
+    return result
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
-    parser.add_argument('--mode', choices=['source', 'gateway'], required=True)
+    parser.add_argument('--mode', choices=['source', 'gateway', 'link-preflight'], required=True)
     parser.add_argument('--release')
     options = parser.parse_args(argv)
     config = read_json(options.config)
-    if options.mode == 'source' and not options.release:
-        parser.error('--release is required for a source probe')
-    value = source(config, options.release) if options.mode == 'source' else gateway(config)
+    if options.mode in ('source', 'link-preflight') and not options.release:
+        parser.error('--release is required for a source or link preflight probe')
+    if options.mode == 'source':
+        value = source(config, options.release)
+    elif options.mode == 'link-preflight':
+        value = link_preflight(config, options.release)
+    else:
+        value = deployment_gateway(config, options.release)
     print(json.dumps(value, sort_keys=True))
     return 0
 
