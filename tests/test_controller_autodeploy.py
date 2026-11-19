@@ -67,7 +67,7 @@ class Harness(watcher.Watcher):
 
 class WatcherTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.mkdtemp(prefix='autodeploy-test-')
+        self.temporary = os.path.realpath(tempfile.mkdtemp(prefix='autodeploy-test-'))
         self.home = os.path.join(self.temporary, 'controller-home')
         self.original = os.path.join(self.temporary, 'original-release')
         self.root = os.path.join(self.temporary, 'updater')
@@ -356,6 +356,66 @@ class WatcherTests(unittest.TestCase):
                 "import sys; sys.stderr.write('fixture-secret'); sys.exit(7)"], 5)
         self.assertEqual(caught.exception.code, 'command_exit_7')
         self.assertNotIn('fixture-secret', str(caught.exception))
+
+
+    def test_launcher_pins_lazy_imports_after_current_changes(self):
+        second = os.path.join(self.temporary, 'second-source')
+        os.makedirs(os.path.join(second, 'biomerte'))
+        for root, value in ((self.original, 'first'), (second, 'second')):
+            with open(os.path.join(root, 'fixture_payload.py'), 'w') as stream:
+                stream.write('VALUE = ' + repr(value) + '\n')
+        with open(os.path.join(second, 'biomerte', '__init__.py'), 'w') as stream:
+            stream.write('')
+        ready = os.path.join(self.temporary, 'child-ready.json')
+        trigger = os.path.join(self.temporary, 'child-go')
+        result = os.path.join(self.temporary, 'child-result.json')
+        # Move cwd away before the lazy import so only the physical PYTHONPATH,
+        # not an incidental current-directory entry, can select the first source.
+        program = (
+            "import json,os,sys,time; os.chdir(sys.argv[4]); "
+            "json.dump({'path':sys.path,'argv':sys.argv[1:]},open(sys.argv[1]+'.tmp','w')); os.rename(sys.argv[1]+'.tmp',sys.argv[1]); "
+            "\nwhile not os.path.exists(sys.argv[2]): time.sleep(.01)\n"
+            "import fixture_payload; "
+            "json.dump({'value':fixture_payload.VALUE},open(sys.argv[3],'w'))")
+        config = dict(self.config, controller_argv=[
+            sys.executable, '-S', '-c', program, ready, trigger, result, self.temporary])
+        config_path = os.path.join(self.temporary, 'launcher-config.json')
+        save(config_path, config)
+        process = subprocess.Popen([sys.executable, '-S',
+            os.path.join(ROOT, 'deploy', 'controller_autodeploy_exec.py'),
+            '--config', config_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            import time
+            deadline = time.monotonic() + 5
+            while not os.path.exists(ready) and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(os.path.exists(ready), 'launcher child did not start')
+            self.assertIn(self.original, watcher.read_json(ready)['path'])
+            watcher.atomic_link(self.worker.current_link, second)
+            with open(trigger, 'w') as stream:
+                stream.write('go')
+            output, error = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, error.decode('utf-8', 'replace'))
+            self.assertEqual(watcher.read_json(result)['value'], 'first')
+            self.assertEqual(watcher.read_json(ready)['argv'],
+                             [ready, trigger, result, self.temporary])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_launcher_refuses_missing_node_without_running_command(self):
+        config = dict(self.config, home=os.path.join(self.temporary, 'missing'),
+                      controller_argv=[sys.executable, '-c', "print('SHOULD NOT RUN')"])
+        config_path = os.path.join(self.temporary, 'launcher-config.json')
+        save(config_path, config)
+        process = subprocess.Popen([sys.executable, '-S',
+            os.path.join(ROOT, 'deploy', 'controller_autodeploy_exec.py'),
+            '--config', config_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, error = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 1)
+        self.assertEqual(output, b'')
+        self.assertIn(b'existing_node_required', error)
 
 
 if __name__ == '__main__':

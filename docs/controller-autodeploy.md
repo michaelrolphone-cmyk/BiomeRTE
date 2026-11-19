@@ -17,10 +17,13 @@ patch merged to the configured branch.
 * Its configuration and `status.json` are local files, separate from controller
   state. It never creates a controller identity, calls `init`, edits `node.json`,
   changes credentials, or modifies service definitions.
-* A one-time service configuration points the existing controller's source
-  directory and `PYTHONPATH` at the watcher's `current` symlink. Preserve its
-  interpreter, `-S`, diagnostic wrapper, arguments, environment, user, home,
-  logs, and any existing service overrides.
+* A one-time service configuration invokes the stable installed
+  `controller_autodeploy_exec.py --config /private/config.json` launcher.
+  It resolves `current` once, sets the physical source directory and
+  `PYTHONPATH`, and executes the original `controller_argv` unchanged. Preserve
+  its interpreter, `-S`, diagnostic wrapper, arguments, environment, user, home,
+  logs, and any existing service overrides. Physical paths prevent old
+  processes from lazily importing files from a new release during a switch.
 * The gateway link, maintenance agent, providers, and installed watcher remain
   on their existing independent source paths. This watcher only restarts the
   explicitly configured services.
@@ -39,6 +42,8 @@ Use a mode-0600 JSON file, with absolute paths appropriate to that host:
   "branch": "main",
   "python": "/absolute/stable/python3",
   "interval": 60,
+  "controller_argv": ["/absolute/stable/python3", "-S", "-m", "biomerte", "--home", "/absolute/existing/controller-home", "serve"],
+  "extra_pythonpaths": [],
   "restart_commands": [
     ["/absolute/restart-helper"]
   ],
@@ -107,10 +112,15 @@ commands. They impose no limits on terminal jobs or controller capabilities.
    This validates the existing node and authenticated local/site paths,
    optionally verifies process source, and creates `current` pointing to that
    original source. It does not restart any service.
-4. Change only the existing controller's source routing to use `current`.
-   Preserve every unrelated service setting. On systemd inspect the effective
-   drop-in order: a later override can silently defeat an earlier
-   `WorkingDirectory` or `PYTHONPATH` change.
+4. Copy `controller_autodeploy_exec.py` into the same stable recovery directory.
+   Save the exact original controller argument vector as `controller_argv`.
+   Change the existing controller's native command to the stable Python,
+   `-S`, stable launcher, `--config`, and private config path. The launcher
+   executes the saved original command unchanged after pinning the physical
+   release. Preserve every unrelated service setting and include any required
+   additional Python paths explicitly in `extra_pythonpaths`. On systemd
+   inspect the effective drop-in order: a later override can silently defeat
+   an earlier command or source-routing change.
 5. Configure the existing Mac watchdog's JSON `recovery_lock` to the same path.
    Its shared-lock support defers a competing restart while the updater is
    switching or verifying. A process crash automatically releases `flock`;
@@ -231,7 +241,7 @@ python3 -S -m unittest tests.test_controller_watchdog tests.test_controller_watc
 The first suite covers real Git staging with package resources, unchanged
 polls, failed deployment followed by a repair, interrupted switches before and
 after link activation, offline rollback, failed rollback followed by a new
-patch, safe retention, source identity, diagnostic subprocess timeout, and
+patch, safe retention, source identity, physical import pinning, diagnostic subprocess timeout, and
 authenticated readiness requirements. The Mac watchdog suite separately
 checks shared restart-lock deferral. Production qualification still requires
 observing the actual services and independently authenticated recovery route.
