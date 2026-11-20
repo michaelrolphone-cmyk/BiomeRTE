@@ -335,9 +335,15 @@ _IDLE_CONNECTIONS = []
 
 
 def _close_connections(key):
+    idle = []
     with _CONNECTIONS_LOCK:
-        idle = [db for owner, db in _IDLE_CONNECTIONS if owner is key]
-        _IDLE_CONNECTIONS[:] = [(owner, db) for owner, db in _IDLE_CONNECTIONS if owner is not key]
+        # Cyclic GC can run another Store finalizer inside this same RLock.
+        # Remove exact entries from a snapshot; never rebuild the shared pool
+        # from an iteration that nested cleanup may have changed.
+        for entry in tuple(_IDLE_CONNECTIONS):
+            if entry[0] is key:
+                _IDLE_CONNECTIONS.remove(entry)
+                idle.append(entry[1])
     for db in idle:
         db.close()
 
@@ -438,9 +444,12 @@ class Store:
         """
         db = None
         with _CONNECTIONS_LOCK:
-            for index in range(len(_IDLE_CONNECTIONS) - 1, -1, -1):
-                if _IDLE_CONNECTIONS[index][0] is self._connection_key:
-                    unused, db = _IDLE_CONNECTIONS.pop(index)
+            # A finalizer can shrink the pool while the RLock is re-entered.
+            # This live Store keeps its own key alive throughout checkout.
+            for entry in reversed(tuple(_IDLE_CONNECTIONS)):
+                if entry[0] is self._connection_key:
+                    _IDLE_CONNECTIONS.remove(entry)
+                    db = entry[1]
                     break
         if db is None:
             db = self.connect()

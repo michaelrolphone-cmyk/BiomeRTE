@@ -1,9 +1,12 @@
 import gc
 import contextlib
+import inspect
 import sqlite3
+import sys
 import tempfile
 import threading
 import unittest
+import weakref
 from biomerte.store import Store, _IDLE_CONNECTIONS, _CONNECTIONS_LOCK
 
 
@@ -114,6 +117,95 @@ class ConnectionReuseTests(unittest.TestCase):
             gc.collect()
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute('SELECT 1')
+
+    def test_cyclic_gc_during_checkout_preserves_the_exact_warm_connection(self):
+        gc.collect()
+        enabled, previous_trace = gc.isenabled(), sys.gettrace()
+        gc.disable()
+        observed = []
+        try:
+            with self.store.connection() as warm:
+                self.assertEqual(warm.execute('SELECT 1').fetchone()[0], 1)
+            other = Store(self.directory.name, 'checkout-cycle')
+            other.cycle = [other]
+            with other.connection() as orphan_db:
+                self.assertEqual(orphan_db.execute('SELECT 1').fetchone()[0], 1)
+            orphan = weakref.ref(other)
+            del other
+            code = Store.connection.__wrapped__.__code__
+            lines, first_line = inspect.getsourcelines(Store.connection)
+            check_line = next(first_line + index for index, line in enumerate(lines)
+                              if line.strip().startswith('if ') and
+                              'self._connection_key' in line)
+            def collect_during_checkout(frame, event, arg):
+                if (frame.f_code is code and event == 'line' and
+                        frame.f_lineno == check_line and not observed):
+                    observed.append(len(_IDLE_CONNECTIONS))
+                    gc.collect()
+                    observed.append(len(_IDLE_CONNECTIONS))
+                return collect_during_checkout
+            sys.settrace(collect_during_checkout)
+            try:
+                with self.store.connection() as reused:
+                    self.assertIs(reused, warm)
+                    self.assertEqual(reused.execute('SELECT 1').fetchone()[0], 1)
+            finally:
+                sys.settrace(previous_trace)
+            self.assertEqual(len(observed), 2)
+            self.assertEqual(observed[0] - observed[1], 1)
+            self.assertIsNone(orphan())
+            with self.assertRaises(sqlite3.ProgrammingError):
+                orphan_db.execute('SELECT 1')
+            with self.store.connection() as reused:
+                self.assertIs(reused, warm)
+        finally:
+            sys.settrace(previous_trace)
+            if enabled:
+                gc.enable()
+
+    def test_cyclic_gc_during_close_does_not_resurrect_or_lose_idle_handles(self):
+        from biomerte import store as store_module
+        gc.collect()
+        enabled, previous_trace = gc.isenabled(), sys.gettrace()
+        gc.disable()
+        observed = []
+        try:
+            other = Store(self.directory.name, 'close-cycle')
+            other.cycle = [other]
+            with self.store.connection() as first:
+                with other.connection() as orphan_db:
+                    with self.store.connection() as second:
+                        self.assertIsNot(first, second)
+            orphan = weakref.ref(other)
+            del other
+            code = store_module._close_connections.__code__
+            lines, first_line = inspect.getsourcelines(store_module._close_connections)
+            check_line = next(first_line + index for index, line in enumerate(lines)
+                              if line.strip() == 'if entry[0] is key:')
+            def collect_during_close(frame, event, arg):
+                if (frame.f_code is code and event == 'line' and
+                        frame.f_lineno == check_line and not observed):
+                    observed.append(len(_IDLE_CONNECTIONS))
+                    gc.collect()
+                    observed.append(len(_IDLE_CONNECTIONS))
+                return collect_during_close
+            sys.settrace(collect_during_close)
+            try:
+                self.store.close()
+            finally:
+                sys.settrace(previous_trace)
+            self.assertEqual(len(observed), 2)
+            self.assertEqual(observed[0] - observed[1], 1)
+            self.assertIsNone(orphan())
+            for db in (first, second, orphan_db):
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    db.execute('SELECT 1')
+            self.assertFalse(any(owner is self.store._connection_key
+                                 for owner, unused in _IDLE_CONNECTIONS))
+        finally:
+            sys.settrace(previous_trace)
+            if enabled:
+                gc.enable()
 
     def test_uncommitted_changes_cannot_escape_checkout(self):
         with self.store.connection() as db:
