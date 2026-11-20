@@ -12,6 +12,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
@@ -172,6 +173,78 @@ class IndependentTransportTests(unittest.TestCase):
         transport.exchange = lambda body: valid
         self.assertEqual(transport.complete('one', RESULT), agent.digest(RESULT))
 
+
+
+def wait_then_execute(home, incoming, outgoing, gate):
+    gate.wait()
+    agent.executor_main(home, incoming, outgoing)
+
+
+class ProcessIntegrationTests(unittest.TestCase):
+    def start_worker(self, home, target=agent.executor_main, extra=()):
+        context = agent.multiprocessing.get_context('fork')
+        incoming, outgoing = context.Queue(maxsize=1), context.Queue()
+        worker = context.Process(target=target, args=(home, incoming, outgoing) + extra)
+        worker.daemon = True
+        worker.start()
+        def cleanup():
+            worker.terminate()
+            worker.join(5)
+            incoming.cancel_join_thread()
+            outgoing.cancel_join_thread()
+            incoming.close()
+            outgoing.close()
+        self.addCleanup(cleanup)
+        return worker, incoming, outgoing
+
+    def test_real_child_storage_lock_cannot_block_diagnostic_heartbeat(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        context = agent.multiprocessing.get_context('fork')
+        gate = context.Event()
+        worker, incoming, outgoing = self.start_worker(
+            folder.name, wait_then_execute, (gate,))
+        # Acquire after fork so the child never inherits this SQLite connection.
+        lock = sqlite3.connect(os.path.join(folder.name, 'ledger.sqlite'))
+        self.addCleanup(lock.close)
+        lock.execute('BEGIN EXCLUSIVE')
+        gate.set()
+        transport = FakeTransport()
+        client = agent.Agent(transport, incoming, outgoing, worker)
+        client.step({'version': 1, 'agent': agent.AGENT})
+        self.assertEqual([x['operation'] for x in transport.calls], ['heartbeat'])
+        self.assertTrue(incoming.empty())
+        lock.rollback()
+
+    def test_real_process_admission_result_ack_and_redelivery_execute_once(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        worker, incoming, outgoing = self.start_worker(folder.name)
+        transport = FakeTransport()
+        counter = os.path.join(folder.name, 'execution-counter')
+        transport.jobs = [{'id': 'one', 'argv': [
+            '/bin/sh', '-c', 'printf x >> "$1"; printf done', 'sh', counter], 'cwd': None}]
+        client = agent.Agent(transport, incoming, outgoing, worker)
+        deadline, reported = time.monotonic() + 10, False
+        while time.monotonic() < deadline:
+            client.step({'version': 1, 'agent': agent.AGENT})
+            self.assertFalse(client.failed)
+            if any(item['operation'] == 'complete' for item in transport.calls):
+                with sqlite3.connect(os.path.join(folder.name, 'ledger.sqlite')) as database:
+                    row = database.execute('SELECT state FROM commands WHERE id=?', ('one',)).fetchone()
+                if row and row[0] == 'reported':
+                    reported = True
+                    break
+            time.sleep(0.01)
+        self.assertTrue(reported, 'real child never completed its durable ACK path')
+        # Continue presenting the same gateway command after it was completed.
+        for unused in range(5):
+            client.step({'version': 1, 'agent': agent.AGENT})
+            time.sleep(0.01)
+        self.assertEqual(agent.read_text(counter), 'x')
+        completed = [item for item in transport.calls if item['operation'] == 'complete']
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]['result']['stdout'], 'done')
 
 class TLSAndInstallationTests(unittest.TestCase):
     @classmethod
