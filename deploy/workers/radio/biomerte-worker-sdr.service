@@ -1,0 +1,15 @@
+[Unit]
+Description=Containerized actual SDR receiver implementation
+Requires=docker.service
+After=docker.service network-online.target
+Conflicts=biomerte-sdr.service biomerte-sdr-provider.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/biomerte/deploy/workers/radio/launch.py run --config /etc/biomerte/worker-sdr.json
+ExecStop=/usr/bin/docker stop --time 30 biomerte-worker-sdr
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+{
+  "kind": "sdr",
+  "image": "REPLACE_WITH_QUALIFIED_SHA256_IMAGE_ID",
+  "hostname": "ProximityRF",
+  "home": "/home/pi/.local/share/biomerte-sdr",
+  "state": "/home/pi/.local/share/sdr-receiver",
+  "devices": [
+    "/dev/bus/usb/001/004"
+  ],
+  "device_groups": [
+    46
+  ]
+}
