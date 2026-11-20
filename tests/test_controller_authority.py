@@ -140,6 +140,12 @@ class ControllerTests(unittest.TestCase):
             self.app.begin_pair(self.peer_public, "blocked")
         with self.assertRaises(Fault):
             self.app.stores["site"].execute(lambda tx: tx.put("future-kind","id",{}))
+        for operation, arguments in (("provider.poll",{"provider":self.peer}),
+                                      ("stream.inspect",{"session":"old-stream"}),
+                                      ("bus.poll",{"name":"old-worker"})):
+            with self.assertRaises(Fault) as raised:
+                self.app.call(operation, arguments)
+            self.assertEqual(raised.exception.status, 409)
         self.app.call("knowledge.put", dict(key="local-only", body=1), "local-only", "local")
         passive = Application(self.tmp.name)
         self.addCleanup(self.close_app, passive)

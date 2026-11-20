@@ -181,14 +181,20 @@ class Application:
                     return command(tx, ctx, name, args, request_id)
             return command(tx, ctx, name, args, request_id)
         operation = OPERATIONS.get(name)
-        if realm == 'site' and (operation is None or operation[2]):
+        passive = name in ('system.info', 'cluster.status', 'bus.discover', 'system.snapshot')
+        if realm == 'site' and (operation is None or operation[2] or not passive):
+            # provider.poll, stream.inspect and bus reads can expose commands
+            # despite being read-only. A frozen source may serve diagnostics only.
             self._site_write_allowed()
         if name in session_api.EXTERNAL:
             if cached and session_api.EXTERNAL[name][1]:
                 raise Fault('Cached site view is read-only', 409)
             return session_api.dispatch(self, name, args, request_id, realm, authorize)
         read_only = operation is not None and not operation[2]
-        return self.stores[realm].execute(transaction, cached=cached, read_only=read_only)
+        result = self.stores[realm].execute(transaction, cached=cached, read_only=read_only)
+        if realm == 'site' and not passive:
+            self._site_write_allowed()
+        return result
 
     def tick(self, realm):
         if realm == 'site':
