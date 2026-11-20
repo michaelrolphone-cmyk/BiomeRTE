@@ -270,7 +270,6 @@
     "liveness_http": 200,
     "readiness_http": 503,
     "anchor_count": 2,
-    "solution_age_s_at_final_clock_verification": 0.24345946311950684,
     "native_clock_preserved": true,
     "native_tof_started": false,
     "same_host_state": true,
@@ -278,7 +277,19 @@
     "observation_seconds": 51.97,
     "readiness_dependency": "camera; rover_ftm_pending diagnosed",
     "receipt": "actual-workers-tof-rollforward-observe-20261120-83",
-    "evidence": "tof/live-qualification-20261120.json"
+    "evidence": "tof/live-qualification-20261120.json",
+    "state_output_age_s_at_clock_verification": 0.24345946311950684,
+    "freshness_scope": "latest coordinator state output; a fresh file does not establish solved pose or camera readiness",
+    "last_followup": {
+      "observed_utc": "2026-11-20T17:10:36.243231+00:00",
+      "running": true,
+      "restart_count": 0,
+      "anchor_count": 1,
+      "state_output_age_s": 0.4264202117919922,
+      "same_native_clock": true,
+      "docker_health": "unhealthy",
+      "receipt": "actual-workers-final-live-status-20261120-88"
+    }
   },
   "provider_authority_blocker": {
     "observed_utc": "2026-11-20T16:20:13Z",
@@ -323,14 +334,19 @@
       "harness_fix": "fc3e066338eeab8f22891ba09a4edc41f54b95dd",
       "affected_tests_passed": 15,
       "declared_dependency_verified_in_final_images": "46.0.7",
-      "mac_additional_failure": "reentrant Store finalizer invalidates idle-connection indexed traversal; narrow repair in progress",
-      "full_ci_rerun": "pending final source push"
+      "mac_additional_failure": "fixed: reentrant finalizers invalidated idle connection indexes and could break connection ownership",
+      "full_ci_rerun": "required on final published head; not claimed passed",
+      "pool_fix": "963664dd6753b8911737a8b36c655e4167a6a10f",
+      "pool_targeted_tests_passed": 35,
+      "pool_deterministic_regressions": 5,
+      "regressions_failed_before_fix": true
     }
   },
   "publication": {
     "tof_pr": "https://github.com/michaelrolphone-cmyk/RiscRTE-System-Apps/pull/261",
     "biomerte_branch": "work/actual-worker-containers-20261120",
-    "source_tags_published_and_verified": 9
+    "source_tags_published_and_verified": 9,
+    "biomerte_pr": "https://github.com/michaelrolphone-cmyk/BiomeRTE/pull/137"
   },
   "image_identity_verification": {
     "observed_utc": "2026-11-20T17:06:14.267189+00:00",

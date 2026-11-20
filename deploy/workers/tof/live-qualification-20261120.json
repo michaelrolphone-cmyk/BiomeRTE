@@ -80,5 +80,16 @@
     "anchor_count": 2
   },
   "sample_count": 10,
-  "all_samples_running_without_restart": true
+  "all_samples_running_without_restart": true,
+  "freshness_scope": "latest coordinator state output; a fresh file does not establish solved pose or camera readiness",
+  "last_followup": {
+    "observed_utc": "2026-11-20T17:10:36.243231+00:00",
+    "running": true,
+    "restart_count": 0,
+    "anchor_count": 1,
+    "state_output_age_s": 0.4264202117919922,
+    "same_native_clock": true,
+    "docker_health": "unhealthy",
+    "receipt": "actual-workers-final-live-status-20261120-88"
+  }
 }
