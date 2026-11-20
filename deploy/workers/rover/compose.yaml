@@ -22,6 +22,12 @@ services:
         target: /state
         bind:
           create_host_path: false
+      - type: bind
+        source: "${BIOME_HOST_IO_CLIENT:?Set the supplied HTTPS HostIO client directory}"
+        target: /run/biome
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:rw,nosuid,noexec,size=32m,mode=1777
     networks: [biome]

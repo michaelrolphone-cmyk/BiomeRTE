@@ -4,7 +4,7 @@
   "identity_home": "/config/rover",
   "state_dir": "/state",
   "controllers_file": "/config/controllers.json",
-  "host_io_config": "/config/host-io.json",
+  "host_io_config": "/run/biome/host-io.json",
   "controller_api": "http://host.docker.internal:8740/v1/call",
   "allow_private_controller_http": true,
   "gateway": "https://existing-controller-gateway.example",

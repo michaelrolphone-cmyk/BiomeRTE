@@ -1,0 +1,32 @@
+{
+  "architecture": "arm64",
+  "build_exit": 0,
+  "compose_config_fixture_validation": true,
+  "default_help": "usage: rover.py [-h] [--config CONFIG] [--check-config]\n\noptions:\n  -h, --help       show this help message and exit\n  --config CONFIG\n  --check-config\n",
+  "default_help_exit": 0,
+  "devices": [],
+  "evidence_directory": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-rover-container-20261120-evidence/rover-59f7296380d8",
+  "finished_at": "2026-11-20T15:21:48.390569+00:00",
+  "fixture_exit": 0,
+  "fixture_output": "test_real_http_auth_routes_and_video_dispatch (test_rover_image.BrowserTransport.test_real_http_auth_routes_and_video_dispatch) ... ok\ntest_real_vision_websocket_preserves_binary_frame (test_rover_image.BrowserTransport.test_real_vision_websocket_preserves_binary_frame) ... ok\ntest_fresh_cross_epoch_frame_preserves_bytes (test_rover_image.ClockFence.test_fresh_cross_epoch_frame_preserves_bytes) ... ok\ntest_stale_future_or_previous_boot_frames_rejected (test_rover_image.ClockFence.test_stale_future_or_previous_boot_frames_rejected) ... ok\ntest_exact_image_source_closure (test_rover_image.SourceAndCustody.test_exact_image_source_closure) ... ok\ntest_original_stream_epoch_and_expiry_fences (test_rover_image.SourceAndCustody.test_original_stream_epoch_and_expiry_fences) ... ok\ntest_signed_controller_destination_and_identity (test_rover_image.SourceAndCustody.test_signed_controller_destination_and_identity) ... ok\ntest_uncertain_submission_keeps_original_authority_after_restart (test_rover_image.SourceAndCustody.test_uncertain_submission_keeps_original_authority_after_restart) ... ok\n\n----------------------------------------------------------------------\nRan 8 tests in 0.027s\n\nOK\n",
+  "fixtures": 8,
+  "image_id": "sha256:407b044f16810b8123591c6baecef7aa32c367026319a40cfd5ac80cc282fe68",
+  "kind": "rover",
+  "limits": [
+    "Only linux/arm64 was built and tested.",
+    "Tests used isolated fixture state and Docker network=none; no live capabilities, credentials, model engines or physical devices.",
+    "Host source/destination mounts, current controller/HostIO readiness and final operational handoff remain host rollout steps."
+  ],
+  "live_backend_qualified": false,
+  "live_configuration_preflight": false,
+  "live_handoff": false,
+  "network": "none",
+  "no_live_handoff": true,
+  "os": "linux",
+  "platform": "linux/arm64",
+  "schema": "biomerte.frontend-image-qualification/1",
+  "size_bytes": 79208852,
+  "source_commit": "59f7296380d88e34c7db136501219d46db61d386",
+  "started_at": "2026-11-20T15:21:38.777466+00:00",
+  "tag": "biomerte-worker-rover:59f7296380d8"
+}
