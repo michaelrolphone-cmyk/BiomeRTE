@@ -23,7 +23,7 @@ watchdog = load_module('custody_watchdog',
 
 class CustodyRecoveryTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.mkdtemp(prefix='custody-recovery-')
+        self.temporary = os.path.realpath(tempfile.mkdtemp(prefix='custody-recovery-'))
         self.addCleanup(shutil.rmtree, self.temporary)
         self.home = os.path.join(self.temporary, 'home')
         self.root = os.path.join(self.temporary, 'updater')
