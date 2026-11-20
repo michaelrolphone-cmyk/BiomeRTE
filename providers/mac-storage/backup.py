@@ -4,6 +4,7 @@ import datetime
 import fcntl
 import gzip
 import hashlib
+import ipaddress
 import io
 import json
 import os
@@ -16,7 +17,7 @@ import tarfile
 import tempfile
 import time
 from urllib.parse import quote
-from volumes import BASE, VAULT, SACRED, allocate, syncdir, write_json
+from volumes import BASE, VAULT, SACRED, allocate, syncdir, write_json, prepare
 
 CHUNK=1024*1024
 MAX_HISTORY=24
@@ -104,12 +105,15 @@ def publish(raw,meta,old,history,tmp):
     os.replace(stage,VAULT);syncdir(BASE)
     return current
 
-def exchange(cfg,old,history,tmp,prior_stamp,host):
-    argv=['/usr/bin/ssh','-T','-C','-F','/dev/null','-i',str(BASE/'replica-key'),
+def ssh_command(host):
+    return ['/usr/bin/ssh','-T','-C','-F','/dev/null','-i',str(BASE/'replica-key'),
           '-o','BatchMode=yes','-o','LogLevel=ERROR','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes',
           '-o','UserKnownHostsFile='+str(BASE/'known_hosts'),'-o','HostKeyAlias=biome-sacred-pi',
+          '-o','GlobalKnownHostsFile=/dev/null','-o','UpdateHostKeys=no',
           '-o','ConnectTimeout=8','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','pi@'+host,'snapshot']
-    with subprocess.Popen(argv,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as p:
+
+def exchange(cfg,old,history,tmp,prior_stamp,host):
+    with subprocess.Popen(ssh_command(host),stdin=subprocess.PIPE,stdout=subprocess.PIPE) as p:
         try:
             p.stdin.write((json.dumps({'stamp':prior_stamp})+'\n').encode());p.stdin.flush()
             meta=json.loads(p.stdout.readline(200000))
@@ -142,8 +146,25 @@ def exchange(cfg,old,history,tmp,prior_stamp,host):
         finally:
             if p.poll() is None:p.kill()
 
-def sync():
+def replica_configuration():
     cfg=json.loads(CONFIG.read_text())
+    endpoint=os.environ.get('BIOME_REPLICA_HOST')
+    if endpoint:
+        # A frozen rollout may use the current gateway-reported IP without
+        # changing the native source volume identity or its installed config.
+        cfg=dict(cfg,hosts=[str(ipaddress.ip_address(endpoint))])
+    return cfg
+
+def replica_preflight():
+    cfg=replica_configuration()
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED')=='1':
+        # This is the existing read-only HostIO/native-volume attestation.
+        # It runs before lock, temporary directory or backup state changes.
+        prepare()
+    return cfg
+
+def sync():
+    cfg=replica_preflight()
     before=json.loads(HEALTH.read_text()) if HEALTH.exists() else {}
     with (BASE/'replica.lock').open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
