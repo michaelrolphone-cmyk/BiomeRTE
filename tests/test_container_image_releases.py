@@ -218,5 +218,40 @@ class ImageReleaseTests(unittest.TestCase):
                     images.combine(type("Args", (), {"lock": paths, "output_dir": output})())
                 self.assertFalse(output.exists())
 
+    def test_repository_prefix_changes_only_published_repository_not_logical_provenance(self):
+        for prefix, repository in [(None, "service"), ("biomerte-", "biomerte-service")]:
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as folder:
+                path, lock, _ = self.sample(Path(folder))
+                args = type("Args", (), {"lock": path, "docker": "docker",
+                    "registry": "ghcr.io", "namespace": "owner"})()
+                if prefix is not None:
+                    args.repository_prefix = prefix
+                labels = images.expected_labels(lock["source_commit"], lock["source_url"],
+                                                "service", "linux/arm64")
+                with patch.object(images, "inspect_image", return_value={"Config": {"Labels": labels}}), \
+                        patch.object(images, "call", return_value="digest: sha256:"+"c"*64) as command:
+                    images.publish(args)
+                expected_tag = "ghcr.io/owner/{}:{}-linux-arm64".format(repository, "a"*12)
+                self.assertEqual(command.call_args_list[0].args[0],
+                    ["docker", "tag", "sha256:"+"b"*64, expected_tag])
+                self.assertEqual(command.call_args_list[1].args[0], ["docker", "push", expected_tag])
+                published = images.release(path)["images"][0]
+                self.assertEqual(published["id"], "service")
+                self.assertEqual(published["image_id"], "sha256:"+"b"*64)
+                self.assertEqual(published["registry_ref"], "ghcr.io/owner/"+repository+"@sha256:"+"c"*64)
+
+    def test_invalid_repository_prefix_fails_before_image_inspection_or_mutation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path, _, _ = self.sample(Path(folder))
+            for prefix in ("../", "bad/name", "Upper-", "registry:", "name@", " ", "-bad", None):
+                args = type("Args", (), {"lock": path, "docker": "docker",
+                    "registry": "ghcr.io", "namespace": "owner", "repository_prefix": prefix})()
+                with self.subTest(prefix=prefix), patch.object(images, "inspect_image") as inspect, \
+                        patch.object(images, "call") as mutation:
+                    with self.assertRaisesRegex(ValueError, "Repository prefix"):
+                        images.publish(args)
+                    inspect.assert_not_called()
+                    mutation.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

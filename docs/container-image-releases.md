@@ -115,3 +115,19 @@ Private deployment pulls need separate read:packages credentials. The Actions
 publication token is job-scoped and must not be copied to a persistent host.
 A registry release does not establish physical Pi compatibility or state/effect
 handoff for Rover and ToF.
+
+## Separate registry names from logical image IDs
+
+An optional --repository-prefix changes only the registry repository name at
+publication. For example, --repository-prefix biomerte- publishes logical image
+service-runner as ghcr.io/OWNER/biomerte-service-runner. The default empty prefix
+preserves existing names. Prefixes cannot contain slashes, credentials, ports or
+uppercase characters.
+
+The original logical ID, exact source/commit/platform labels and image ID remain
+unchanged and are all checked before any tag or push. The confirmed registry_ref
+records the actual destination; render continues selecting the logical image ID.
+For a prefixed destination, the GHCR private guard's --image must name the actual
+registry package (for example biomerte-service-runner), while build/render keep
+using the logical ID service-runner. No existing workflow changes its package
+names merely because this optional publication argument is available.
