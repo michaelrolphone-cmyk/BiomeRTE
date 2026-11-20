@@ -77,18 +77,61 @@ visibility and grant this workflow access. A second check verifies all packages
 are private after publication. An unreadable or nonprivate destination fails
 the run rather than changing visibility; errors report the actual visibility.
 Private publishing-repository metadata is a first-creation precondition, not
-proof of the created package's visibility. The combination of a private publishing
-workflow and an OCI source label linking a different public repository still
-needs operational verification. Retain postflight and verify anonymous access
-is denied before treating that release as private.
+proof of the created package's visibility. Retain postflight and verify anonymous
+access is denied before treating a release as private. The bootstrap evidence
+below verifies this combination for the initial service-runner image while
+preserving its truthful public-source OCI label.
 See GitHub's Actions-specific defaults:
 https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows
 
-The repositories are:
+The workflow publishes to these private destinations. Build and render keep the
+logical IDs; publish uses --repository-prefix biomerte-, and every private
+preflight/postflight names the actual destination package.
 
-    ghcr.io/michaelrolphone-cmyk/service-runner
-    ghcr.io/michaelrolphone-cmyk/service-authority
-    ghcr.io/michaelrolphone-cmyk/portable-services
+| Logical image ID | Registry repository |
+| --- | --- |
+| service-runner | ghcr.io/michaelrolphone-cmyk/biomerte-service-runner |
+| service-authority | ghcr.io/michaelrolphone-cmyk/biomerte-service-authority |
+| portable-services | ghcr.io/michaelrolphone-cmyk/biomerte-portable-services |
+
+### Bootstrap evidence and required Actions access
+
+The bootstrap publisher is
+[michaelrolphone-cmyk/BiomeRTE-Container-Registry](https://github.com/michaelrolphone-cmyk/BiomeRTE-Container-Registry),
+repository ID 1464834784. Its private visibility and identity were checked
+through the GitHub API before publication. The
+[initial pilot run](https://github.com/michaelrolphone-cmyk/BiomeRTE-Container-Registry/actions/runs/44653069214)
+imported the already-qualified service-runner ARM64 image without rebuilding or
+changing its source labels. It verified package ID 17087654 as private and
+independently observed a fresh anonymous GHCR token request denied with HTTP 401.
+Its immutable destination is:
+
+    ghcr.io/michaelrolphone-cmyk/biomerte-service-runner@sha256:92d1d9803249b55ad2588b88291d033b3763a648de1ceeda095e394651ce6c05
+
+This proves the pilot's private publication through the bootstrap repository.
+It does not establish that this public source repository's GITHUB_TOKEN can
+access those packages. The observed pilot package's repository association was
+null, so source labels and bootstrap success must not be treated as an Actions
+permission grant.
+
+Before automatic main publication can succeed, each of the three private
+packages must grant the michaelrolphone-cmyk/BiomeRTE repository Write access
+under Package settings > Manage Actions access > Add repository. Keep package
+visibility private. This explicit Actions grant is separate from connecting a
+package to a source repository. Verify the grant using this repository's
+workflow token; a successful read-only probe establishes read access, while
+write access still requires the configured Write role and a qualified
+publication. The source configuration does not claim that grant is present.
+See [GitHub's workflow-access instructions](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#ensuring-workflow-access-to-your-package).
+
+If this repository's token cannot read a private destination, the initial
+private preflight blocks publication before any image build or push. Passing
+that check proves read access, not a successful write. This public repository
+cannot create an absent destination through the guarded workflow. Private host pulls
+also need their own read:packages credential; the Actions permission grant does
+not supply persistent host credentials.
+
+### Release receipts
 
 Tags retain the source commit prefix and platform; deployment references use
 the full confirmed registry digest. The same private-visibility guard is
@@ -129,5 +172,6 @@ unchanged and are all checked before any tag or push. The confirmed registry_ref
 records the actual destination; render continues selecting the logical image ID.
 For a prefixed destination, the GHCR private guard's --image must name the actual
 registry package (for example biomerte-service-runner), while build/render keep
-using the logical ID service-runner. No existing workflow changes its package
-names merely because this optional publication argument is available.
+using the logical ID service-runner. This repository's GHCR workflow explicitly
+selects the biomerte- prefix; other callers retain the default naming unless
+they supply the option.
