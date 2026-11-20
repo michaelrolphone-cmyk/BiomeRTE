@@ -35,6 +35,22 @@ class RegistryAuthTests(unittest.TestCase):
                     "library/alpine@sha256:"+"a"*64]:
             self.assertIsNone(self.engine._registry_auth_header(ref))
 
+
+    def test_unqualified_names_tags_and_digests_resolve_to_docker_hub(self):
+        references = ["ghcr.io", "alpine:3", "localhost:5000", "ghcr.io@sha256:"+"a"*64]
+        for reference in references:
+            self.assertIsNone(self.engine._registry_auth_header(reference))
+        self.write({"auths": {"docker.io": {"username": "hub", "password": "hub-secret"},
+                             "example": {"username": "explicit", "password": "host-secret"}}})
+        for reference in references:
+            self.assertEqual(self.decode(self.engine._registry_auth_header(reference))["serveraddress"], "docker.io")
+        self.assertEqual(self.decode(self.engine._registry_auth_header("Example/service:tag"))["serveraddress"], "example")
+
+    def test_registry_keys_reject_trailing_newline(self):
+        self.write({"auths": {"ghcr.io\n": {"username": "owner", "password": SECRET}}})
+        with self.assertRaisesRegex(ds.DockerError, "unavailable or invalid"):
+            self.engine._registry_auth_header(IMAGE)
+
     def test_atomic_file_rotation_is_used_on_next_pull(self):
         old = self.engine._registry_auth_header(IMAGE)
         replacement = self.path.with_name("replacement.json")

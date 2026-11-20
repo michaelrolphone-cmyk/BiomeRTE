@@ -182,11 +182,13 @@ class DockerEngine:
             if not isinstance(config, dict) or set(config) != {"auths"} or not isinstance(config["auths"], dict):
                 raise ValueError("Expected a dedicated Docker auth file")
             auths = config["auths"]
-            if any(not isinstance(key, str) or not re.match(r"^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$", key)
+            if any(not isinstance(key, str) or not re.match(r"^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\Z", key)
                    or not isinstance(value, dict) for key, value in auths.items()):
                 raise ValueError("Expected exact registry authority keys")
-            first = image_ref.split("/", 1)[0]
-            registry = first.lower() if "." in first or ":" in first or first == "localhost" else "docker.io"
+            name = image_ref.split("@", 1)[0]
+            first = name.split("/", 1)[0]
+            explicit = "/" in name and ("." in first or ":" in first or first == "localhost" or first.lower() != first)
+            registry = first.lower() if explicit else "docker.io"
             credentials = auths.get(registry)
             if credentials is None:
                 return None
