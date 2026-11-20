@@ -1,11 +1,12 @@
+import {logProviderFailure} from './diagnostics.mjs';
 // One durable site runtime, independent of the two physical gateway links.
 // Only owner-authenticated runTool calls may use the dedicated operator signer.
 const hash=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
-const fault=(message,status=503)=>Object.assign(Error(message),{status});
+const fault=(message,status=503)=>Object.assign(Error(message),{status,runtimePublic:true});
 const configured=new WeakMap();
 const success=value=>({content:[{type:'text',text:JSON.stringify(value)}]});
-const failure=error=>({isError:true,content:[{type:'text',text:error.message??'Controller runtime unavailable'}],
+const failure=error=>({isError:true,content:[{type:'text',text:error.runtimePublic?error.message:'Controller runtime unavailable'}],
  structuredContent:{error_code:'CONTROLLER_RUNTIME_UNAVAILABLE',status:error.status??503,retry_same_id:true}});
 function validDeclaration(value){
  if(!object(value)||Object.keys(value).some(k=>!['service_id','authority','controller_aliases','operator_actor','event_default_controller'].includes(k))||
@@ -95,10 +96,10 @@ async function signEnvelope(env,config,envelope){
  return {...envelope,auth:{actor:config.operator_actor,signature:btoa(String.fromCharCode(...new Uint8Array(signature)))}};
 }
 async function forward(config,raw,path='call'){
- const response=await fetch(config.origin+'/api/controller-runtimes/'+config.authority+'/'+path,{
+ let response;try{response=await fetch(config.origin+'/api/controller-runtimes/'+config.authority+'/'+path,{
   method:'POST',headers:{'Content-Type':'application/json'},body:raw,redirect:'error',
   signal:AbortSignal.timeout(30000)
- });
+ })}catch{throw fault('Controller runtime reply unavailable')}
  if(![200,400,401,403,404,409,410,413,429,503].includes(response.status))
   throw fault('Controller runtime reply unavailable');
  return new Response(await response.text(),{status:response.status,headers:{
@@ -134,7 +135,7 @@ export async function controllerRuntimeTool(env,name,args){
  }catch(error){return failure(error)}
 }
 // selected is a previously recorded dispatch origin, never a rewritten signature.
-export async function controllerRuntimeNative(env,raw,selected){
+export async function controllerRuntimeNative(env,raw,selected,req){
  try{
   const config=await controllerRuntimeConfig(env);if(!config)return null;
   const envelope=JSON.parse(raw);
@@ -142,14 +143,14 @@ export async function controllerRuntimeNative(env,raw,selected){
   if(envelope.site!==config.site)throw fault('Wrong controller site',403);
   if(!addresses(config,envelope.controller)||!addresses(config,selected))return null;
   return await forward(config,raw);
- }catch(error){return Response.json({error:error.message??'Controller runtime unavailable',retry_same_id:true},{status:error.status??503})}
+ }catch(error){return runtimeFailure(error,req,raw)}
 }
-export async function controllerRuntimePair(env,phase,raw,selected){
+export async function controllerRuntimePair(env,phase,raw,selected,req){
  try{
   const config=await controllerRuntimeConfig(env);if(!config||!addresses(config,selected))return null;
   if(!['begin','finish'].includes(phase))throw fault('Unsupported pairing phase',400);
   return await forward(config,raw,'pair/'+phase);
- }catch(error){return Response.json({error:error.message??'Controller runtime unavailable',retry_same_id:true},{status:error.status??503})}
+ }catch(error){return runtimeFailure(error,req,raw)}
 }
 
 export async function controllerRuntimeEvent(env,kind,payload){
@@ -166,4 +167,14 @@ export async function controllerRuntimeEvent(env,kind,payload){
  }catch(error){
   return kind==='change'?{error:{code:-32015,message:'Controller could not verify the subscription',data:{reason:'controller_unavailable'}}}:failure(error);
  }
+}
+
+function runtimeFailure(error,req,raw){
+ if(error.runtimePublic)return Response.json({error:error.message,retry_same_id:true},{status:error.status});
+ if(req){
+  let operation='unknown';try{operation=JSON.parse(raw).operation??'unknown'}catch{}
+  logProviderFailure(req,{started:performance.now(),stage:'controller_runtime',
+    reason:'runtime_configuration_failed',operation},503,error);
+ }
+ return Response.json({error:'Controller gateway unavailable'},{status:503});
 }

@@ -24,7 +24,7 @@ export async function nativeCall(req,env){
  const config=await env.DB.prepare('SELECT site FROM controller_config WHERE id=1').first();
  if(!config)return reply({error:'Controller unavailable',retryable:true},503);
  if(config.site!==e.site)return reply({error:'Wrong controller site'},403);
- const runtime=await controllerRuntimeNative(env,raw);
+ const runtime=await controllerRuntimeNative(env,raw,undefined,req);
  if(runtime)return runtime;
  const logical=await logicalServiceCall(env,{authority:e.controller},raw);
  if(logical)return logical;
