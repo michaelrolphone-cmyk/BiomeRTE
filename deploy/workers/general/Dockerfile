@@ -57,6 +57,7 @@ RUN pip install --no-cache-dir cryptography==44.0.2
 COPY deploy/workers/runtime/terminal/biomerte /opt/biome/biomerte
 COPY providers/private-chat /opt/biome/providers/private-chat
 COPY deploy/workers/private/health.py /opt/private-health.py
+RUN chmod a+r /opt/private-health.py
 ENV BIOME_MODEL_HOST_IO_CONFIG=/run/biome/host-io.json \
     BIOME_PRIVATE_CHAT_STATE=/state/chat BIOME_PRIVATE_IMAGE_STATE=/state/image \
     BIOME_PRIVATE_MODEL_HEALTH=/run/biome-health/model.json

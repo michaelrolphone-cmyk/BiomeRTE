@@ -47,7 +47,46 @@ def inspect_image(image):
     result = json.loads(subprocess.check_output([DOCKER,"image","inspect",image],text=True))[0]
     if result["Id"] != image or result["Os"] != "linux" or result["Architecture"] != "arm64":
         raise ValueError("Expected the qualified linux/arm64 worker image")
-    return {"id":image,"os":result["Os"],"architecture":result["Architecture"]}
+    return {"id":image,"os":result["Os"],"architecture":result["Architecture"],
+            "source_commit":result.get("Config",{}).get("Labels",{}).get("org.opencontainers.image.revision")}
+
+def image_identity_preflight(image, kind, chat, state, expected):
+    # Run only imports and identity reads, with both native state mounts read-only.
+    # Do not serve, enroll, call the gateway, or contact a model backend.
+    code = """
+import base64,hashlib,importlib.util,json,os,sys
+from pathlib import Path
+from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
+sys.path.insert(0,'/opt/biome/providers/private-chat')
+import private_chat
+c=json.loads((Path('/state/chat')/'manifest.json').read_text())
+i=json.loads((Path('/state/image')/'manifest.json').read_text())
+public=private_chat.identity_key().public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+phone=base64.b64decode(c['phone_identity'],validate=True) if c.get('phone_identity') else None
+spec=importlib.util.spec_from_file_location('qualified_private_health','/opt/private-health.py')
+health=importlib.util.module_from_spec(spec);spec.loader.exec_module(health)
+value={'site':c['site'],'chat_provider':c['provider'],'image_provider':i['provider'],
+ 'chat_resource':c['resource'],'image_resource':i['resource'],
+ 'signing_public_sha256':hashlib.sha256(public).hexdigest(),
+ 'phone_public_sha256':hashlib.sha256(phone).hexdigest() if phone else None,
+ 'enrollment_pending':bool(c.get('enrollment_hash'))}
+print(json.dumps({'identity':value,'uid':os.getuid(),'health_module_readable':True,
+ 'worker_source':private_chat.__file__}))
+"""
+    command = [DOCKER,"run","--rm","--user",f"{os.getuid()}:{os.getgid()}",
+               "--read-only","--network","none","--cap-drop","ALL",
+               "--security-opt","no-new-privileges:true","-e","HOME=/home/biome",
+               "--mount",f"type=bind,source={chat},target=/state/chat,readonly",
+               "--mount",f"type=bind,source={state},target=/state/image,readonly",
+               "--entrypoint","python",image,"-c",code]
+    result = json.loads(subprocess.check_output(command,text=True))
+    if (result["identity"] != expected or result["uid"] != os.getuid()
+            or not result["worker_source"].startswith("/opt/biome/")
+            or result["health_module_readable"] is not True):
+        raise ValueError("Container identity or worker health import failed")
+    return {"kind":kind,"image":image,"uid":result["uid"],"identity_preserved":True,
+            "health_module_readable":True,"native_state_read_only":True,"network":"none"}
+
 
 def prepare(args):
     os.umask(0o077)
@@ -76,11 +115,17 @@ def prepare(args):
     native = dict(client, url=args.native_url, token_file=str(out/"private/host-io.token"),
                   ca_file=str(out/"config/host-io-ca.pem"))
     write(out/"config/host-io.native.json",native)
-    container = dict(client,token_file="/run/biome/host-io.token",ca_file="/run/biome/host-io-ca.pem")
+    container = dict(client,url=args.container_url,token_file="/run/biome/host-io.token",ca_file="/run/biome/host-io-ca.pem")
+    require_model_transport(HostIOClient(dict(container,token_file=native["token_file"],ca_file=native["ca_file"])))
     write(out/"config/host-io.json",container)
-    sources = {"chat_module":repo/"providers/private-chat/model_service.py",
-               "image_module":repo/"providers/private-image/comfy_backend.py",
-               "runtime_module":repo/"providers/model-runtime/model_runtime.py"}
+    source_root = Path(args.model_source_root).resolve() if args.model_source_root else repo
+    relative = {"chat_module":"providers/private-chat/model_service.py",
+                "image_module":"providers/private-image/comfy_backend.py",
+                "runtime_module":"providers/model-runtime/model_runtime.py"}
+    sources = {key:source_root/name for key,name in relative.items()}
+    for key,path in sources.items():
+        if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256((repo/relative[key]).read_bytes()).digest():
+            raise ValueError("Native release model source differs from the qualified source")
     model_config = dict(enabled=True,**{key:str(path) for key,path in sources.items()},
         sha256={key:hashlib.sha256(path.read_bytes()).hexdigest() for key,path in sources.items()})
     write(out/"config/bridge.models.patch.json",{"models":model_config})
@@ -117,7 +162,8 @@ def prepare(args):
         shutil.copyfile(source,out/"rollback"/("native."+kind+".plist"))
     write(out/"compose.json",{"name":"biome-private","services":services})
     revision = subprocess.check_output(["git","rev-parse","HEAD"],cwd=repo,text=True).strip()
-    plan = {"v":1,"state":"prepared_not_migrated","repo":str(repo),"source_commit":revision,
+    plan = {"v":1,"state":"prepared_not_migrated","repo":str(repo),"preparation_source_commit":revision,
+        "native_model_source_root":str(source_root),
         "uid":uid,"gid":gid,"identity":before,"images":images,"native_labels":LABELS,
         "chat_state":str(chat),"image_state":str(image),
         "native_admission":str(Path.home()/".local/share/biome-model-runtime/admission.sqlite"),
@@ -125,8 +171,13 @@ def prepare(args):
         "native_dependencies":["LM Studio","ComfyUI","native ModelRuntime","HostIO TLS listener"],
         "native_model_state_is_not_mounted":True,
         "cross_kernel_file_locks_are_not_fencing":True}
-    write(out/"plan.json",plan)
     subprocess.run([DOCKER,"compose","-f",str(out/"compose.json"),"config","--quiet"],check=True)
+    preflight = [image_identity_preflight(images[kind]["id"],kind,chat,image,before)
+                 for kind in ("chat","image")]
+    if identity(chat,image) != before:
+        raise ValueError("Private identity changed during preparation")
+    write(out/"identity-preflight.json",{"checks":preflight,"model_generation_performed":False})
+    write(out/"plan.json",plan)
     print(json.dumps({"deployment":str(out),"state":plan["state"],
                       "image_ids":{key:value["id"] for key,value in images.items()},
                       "identity_preserved":True}))
@@ -137,6 +188,8 @@ if __name__ == "__main__":
     p.add_argument("--output",required=True)
     p.add_argument("--client-config",required=True)
     p.add_argument("--native-url",default="https://127.0.0.1:8766")
+    p.add_argument("--container-url",default="https://host.docker.internal:8766")
+    p.add_argument("--model-source-root")
     p.add_argument("--chat-image",required=True)
     p.add_argument("--image-image",required=True)
     prepare(p.parse_args())
