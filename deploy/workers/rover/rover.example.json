@@ -34,5 +34,6 @@
     "right": 4
   },
   "intent_ttl_ms": 500,
-  "port": 8093
+  "port": 8093,
+  "listen_host": "0.0.0.0"
 }

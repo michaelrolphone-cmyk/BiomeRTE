@@ -3,7 +3,8 @@
   "changes": [
     "Dedicated non-root Rover image and deployment definition; actual application source reused unchanged.",
     "Existing portable entrypoint retains explicit controller/network and native HostIO clock/origin/survey boundaries.",
-    "No credentials or existing route state included."
+    "No credentials or existing route state included.",
+    "Explicit container listener with native loopback default and authenticated host-loopback8093 publication preserves existing native observer consumers."
   ],
   "deployed_release": "service-authorities-0b5d03ea8465",
   "image_files": [
@@ -90,7 +91,7 @@
     {
       "image_path": "rover.py",
       "repository_path": "deploy/portable-services/rover.py",
-      "sha256": "f189b9639d8f88bad854687238d7b53156d95b0b567e54ef63db5163bcc7eaba"
+      "sha256": "bd0637a2a9858c3dfe06f5d8da609a4eb15ae4b79987827db3ae6e71b15fd11b"
     },
     {
       "image_path": "portable_common.py",
@@ -100,7 +101,7 @@
     {
       "image_path": "biomerte/host_io_client.py",
       "repository_path": "biomerte/host_io_client.py",
-      "sha256": "41d272fc31903eff9ab4510969d53a5900fa9d09a54fb0b350ab103f05050b9d"
+      "sha256": "25d22d43f5e6ca910c32c2b96531324d2ee68ecc878a4868d395ef0861827465"
     }
   ],
   "original_source_manifest": {

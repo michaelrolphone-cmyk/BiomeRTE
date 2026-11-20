@@ -30,6 +30,8 @@ from portable_common import absolute_path, endpoint, read_json, stop_event
 def configure(config):
     if not isinstance(config, dict):
         raise ValueError("Rover configuration must be an object")
+    if config.get("listen_host", "127.0.0.1") not in ("127.0.0.1", "0.0.0.0"):
+        raise ValueError("Rover listen_host must be loopback or the explicit container interface")
     if config.get("state_mode") != "single_host_durable":
         raise ValueError("Rover requires an explicit durable single-host state handoff")
     for name in ("controller_home", "identity_home", "state_dir", "controllers_file", "host_io_config"):
@@ -216,9 +218,10 @@ async def run(config):
     transport = waiter = None
     try:
         await runner.setup()
-        # Loopback remains sufficient: the outbound bridge is in this process.
+        # Native defaults retain loopback; the container explicitly binds its interface
+        # so Docker can preserve the authenticated host-loopback observer endpoint.
         port = config.get("port", 8093)
-        await web.TCPSite(runner, "127.0.0.1", port).start()
+        await web.TCPSite(runner, config.get("listen_host", "127.0.0.1"), port).start()
         transport = asyncio.create_task(Outbound(config["public_stream_gateway"],
             "http://127.0.0.1:" + str(port), secret, rover.local_router,
             allowed_private_router_hosts=config.get("private_router_hosts", ())).run())
