@@ -53,6 +53,11 @@ its original absolute path. Before taking the replica lock or changing backup
 state, the container uses the existing native `storage.status` observation and
 volume identity/reservation checks. It never formats or mounts native media.
 
+The replica image includes the passwd entry OpenSSH requires for native UID/GID
+501:20. Its build arguments BIOME_NATIVE_UID and BIOME_NATIVE_GID must match
+the preserved runtime account when preparing an image for a different host.
+The supplied HOME and all mounted paths retain their native absolute values.
+
 The existing storage state is writable for the archive, health and staging
 files. The exact existing `replica-key` and `known_hosts` files are overlaid
 read-only. SSH retains user `pi`, host-key alias `biome-sacred-pi`, BatchMode,

@@ -49,6 +49,12 @@ RUN chmod -R a+rX /opt/biome
 CMD ["storage"]
 
 FROM storage AS replica
+# OpenSSH requires a passwd entry even when Docker runs a numeric UID.
+ARG BIOME_NATIVE_UID=501
+ARG BIOME_NATIVE_GID=20
+RUN if ! getent group "$BIOME_NATIVE_GID" >/dev/null; then groupadd --gid "$BIOME_NATIVE_GID" biome-replica; fi \
+    && useradd --no-create-home --uid "$BIOME_NATIVE_UID" --gid "$BIOME_NATIVE_GID" \
+       --home-dir /nonexistent --shell /usr/sbin/nologin biome-replica
 RUN chmod -R a+rX /opt/biome
 CMD ["replica"]
 
