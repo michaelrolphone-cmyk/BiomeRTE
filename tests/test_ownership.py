@@ -381,6 +381,16 @@ class OwnershipTests(unittest.TestCase):
             sb=Store(self.temp.name,'api-b-'+str(type(request_id).__name__))
             a,b=Application.__new__(Application),Application.__new__(Application)
             a.__dict__.update(self.a.__dict__);b.__dict__.update(self.b.__dict__)
+            # These intentionally unseeded Application fixtures bypass __init__.
+            # Retain its inert native custody state while exercising real calls.
+            for app in (a,b):
+                app.directory=self.temp.name
+                app.controller_runtime={}
+                app.controller_aliases=frozenset()
+                app.controller_operator_actors=frozenset()
+                app.controller_actor_aliases={}
+                app._management_stamp=None
+                app._management_value=None
             a.stores={'site':sa};b.stores={'site':sb}
             a.config=dict(a.config,incarnation='a',operational_retention={'enabled':False})
             b.config=dict(b.config,incarnation='b',operational_retention={'enabled':False})
