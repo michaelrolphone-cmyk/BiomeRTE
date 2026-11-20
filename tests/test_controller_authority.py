@@ -342,5 +342,17 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(status["site_writes"],"frozen")
 
 
+    def test_frozen_background_reports_intentional_read_only_health(self):
+        from biomerte.web import background
+        self.marker("frozen-source")
+        class Stop:
+            def __init__(self): self.done=False
+            def is_set(self): return self.done
+            def wait(self,seconds): self.done=True
+        background(self.app,Stop(),"site")
+        self.assertEqual(self.app.health["site"],"managed-read-only")
+        self.assertNotIn("site",getattr(self.app,"background_errors",{}))
+
+
 if __name__ == "__main__":
     unittest.main()

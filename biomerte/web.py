@@ -118,6 +118,14 @@ def server(app, host, port, cert=None, key=None):
 def background(app, stop, realm):
     while not stop.is_set():
         try:
+            if realm == 'site':
+                marker = getattr(app, '_controller_management', lambda: None)()
+                if marker and (marker['mode']=='frozen-source' or not getattr(app, 'controller_runtime', None)):
+                    app.health[realm] = 'managed-read-only'
+                    if hasattr(app, 'background_errors'):
+                        app.background_errors.pop(realm, None)
+                    stop.wait(0.6)
+                    continue
             moved = app.tick(realm)
             app.health[realm] = 'ready'
             if hasattr(app, 'background_errors'): app.background_errors.pop(realm, None)
