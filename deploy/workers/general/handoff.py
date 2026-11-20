@@ -88,7 +88,7 @@ def launch_state(uid,label):
     domain="gui/"+str(uid)
     disabled=run(["/bin/launchctl","print-disabled",domain]).stdout
     return {"was_loaded":run(["/bin/launchctl","print",domain+"/"+label],False).returncode==0,
-            "was_disabled":bool(re.search(r'"'+re.escape(label)+r'"\s*=>\s*true',disabled))}
+            "was_disabled":bool(re.search(r'(?m)^\s*"'+re.escape(label)+r'"\s*=>\s*(?:true|disabled)\s*$',disabled))}
 def verify_native(plan,registration=False):
     for entry in plan["native"]:
         if digest(entry["path"])!=entry["sha256"]:
@@ -283,6 +283,8 @@ def apply(plan):
         raise RuntimeError("Plan already transitioned; inspect it or use explicit rollback")
     if any(e["was_disabled"] for e in plan["native"]):
         raise RuntimeError("Prepared native owner was disabled; do not activate implicitly")
+    if any(not e["was_loaded"] for e in plan["native"]):
+        raise RuntimeError("Prepared native owner was unloaded; do not activate implicitly")
     verify_native(plan,registration=True);require_quiescent(plan);controller_preflight(plan)
     before=inspect_containers(plan)
     if any(o["State"]["Running"] for o in before):

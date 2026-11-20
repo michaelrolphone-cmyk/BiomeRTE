@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -54,6 +55,35 @@ class HandoffRisks(unittest.TestCase):
         with sqlite3.connect(Path(plan["state"])/"worker.sqlite") as db:
             db.execute("CREATE TABLE IF NOT EXISTS actions(id TEXT,state TEXT)")
             db.execute("INSERT INTO actions VALUES('original-operation',?)",(state,))
+    def test_launchd_disabled_words_and_boolean_values_match_exact_label_and_value(self):
+        label="org.biomerte.mac-replica"
+        for value,expected in (("disabled",True),("enabled",False),("true",True),("false",False),
+                               ("disabled_extra",False),("true_extra",False)):
+            with self.subTest(value=value):
+                output='\n\tdisabled services = {\n\t\t"org.biomerte.mac-replica-other" => disabled\n'
+                output+='\t\t"orgXbiomerteXmac-replica" => disabled\n'
+                output+='\t\t"'+label+'" => '+value+'\n\t}\n'
+                def host(argv,check=True,env=None):
+                    self.assertEqual(argv[0],"/bin/launchctl")
+                    if argv[1]=="print-disabled":
+                        self.assertEqual(argv[2],"gui/501")
+                        return subprocess.CompletedProcess(argv,0,output,"")
+                    self.assertEqual(argv[1:],["print","gui/501/"+label])
+                    return subprocess.CompletedProcess(argv,0,"loaded","")
+                self.command.side_effect=host
+                self.assertEqual(h.launch_state(501,label),{"was_loaded":True,"was_disabled":expected})
+        self.command.side_effect=lambda argv,check=True,env=None:subprocess.CompletedProcess(
+            argv,0 if argv[1]=="print-disabled" else 113,'\n\tdisabled services = {\n\t}\n',"")
+        self.assertEqual(h.launch_state(501,label),{"was_loaded":False,"was_disabled":False})
+    def test_disabled_or_unloaded_replica_cannot_be_implicitly_activated(self):
+        for state in ({"was_loaded":True,"was_disabled":True},{"was_loaded":False,"was_disabled":False}):
+            with self.subTest(state=state):
+                plan=self.plan("replica");plan["native"][0].update(state)
+                with mock.patch.object(h,"controller_preflight") as preflight,mock.patch.object(h,"inspect_containers") as inspected:
+                    with self.assertRaisesRegex(RuntimeError,"do not activate implicitly"):h.execute(plan,"apply")
+                preflight.assert_not_called();inspected.assert_not_called();self.command.assert_not_called()
+                self.assertFalse(plan["native_transition_started"])
+                shutil.rmtree(Path(plan["directory"]))
     def test_freeze_pins_image_and_existing_mounts_and_escapes_interpolation(self):
         folder=self.root/"existing";folder.mkdir()
         source={"services":{"storage":{"image":"mutable:tag","build":{"context":"."},"profiles":["storage"],
