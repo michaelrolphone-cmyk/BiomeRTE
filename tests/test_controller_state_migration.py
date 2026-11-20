@@ -182,6 +182,119 @@ class ControllerMigration(unittest.TestCase):
                 self.assertFalse(self.plan()["ready"])
                 self.mac["records"] = [row for row in self.mac["records"] if row[:2] != [kind, "pending"]]
 
+
+    def settled_human_wait(self, run_state="completed"):
+        run = {"id": "settled-run", "name": "workspace-qualification-hold",
+               "state": run_state, "steps": 3, "parent": "",
+               "rev": "pinned-fixture-revision", "tokens": [],
+               "result": {"accepted": True}}
+        wait = {"id": "settled-wait", "run": run["id"], "kind": "human",
+                "name": "wait", "state": "answered", "question": "Qualification",
+                "answer_schema": {"accepted": "bool"}, "answer": {"accepted": True},
+                "actor": "fixture-operator"}
+        self.put(self.mac, "runs", run["id"], run)
+        self.put(self.mac, "waits", wait["id"], wait)
+        return run, wait
+
+    def test_answered_human_wait_keeps_exact_history_and_original_event_lineage(self):
+        for state in ("completed", "cancelled", "failed"):
+            with self.subTest(state=state):
+                run, wait = self.settled_human_wait(state)
+                before = copy.deepcopy(self.sources)
+                plan = self.plan()
+                self.assertTrue(plan["ready"], plan["blocked"])
+                result = records(self.export(plan))
+                self.assertEqual(migration.canonical(run),
+                                 migration.canonical(result[("runs", run["id"])]))
+                self.assertEqual(migration.canonical(wait),
+                                 migration.canonical(result[("waits", wait["id"])]))
+                self.assertEqual(before, self.sources)
+                self.assertEqual(5, result[("_meta", "events")])
+                self.assertNotIn(("events", "%020d" % 2), result)
+                self.assertEqual({"high": 2, "logical_high": 5, "floor": 0},
+                                 result[("_controller_source_feeds", MAC)]["events"])
+                original = next(row[2] for row in self.mac["records"]
+                                if row[:2] == ["events", "%020d" % 2])
+                self.assertEqual(migration.canonical(original), migration.canonical(
+                    result[("_controller_source_events", MAC + ":" + "%020d" % 2)]))
+                self.assertTrue(any(kind == migration.ARCHIVE
+                                    and value["source_controller"] == MAC
+                                    and value["kind"] == "events"
+                                    and value["record"] == original
+                                    for (kind, unused), value in result.items()))
+
+    def test_answered_human_wait_requires_its_exact_terminal_source_run(self):
+        for run_value in (None, {"id": "settled-run", "state": "running"},
+                          {"id": "settled-run", "state": "paused"},
+                          {"id": "settled-run"},
+                          {"id": "another-run", "state": "completed"},
+                          {"state": "completed"}):
+            with self.subTest(run=run_value):
+                run, wait = self.settled_human_wait()
+                self.mac["records"] = [row for row in self.mac["records"]
+                                       if row[:2] != ["runs", run["id"]]]
+                if run_value is not None:
+                    self.put(self.mac, "runs", run["id"], run_value)
+                # A terminal run on another source cannot settle this source's wait.
+                self.put(self.pi, "runs", run["id"], run)
+                plan = self.plan()
+                self.assertFalse(plan["ready"])
+                self.assertTrue(any(item["kind"] == "waits" for item in plan["blocked"]))
+                with self.assertRaises(migration.MigrationError):
+                    self.export(plan)
+
+    def test_wait_retirement_stays_closed_for_unsettled_nonhuman_or_malformed_waits(self):
+        patches = ({"state": "open"}, {"state": "failed"}, {"state": None},
+                   {"kind": "message"}, {"kind": "delegate"}, {"kind": "event"},
+                   {"kind": "timer"}, {"kind": None}, {"id": "another-wait"},
+                   {"run": ""}, {"run": None}, {"run": 1}, {"run": []}, {"run": {}})
+        for patch in patches:
+            with self.subTest(patch=patch):
+                unused, wait = self.settled_human_wait()
+                self.put(self.mac, "waits", wait["id"], dict(wait, **patch))
+                plan = self.plan()
+                self.assertFalse(plan["ready"])
+                self.assertTrue(any(item["kind"] == "waits" for item in plan["blocked"]))
+                with self.assertRaises(migration.MigrationError):
+                    self.export(plan)
+        for missing in ("id", "state", "kind", "run", "answer"):
+            with self.subTest(missing=missing):
+                unused, wait = self.settled_human_wait()
+                del wait[missing]
+                self.put(self.mac, "waits", "settled-wait", wait)
+                self.assertFalse(self.plan()["ready"])
+
+    def test_settled_human_wait_does_not_mask_other_event_domain_obligations(self):
+        self.settled_human_wait()
+        for kind, value in (
+                ("subscriptions", {"id": "active", "cursor": 1}),
+                ("runs", {"id": "active", "state": "running"}),
+                ("waits", {"id": "active", "kind": "human", "state": "open"}),
+                ("assistant_responsibilities", {"id": "active", "desired": "pause"}),
+                ("assistant_background", {"id": "active", "state": "waiting"})):
+            with self.subTest(kind=kind):
+                self.put(self.mac, kind, "active", value)
+                plan = self.plan()
+                self.assertFalse(plan["ready"])
+                self.assertTrue(any(item["kind"] == kind for item in plan["blocked"]))
+                with self.assertRaises(migration.MigrationError):
+                    self.export(plan)
+                self.mac["records"] = [row for row in self.mac["records"]
+                                       if row[:2] != [kind, "active"]]
+
+    def test_settled_wait_or_run_change_after_review_invalidates_export(self):
+        for changed_kind in ("waits", "runs"):
+            with self.subTest(kind=changed_kind):
+                run, wait = self.settled_human_wait()
+                plan = self.plan()
+                if changed_kind == "waits":
+                    self.put(self.mac, "waits", wait["id"],
+                             dict(wait, answer={"accepted": False}))
+                else:
+                    self.put(self.mac, "runs", run["id"], dict(run, state="running"))
+                with self.assertRaises(migration.MigrationError):
+                    self.export(plan)
+
     def test_mutable_collision_requires_exact_reviewed_source(self):
         self.put(self.pi, "actions", "same-id", {"state": "uncertain", "provider": "pi"})
         self.put(self.mac, "actions", "same-id", {"state": "succeeded", "provider": "mac"})
