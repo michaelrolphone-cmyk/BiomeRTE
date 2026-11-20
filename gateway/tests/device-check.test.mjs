@@ -2,8 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
+import {generateKeyPairSync,createHash} from 'node:crypto';
 import {sqliteD1} from './sqlite-d1.mjs';
-import {device,hexHash} from '../lib/bridge.mjs';
+import {device,hexHash,runTool} from '../lib/bridge.mjs';
 
 async function fixture(){
  const sql=new DatabaseSync(':memory:');
@@ -107,5 +108,83 @@ test('registered identity takes precedence when the credential also matches lega
   f.env.BIOME_BRIDGE_PIN=await hexHash(await hexHash(f.tokens.mac)+'\n');
   const {request}=await finish(f,f.send('/bridge/check'));
   assert.deepEqual(request.arguments,{controller:f.mac,controller_owner:'mac'});
+ }finally{f.sql.close()}
+});
+
+const managedKeys=generateKeyPairSync('rsa',{modulusLength:2048});
+function managed(f,{retained=false}={}){
+ const declaration={service_id:'site-controller',authority:'c'.repeat(64),
+  controller_aliases:[f.mac,f.pi],
+  operator_actor:createHash('sha256').update(managedKeys.publicKey.export({type:'spki',format:'der'})).digest('hex')};
+ f.env.SERVICE_AUTHORITY_ORIGIN='https://authority.example';
+ f.env.CONTROLLER_RUNTIME_SIGNING_KEY=managedKeys.privateKey.export({type:'pkcs8',format:'pem'});
+ if(retained){
+  f.sql.exec('CREATE TABLE controller_runtime_scopes(site TEXT PRIMARY KEY,declaration TEXT NOT NULL)');
+  f.sql.prepare('INSERT INTO controller_runtime_scopes VALUES(?,?)').run('site',JSON.stringify(declaration));
+ }else{
+  f.env.CONTROLLER_RUNTIME_AUTHORITY=JSON.stringify(declaration);
+  f.env.CONTROLLER_RUNTIME_REQUIRED='1';
+ }
+ return declaration;
+}
+
+test('managed runtime keeps each authenticated device health check on its physical link',async t=>{
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('Device health reached the managed authority')});
+ for(const owner of ['mac','pi']){
+  const f=await fixture();try{
+   managed(f);
+   const other=owner==='mac'?'pi':'mac';
+   const pending=f.send('/bridge/check',{controller:f[other],operation:'cap.acquire',arguments:{}},owner);
+   const {response,request,value}=await finish(f,pending,owner);
+   assert.equal(response.status,200);
+   assert.deepEqual(await response.json(),value);
+   assert.equal(request.name,'biome_status');
+   assert.deepEqual(request.arguments,{controller:f[owner],controller_owner:owner});
+  }finally{f.sql.close()}
+ }
+ assert.equal(fetch.mock.callCount(),0);
+});
+
+test('retained logical custody cannot redirect the physical recovery check after flags disappear',async t=>{
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('Retained runtime intercepted device health')});
+ const f=await fixture();try{
+  managed(f,{retained:true});
+  const {response,request,value}=await finish(f,f.send('/bridge/check'));
+  assert.deepEqual(await response.json(),value);
+  assert.deepEqual(request.arguments,{controller:f.mac,controller_owner:'mac'});
+  assert.equal(fetch.mock.callCount(),0);
+ }finally{f.sql.close()}
+});
+
+test('missing or malformed managed configuration does not block authenticated native recovery',async t=>{
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('Recovery depended on managed configuration')});
+ for(const declaration of [undefined,'{']){
+  const f=await fixture();try{
+   f.env.CONTROLLER_RUNTIME_REQUIRED='1';
+   if(declaration!==undefined)f.env.CONTROLLER_RUNTIME_AUTHORITY=declaration;
+   const {response,request,value}=await finish(f,f.send('/bridge/check'));
+   assert.deepEqual(await response.json(),value);
+   assert.deepEqual(request.arguments,{controller:f.mac,controller_owner:'mac'});
+  }finally{f.sql.close()}
+ }
+ assert.equal(fetch.mock.callCount(),0);
+});
+
+test('ordinary operator status still uses the logical authority when device recovery is separate',async t=>{
+ const f=await fixture();try{
+  const declaration=managed(f);
+  const fetch=t.mock.method(globalThis,'fetch',async(url,request)=>{
+   assert.equal(url,'https://authority.example/api/controller-runtimes/'+declaration.authority+'/call');
+   const call=JSON.parse(request.body);
+   assert.equal(call.auth.actor,declaration.operator_actor);
+   assert.ok(call.auth.signature);
+   assert.equal(request.redirect,'error');
+   return Response.json({result:{node:declaration.authority,site:'site'}});
+  });
+  const reply=await runTool(f.env,'biome_status',{controller:f.mac});
+  assert.equal(reply.isError,undefined);
+  assert.equal(JSON.parse(reply.content[0].text).node,declaration.authority);
+  assert.equal(fetch.mock.callCount(),3);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM bridge_jobs').get().n,0);
  }finally{f.sql.close()}
 });
