@@ -37,7 +37,7 @@ services:
     profiles: [workspaces]
     image: biomerte-worker-workspaces:${BIOME_WORKER_VERSION}
     build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: workspaces}
-    group_add: ["0"]
+    user: "${BIOME_DOCKER_UID:-0}:${BIOME_DOCKER_GID:-0}"
     volumes:
       - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -48,7 +48,7 @@ services:
     profiles: [workspaces]
     image: biomerte-worker-workspaces:${BIOME_WORKER_VERSION}
     command: [workspace-monitor]
-    group_add: ["0"]
+    user: "${BIOME_DOCKER_UID:-0}:${BIOME_DOCKER_GID:-0}"
     healthcheck: {disable: true}
     volumes:
       - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
@@ -60,7 +60,7 @@ services:
     profiles: [docker-cli]
     image: biomerte-worker-docker-cli:${BIOME_WORKER_VERSION}
     build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: docker-cli}
-    group_add: ["0"]
+    user: "${BIOME_DOCKER_UID:-0}:${BIOME_DOCKER_GID:-0}"
     volumes:
       - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -84,7 +84,7 @@ services:
     image: biomerte-worker-replica:${BIOME_WORKER_VERSION}
     build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: replica}
     healthcheck:
-      test: ["CMD","python","-c","import json,time,pathlib,os; s=json.loads((pathlib.Path.home()/'.local/share/biome-mac-storage/replica-health.json').read_text()); assert s.get('last_success',s.get('verified_at',0))>time.time()-900"]
+      test: ["CMD","python","-c","import json,time,pathlib,os; s=json.loads(pathlib.Path(os.environ['BIOME_WORKER_HEALTH']).read_text()); assert s.get('state')=='online' and 0<=time.time()-s['last_poll']<900"]
       interval: 60s
       start_period: 10m
     volumes:
