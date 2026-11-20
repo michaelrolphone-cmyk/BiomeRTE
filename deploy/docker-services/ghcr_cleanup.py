@@ -26,6 +26,11 @@ EXPECTED_DIGESTS = {'service-runner': {'sha256:92d1d9803249b55ad2588b88291d033b3
 EARLIEST = "2026-11-20T00:49:44Z"
 LATEST = "2026-11-20T00:50:17Z"
 INVENTORY = Path(__file__).with_name("ghcr-cleanup-44648102932.inventory.json")
+PRIOR_RUN_ID = 44654682862
+PRIOR_WORKFLOW_SHA = "dd72877d2a33dac489e519ac0af563e75f5b2e9c"
+PRIOR_RECEIPT_SHA256 = "383c1acf36568d0281e7ae9258d666c8d7c5c5497311628256971c462e74dd25"
+PRIOR_RECEIPT = Path(__file__).with_name("ghcr-cleanup-44654682862.prior-receipt.json")
+REMOVED_VERSION_ID = 1601148605
 ACCEPT_MANIFEST = ", ".join((
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
@@ -117,6 +122,46 @@ def load_expected(path=INVENTORY):
             "Incomplete original publication allowlist")
     return expected
 
+def validate_resume_proof(prior, original):
+    require(prior.get("schema") == "biomerte-ghcr-cleanup-receipt/1"
+            and prior.get("original_run_id") == RUN_ID and prior.get("source_commit") == SOURCE
+            and prior.get("inventory_sha256") == INVENTORY_SHA256
+            and prior.get("workflow_sha") == PRIOR_WORKFLOW_SHA
+            and prior.get("mode") == "delete" and prior.get("complete") is False
+            and prior.get("state") == "failed_requires_inspection"
+            and prior.get("error") == "Exact version deletion did not return HTTP 204",
+            "Unexpected prior cleanup outcome")
+    require(prior.get("before") == original and prior.get("anonymous_checks") == [],
+            "Prior cleanup did not establish the complete original inventory")
+    originals = {version["id"]: version for version in original["service-runner"]["versions"]}
+    actions = prior.get("actions", [])
+    require(len(actions) == 2, "Prior cleanup has unexpected additional attempts")
+    expected = [(REMOVED_VERSION_ID, 204), (1601148152, 400)]
+    for action, (vid, status) in zip(actions, expected):
+        require(action.get("operation") == "delete_version"
+                and action.get("package") == "service-runner"
+                and action.get("package_id") == PACKAGE_IDS["service-runner"]
+                and action.get("version_id") == vid and action.get("http_status") == status
+                and action.get("digest") == originals[vid]["digest"],
+                "Prior cleanup does not prove the exact single removed version")
+    require([action["version_id"] for action in actions if action["http_status"] == 204]
+            == [REMOVED_VERSION_ID], "Unexpected confirmed removal history")
+
+def load_resume_expected(original, path=PRIOR_RECEIPT):
+    raw = Path(path).read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == PRIOR_RECEIPT_SHA256, "Prior cleanup receipt hash mismatch")
+    validate_resume_proof(json.loads(raw), original)
+    remaining = {
+        name: {"metadata": package["metadata"],
+               "versions": [version for version in package["versions"]
+                            if version["id"] != REMOVED_VERSION_ID]}
+        for name, package in original.items()
+    }
+    require({name: len(package["versions"]) for name, package in remaining.items()}
+            == {"service-runner": 1, "service-authority": 2, "portable-services": 2},
+            "Unexpected remaining version inventory")
+    return remaining
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, url):
         return None
@@ -147,10 +192,6 @@ class GitHub:
             path = self.path(name)
             self.allowed.update((path, path + "/versions"))
             self.deletable.add(path)
-            for version in package["versions"]:
-                target = path + "/versions/" + str(version["id"])
-                self.allowed.add(target)
-                self.deletable.add(target)
 
     @staticmethod
     def path(name):
@@ -202,14 +243,6 @@ class GitHub:
                 and len(ids) == len(set(ids)), "Invalid or duplicate version inventory")
         return result
 
-    def version(self, name, vid):
-        status, value, _ = self.request(self.path(name) + "/versions/" + str(vid))
-        require(status == 200 and isinstance(value, dict), "Exact version read failed")
-        return value
-
-    def delete_version(self, name, vid):
-        return self.request(self.path(name) + "/versions/" + str(vid), "DELETE")[0]
-
     def delete_package(self, name):
         return self.request(self.path(name), "DELETE")[0]
 
@@ -248,41 +281,34 @@ def inspect_current(api, name, expected, remaining, allow_absent=False):
             "Version IDs, digests, tags or timestamps changed: " + name)
     return {"metadata": package_metadata(package), "versions": normalized}
 
-def perform(api, expected, execute, receipt, save):
+def perform(api, remaining, original, execute, receipt, save):
     receipt["before"] = {}
-    for name, package in expected.items():
+    for name, package in remaining.items():
         receipt["before"][name] = inspect_current(api, name, package, package["versions"])
-    receipt["state"] = "preflight_verified"
+    receipt["state"] = "resume_preflight_verified"
     save()
     if not execute:
         receipt.update({"state": "verified_only", "complete": True})
         save()
         return
-    for name, package in expected.items():
-        remaining = list(package["versions"])
-        for version in list(remaining):
-            inspect_current(api, name, package, remaining)
-            require(version_metadata(api.version(name, version["id"])) == version,
-                    "Exact version changed immediately before deletion")
-            action = {"operation": "delete_version", "package": name, "package_id": PACKAGE_IDS[name],
-                      "version_id": version["id"], "digest": version["digest"], "started_at": now()}
-            receipt["actions"].append(action)
-            save()
-            action["http_status"] = api.delete_version(name, version["id"])
-            save()
-            require(action["http_status"] == 204, "Exact version deletion did not return HTTP 204")
-            remaining.remove(version)
-        observed = inspect_current(api, name, package, [], allow_absent=True)
-        if observed is not None:
-            action = {"operation": "delete_empty_package", "package": name,
-                      "package_id": PACKAGE_IDS[name], "started_at": now()}
-            receipt["actions"].append(action)
-            save()
-            action["http_status"] = api.delete_package(name)
-            save()
-            require(action["http_status"] == 204, "Empty package deletion did not return HTTP 204")
-        require(api.package(name) is None, "Package still exists after cleanup: " + name)
-    for name, package in expected.items():
+    for name, package in remaining.items():
+        observed = inspect_current(api, name, package, package["versions"])
+        action = {
+            "operation": "delete_exact_original_package", "package": name,
+            "package_id": PACKAGE_IDS[name], "started_at": now(),
+            "remaining_version_ids": [version["id"] for version in package["versions"]],
+            "verified_immediately_before": observed,
+        }
+        receipt["actions"].append(action)
+        save()
+        action["http_status"] = api.delete_package(name)
+        action["responded_at"] = now()
+        save()
+        require(action["http_status"] == 204, "Exact package deletion did not return HTTP 204")
+        action["package_absent_after"] = api.package(name) is None
+        save()
+        require(action["package_absent_after"], "Package still exists after cleanup: " + name)
+    for name, package in original.items():
         require(api.package(name) is None, "Package reappeared during cleanup: " + name)
         for version in package["versions"]:
             for reference in [version["digest"]] + version["tags"]:
@@ -303,7 +329,11 @@ def main():
                "observed_creation_window": {"start": EARLIEST, "end": LATEST},
                "workflow_sha": os.environ.get("GITHUB_SHA"), "mode": args.mode,
                "started_at": now(), "complete": False, "state": "starting",
-               "actions": [], "anonymous_checks": []}
+               "actions": [], "anonymous_checks": [],
+               "resume": {"prior_run_id": PRIOR_RUN_ID, "prior_workflow_sha": PRIOR_WORKFLOW_SHA,
+                          "prior_receipt_sha256": PRIOR_RECEIPT_SHA256,
+                          "confirmed_removed_version_ids": [REMOVED_VERSION_ID],
+                          "method": "exact_original_package_delete"}}
     def save():
         receipt["updated_at"] = now()
         Path(args.output).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
@@ -312,9 +342,10 @@ def main():
         require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY
                 and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
                 and os.environ.get("GITHUB_REF") == BRANCH, "Unexpected workflow execution context")
-        expected = load_expected()
-        api = GitHub(os.environ.get("GH_TOKEN"), expected, allow_delete=args.mode == "delete")
-        perform(api, expected, args.mode == "delete", receipt, save)
+        original = load_expected()
+        remaining = load_resume_expected(original)
+        api = GitHub(os.environ.get("GH_TOKEN"), remaining, allow_delete=args.mode == "delete")
+        perform(api, remaining, original, args.mode == "delete", receipt, save)
     except Exception as error:
         receipt["state"] = "failed_requires_inspection"
         receipt["error"] = str(error) if isinstance(error, Closed) else "Unexpected validation or I/O failure"

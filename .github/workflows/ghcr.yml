@@ -1,9 +1,9 @@
-name: Guarded cleanup of original GHCR publication
+name: Resume guarded cleanup of original GHCR publication
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Verify inventory or delete only the original six versions
+        description: Verify the exact remainder or delete only the original packages
         type: choice
         required: true
         default: verify
@@ -37,6 +37,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ghcr-cleanup-44648102932-receipt
-          path: ghcr-cleanup-44648102932.receipt.json
+          path: |
+            ghcr-cleanup-44648102932.receipt.json
+            deploy/docker-services/ghcr-cleanup-44648102932.inventory.json
+            deploy/docker-services/ghcr-cleanup-44654682862.prior-receipt.json
           if-no-files-found: error
           retention-days: 30

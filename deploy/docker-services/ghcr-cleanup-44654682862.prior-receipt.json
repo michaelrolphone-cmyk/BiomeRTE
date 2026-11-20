@@ -1,0 +1,139 @@
+{
+  "actions": [
+    {
+      "digest": "sha256:54a942a9f620952f4b41a54ce4054d2f180de2ba1886792489f99269697d6d38",
+      "http_status": 204,
+      "operation": "delete_version",
+      "package": "service-runner",
+      "package_id": 17087076,
+      "started_at": "2026-11-20T01:35:25.752756+00:00",
+      "version_id": 1601148605
+    },
+    {
+      "digest": "sha256:92d1d9803249b55ad2588b88291d033b3763a648de1ceeda095e394651ce6c05",
+      "http_status": 400,
+      "operation": "delete_version",
+      "package": "service-runner",
+      "package_id": 17087076,
+      "started_at": "2026-11-20T01:35:27.969183+00:00",
+      "version_id": 1601148152
+    }
+  ],
+  "anonymous_checks": [],
+  "before": {
+    "portable-services": {
+      "metadata": {
+        "created_at": "2026-11-20T00:50:09Z",
+        "id": 17087092,
+        "name": "portable-services",
+        "owner_id": 247690798,
+        "owner_login": "michaelrolphone-cmyk",
+        "package_type": "container",
+        "repository": "michaelrolphone-cmyk/BiomeRTE",
+        "repository_id": 1443999162,
+        "visibility": "public"
+      },
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:50:17Z",
+          "digest": "sha256:1403d559ccc756dfb7d4add01c36a63e7d4a85a04fb46c3eddab23e581cdf0d2",
+          "id": 1601150350,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:50:17Z"
+        },
+        {
+          "created_at": "2026-11-20T00:50:09Z",
+          "digest": "sha256:f356ab913689f96a8876506f567f01576ee78b57571384d79e9e10298664acae",
+          "id": 1601149827,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:50:09Z"
+        }
+      ]
+    },
+    "service-authority": {
+      "metadata": {
+        "created_at": "2026-11-20T00:49:56Z",
+        "id": 17087080,
+        "name": "service-authority",
+        "owner_id": 247690798,
+        "owner_login": "michaelrolphone-cmyk",
+        "package_type": "container",
+        "repository": "michaelrolphone-cmyk/BiomeRTE",
+        "repository_id": 1443999162,
+        "visibility": "public"
+      },
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:50:02Z",
+          "digest": "sha256:bf64fcfa88b926997e307405c20cd6d5775e4c031c893bc322bdf3cabe9f7d28",
+          "id": 1601149362,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:50:02Z"
+        },
+        {
+          "created_at": "2026-11-20T00:49:56Z",
+          "digest": "sha256:e66fac75207dad0a133ac31300b21bcd8a8721ac2def953f3b25b2cce42d7292",
+          "id": 1601148967,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:49:56Z"
+        }
+      ]
+    },
+    "service-runner": {
+      "metadata": {
+        "created_at": "2026-11-20T00:49:44Z",
+        "id": 17087076,
+        "name": "service-runner",
+        "owner_id": 247690798,
+        "owner_login": "michaelrolphone-cmyk",
+        "package_type": "container",
+        "repository": "michaelrolphone-cmyk/BiomeRTE",
+        "repository_id": 1443999162,
+        "visibility": "public"
+      },
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:49:50Z",
+          "digest": "sha256:54a942a9f620952f4b41a54ce4054d2f180de2ba1886792489f99269697d6d38",
+          "id": 1601148605,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:49:50Z"
+        },
+        {
+          "created_at": "2026-11-20T00:49:44Z",
+          "digest": "sha256:92d1d9803249b55ad2588b88291d033b3763a648de1ceeda095e394651ce6c05",
+          "id": 1601148152,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:49:44Z"
+        }
+      ]
+    }
+  },
+  "complete": false,
+  "error": "Exact version deletion did not return HTTP 204",
+  "inventory_sha256": "d2190b7366355208135cde9f48fb2b0cfe3fb22a9970aab735d9448a3f697e00",
+  "mode": "delete",
+  "observed_creation_window": {
+    "end": "2026-11-20T00:50:17Z",
+    "start": "2026-11-20T00:49:44Z"
+  },
+  "original_run_id": 44648102932,
+  "schema": "biomerte-ghcr-cleanup-receipt/1",
+  "source_commit": "a81497cf0465e980585cf72562c5bef059b3c7b7",
+  "started_at": "2026-11-20T01:35:20.730324+00:00",
+  "state": "failed_requires_inspection",
+  "updated_at": "2026-11-20T01:35:28.298389+00:00",
+  "workflow_sha": "dd72877d2a33dac489e519ac0af563e75f5b2e9c"
+}

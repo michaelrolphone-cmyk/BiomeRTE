@@ -1,52 +1,59 @@
-# One-time cleanup of publication 44648102932
+# Exact resume of cleanup for publication 44648102932
 
-This isolated branch prepares cleanup of only the three packages first published
-from BiomeRTE commit a81497cf0465e980585cf72562c5bef059b3c7b7. It does not modify
-running containers, local images, private replacement packages, credentials or
-package visibility.
+This isolated branch prepares the reviewed resume of cleanup run 44654682862.
+That run confirmed one deletion: service-runner ARMv7 version 1601148605 returned
+HTTP 204. Its next attempt, ARM64 version 1601148152, returned HTTP 400 and stopped.
+No other operation was attempted. The complete original inventory and that exact
+partial receipt remain checked in, with both SHA-256 hashes pinned in the script.
 
-The workflow defaults to verify-only. A repository administrator must review the
-exact branch head and select mode delete to execute the cleanup. Only a manual
-run in michaelrolphone-cmyk/BiomeRTE on work/ghcr-guarded-cleanup-20261120 is allowed.
-The normal publishing guards must already be in place and other publication
-writers must be stopped before deletion.
+The resume accepts only that history and the complete remaining inventory:
+service-runner has its original ARM64 version, service-authority has both original
+versions, and portable-services has both original versions. All package IDs,
+owner/repository IDs, public visibility, creation times, version IDs, digests, tags
+and original update timestamps must match. Any additional or missing version,
+replacement package, or changed prior receipt blocks execution.
 
-The checked-in inventory is the exact successful read-only inventory artifact
-from run 44651896412, artifact 14591865623. Its SHA-256 is pinned in the script.
-The inventory's estimated start field was 00:49:45Z; observed version creation
-began one second earlier. The cleanup verifies the actual observed interval
-2026-11-20T00:49:44Z through 00:50:17Z and exact recorded creation/update times.
+The workflow defaults to verify-only and remains at .github/workflows/ghcr.yml.
+It permits only a manual run in michaelrolphone-cmyk/BiomeRTE on
+work/ghcr-guarded-cleanup-20261120. Before selecting mode delete, all six exact
+images must have proven private copies and concurrent original-package writers
+must be stopped. These are root's execution prerequisites, not newly assumed
+properties established by this script.
 
-Before any deletion, all three package identities and complete version lists
-must match. The guards require package IDs, owner ID/login, repository ID/name,
-public visibility, container type, creation times, and all six exact version
-IDs/digests/tag arrays. Each deletion is rechecked against the remaining complete
-inventory, and a direct version read is matched immediately before its DELETE.
-Only the six recorded version IDs may be removed. An empty package is deleted
-only after a fresh same-ID check and empty complete inventory. If GitHub already
-removed the empty package, its absence is recorded through verification.
+Delete mode verifies all three complete remaining inventories before any
+mutation. Immediately before each deletion it rereads the package identity and
+every remaining version. It then uses the documented whole-package DELETE for
+that exact original package. No per-version delete is allowed by the client.
+This is a specific reviewed resume, not an automatic fallback for HTTP 400 or any
+other failure. Each DELETE must return HTTP 204; unexpected results stop without
+retrying or attempting a different operation.
 
-Every attempted deletion is written to a receipt before the request; each
-successful response must be HTTP 204. Partial failure stops immediately and
-requires inspection. There are no automatic retries or restoration actions.
-After deletion, all package API entries must be absent, and fresh anonymous
-authorization/manifest checks must deny both the six digests and six tags.
-Network errors and unexpected statuses do not count as proof of denial.
+Receipts persist the immediate inventory before each request, the returned HTTP
+status after the request, and the subsequent absence check. All original package
+API entries must be absent at completion. Fresh anonymous authorization/manifest
+checks cover every original digest and tag, including the already removed ARMv7
+version. Network errors and unexpected statuses do not count as denial.
 
-GitHub's APIs do not provide a documented atomic inventory-and-delete operation.
-The checks detect changed or extra versions before subsequent deletions, but
-stopping concurrent writers is still required. The script does not invent a
-conditional-delete endpoint.
+The original inventory comes from read-only run 44651896412, artifact 14591865623.
+Its estimated start field was 00:49:45Z; actual observed creation began at
+2026-11-20T00:49:44Z and ended at 00:50:17Z. The script verifies those exact observed
+timestamps. The prior cleanup receipt identifies workflow commit
+dd72877d2a33dac489e519ac0af563e75f5b2e9c. The new receipt and both original evidence
+files are uploaded together; no image archive or credential is included.
 
-The workflow uses only its own GITHUB_TOKEN, with package admin inherited from
-the original publishing repository. It never exports that token. Anonymous
-registry checks omit this credential entirely. Artifacts contain metadata and
-receipts only; no image archive or credential is uploaded.
+GitHub does not document an atomic inventory-and-delete operation. Immediate
+checks detect changes before the next deletion, while stopping concurrent writers
+remains necessary. The script never invents a conditional-delete endpoint.
 
-Deletion does not retract earlier downloads. Restore is not automatic: GitHub's
-30-day restoration requires an available namespace, and public package download
-limits can prevent deletion. Preserve the original release lock, archive receipts
-and copied replacement images independently.
+Only the workflow's own GITHUB_TOKEN is used, with package admin inherited from
+the original publishing repository. Anonymous checks exclude this credential.
+The script does not modify live containers, local images, private replacement
+packages, credential configuration or package visibility.
+
+Deletion cannot retract earlier downloads. Restoration is not automatic:
+GitHub's 30-day restoration requires an available namespace, and public package
+download limits can prevent deletion. Preserve the original publication lock,
+qualified image evidence, private copies and cleanup history independently.
 
 Primary documentation:
 - https://docs.github.com/en/packages/learn-github-packages/deleting-and-restoring-a-package
