@@ -17,6 +17,8 @@ jobs:
       - name: Install the declared controller runtime dependency
         run: python3 -m pip install aiohttp==3.14.5
       - run: python3 -m unittest discover -v
+      - name: Qualify independent Linux maintenance
+        run: python3 -S -m unittest discover -s gateway/recovery -p 'test_linux_maintenance_agent.py' -v
       - name: Qualify assistant workflows and recovery
         run: python3 -S -m unittest discover -s integrations/proactive_assistant/tests -v
       - name: Qualify the LM Studio coding adapter
