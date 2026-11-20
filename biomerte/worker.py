@@ -135,9 +135,7 @@ class Worker:
                 if field in o:
                     args[field] = o[field]
             if o['contract'] in ('host.terminal.run:1', 'docker.cli:1'):
-                import socket
-                args['configuration'] = dict(args.get('configuration', {}),
-                                             execution_custody=True, execution_host=socket.gethostname())
+                args['configuration'] = dict(args.get('configuration', {}), execution_custody=True)
             self.remote.call('cap.offer', args)
 
 

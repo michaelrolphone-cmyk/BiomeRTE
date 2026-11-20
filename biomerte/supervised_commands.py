@@ -24,8 +24,24 @@ def initialize(worker):
 def pending(worker):
     initialize(worker)
     # This is a compact active index, not a scan of historical actions.
-    return [json.loads(row[0]) for row in worker.db.execute(
-        'SELECT action FROM supervised_pending ORDER BY id')]
+    return [action for row in worker.db.execute(
+        'SELECT action FROM supervised_pending ORDER BY id')
+        for action in [json.loads(row[0])] if not action.get('delivery_unresolved')]
+
+
+def unresolved(worker, limit=32):
+    """Bounded inspection of parked outboxes; no ACK or evidence deletion."""
+    if type(limit) is not int or not 1 <= limit <= 64:
+        raise Fault('Invalid unresolved delivery page size')
+    initialize(worker)
+    items = []
+    for row in worker.db.execute('SELECT action FROM supervised_pending ORDER BY id'):
+        action = json.loads(row[0])
+        if action.get('delivery_unresolved'):
+            items.append(dict(id=action['id'], **action['delivery_unresolved']))
+            if len(items) == limit:
+                break
+    return items
 
 
 def supported(action):
@@ -67,6 +83,11 @@ def start(worker, action, adapter, schema, signature):
     worker.db.execute('INSERT INTO supervised_pending VALUES(?,?,?,?,?)',
                       (action['id'], signature, encode(action), encode(adapter), encode(schema)))
     finish(worker, action, adapter, schema, signature)
+
+
+def publication_id(signature, name, arguments):
+    """Replay one immutable observation through the existing durable API receipt."""
+    return 'supervised-' + digest([signature, name, arguments])
 
 
 def finish(worker, action, adapter, schema, signature):
@@ -118,9 +139,12 @@ def finish(worker, action, adapter, schema, signature):
             time.sleep(min(.2, interval))
             observation = runner.inspect(directory)
         try:
-            worker.remote.call('provider.custody', dict(args, observation=dict(
+            # This final snapshot is immutable evidence, not a live heartbeat.
+            custody = dict(args, observation=dict(
                 observation, signature=signature, recovery_path=directory,
-                local_observed_at=observation.get('observed_at'))))
+                local_observed_at=observation.get('observed_at')))
+            worker.remote.call('provider.custody', custody,
+                               publication_id(signature, 'provider.custody', custody))
         except Exception:
             pass
         if observation['state'] == 'not_started':
@@ -147,10 +171,31 @@ def finish(worker, action, adapter, schema, signature):
             out = {'reason': observation.get('reason', 'Adapter did not return a valid result'),
                    'runner': observation, 'replay_allowed': False,
                    'recovery_path': directory}
-        worker.db.execute('UPDATE actions SET state=?,result=? WHERE id=? AND signature=?',
-                          (state, encode(out), action['id'], signature))
+        encoded = encode(out)
+        if (state, encoded) != (local[1], local[2]):
+            worker.db.execute('UPDATE actions SET state=?,result=? WHERE id=? AND signature=?',
+                              (state, encoded, action['id'], signature))
     args.update(state=state, result=out)
-    acknowledged = worker.remote.call('provider.result', args)
+    try:
+        if state == 'uncertain':
+            acknowledged = worker.remote.call('provider.result', args,
+                publication_id(signature, 'provider.result', args))
+        else:
+            acknowledged = worker.remote.call('provider.result', args)
+    except Exception:
+        # Only a successful authoritative read can park a missing receipt.
+        # Unreachable transport remains retryable; neither case permits replay.
+        acknowledged = worker.remote.call('cap.status', {'operation': action['id'], 'recovery': True})
+        if (isinstance(acknowledged, dict) and acknowledged.get('id') == action['id'] and
+                acknowledged.get('state') == 'missing_unknown' and acknowledged.get('acknowledged') is False):
+            parked = dict(action, delivery_unresolved=dict(state='authoritative_receipt_missing',
+                          observed_at=time.time(), acknowledged=False, replay_allowed=False,
+                          recovery_path=directory, next_action='Reconcile original executor evidence; retained output is not acknowledged'))
+            worker.db.execute('UPDATE supervised_pending SET action=? WHERE id=? AND signature=?',
+                              (encode(parked), action['id'], signature))
+            return
+        if not isinstance(acknowledged, dict) or acknowledged.get('result_expired') is not True:
+            raise
     exact = isinstance(acknowledged, dict) and all(acknowledged.get(k) == v for k, v in (
         ('id', action['id']), ('provider', worker.remote.node), ('generation', action['generation'])))
     outcome_matches = exact and (acknowledged.get('state') == state or
@@ -163,7 +208,8 @@ def finish(worker, action, adapter, schema, signature):
                           (action['id'], signature, state, digest(out)))
         cleanup(worker, action, adapter, signature)
     elif state == 'uncertain':
-        # Retain evidence and ownership, but don't busy-loop a known lost custodian.
+        # Keep the pending identity and evidence. Reinspection may discover a
+        # completion; unchanged reports reuse their durable receipt.
         raise Fault('Runner requires reconciliation: ' + directory, 409)
     else:
         raise Fault('Runner result acknowledgement mismatch', 409)
