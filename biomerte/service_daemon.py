@@ -46,7 +46,8 @@ def scope_digest(config):
             controller_aliases=sorted(config.get("controller_aliases",[])),
             operator_actors=sorted(config.get("operator_actors",[])),
             operator_actor_aliases=config.get("operator_actor_aliases",{}),
-            replication_policy=config.get("replication_policy","available-peers")))
+            replication_policy=config.get("replication_policy","available-peers"),
+            event_default_controller=config.get("event_default_controller")))
     if config.get("authority_kind", "physical") != "physical":
         raise CheckpointError("Unknown logical authority kind")
     # Preserve existing physical-service checkpoint identities byte for byte.
@@ -433,6 +434,11 @@ class AuthorityDaemon:
         self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()
         self.connected=False
+        self.events=None
+        if controller and config.get("event_authorize_url"):
+            from .controller_events import ManagedEvents
+            self.events=ManagedEvents(self)
+            self.authority.events=self.events
 
     async def helper(self,operation,**kw):
         return await local_rpc(self.session,self.url,self.token,
@@ -482,9 +488,16 @@ class AuthorityDaemon:
                     reply["result"]=await asyncio.to_thread(self.authority.pair,
                         message.get("operation"),message.get("payload"),preparing)
                 elif typ=="inspect" and not preparing:
-                    if message.get("authority")!=self.config["authority_id"]:
-                        raise Fault("Wrong logical stream authority",403)
-                    reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
+                    requested=message.get("authority")
+                    if self.config.get("authority_kind")=="controller":
+                        if requested not in [self.config["authority_id"]]+self.config.get("controller_aliases",[]):
+                            raise Fault("Wrong managed stream authority",403)
+                        reply["grant"]=await asyncio.to_thread(
+                            self.authority.inspect,message["session"],requested)
+                    else:
+                        if requested!=self.config["authority_id"]:
+                            raise Fault("Wrong logical stream authority",403)
+                        reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
                 else:
                     raise Fault("Service effect admission is unavailable",503)
                 await self.publish()
@@ -537,6 +550,10 @@ class AuthorityDaemon:
             await asyncio.to_thread(self.authority.maintain)
             await self.publish()
             await self.transport.validate(self.binding,preparing=False)
+            if getattr(self,"events",None) is not None:
+                await asyncio.to_thread(self.events.deliver)
+                await self.publish()
+                await self.transport.validate(self.binding,preparing=False)
 
     async def maintenance_loop(self):
         interval=self.config.get("maintenance_interval_s",1)

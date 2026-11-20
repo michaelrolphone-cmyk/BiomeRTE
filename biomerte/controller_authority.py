@@ -27,6 +27,7 @@ class ControllerAuthority:
     def __init__(self, app, config, current_binding):
         self.app, self.config, self.binding = app, config, binding(current_binding)
         self.lock = threading.RLock()
+        self.app.controller_binding = dict(self.binding)
         if config.get("authority_kind") != "controller" or not app.controller_runtime:
             raise Fault("Explicit managed controller runtime required", 403)
         if app.stores["site"].remote:
@@ -38,7 +39,9 @@ class ControllerAuthority:
         self.shards = {}
         self._by_digest = {}
         self.snapshot_reads = 0
+        self.events = None
         self._initialize_checkpoint_index()
+        from . import controller_events  # register exact native event operation schemas
         from .assistant_support import seed_controller_control
         self.app.stores["site"].execute(lambda tx: seed_controller_control(tx, self.app))
 
@@ -149,8 +152,14 @@ class ControllerAuthority:
         return envelope["operation"], args, auth
 
     def call(self, envelope, preparing):
+        name, args, auth = self._check(envelope, preparing)
+        if name in ("gateway.events.change","gateway.events.grok"):
+            if self.events is None:
+                raise Fault("Managed event delivery binding is unavailable",503)
+            # The daemon serializes calls. Do not hold the snapshot lock during
+            # a callback barrier that must publish committed event state.
+            return self.events.call(envelope)
         with self.lock:
-            name, args, auth = self._check(envelope, preparing)
             return self.app.call(name, args, envelope["id"], "site", auth=auth,
                                  controller=envelope.get("controller"))
 
@@ -172,10 +181,13 @@ class ControllerAuthority:
                 return self.app.finish_pair(proof)
             raise Fault("Only pairing begin and finish are public operations", 403)
 
-    def inspect(self, session):
+    def inspect(self, session, authority=None):
         with self.lock:
-            return self.app.call("stream.inspect", {"session": session},
+            grant = self.app.call("stream.inspect", {"session": session},
                                  "controller-inspect-" + session, "site")
+            if authority is not None and grant["authority"] != authority:
+                raise Fault("Stream grant belongs to another authority",403)
+            return grant
 
     def prepare_fences(self, prepared_checkpoint, retained_floors=None):
         # This is logical write ownership, not a physical resource-generation

@@ -93,7 +93,10 @@ def event_service(path, local, home, origin, token, site_access):
     def topics(realm, topic, after, limit):
         return read_feed(realm, 'bus.event_page', {'topic': topic, 'after': after, 'limit': limit})
 
-    return EventStore(path, feed, authorize, topic_feed=topics, controller=controller)
+    # A frozen site producer cannot write or deliver its old event sidecar.
+    allowed = lambda realm: realm == 'local' or not os.path.exists(os.path.join(home, 'controller-authority.json'))
+    return EventStore(path, feed, authorize, topic_feed=topics, controller=controller,
+                      realm_allowed=allowed)
 
 
 def delivery_loop(factory):

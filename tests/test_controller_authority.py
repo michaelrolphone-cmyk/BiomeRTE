@@ -298,5 +298,49 @@ class ControllerTests(unittest.TestCase):
                 tx,Context(self.app),"grant",changed,"other-operation"))
 
 
+    def test_legacy_stream_authority_keeps_its_identity_and_signing_secret(self):
+        import base64
+        import hashlib
+        import hmac
+        import time
+        from biomerte import streams
+        self.app.config.update(stream_router_secret="logical-secret-"+"l"*40,
+            stream_gateway_url="wss://router.example/stream",
+            stream_authorities={"physical-pi":{"secret":"legacy-secret-"+"p"*40,
+                                               "url":"wss://router.example/stream"}})
+        grant=dict(id="old-stream",authority="physical-pi",site=self.app.site,realm="site",
+                   lease="old-lease",resource="camera",provider="provider",server="admin",
+                   generation=8,state="open",expires_at=time.time()+600)
+        def seed(tx):
+            tx.put("leases","old-lease",dict(id="old-lease",guard="camera",resource="camera",
+                                           owner="admin",generation=8,state="bound"))
+            tx.put("guards","camera",dict(holder="old-lease",generation=8))
+            tx.put("_stream_grants","old-stream",grant)
+        self.app.stores["site"].execute(seed)
+        observed=self.authority.inspect("old-stream","physical-pi")
+        self.assertEqual(observed["authority"],"physical-pi")
+        token=streams.token(Context(self.app),grant,"provider")
+        encoded,signature=token.split(".")
+        raw=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
+        expected=hmac.new(self.app.config["stream_authorities"]["physical-pi"]["secret"].encode(),
+                          raw,hashlib.sha256).hexdigest()
+        self.assertEqual(signature,expected)
+        self.assertEqual(json.loads(raw)["authority"],"physical-pi")
+        with self.assertRaises(Fault):
+            self.authority.inspect("old-stream","physical-mac")
+
+    def test_managed_status_distinguishes_controller_placement_from_shared_journal(self):
+        value=self.app.call("cluster.status")
+        self.assertEqual(value["mode"],"managed-controller")
+        self.assertEqual(value["service_id"],B["service_id"])
+        self.assertEqual(value["placement_binding"],B)
+        self.marker("frozen-source")
+        passive=Application(self.tmp.name)
+        self.addCleanup(self.close_app,passive)
+        status=passive.call("cluster.status")
+        self.assertEqual(status["mode"],"managed-source")
+        self.assertEqual(status["site_writes"],"frozen")
+
+
 if __name__ == "__main__":
     unittest.main()

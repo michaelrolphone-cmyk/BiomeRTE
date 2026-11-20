@@ -303,6 +303,21 @@ def info(tx, ctx):
 
 @op('cluster.status', write=False)
 def cluster_status(tx, ctx):
+    managed = getattr(ctx.app, 'controller_runtime', {})
+    if ctx.scope == 'site' and managed:
+        return {'mode':'managed-controller', 'node':ctx.app.node,
+                'automatic_failover':True, 'service_id':managed['service_id'],
+                'authority_id':managed['authority_id'],
+                'controller_aliases':sorted(ctx.app.controller_aliases),
+                'replica_workers':managed.get('replica_workers',[]),
+                'replication_policy':managed.get('replication_policy','available-peers'),
+                'placement_binding':getattr(ctx.app,'controller_binding',None),
+                'freshness_evidence':'Current grant and exact durable head are checked by the service helper and coordinator.'}
+    marker = ctx.app._controller_management() if ctx.scope == 'site' else None
+    if marker:
+        return {'mode':'managed-source', 'node':ctx.app.node,
+                'automatic_failover':False, 'site_writes':'frozen',
+                'service_id':marker['service_id'],'authority_id':marker['authority_id']}
     remote = ctx.app.stores['site'].remote
     if not remote:
         return {'mode': 'standalone', 'node': ctx.app.node, 'automatic_failover': False}
