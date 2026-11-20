@@ -1,0 +1,35 @@
+services:
+  rover:
+    image: "${BIOME_ROVER_IMAGE:?Set the qualified immutable image digest}"
+    pull_policy: never
+    container_name: biomerte-worker-rover
+    user: "${BIOME_WORKER_UID:-501}:${BIOME_WORKER_GID:-20}"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["--config","/config/rover.json"]
+    volumes:
+      - type: bind
+        source: "${BIOME_ROVER_CONFIG:?Set the prepared read-only configuration directory}"
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${BIOME_ROVER_STATE:?Set the transferred durable route-state directory}"
+        target: /state
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=32m,mode=1777
+    networks: [biome]
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "1m", max-file: "3"}
+networks:
+  biome:
+    external: true
+    name: "${BIOME_DOCKER_NETWORK:?Set the existing private worker network}"
