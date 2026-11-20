@@ -285,6 +285,8 @@ class VisionClient:
         if host_io_config:
             from biomerte.host_io_client import HostIOClient
             self.host_io = HostIOClient.from_config(host_io_config)
+            if timeout is not None:
+                self.host_io.config["vision_query_timeout_s"] = timeout
 
     def query(self, operation, inputs):
         if operation + ":1" not in CONTRACTS or not isinstance(inputs, dict):
