@@ -21,6 +21,26 @@ def write(path, value):
     path.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n")
     path.chmod(0o600)
 
+def disabled_override(text, label):
+    marker = '"'+label+'"'
+    pattern = r'^\s*"'+re.escape(label)+r'"\s*=>\s*(true|false|enabled|disabled)\s*,?\s*$'
+    match = re.search(pattern,text,re.M)
+    if match:
+        return match.group(1)
+    if marker in text:
+        raise ValueError("Unknown explicit LaunchAgent disabled state")
+    return None
+
+def launchd_snapshot(label, uid, plist_disabled=False):
+    text = subprocess.check_output(["/bin/launchctl","print-disabled",f"gui/{uid}"],text=True)
+    override = disabled_override(text,label)
+    enabled = override in ("enabled","false") if override is not None else not plist_disabled
+    job = subprocess.run(["/bin/launchctl","print",f"gui/{uid}/{label}"],capture_output=True,text=True)
+    match = re.search(r"^\s*pid = (\d+)\s*$",job.stdout,re.M)
+    return {"label":label,"enabled":enabled,"disabled_override":override,
+            "loaded":job.returncode==0,"pid":int(match.group(1)) if match else None}
+
+
 def identity(chat, image):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -149,6 +169,7 @@ def prepare(args):
                    bind(out/"private/host-io.token","/run/biome/host-io.token",True),
                    bind(chat,"/state/chat")]}
     services = {}
+    native_launchd = {}
     for kind in ("chat","image"):
         service = json.loads(json.dumps(common))
         service.update(image=images[kind]["id"],command=["private-"+kind])
@@ -160,11 +181,13 @@ def prepare(args):
         if spec.get("Label") != LABELS[kind]:
             raise ValueError("Native LaunchAgent identity mismatch")
         shutil.copyfile(source,out/"rollback"/("native."+kind+".plist"))
+        native_launchd[kind] = launchd_snapshot(LABELS[kind],uid,bool(spec.get("Disabled",False)))
     write(out/"compose.json",{"name":"biome-private","services":services})
     revision = subprocess.check_output(["git","rev-parse","HEAD"],cwd=repo,text=True).strip()
     plan = {"v":1,"state":"prepared_not_migrated","repo":str(repo),"preparation_source_commit":revision,
         "native_model_source_root":str(source_root),
         "uid":uid,"gid":gid,"identity":before,"images":images,"native_labels":LABELS,
+        "native_launchd":native_launchd,
         "chat_state":str(chat),"image_state":str(image),
         "native_admission":str(Path.home()/".local/share/biome-model-runtime/admission.sqlite"),
         "project":"biome-private","same_mac_only":True,

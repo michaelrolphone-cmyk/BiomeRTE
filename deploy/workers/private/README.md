@@ -107,7 +107,7 @@ commands. A new deployment directory is prepared using immutable local image IDs
 and an existing HTTPS client configuration with native-readable CA/token paths:
 
 ```sh
-python3 deploy/workers/private/prepare.py --output /absolute/deployment   --client-config /absolute/native-client.json   --chat-image sha256:<qualified-chat-id>   --image-image sha256:<qualified-image-id>
+python3 deploy/workers/private/prepare.py --output /absolute/deployment --client-config /absolute/native-client.json --model-source-root /absolute/immutable/native-release --chat-image sha256:<qualified-chat-id> --image-image sha256:<qualified-image-id>
 ```
 
 The command writes compose.json, a container client config and separate native
@@ -116,8 +116,10 @@ LaunchAgent rollback copies, and plan.json. It validates the actual image
 architecture and Docker Compose specification. It sets separate native and
 container TLS origins, verifies the immutable native model source hashes, and
 imports the actual image health module and signing identity as the deployment
-UID with read-only state mounts and no network. It does not start a container,
-stop a native worker, mutate gateway definitions, enroll a phone or change HostIO.
+UID with read-only state mounts and no network. Probe containers exit after
+these checks. The plan also records the actual enabled/disabled override and
+loaded state of both native services, accepting macOS word and boolean formats.
+Live worker activation remains the separate owner-controlled handoff.
 
 Merge config/bridge.models.patch.json into the latest HostIO config, preserving
 gateway/gitlab/vision/anchors and concurrent settings. Stage the bridge as the
@@ -155,8 +157,9 @@ that it does not claim an Android-device test.
 
 Drain active requests first using status; native model calls outlive a dropped
 container connection and must finish cleanup. Stop **both** private containers
-with the same Compose project. Confirm they exited before enabling/bootstraping
-the two captured native LaunchAgents. Keep the current shared state and the
+with the same Compose project. Confirm they exited before restoring each native
+service's original enabled/disabled and loaded state from plan.native_launchd.
+Bootstrap only services that were originally loaded, using the captured plists. Keep the current shared state and the
 existing identity; do not blindly restore an older ledger or pairing snapshot.
 The snapshots exist for diagnosed corruption, with an explicit choice to restore.
 
