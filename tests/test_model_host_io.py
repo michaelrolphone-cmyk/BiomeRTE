@@ -361,6 +361,24 @@ class TLSModelTests(unittest.TestCase):
             client.model_call("chat.privacy",{})
         self.assertEqual(len(calls),1)
         self.assertIsNone(calls[0][1])
+    def test_successful_artifact_delivery_keeps_private_worker_health_fresh(self):
+        import private_chat
+        receipt = self.root/"poll-health.json"
+        from types import SimpleNamespace
+        def save_json(path,value):path.write_text(json.dumps(value))
+        fake = SimpleNamespace(invoke_provider=lambda *args:{"sha256":"synthetic"},save_json=save_json)
+        with patch.object(private_chat,"gateway",fake), patch.dict(os.environ,{"BIOME_WORKER_HEALTH":str(receipt)}):
+            remote = private_chat.Remote({"provider":"test-provider","site":"test-site"})
+            remote.call("artifact.put",{"data":"PRIVATE_CIPHERTEXT_CANARY"})
+        value = json.loads(receipt.read_text())
+        self.assertEqual(set(value),{"last_contact","state"})
+        self.assertEqual(value["state"],"online")
+        self.assertNotIn("PRIVATE_CIPHERTEXT_CANARY",receipt.read_text())
+        spec = importlib.util.spec_from_file_location("delivery_health",ROOT/"deploy/workers/private/health.py")
+        health = importlib.util.module_from_spec(spec);spec.loader.exec_module(health)
+        with patch.dict(os.environ,{"BIOME_WORKER_HEALTH":str(receipt)}):
+            self.assertTrue(health.healthy())
+
     def test_health_metadata_is_ephemeral_and_never_contains_payload(self):
         receipt = self.root/"model-health.json"
         seen = []

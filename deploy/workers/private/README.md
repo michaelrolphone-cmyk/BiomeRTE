@@ -69,7 +69,7 @@ Image progress goes back to the worker and is encrypted in the existing image
 session before agent.progress. Large output is framed over TLS with SHA-256
 verification, then encrypted/chunked by the existing artifact protocol.
 A tmpfs health receipt contains only a request UUID, container PID and start time.
-The private health check accepts normal polling or that exact request still
+The private health check accepts successful gateway polling/progress/artifact delivery or that exact request still
 present in native model custody; a long image generation is not a stale poll.
 
 ## Build and qualify

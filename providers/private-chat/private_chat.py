@@ -76,7 +76,16 @@ class Remote:
     def __init__(self, cfg):
         self.node, self.site = cfg['provider'], cfg['site']
     def call(self, name, args, rid=None):
-        return gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        result = gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        health = os.environ.get('BIOME_WORKER_HEALTH')
+        if health:
+            try:
+                # Successful encrypted progress/artifact delivery also proves
+                # this worker is making progress between provider polls.
+                gateway.save_json(Path(health), {'last_contact':time.time(), 'state':'online'})
+            except OSError:
+                pass
+        return result
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
     def advertise(self):
