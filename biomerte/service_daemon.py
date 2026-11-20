@@ -250,8 +250,21 @@ class CheckpointHelper:
                     or state.get("site")!=self.config["site"]):
                 raise Fault("Wrong logical service state",403)
             packet=await asyncio.to_thread(self.store.advance,state,b)
+            reference=checkpoint_ref(packet)
+            previous=getattr(self,"last_publication",None)
+            # The grant is checked before entering the lock. Recheck it here
+            # before reusing an exact, recently witnessed checkpoint, including
+            # when the local lock has delayed this request.
+            if (previous is not None and previous["binding"]==b
+                    and same_ref(previous["reference"],reference)
+                    and time.monotonic()<previous["expires"]):
+                await self.validate(b)
+                return dict(previous["result"])
             reply=await self.publish_packet(b,packet)
-            return {"checkpoint":reply["checkpoint"],"replication":self.replication}
+            result={"checkpoint":reply["checkpoint"],"replication":self.replication}
+            self.last_publication={"binding":b,"reference":reference,"result":result,
+                                   "expires":time.monotonic()+5}
+            return dict(result)
 
     async def fence(self,body):
         b=binding(body)
