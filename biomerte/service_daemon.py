@@ -196,6 +196,7 @@ class CheckpointHelper:
         self.lock = asyncio.Lock()
         self.connection = None
         self.replication = "unobserved"
+        self.replica_blocks = {}
         if self.store.head() is None and config.get("bootstrap_packet"):
             packet=json.loads(pathlib.Path(config["bootstrap_packet"]).read_text())
             self.store.install(packet)
@@ -241,7 +242,7 @@ class CheckpointHelper:
             raw = base64.b64decode(block["data"], validate=True)
         except (ValueError, TypeError):
             raise CheckpointError("Invalid controller block encoding")
-        result = await asyncio.to_thread(self.store.chunks.put, raw, block.get("digest"))
+        result = await asyncio.to_thread(self.store.chunks.put, raw, valid_digest(block.get("digest")))
         await self.validate(b)
         return result
 
@@ -249,8 +250,11 @@ class CheckpointHelper:
         refs = state_blocks(packet["payload"]["state"])
         if refs is None:
             return
-        keys = list(refs)
         for target in targets:
+            cache_key = (target["worker_id"], target["worker_incarnation"],
+                         b["boot_epoch"], b["grant_token"])
+            known = self.replica_blocks.get(cache_key, set())
+            keys = [key for key in refs if key not in known]
             for offset in range(0, len(keys), 256):
                 asked = keys[offset:offset + 256]
                 reply = await self.transport.request("/api/service-checkpoints/chunk-missing", {
@@ -309,6 +313,7 @@ class CheckpointHelper:
             reply=await self.transport.request("/api/service-checkpoints/replicate",body)
             self.replication="complete" if len(targets)+1==len(self.config["replica_workers"]) else "degraded"
         except (Fault,asyncio.TimeoutError,OSError):
+            self.replica_blocks.clear()
             if require_all:
                 raise
             if self.config.get("authority_kind") == "controller":
@@ -347,6 +352,10 @@ class CheckpointHelper:
             actual.add(key)
         if actual != expected:
             raise Fault("Witness acknowledgement set differs from requested replicas", 503)
+        refs = state_blocks(packet["payload"]["state"])
+        if refs is not None:
+            self.replica_blocks = {(target["worker_id"], target["worker_incarnation"],
+                b["boot_epoch"], b["grant_token"]): set(refs) for target in acknowledged_targets}
         await asyncio.to_thread(self.store.published,checkpoint_ref(packet))
         return reply
 
@@ -491,7 +500,7 @@ class CheckpointHelper:
                 if not phase or phase["binding"]!=b:
                     raise Fault("Superseded local service phase",409)
                 value=dict(phase,generation_floors=await asyncio.to_thread(
-                    self.store.generation_floors,self.config["resources"]),
+                    self.store.generation_floors,self.config.get("resources", [])),
                     replication=self.replication)
             else:
                 raise Fault("Unknown service adapter operation",400)

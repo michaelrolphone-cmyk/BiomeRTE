@@ -246,6 +246,34 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
                 store.close()
             self.closed_apps.add(id(daemon))
 
+    async def test_controller_blocks_repair_and_root_publication_use_real_tls_helpers(self):
+        from biomerte.checkpoint_chunks import STATE_FORMAT, BLOCK_BYTES, canonical
+        import hashlib
+        primary, standby = self.helpers["pi"], self.helpers["mac"]
+        key = "checkpoint-artifact"
+        raw = canonical([["artifacts", key, "payload" * (BLOCK_BYTES // 3)]])
+        desc = primary.store.chunks.write_shard(
+            "artifacts", hashlib.sha256(key.encode()).hexdigest()[:2], raw)
+        state = dict(format=STATE_FORMAT, authority=self.identity["node"],
+                     site="integration-site", shards=[desc])
+        packet = primary.store.advance(state, self.binding)
+        result = await primary.publish_packet(self.binding, packet)
+        self.assertEqual("complete", primary.replication)
+        self.assertEqual(checkpoint_ref(packet), result["checkpoint"])
+        self.assertEqual(packet, standby.store.get(checkpoint_ref(packet)))
+        standby.store.require_chunks(state)
+        self.assertEqual({}, self.workers.pending)
+        # A same-root retry uses the exact retained block set, but a corrupted
+        # recipient must refuse its root ACK; the sender clears its optimization.
+        primary.config["authority_kind"] = "controller"
+        missing = desc["blocks"][0]["digest"]
+        path = pathlib.Path(standby.store.chunks.directory) / missing
+        path.write_bytes(b"z" * path.stat().st_size)
+        await primary.publish_packet(self.binding, packet)
+        standby.store.require_chunks(state)
+        self.assertEqual(primary.store.chunks.get(missing), standby.store.chunks.get(missing))
+        self.assertNotIn("package", self.workers.head(SERVICE))
+
     async def cleanup(self):
         for task in self.tasks:
             task.cancel()
