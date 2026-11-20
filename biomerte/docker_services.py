@@ -8,6 +8,8 @@ capability leases and explicit ownership transfer are never changed here.
 from __future__ import print_function
 import argparse
 import base64
+import calendar
+import datetime
 import hashlib
 import http.client
 import json
@@ -97,6 +99,23 @@ def normalize_platform(os_name, arch):
     return os_name + "/" + arch
 
 
+def docker_timestamp(value):
+    """Parse Docker RFC3339Nano timestamps without losing probe ordering."""
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$",
+                     value) if isinstance(value, str) else None
+    if not match:
+        raise ValueError("Invalid Docker timestamp")
+    seconds = calendar.timegm(datetime.datetime.strptime(
+        match.group(1), "%Y-%m-%dT%H:%M:%S").timetuple())
+    if match.group(3) != "Z":
+        hours, minutes = int(match.group(5)), int(match.group(6))
+        if hours > 23 or minutes > 59:
+            raise ValueError("Invalid Docker timestamp offset")
+        offset = (hours * 60 + minutes) * 60
+        seconds -= offset if match.group(4) == "+" else -offset
+    return seconds * 1000000000 + int((match.group(2) or "").ljust(9, "0"))
+
+
 class DockerError(RuntimeError):
     pass
 
@@ -154,6 +173,9 @@ class DockerEngine:
 
     def version(self):
         return self.request("GET", "/version")
+
+    def daemon_time(self):
+        return docker_timestamp(self.request("GET", "/v1.24/info").get("SystemTime"))
 
     def image(self, image_ref):
         try:
@@ -514,12 +536,30 @@ class Runner:
         info = self.engine.inspect(container)
         if not info or not info.get("State", {}).get("Running"):
             return False
-        if adapters.staged(self.manifests.get(service_id, {})) and service_id not in self.activation_acks:
-            return None  # An inert preparation process is not an active service.
-        health = info["State"].get("Health", {}).get("Status")
-        if health == "starting":
+        manifest = self.manifests.get(service_id, {})
+        health = info["State"].get("Health") or {}
+        status = health.get("Status")
+        if adapters.staged(manifest):
+            activated = self.activation_acks.get(service_id)
+            if not activated:
+                return None  # An inert preparation process is not an active service.
+            check = (info.get("Config", {}).get("Healthcheck") or {}).get("Test", [])
+            if manifest.get("health") or health or (check and check[0] != "NONE"):
+                fresh = False
+                try:
+                    sample = health["Log"][-1]
+                    start, end = docker_timestamp(sample["Start"]), docker_timestamp(sample["End"])
+                    boundary = activated["health_after"]
+                    fresh = (status in ("healthy", "unhealthy") and boundary is not None and
+                             start > boundary and end >= start and
+                             activated["health_container"] == container)
+                except (KeyError, IndexError, TypeError, ValueError):
+                    pass
+                if not fresh or status == "starting":
+                    return None if self.clock() < activated["health_deadline"] else False
+        if status == "starting":
             return None
-        return health == "healthy" if health else True
+        return status == "healthy" if status else True
 
     def advertisements(self):
         version = self.engine.version()
@@ -605,6 +645,9 @@ class Runner:
                     return
                 manifest = self.manifests[service_id]
                 if operation == "activate":
+                    container = self.containers.get(service_id)
+                    if not container:
+                        return
                     proof = self.state_proofs.get(service_id)
                     ack = self.fence_acks.get(service_id)
                     if (not adapters.fence_matches(ack, grant, proof) or
@@ -619,6 +662,17 @@ class Runner:
             result = client.call(body)
             proof = (adapters.prepared(body, result) if operation == "prepare"
                      else adapters.activated(body, result))
+            if operation == "activate":
+                # Read after the ACK, in Docker's clock domain. This I/O must not
+                # hold the grant lock or reset the coordinator's startup clock.
+                proof["health_deadline"] = self.clock() + manifest.get("startup_grace_s", 20)
+                proof["health_container"] = container
+                try:
+                    proof["health_after"] = self.engine.daemon_time()
+                except Exception as error:
+                    proof["health_after"] = None
+                    LOG.warning("Service %s health activation boundary unavailable (%s)",
+                                service_id, type(error).__name__)
             with self.lock:
                 if self._current(grant):
                     if operation == "prepare":
@@ -627,6 +681,7 @@ class Runner:
                         current_proof = self.state_proofs.get(service_id)
                         current = self.grants[service_id]
                         if (adapters.proof_matches(current_proof, grant) and
+                                self.containers.get(service_id) == container and
                                 current.get("effect_ready") is True and
                                 current.get("state") in ("starting", "active") and
                                 current_proof["checkpoint"] == proof["checkpoint"]):
