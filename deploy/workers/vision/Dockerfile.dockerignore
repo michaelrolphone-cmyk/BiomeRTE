@@ -1,0 +1,15 @@
+**
+!biomerte/
+!biomerte/**
+!providers/
+!providers/robot-vision/
+!providers/robot-vision/**
+!providers/mac-terminal/
+!providers/mac-terminal/mac_provider.py
+!providers/mac-terminal/persistent_transport.py
+!deploy/
+!deploy/workers/
+!deploy/workers/vision/
+!deploy/workers/vision/**
+**/__pycache__
+**/*.pyc
