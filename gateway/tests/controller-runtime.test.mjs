@@ -180,3 +180,15 @@ test('local event subscriptions retain local producer behavior',async()=>{
   assert.equal(calls.length,0);
  });
 });
+
+test('pairing finish adapts the public proof envelope without changing signed values',async()=>{
+ await fetched(async calls=>{
+  const proof={site:'site',challenge:'f'.repeat(64),key:other,signature:'YQ=='};
+  const response=await controllerRuntimePair(env(),'finish',JSON.stringify(proof),pi);
+  assert.equal(response.status,200);
+  assert.deepEqual(JSON.parse(calls[0].body),{proof:{key:proof.key,signature:proof.signature}});
+  assert.deepEqual(await response.json(),{result:{ok:true}});
+  assert.equal((await controllerRuntimePair(env(),'finish',JSON.stringify({...proof,site:'foreign'}),pi)).status,403);
+  assert.equal(calls.length,1);
+ });
+});

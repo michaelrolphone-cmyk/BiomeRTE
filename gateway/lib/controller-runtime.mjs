@@ -149,7 +149,13 @@ export async function controllerRuntimePair(env,phase,raw,selected,req){
  try{
   const config=await controllerRuntimeConfig(env);if(!config||!addresses(config,selected))return null;
   if(!['begin','finish'].includes(phase))throw fault('Unsupported pairing phase',400);
-  return await forward(config,raw,'pair/'+phase);
+  let body=raw;
+  if(phase==='finish'){
+   const proof=JSON.parse(raw);
+   if(proof.site!==config.site)throw fault('Wrong controller site',403);
+   body=JSON.stringify({proof:{key:proof.key,signature:proof.signature}});
+  }
+  return await forward(config,body,'pair/'+phase);
  }catch(error){return runtimeFailure(error,req,raw)}
 }
 
