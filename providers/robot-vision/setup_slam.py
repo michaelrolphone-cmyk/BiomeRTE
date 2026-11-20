@@ -419,15 +419,22 @@ PATCHES = {
 
 
 class Installer:
-    def __init__(self, state, conda, jobs):
+    def __init__(self, state, conda, jobs, platform_profile="native-macos"):
         self.state = Path(state).expanduser().resolve()
         self.prefix = self.state / "env"
         self.source = self.state / "vendor/pyslam"
         self.python = self.prefix / "bin/python"
         self.conda = str(Path(conda).expanduser())
         self.jobs = jobs
-        if platform.system() != "Darwin" or platform.machine() != "arm64":
-            raise RuntimeError("This setup profile is qualified only for native Apple Silicon macOS.")
+        self.platform_profile = platform_profile
+        if platform_profile == "native-macos":
+            if platform.system() != "Darwin" or platform.machine() != "arm64":
+                raise RuntimeError("The native-macos profile requires Apple Silicon macOS.")
+        elif platform_profile == "linux-cpu":
+            if platform.system() != "Linux" or platform.machine() not in ("aarch64", "x86_64"):
+                raise RuntimeError("The linux-cpu profile requires Linux arm64 or amd64.")
+        else:
+            raise ValueError("Unknown vision platform profile.")
         if self.prefix.resolve() == Path(self.conda).resolve().parent.parent:
             raise RuntimeError("Refusing to mutate the base conda environment.")
         self.state.mkdir(parents=True, exist_ok=True)
@@ -461,7 +468,8 @@ class Installer:
 
     def record(self, phase, data):
         self.receipt.update(pyslam_commit=PYSLAM_COMMIT, state_dir=str(self.state),
-                            python=str(self.python), updated_at_unix_s=time.time())
+                            python=str(self.python), platform_profile=self.platform_profile,
+                            updated_at_unix_s=time.time())
         self.receipt[phase] = data
         temporary = self.receipt_path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(self.receipt, indent=2, sort_keys=True))
@@ -575,9 +583,7 @@ class Installer:
         cmake = self.prefix / "bin/cmake"
         common = [
             "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_C_COMPILER=/usr/bin/clang", "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
-            "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_PREFIX_PATH=" + str(self.prefix),
-            "-DCMAKE_IGNORE_PATH=/opt/homebrew",
+            "-DCMAKE_PREFIX_PATH=" + str(self.prefix),
             "-DPython3_EXECUTABLE=" + str(self.python), "-DPYTHON_EXECUTABLE=" + str(self.python),
             "-DWITH_PYTHON_INTERP_CHECK=ON",
             "-DOpenCV_DIR=" + str(self.prefix / "lib/cmake/opencv4"),
@@ -586,14 +592,25 @@ class Installer:
             "-DCMAKE_MODULE_LINKER_FLAGS=-L" + str(self.prefix / "lib"),
             "-DCMAKE_SHARED_LINKER_FLAGS=-L" + str(self.prefix / "lib"),
         ]
+        if self.platform_profile == "native-macos":
+            common += ["-DCMAKE_C_COMPILER=/usr/bin/clang",
+                       "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+                       "-DCMAKE_OSX_ARCHITECTURES=arm64",
+                       "-DCMAKE_IGNORE_PATH=/opt/homebrew"]
+            library_suffix = "dylib"
+        else:
+            common += ["-DCMAKE_C_COMPILER=/usr/bin/gcc",
+                       "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+                       "-DCMAKE_INSTALL_RPATH=" + str(self.prefix / "lib")]
+            library_suffix = "so"
         steps = [
             ("thirdparty/g2opy", [
                 "-DBUILD_CSPARSE=OFF", "-DG2O_USE_OPENGL=OFF", "-DG2O_USE_OPENMP=OFF",
                 "-DG2O_BUILD_APPS=OFF", "-DG2O_BUILD_EXAMPLES=OFF", "-DBUILD_WITH_MARCH_NATIVE=OFF",
                 "-DCHOLMOD_INCLUDE_DIR=" + str(self.prefix / "include/suitesparse"),
-                "-DCHOLMOD_LIBRARY=" + str(self.prefix / "lib/libcholmod.dylib"),
+                "-DCHOLMOD_LIBRARY=" + str(self.prefix / ("lib/libcholmod." + library_suffix)),
                 "-DCSPARSE_INCLUDE_DIR=" + str(self.prefix / "include/suitesparse"),
-                "-DCSPARSE_LIBRARY=" + str(self.prefix / "lib/libcxsparse.dylib")], False),
+                "-DCSPARSE_LIBRARY=" + str(self.prefix / ("lib/libcxsparse." + library_suffix))], False),
             ("thirdparty/orbslam2_features", [], False),
             ("thirdparty/pydbow3/modules/dbow3", [
                 "-DCMAKE_INSTALL_PREFIX=" + str(self.source / "thirdparty/pydbow3/modules/dbow3/install"),
@@ -688,12 +705,14 @@ def main():
     parser.add_argument("--state-dir", default=str(Path.home() / ".local/share/biome-robot-vision"))
     parser.add_argument("--conda", default=str(Path.home() / "miniconda3/bin/conda"))
     parser.add_argument("--jobs", type=int, default=4, help="Native compile concurrency, not a runtime limit")
+    parser.add_argument("--platform-profile", choices=("native-macos", "linux-cpu"),
+                        default="native-macos")
     parser.add_argument("--phase", choices=("all", "environment", "source", "patches", "native",
                                           "python", "vocabulary", "smoke"), default="all")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    installer = Installer(args.state_dir, args.conda, args.jobs)
+    installer = Installer(args.state_dir, args.conda, args.jobs, args.platform_profile)
     actions = {"environment": installer.environment, "source": installer.checkout,
                "patches": installer.patches, "native": installer.native,
                "python": installer.python_packages, "vocabulary": installer.vocabulary,
