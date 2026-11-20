@@ -360,6 +360,20 @@ def target_spec(target, sources):
     return result
 
 
+def _answered_human_wait_in_terminal_run(rows, key, value):
+    """A settled human answer is history, not an active event consumer."""
+    if (not isinstance(value, dict) or value.get("id") != key
+            or value.get("kind") != "human" or value.get("state") != "answered"
+            or "answer" not in value):
+        return False
+    run_id = value.get("run")
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    run = rows.get(("runs", run_id))
+    return (isinstance(run, dict) and run.get("id") == run_id
+            and run.get("state") in TERMINAL_RUNS)
+
+
 def event_domain_blockers(rows):
     blockers = []
     for (kind, key), value in sorted(rows.items()):
@@ -367,7 +381,7 @@ def event_domain_blockers(rows):
             blockers.append([kind, key, "subscription cursor requires explicit migration"])
         elif kind == "runs" and value.get("state") not in TERMINAL_RUNS:
             blockers.append([kind, key, "nonterminal run may own event cursors"])
-        elif kind == "waits":
+        elif kind == "waits" and not _answered_human_wait_in_terminal_run(rows, key, value):
             blockers.append([kind, key, "wait requires explicit migration"])
         elif kind.startswith("assistant_") and kind not in ("assistant_config",):
             blockers.append([kind, key, "assistant event domain requires explicit migration"])

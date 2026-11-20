@@ -94,10 +94,16 @@ select a source for individual ambiguous records:
       ]
     }
 
-Event-domain retirement is rejected if that source has subscriptions, waits,
-nonterminal runs or assistant execution records. Exact original events,
-counters and displaced values remain in the provenance archive. Do not retire
-an active domain simply to make a plan pass.
+Event-domain retirement is rejected if that source has subscriptions,
+nonterminal runs, assistant execution records or unresolved waits. The only
+wait exception is an answered human wait with its answer retained and an exact,
+present terminal run in the same source. Both record IDs must match their keys.
+The wait and run remain unchanged as historical records; no cleanup is needed
+to obtain eligibility. Open waits, nonhuman waits and missing or nonterminal
+run references remain blockers. Exact original events, counters and displaced
+values remain in the provenance archive, with each source alias's event history
+and cursor mapping preserved. Do not retire an active domain simply to make a
+plan pass.
 
     python3 deploy/controller-authority/migrate.py plan \
       --source /private/migration/pi-backup.json \
