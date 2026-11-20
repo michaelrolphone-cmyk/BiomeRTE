@@ -35,6 +35,8 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.vision.rig.status", {}, "Read shared-map front/rear tracking, clock alignment and rig configuration."),
+        ("robot.vision.rig.configure", {"configuration":field("obj",True)}, "Save and hot-reload rear-camera source, intrinsics and rigid mount without reflashing. Both views contribute to the existing shared map."),
         ("robot.camera.exposure.status", {}, "Read live camera auto-exposure, auto-gain and manual driver control values; first-DMA capture stamps are not calibrated photon exposure times."),
         ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure/gain update. Auto modes are Boolean; exposure_value 9..1200 sensor-driver units (not microseconds); exposure_level -2..2; gain 0..30. Settings are RAM-only. Inspect unknown outcomes before retry."),
         ("robot.body.model", {}, "Metric body dimensions, wheelbase, track, camera/sonar/AHRS rigid mounts and always-on-floor invariant."),
@@ -122,6 +124,13 @@ def contract_definitions():
     ]
     definitions = [dict(name=name, version=1, description=description, inputs=inputs,
                         outputs={"result": "obj"}, synchronous=False) for name, inputs, description in specs]
+    # Existing v1 contracts remain unchanged; v2 adds explicit camera selection.
+    for original in list(definitions):
+        if original["name"] in ("robot.vision.frame","robot.vision.snapshot","robot.vision.geometry"):
+            modern_camera=copy.deepcopy(original);modern_camera["version"]=2
+            modern_camera["inputs"]["camera_id"]=field("str")
+            modern_camera["description"]="Select front or rear camera observations in the same shared map. "+original["description"]
+            definitions.append(modern_camera)
     ground = next(item for item in definitions if item["name"] == "robot.vision.project_ground")
     modern = copy.deepcopy(ground)
     modern["version"] = 2
@@ -141,6 +150,7 @@ CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contrac
 
 
 MUTATING_CONTRACTS = frozenset({
+    "robot.vision.rig.configure:1",
     "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
     "robot.camera.light.set:1", "robot.ahrs.calibrate:1",
