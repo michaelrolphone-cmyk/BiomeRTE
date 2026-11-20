@@ -93,6 +93,7 @@ def command_entry(config, release):
     command = config.get('controller_argv')
     if (not isinstance(command, list) or len(command) < 4
             or not all(isinstance(part, str) and part for part in command)
+            or not os.path.isabs(command[0])
             or not re.match(r'^python(?:[0-9]+(?:\.[0-9]+)*)?$',
                             os.path.basename(command[0]))):
         raise CustodyError('custody_command_unverified')
@@ -115,6 +116,11 @@ def command_entry(config, release):
         if entry not in allowed:
             raise CustodyError('custody_command_unverified')
         arguments = command[index + 1:]
+    # argparse accepts unique long-option abbreviations. A second --hom or
+    # --ho could otherwise override the exact --home that we just inspected.
+    if any(argument.split('=', 1)[0] in ('--h', '--ho', '--hom')
+           for argument in arguments):
+        raise CustodyError('custody_command_home_mismatch')
     positions = [i for i, argument in enumerate(arguments)
                  if argument == '--home' or argument.startswith('--home=')]
     if len(positions) != 1:

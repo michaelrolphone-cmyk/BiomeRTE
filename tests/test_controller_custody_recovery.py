@@ -203,6 +203,23 @@ class CustodyRecoveryTests(unittest.TestCase):
                 with self.assertRaises(custody.CustodyError):
                     custody.require_release(dict(self.config, controller_argv=command), self.new)
 
+    def test_relative_interpreter_is_not_a_pinned_execution_boundary(self):
+        self.freeze()
+        command = ['python', '-S', '-m', 'biomerte', '--home', self.home, 'serve']
+        with self.assertRaises(custody.CustodyError):
+            custody.require_release(dict(self.config, controller_argv=command), self.new)
+
+    def test_gateway_abbreviated_home_cannot_override_the_guarded_home(self):
+        self.freeze()
+        for option in ('--h', '--ho', '--hom', '--ho=', '--hom='):
+            command = [sys.executable, '-S', 'deploy/gateway-agent.py',
+                       '--home', self.home, '--origin', 'https://fixture.invalid']
+            command += ([option + self.temporary] if option.endswith('=')
+                        else [option, self.temporary])
+            with self.subTest(option=option):
+                with self.assertRaises(custody.CustodyError):
+                    custody.require_release(dict(self.config, controller_argv=command), self.new)
+
     def test_missing_invalid_foreign_or_managed_authority_marker_cannot_execute(self):
         self.freeze()
         self.select(self.new)
