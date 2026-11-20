@@ -1,0 +1,119 @@
+{
+  "container_tests": {
+    "gid": 20,
+    "network": "none",
+    "passed": true,
+    "replica_wiring": 7,
+    "uid": 501
+  },
+  "current_endpoint": {
+    "host": "192.168.1.23",
+    "source": "Gateway self-report supplied by coordinating task",
+    "ssh_probe": {
+      "authenticated": false,
+      "endpoint": "192.168.1.23:22",
+      "exit_code": 255,
+      "host_key_alias": "biome-sacred-pi",
+      "identity_file": "/Users/micahelbyrns/.local/share/biome-mac-storage/replica-key",
+      "known_hosts_file": "/Users/micahelbyrns/.local/share/biome-mac-storage/known_hosts",
+      "observed_at": "2026-11-20T16:32:06.227318+00:00",
+      "probe_stopped_after_timeout": false,
+      "public_diagnostics": [
+        "Connection timed out during banner exchange"
+      ],
+      "remote_command": null,
+      "request_session": false,
+      "strict_host_key_checking": true
+    }
+  },
+  "image": {
+    "architecture": "arm64",
+    "image_id": "sha256:8011ce31232fc3e4051d81810353ead7066a0052891ac9f7a319a7ff9108ee90",
+    "os": "linux",
+    "size": 269194828,
+    "source_commit": "8f6990af09f65e22bc5b182a392cb8ad03cd2376",
+    "tag": "biomerte-worker-replica:20261120-8f6990af09f6"
+  },
+  "live_backup_transfer_performed": false,
+  "live_cutover_performed": false,
+  "native_tests": {
+    "handoff": 15,
+    "passed": true,
+    "replica_wiring": 7
+  },
+  "prepared_mounts": [
+    {
+      "bind": {
+        "create_host_path": false
+      },
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/client",
+      "target": "/run/biome",
+      "type": "bind"
+    },
+    {
+      "bind": {
+        "create_host_path": false
+      },
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage",
+      "target": "/Users/micahelbyrns/.local/share/biome-mac-storage",
+      "type": "bind"
+    },
+    {
+      "bind": {
+        "create_host_path": false
+      },
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/workspace.mount",
+      "target": "/Users/micahelbyrns/.local/share/biome-mac-storage/workspace.mount",
+      "type": "bind"
+    },
+    {
+      "bind": {
+        "create_host_path": false
+      },
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/replica-key",
+      "target": "/Users/micahelbyrns/.local/share/biome-mac-storage/replica-key",
+      "type": "bind"
+    },
+    {
+      "bind": {
+        "create_host_path": false
+      },
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/known_hosts",
+      "target": "/Users/micahelbyrns/.local/share/biome-mac-storage/known_hosts",
+      "type": "bind"
+    }
+  ],
+  "prepared_plan": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/general-20261120/replica-v3-20261120T164134Z/plan.json",
+  "prepared_replica_source": {
+    "host": "192.168.1.23",
+    "host_key_alias": "biome-sacred-pi",
+    "volume": "fe633266127846f5a277f925ed62c35d"
+  },
+  "prepared_unsettled": [],
+  "readonly_native_attestation": {
+    "backup_sync_invoked": false,
+    "container_gid": 20,
+    "container_uid": 501,
+    "endpoint": "192.168.1.23",
+    "host_key_alias_pinned": true,
+    "native_volume_attested": true,
+    "native_volume_mounted": true,
+    "network_ssh_invoked": false,
+    "passwd_account": "biome-replica",
+    "sacred_allocated_bytes": 2147483648,
+    "source_volume": "fe633266127846f5a277f925ed62c35d",
+    "ssh_identity_mode": "0o600",
+    "ssh_identity_parse_exit_code": 0,
+    "ssh_identity_readable": true,
+    "workspace_allocated_bytes": 105226698752,
+    "workspace_path": "/Users/micahelbyrns/.local/share/biome-mac-storage/workspace.mount",
+    "workspace_uuid": "70c73601bcb94cf89a29b7aefe55b2e2"
+  },
+  "remaining_blocker": "Current endpoint SSH banner exchange timed out before host-key verification/authentication; complete backup publication is not qualified.",
+  "schema": "biomerte.replica-container-qualification/1",
+  "source_commit": "8f6990af09f65e22bc5b182a392cb8ad03cd2376"
+}
