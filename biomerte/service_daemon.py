@@ -19,6 +19,7 @@ from .service_checkpoint import (
     CheckpointStore, binding, canonical, checkpoint_ref, digest, same_ref,
     select_current)
 from .service_authority import ScopedAuthority
+from .controller_authority import ControllerAuthority
 from .docker_services import container_name
 
 LOG = logging.getLogger("biomerte.service")
@@ -39,6 +40,16 @@ def env_binding():
 
 
 def scope_digest(config):
+    if config.get("authority_kind", "physical") == "controller":
+        return digest(dict(authority_kind="controller",
+            service_id=config["service_id"],authority_id=config["authority_id"],site=config["site"],
+            controller_aliases=sorted(config.get("controller_aliases",[])),
+            operator_actors=sorted(config.get("operator_actors",[])),
+            operator_actor_aliases=config.get("operator_actor_aliases",{}),
+            replication_policy=config.get("replication_policy","available-peers")))
+    if config.get("authority_kind", "physical") != "physical":
+        raise CheckpointError("Unknown logical authority kind")
+    # Preserve existing physical-service checkpoint identities byte for byte.
     return digest({k:config[k] for k in (
         "service_id","authority_id","site","resources","providers","contracts")})
 
@@ -415,8 +426,11 @@ class AuthorityDaemon:
         self.transport=Transport(session,config)
         self.token=secret(config["helper_key_file"])
         self.url=os.environ.get("BIOME_SERVICE_ADAPTER_URL") or config["adapter_url"]
-        self.app=Application(config["authority_home"])
-        self.authority=ScopedAuthority(self.app,config,self.binding)
+        controller=config.get("authority_kind")=="controller"
+        self.app=Application(config["authority_home"],
+                             controller_runtime=config if controller else None)
+        authority_type=ControllerAuthority if controller else ScopedAuthority
+        self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()
         self.connected=False
 
@@ -429,6 +443,9 @@ class AuthorityDaemon:
         return await self.helper("status")
 
     async def publish(self):
+        if self.config.get("authority_kind")=="controller":
+            from .controller_checkpoint import publish_controller
+            return await publish_controller(self)
         state=await asyncio.to_thread(self.authority.snapshot)
         return await self.helper("publish",state=state)
 
@@ -445,7 +462,7 @@ class AuthorityDaemon:
 
     async def dispatch(self,message):
         typ=message.get("type")
-        reply=dict(type="inspect_result" if typ=="inspect" else "call_result",
+        reply=dict(type={"inspect":"inspect_result","pair":"pair_result"}.get(typ,"call_result"),
                    id=message.get("id"),binding=self.binding,status=200)
         try:
             if message.get("binding")!=self.binding:
@@ -461,6 +478,9 @@ class AuthorityDaemon:
                     result=await asyncio.to_thread(self.authority.call,
                                       message["envelope"],preparing)
                     reply["result"]=result
+                elif typ=="pair" and self.config.get("authority_kind")=="controller":
+                    reply["result"]=await asyncio.to_thread(self.authority.pair,
+                        message.get("operation"),message.get("payload"),preparing)
                 elif typ=="inspect" and not preparing:
                     if message.get("authority")!=self.config["authority_id"]:
                         raise Fault("Wrong logical stream authority",403)

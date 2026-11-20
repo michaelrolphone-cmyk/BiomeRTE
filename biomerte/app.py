@@ -54,11 +54,32 @@ def seed(tx):
 
 
 class Application:
-    def __init__(self, directory):
+    def __init__(self, directory, controller_runtime=None):
         self.directory = os.path.abspath(directory)
         self.config = read_json(os.path.join(directory, 'node.json'))
         self.node, self.site = self.config['node'], self.config['site']
         self.key = os.path.join(directory, 'node.key')
+        self.controller_runtime = dict(controller_runtime or {})
+        self.controller_aliases = frozenset()
+        self.controller_operator_actors = frozenset()
+        self.controller_actor_aliases = {}
+        self._management_stamp, self._management_value = None, None
+        if self.controller_runtime:
+            c = self.controller_runtime
+            if (c.get('authority_kind') != 'controller' or c.get('authority_id') != self.node
+                    or c.get('site') != self.site or not isinstance(c.get('service_id'), str)):
+                raise Fault('Managed controller runtime identity mismatch', 403)
+            aliases = c.get('controller_aliases', [])
+            operators = c.get('operator_actors', [])
+            actor_aliases = c.get('operator_actor_aliases', {})
+            if (not isinstance(aliases, list) or not all(isinstance(x, str) and x for x in aliases)
+                    or not isinstance(operators, list) or not all(isinstance(x, str) and x for x in operators)
+                    or not isinstance(actor_aliases, dict) or set(actor_aliases) - set(operators)
+                    or any(v != 'admin' for v in actor_aliases.values())):
+                raise Fault('Explicit controller aliases and operator identities required', 403)
+            self.controller_aliases = frozenset(aliases)
+            self.controller_operator_actors = frozenset(operators)
+            self.controller_actor_aliases = dict(actor_aliases)
         remote = None
         if self.config.get('gateway_link') and (self.config.get('gateway_journal') or self.config.get('etcd')):
             raise Fault('Local gateway link cannot use permanent shared storage')
@@ -71,10 +92,15 @@ class Application:
             realm_file = 'gateway-' + self.site
         self.stores = {'local': Store(directory, 'local'),
                        'site': Store(directory, realm_file, remote)}
+        self.stores['site'].write_guard = self._site_write_allowed
         self.timer_anchors = {}
         self.retention_next = {}
         self.health = {}
         for scope, store in self.stores.items():
+            if scope == 'site' and self._controller_management() and not self.controller_runtime:
+                # Frozen sources and passive logical homes remain inspectable.
+                self.health[scope] = 'managed-read-only'
+                continue
             try:
                 store.execute(seed)
                 self.health[scope] = 'ready'
@@ -83,8 +109,46 @@ class Application:
                 if scope == 'local' or e.status != 503:
                     raise
 
+    def _controller_management(self):
+        path = os.path.join(self.directory, 'controller-authority.json')
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            if self._management_value is not None:
+                raise Fault('Controller custody marker was removed', 409)
+            return None
+        stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        if stamp != self._management_stamp:
+            try:
+                value = read_json(path)
+            except (OSError, ValueError) as exc:
+                raise Fault('Invalid controller custody marker', 409) from exc
+            if (not isinstance(value, dict) or value.get('format') != 1
+                    or value.get('mode') not in ('frozen-source', 'managed-authority')
+                    or value.get('site') != self.site
+                    or not all(isinstance(value.get(k), str) and value[k]
+                               for k in ('service_id', 'authority_id'))
+                    or value['mode'] == 'frozen-source' and value.get('source_node') != self.node
+                    or value['mode'] == 'managed-authority' and value['authority_id'] != self.node):
+                raise Fault('Controller custody marker identity mismatch', 409)
+            self._management_stamp, self._management_value = stamp, value
+        return self._management_value
+
+    def _site_write_allowed(self):
+        marker = self._controller_management()
+        if marker is None:
+            return
+        runtime = self.controller_runtime
+        if (marker['mode'] != 'managed-authority' or not runtime
+                or any(marker[k] != runtime.get(k) for k in ('site', 'service_id', 'authority_id'))
+                or set(marker.get('controller_aliases', [])) != self.controller_aliases):
+            raise Fault('Site responsibility is managed by logical authority ' +
+                        marker['authority_id'] + '; native site writes are frozen', 409)
+
     def call(self, name, args=None, request_id=None, realm='site', auth=None, cached=False, controller=None):
-        if controller is not None and controller != self.node:
+        # Verify the original addressed controller below; never rewrite signed input.
+        accepted = self.controller_aliases if realm == 'site' else frozenset()
+        if controller is not None and controller != self.node and controller not in accepted:
             raise Fault('Request addressed to a different controller', 403)
         if realm not in self.stores:
             raise Fault('Unknown realm')
@@ -101,8 +165,12 @@ class Application:
                 if controller is not None:
                     envelope['controller'] = controller
                 verify(peer['key'], auth['signature'], envelope)
-                ctx = Context(self, peer['id'], realm, peer['scopes'])
-                if name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot':
+                operator_actor = realm == 'site' and peer['id'] in self.controller_operator_actors
+                actor = self.controller_actor_aliases.get(peer['id'], peer['id']) if operator_actor else peer['id']
+                ctx = Context(self, actor, realm, None if operator_actor else peer['scopes'])
+                if operator_actor:
+                    ctx.authenticated_actor = peer['id']
+                if not operator_actor and (name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot'):
                     raise Fault('Operator action', 403)
             return ctx
 
@@ -113,6 +181,8 @@ class Application:
                     return command(tx, ctx, name, args, request_id)
             return command(tx, ctx, name, args, request_id)
         operation = OPERATIONS.get(name)
+        if realm == 'site' and (operation is None or operation[2]):
+            self._site_write_allowed()
         if name in session_api.EXTERNAL:
             if cached and session_api.EXTERNAL[name][1]:
                 raise Fault('Cached site view is read-only', 409)
@@ -121,6 +191,8 @@ class Application:
         return self.stores[realm].execute(transaction, cached=cached, read_only=read_only)
 
     def tick(self, realm):
+        if realm == 'site':
+            self._site_write_allowed()
         budget = 64
         policy = self.config.get('operational_retention', {})
         enabled = policy.get('enabled', True)
