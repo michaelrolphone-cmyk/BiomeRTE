@@ -9,8 +9,14 @@ import threading
 import asyncio
 from pathlib import Path
 import sys
-sys.path.insert(0,str(Path.home()/'.local/share/biome-model-runtime'))
-from model_runtime import ModelRuntime
+def native_runtime():
+    if sys.platform != "darwin":
+        raise RuntimeError("Native Mac model admission is required")
+    directory = str(Path.home()/".local/share/biome-model-runtime")
+    if directory not in sys.path:
+        sys.path.insert(0,directory)
+    from model_runtime import ModelRuntime
+    return ModelRuntime()
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 class NoRedirect(HTTPRedirectHandler):
@@ -18,10 +24,11 @@ class NoRedirect(HTTPRedirectHandler):
         raise RuntimeError("Local redirect refused")
 
 class ComfyBackend:
-    def __init__(self, url="http://127.0.0.1:8188", model="fluxedUpFluxNSFW_71Q8GGUF.gguf"):
+    def __init__(self, url="http://127.0.0.1:8188", model="fluxedUpFluxNSFW_71Q8GGUF.gguf", *, runtime_factory=None):
         if url != "http://127.0.0.1:8188":
             raise ValueError("ComfyUI must stay on loopback")
         self.url, self.model = url, model
+        self.runtime_factory = runtime_factory or native_runtime
         self.http = build_opener(ProxyHandler({}), NoRedirect())
 
     def api(self, path, data=None, method=None):
@@ -30,6 +37,15 @@ class ComfyBackend:
         with self.http.open(req) as response:
             body = response.read()
             return json.loads(body) if body.strip() else {}
+
+    def ready(self):
+        nodes = self.api("/object_info")
+        if "BiomeMemoryImage" not in nodes:
+            raise RuntimeError("Memory output node unavailable")
+        models = nodes["UnetLoaderGGUF"]["input"]["required"]["unet_name"][0]
+        if self.model not in models:
+            raise RuntimeError("Model unavailable")
+        return {"ready":True, "model":self.model, "output":"memory"}
 
     def specification(self, messages):
         text = next(m["content"] for m in reversed(messages) if m["role"] == "user")
@@ -112,7 +128,7 @@ class ComfyBackend:
     def generate(self, messages, progress=None):
         # Validation precedes admission; no prompt or image bytes enter the queue.
         self.specification(messages)
-        with ModelRuntime().slot('image',progress=progress):
+        with self.runtime_factory().slot('image',progress=progress):
             return self._generate(messages,progress)
 
     def _generate(self, messages, progress=None):

@@ -43,15 +43,15 @@ class ModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);(p/'api-token').write_text('test-only')
             opener=Opener();models=model_catalog(opener,p)
-            self.assertEqual([m['id'] for m in models],['loaded-a','model-b'])
+            self.assertEqual([m['id'] for m in models],['model-a','model-b'])
             self.assertTrue(models[0]['loaded']);self.assertFalse(models[1]['loaded'])
             self.assertEqual(opener.requests[0].get_header('Authorization'),'Bearer test-only')
-    def test_selection_exact_and_legacy_default(self):
+    def test_selection_requires_explicit_available_model(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);o=Opener()
-            self.assertEqual(selected_model(None,o,p),'qwen3.5-9b')
-            self.assertEqual(selected_model('model-b',o,p),'model-b')
-            for bad in ['',{},'embedding','missing']:
+            self.assertEqual(selected_model('model-a',o,p),'loaded-a')
+            self.assertEqual(selected_model('loaded-a',o,p),'loaded-a')
+            for bad in [None,'',{},'embedding','missing']:
                 with self.assertRaises(ValueError): selected_model(bad,o,p)
     def test_catalog_not_available_to_unpaired_phone(self):
         key,phone=ed25519.Ed25519PrivateKey.generate(),ed25519.Ed25519PrivateKey.generate()

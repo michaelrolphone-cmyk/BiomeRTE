@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
 HOME = Path.home()
-STATE = HOME / '.local/share/biome-private-chat'
-TERMINAL = HOME / '.local/share/biome-mac-terminal'
+STATE = Path(os.environ.get('BIOME_PRIVATE_CHAT_STATE', HOME / '.local/share/biome-private-chat'))
+TERMINAL = Path(os.environ.get('BIOME_GATEWAY_CODE', HOME / '.local/share/biome-mac-terminal'))
 LM = HOME / '.local/share/biome-lmstudio'
 sys.path[:0] = [str(TERMINAL), str(TERMINAL / 'runtime')]
 import mac_provider as gateway
@@ -40,68 +40,37 @@ def identity_key():
     if len(value) != 32:
         raise RuntimeError('Invalid identity')
     return Ed25519PrivateKey.from_private_bytes(value)
+from model_service import ModelError, NativeChatBackend, model_catalog, selected_model
+_BACKEND = None
+
+def model_backend():
+    global _BACKEND
+    if _BACKEND is None:
+        config = os.environ.get('BIOME_MODEL_HOST_IO_CONFIG')
+        if config:
+            from biomerte.host_io_client import HostIOClient
+            from biomerte.model_host_io import ModelHostClient
+            _BACKEND = ModelHostClient(HostIOClient.from_config(config))
+        else:
+            if sys.platform != 'darwin':
+                raise RuntimeError('Private workers require the native Mac model bridge')
+            _BACKEND = NativeChatBackend(state=STATE, lm=LM)
+    return _BACKEND
+
 def privacy_ready():
-    """An operator must validate LM Studio logging before enabling private inference."""
-    cfg = json.loads((STATE / 'privacy.json').read_text())
-    if cfg != {'lmstudio_request_logging_disabled': True, 'qualification': 'verified'}:
-        raise RuntimeError('LM Studio privacy qualification required')
-    server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
-    if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
-        raise RuntimeError('LM Studio sensitive logging must be disabled')
-from model_service import ModelError, model_catalog, selected_model
-sys.path.insert(0,str(HOME/'.local/share/biome-model-runtime'))
-from model_runtime import ModelRuntime
+    return model_backend().privacy_ready()
 
 def handle_request(data):
     privacy_ready()
     if data.get('action') == 'models':
-        return {'models': model_catalog(LOCAL, LM)}
+        return model_backend().catalog()
     if data.get('action') not in (None, ''):
         raise ValueError('Invalid private action')
     return inference(data['messages'], data.get('model'))
 
 def inference(messages, model=None):
-    if not isinstance(model,str) or not model:
-        raise ModelError('selected_model_required')
-    started=time.monotonic()
-    with ModelRuntime().slot('llm',model) as instance:
-        admitted=time.monotonic()
-        answer=_inference(messages,instance)
-        answer['diagnostics'].update(requested_model=model,resolved_model=instance,
-                                     model_verified=True,admission_ms=round((admitted-started)*1000))
-        return answer
+    return model_backend().inference(messages, model)
 
-def _inference(messages, model):
-    privacy_ready()
-    messages = conversation_messages(messages)
-    # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    # Admission already unloaded competitors and resolved the exact instance.
-    body = dict(model=model, messages=messages, stream=False, store=False)
-    headers = {'Content-Type': 'application/json'}
-    token_file = LM / 'api-token'
-    if token_file.exists():
-        headers['Authorization'] = 'Bearer ' + token_file.read_text().strip()
-    req = Request('http://127.0.0.1:1234/v1/chat/completions', json.dumps(body).encode(), headers)
-    started=time.monotonic()
-    with LOCAL.open(req) as response:
-        result = json.load(response)
-    inference_ms=round((time.monotonic()-started)*1000)
-    if result.get('model') != model:
-        raise ModelError('model_response_mismatch')
-    if 'response_id' in result:
-        raise RuntimeError('Unexpected retained response')
-    choice = result['choices'][0]
-    if choice.get('finish_reason') not in ('stop', None):
-        raise RuntimeError('Incomplete completion')
-    text = choice['message']['content']
-    if not isinstance(text, str) or not text:
-        raise RuntimeError('Empty completion')
-    usage=result.get('usage',{})
-    usage={key:usage[key] for key in ('prompt_tokens','completion_tokens','total_tokens')
-           if isinstance(usage,dict) and type(usage.get(key)) is int and usage[key]>=0}
-    diagnostics={'v':1,'response_model':result['model'],'finish_reason':choice.get('finish_reason'),
-                 'inference_ms':inference_ms,'usage':usage}
-    return {'text': text, 'model': result['model'], 'diagnostics':diagnostics}
 class Remote:
     realm = 'site'
     def __init__(self, cfg):

@@ -252,6 +252,68 @@ class HostIOClient:
         limit = None if operation == "gateway.invoke" else MAX_JSON
         return self._call(operation, _timeout=timeout, _response_limit=limit, **arguments)["result"]
 
+    def model_call(self, operation, arguments, progress=None):
+        """One TLS request; no retry, cancellation or inference deadline.
+
+        The native request retains admission through cleanup if delivery fails.
+        An interrupted worker must use its existing fail-without-replay ledger.
+        """
+        from .model_host_io import require_model_transport, OPERATIONS, ModelHostError, request_health
+        import hashlib
+        require_model_transport(self)
+        if operation not in OPERATIONS or not isinstance(arguments, dict):
+            raise ValueError("invalid native model operation")
+        import uuid
+        request_id = str(uuid.uuid4())
+        body = dict(protocol=PROTOCOL, host_id=self.config["host_id"], request_id=request_id,
+                    operation=operation, arguments=arguments)
+        if len(json.dumps(body, allow_nan=False, separators=(",", ":")).encode()) > MAX_JSON:
+            raise ValueError("native model request exceeds limit")
+        chunks = bytearray()
+        with request_health(request_id), self._request("/v1/host-io/model", body, timeout=None) as response:
+            def frame():
+                raw = response.readline(MAX_JSON+1)
+                if not raw or len(raw) > MAX_JSON or not raw.endswith(b"\n"):
+                    raise ValueError("truncated native model stream")
+                value = json.loads(raw)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid native model frame")
+                return value
+            start = frame()
+            if (start.get("type") != "start" or start.get("protocol") != PROTOCOL
+                    or start.get("host_id") != self.config["host_id"]
+                    or start.get("operation") != operation or start.get("request_id") != request_id):
+                raise ValueError("native model identity mismatch")
+            if self._bounds is not None and start.get("clock_id") != self._bounds.clock_id:
+                self._bounds.invalidate()
+            while True:
+                value = frame()
+                kind = value.get("type")
+                if kind == "progress":
+                    if not isinstance(value.get("value"), dict):
+                        raise ValueError("invalid native model progress")
+                    if progress is not None:
+                        # As in native ComfyBackend, progress delivery is
+                        # best-effort and never changes generation custody.
+                        try:
+                            progress(value["value"])
+                        except Exception:
+                            pass
+                elif kind == "data":
+                    chunks.extend(base64.b64decode(value["data"], validate=True))
+                elif kind == "end":
+                    if (type(value.get("size")) is not int or value["size"] != len(chunks)
+                            or value.get("sha256") != hashlib.sha256(chunks).hexdigest()):
+                        raise ValueError("native model result integrity mismatch")
+                    result = json.loads(chunks)
+                    if not isinstance(result, dict):
+                        raise ValueError("invalid native model result")
+                    return result
+                elif kind == "error":
+                    raise ModelHostError(value.get("code"))
+                else:
+                    raise ValueError("invalid native model frame")
+
     def vision_query(self, operation, inputs):
         if not isinstance(operation, str) or not isinstance(inputs, dict):
             raise ValueError("invalid vision query")

@@ -53,11 +53,14 @@ RUN chmod -R a+rX /opt/biome
 CMD ["replica"]
 
 FROM base AS private-base
-RUN pip install --no-cache-dir cryptography==44.0.2 aiohttp==3.11.18 Pillow==11.2.1
+RUN pip install --no-cache-dir cryptography==44.0.2
 COPY deploy/workers/runtime/terminal/biomerte /opt/biome/biomerte
 COPY providers/private-chat /opt/biome/providers/private-chat
-COPY providers/model-runtime /opt/biome/providers/model-runtime
-ENV PYTHONPATH=/opt/biome:/opt/biome/providers/mac-terminal:/opt/biome/providers/model-runtime
+COPY deploy/workers/private/health.py /opt/private-health.py
+ENV BIOME_MODEL_HOST_IO_CONFIG=/run/biome/host-io.json \
+    BIOME_PRIVATE_CHAT_STATE=/state/chat BIOME_PRIVATE_IMAGE_STATE=/state/image \
+    BIOME_PRIVATE_MODEL_HEALTH=/run/biome-health/model.json
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s CMD ["python","/opt/private-health.py"]
 
 FROM private-base AS private-chat
 RUN chmod -R a+rX /opt/biome

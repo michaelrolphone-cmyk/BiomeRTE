@@ -192,6 +192,8 @@ class HostIO:
         self.route_lock = threading.Lock()
         self.stop = threading.Event()
         self.refresh_thread = None
+        self._model = None
+        self._model_lock = threading.Lock()
         self._gateway = None
         self._gitlab = None
         self._gateway_lock = threading.Lock()
@@ -223,6 +225,10 @@ class HostIO:
 
     def close(self):
         self.stop.set()
+        with self._model_lock:
+            model = self._model
+        if model is not None:
+            model.close()
         self.anchors.close()
         if self.refresh_thread:
             self.refresh_thread.join(timeout=4)
@@ -463,7 +469,17 @@ class HostIO:
                     provisioning_active=provisioning, device_commands_active=device_effects,
                     effects_active=provisioning or device_effects or self.anchors.sock is not None)
 
+    def model_bridge(self):
+        with self._model_lock:
+            if self._model is None:
+                from .model_host_io import NativeModelBridge
+                self._model = NativeModelBridge(self.settings)
+            return self._model
+
     def call(self, operation, arguments):
+        if operation == "model.status":
+            if arguments: raise ValueError("model status has no arguments")
+            return self.model_bridge().status()
         if operation == "storage.status":
             if arguments: raise ValueError("storage status has no arguments")
             from .storage_host_io import status
@@ -527,6 +543,8 @@ def make_server(settings, backend):
         def do_POST(self):
             if not self.auth():
                 return
+            if self.path == "/v1/host-io/model":
+                return self.model()
             if self.path != "/v1/host-io/call":
                 return self.reply(404, {"error": "not_found"})
             try:
@@ -537,6 +555,9 @@ def make_server(settings, backend):
                 body = json.loads(read_exact(self.rfile, size))
                 if body.get("protocol") != PROTOCOL or not isinstance(body.get("arguments"), dict):
                     raise ValueError("invalid protocol")
+                if (settings.get("tls_listener") and body["operation"] in ("gateway.invoke", "gitlab.token")
+                        and not isinstance(self.connection, ssl.SSLSocket)):
+                    return self.reply(403, {"error":"credential_transport_requires_tls"})
                 result = backend.call(body["operation"], body["arguments"])
                 self.reply(200, dict(protocol=PROTOCOL, host_id=backend.host_id,
                                      clock_id=backend.clock_id, result=result))
@@ -546,6 +567,69 @@ def make_server(settings, backend):
                 self.reply(400, {"error": "invalid_host_request"})
             except (OSError, RuntimeError):
                 self.reply(503, {"error": "native_dependency_unavailable"})
+        def model(self):
+            # Model payloads require TLS even when other existing HostIO routes
+            # explicitly permit local HTTP. Auth and host binding precede work.
+            self.close_connection = True
+            if not isinstance(self.connection, ssl.SSLSocket):
+                return self.reply(403, {"error":"model_tls_required"})
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= MAX_JSON:
+                    raise ValueError("invalid model request length")
+                self.connection.settimeout(5)
+                body = json.loads(read_exact(self.rfile, size))
+                if (body.get("protocol") != PROTOCOL or
+                        body.get("host_id") != backend.host_id):
+                    raise ValueError("invalid model host binding")
+                request_id = body.get("request_id")
+                if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
+                    raise ValueError("invalid model request identity")
+                bridge = backend.model_bridge()
+                bridge.validate(body["operation"], body["arguments"])
+            except PermissionError:
+                return self.reply(403, {"error":"operation_not_active"})
+            except (ValueError, TypeError, KeyError):
+                return self.reply(400, {"error":"invalid_model_request"})
+            except Exception:
+                return self.reply(503, {"error":"native_dependency_unavailable"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            connected = True
+            writing = threading.Lock()
+            def emit(value):
+                nonlocal connected
+                with writing:
+                    if not connected:
+                        return
+                    try:
+                        raw = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
+                        if len(raw) > MAX_JSON:
+                            raise ValueError("model frame exceeds limit")
+                        self.wfile.write(raw + b"\n")
+                        self.wfile.flush()
+                    except (OSError, ValueError, TypeError):
+                        # Delivery failure cannot release native model custody.
+                        connected = False
+            emit(dict(type="start", protocol=PROTOCOL, host_id=backend.host_id,
+                      clock_id=backend.clock_id, operation=body["operation"], request_id=request_id))
+            try:
+                result = bridge.call(body["operation"], body["arguments"],
+                                     lambda value: emit(dict(type="progress", value=value)), request_id=request_id)
+                # Large image results use bounded frames. All data stays in RAM;
+                # the worker's existing encrypted artifact protocol is unchanged.
+                encoded = json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
+                for offset in range(0, len(encoded), 48*1024):
+                    emit(dict(type="data", data=base64.b64encode(encoded[offset:offset+48*1024]).decode()))
+                import hashlib
+                emit(dict(type="end", size=len(encoded), sha256=hashlib.sha256(encoded).hexdigest()))
+            except Exception as error:
+                from .model_host_io import PUBLIC_ERRORS
+                code = getattr(error, "public_code", "")
+                emit(dict(type="error", code=code if code in PUBLIC_ERRORS else "private_inference_unavailable"))
         def do_GET(self):
             if not self.auth():
                 return
@@ -604,19 +688,58 @@ def make_server(settings, backend):
         server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
 
+def make_servers(settings, backend):
+    """Optional TLS listener shares the exact same backend and native owners."""
+    servers = []
+    try:
+        servers.append(make_server(settings, backend))
+        listener = settings.get("tls_listener")
+        if listener is not None:
+            if (not isinstance(listener, dict) or set(listener) != {"listen", "port", "tls"}
+                    or not isinstance(listener["tls"], dict)
+                    or not {"cert_file", "key_file"} <= set(listener["tls"])):
+                raise ValueError("invalid additional HostIO TLS listener")
+            servers.append(make_server(dict(settings, **listener), backend))
+        return servers
+    except BaseException:
+        for server in servers:
+            server.server_close()
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
+    import resource
+    import signal
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     settings = json.loads(Path(args.config).read_text())
     backend = HostIO(settings)
-    server = make_server(settings, backend)
+    servers = make_servers(settings, backend)
+    stopping = threading.Event()
+    def shutdown(signum, frame):
+        stopping.set()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    serving = []
     try:
         backend.start()
-        server.serve_forever(poll_interval=.5)
+        for server in servers:
+            thread = threading.Thread(target=server.serve_forever,
+                                      kwargs={"poll_interval":.5}, daemon=True)
+            thread.start()
+            serving.append(thread)
+        stopping.wait()
     finally:
+        # Stop new requests on both listeners before waiting for native model
+        # custody. Do not abandon an admitted call because its client departed.
+        for server, thread in zip(servers, serving):
+            server.shutdown()
+            thread.join()
         backend.close()
-        server.server_close()
+        for server in servers:
+            server.server_close()
 
 if __name__ == "__main__":
     main()

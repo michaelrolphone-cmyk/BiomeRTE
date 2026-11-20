@@ -48,20 +48,7 @@ def open_message(key, kind, sid, operation, thash, value):
     if set(value) != {'v','kind','sid','id','nonce','ct'} or value['v'] != 2 or value['kind'] != kind or value['sid'] != sid or value['id'] != operation:
         raise ValueError('Invalid envelope')
     return json.loads(AESGCM(key).decrypt(raw(value['nonce'],12), base64.b64decode(value['ct'],validate=True), aad(kind,sid,operation,thash)))
-def conversation_messages(messages):
-    if not isinstance(messages, list) or not messages:
-        raise ValueError('Invalid conversation')
-    result = []
-    for index, message in enumerate(messages):
-        if (not isinstance(message, dict) or not {'role','content'} <= set(message)
-                or set(message) - {'role','content','model'}
-                or message['role'] not in ('system','user','assistant')
-                or (message['role'] == 'system' and index != 0)
-                or not isinstance(message['content'], str)
-                or ('model' in message and (message['role'] != 'assistant' or not isinstance(message['model'], str)))):
-            raise ValueError('Invalid conversation')
-        result.append({'role': message['role'], 'content': message['content']})
-    return result
+from model_service import conversation_messages
 class SessionServer:
     def __init__(self, identity, enrollment_hash=None, phone_identity=None, enrolled=None, request_handler=None):
         self.request_handler = request_handler
