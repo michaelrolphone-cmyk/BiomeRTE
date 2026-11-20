@@ -52,7 +52,7 @@ class ReconnectTests(unittest.IsolatedAsyncioTestCase):
         rover.broadcast('map',frame({'map_id':'map','revision':11,'from_revision':10},b''))
         async with rover.subscribe() as first:
             value=json.loads(await asyncio.wait_for(first['map'].get(),.1))
-            self.assertEqual({'type':'snapshot_required','map_id':'map','revision':12},value)
+            self.assertEqual({'type':'snapshot_required','schema':'rover.map.snapshot-required/1','schema_version':{'major':1,'minor':0},'map_id':'map','revision':12},value)
             rover.broadcast('map',frame({'map_id':'map','revision':13,'from_revision':12},b''))
             await first['map'].get()
             async with rover.subscribe() as second:

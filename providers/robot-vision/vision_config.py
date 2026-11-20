@@ -35,17 +35,7 @@ DEFAULT_CONFIG = {
         },
         "camera_to_robot": None,
     },
-    "radio": {
-        "enabled": False,
-        "receiver_calibration_id": "rssi-v1",
-        "poll_interval_s": 5.0,
-        "network_timeout_s": 2.0,
-        "freshness_threshold_s": 15.0,
-        "prior_max_age_s": 5.0,
-        "pose_history_s": 180.0,
-        "pose_history_limit": 1200,
-        "mapping": {},
-    },
+    "tof": {},
     "ahrs": {
         "enabled": False,
         "poll_interval_s": 0.1,

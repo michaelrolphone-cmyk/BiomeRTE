@@ -35,8 +35,8 @@ def credential(value, secrets, now=None):
         raise Fault('Invalid stream attachment credential', 403)
 
 
-def decode(message, maximum):
-    if len(message) > maximum:
+def decode(message, maximum=None):
+    if maximum is not None and len(message) > maximum:
         raise Fault('Stream message too large', 413)
     if isinstance(message, str):
         metadata = json.loads(message)
@@ -45,7 +45,7 @@ def decode(message, maximum):
         if len(message) < 4:
             raise Fault('Missing frame metadata')
         size = struct.unpack('!I', message[:4])[0]
-        if size > 16384 or size + 4 > len(message):
+        if size + 4 > len(message):
             raise Fault('Invalid frame metadata')
         metadata = json.loads(message[4:4 + size].decode())
         payload = message[4 + size:]
@@ -69,6 +69,19 @@ class Session:
         self.sequences = {}
         self.closed = False
         self.revisions = {}
+        self.sensor_manifest = None
+        self.world_snapshot = None
+        self.world_version = None
+
+    def cache_world_snapshot(self, metadata, forwarded):
+        world = metadata["data"]["map"]
+        survey = world["metadata"].get("survey_baseline") or {}
+        version = (world["map_id"], world["revision"], survey.get("survey_revision"),
+                   world["metadata"].get("attitude_world_reference"))
+        changed = version != self.world_version
+        self.world_version = version
+        self.world_snapshot = forwarded
+        return changed
 
     def peers_on(self, role, lane):
         return [p for (r, l, identity), p in list(self.peers.items())
@@ -86,7 +99,7 @@ class Session:
             target.put(message)
 
     def forward(self, role, lane, message, sender):
-        meta, payload = decode(message, self.grant['limits']['max_message_bytes'])
+        meta, payload = decode(message, None if self.grant.get('contract') == 'robot.vision.stream:1' else self.grant['limits']['max_message_bytes'])
         key = ('forward', role, lane)
         sequence = max(meta['sequence'], self.sequences.get(key, -1) + 1)
         self.sequences[key] = sequence
@@ -108,7 +121,7 @@ class Session:
 
     def check(self, role, lane, message, now=None, sender=None):
         g = self.grant
-        meta, payload = decode(message, g['limits']['max_message_bytes'])
+        meta, payload = decode(message, None if g.get('contract') == 'robot.vision.stream:1' else g['limits']['max_message_bytes'])
         if lane not in g.get('lanes', ['data']):
             raise Fault('Lane outside stream grant', 403)
         if (meta.get('authority'), meta.get('generation'), meta.get('epoch')) != (
@@ -133,7 +146,22 @@ class Session:
                     isinstance(expires, bool) or not isinstance(expires, (int, float)) or
                     not issued <= now < expires <= issued + 1):
                 raise Fault('Expired or invalid driving intent', 409)
-        if lane == 'vision' and not ack:
+        sensor_tick=meta.get("type")=="sensor_tick"
+        if lane == "vision" and not ack and sensor_tick:
+            packet=meta.get("sensor_packet")
+            if (meta.get("image_available") is not False or not isinstance(packet,dict)
+                    or not isinstance(packet.get("schema"),str) or not packet.get("schema")
+                    or not isinstance(packet.get("receiver_id"),str) or not packet.get("receiver_id")
+                    or not isinstance(packet.get("boot_id"),str) or not packet.get("boot_id")
+                    or type(packet.get("capture_monotonic_us")) is not int
+                    or not isinstance(meta.get("frame_id"),str) or not meta.get("frame_id")
+                    or payload not in (None,b"")):
+                raise Fault("Malformed sensor tick")
+        manifest = lane == 'vision' and meta.get('type') == 'sensor_manifest'
+        if manifest and (meta.get('schema') != 'rover.sensor.manifest/1' or
+                         not isinstance(meta.get('revision'), str) or not isinstance(meta.get('sensors'), list) or payload):
+            raise Fault('Malformed sensor manifest')
+        if lane == 'vision' and not ack and not sensor_tick and not manifest:
             for field in ('frame_id', 'source_timestamp', 'processing_timestamp',
                           'calibration_revision', 'map_revision'):
                 if field not in meta:
@@ -199,6 +227,7 @@ class Router:
         event = {'stage': stage, 'authority': (grant or {}).get('authority'),
                  'session': (grant or {}).get('id'), 'error': type(error).__name__,
                  'status': status,
+                 'vision_metadata_field': str(error).split(': ',1)[1] if str(error).startswith('Missing vision metadata: ') else None,
                  'reason': {'Expired or invalid driving intent': 'invalid_intent_freshness',
                             'Old or duplicate sequence': 'old_sequence',
                             'Superseded stream epoch': 'superseded_epoch',
@@ -299,8 +328,16 @@ class Router:
                 raise Fault('Stream subscription released', 403)
         delivery=grant.get('policies', {}).get(lane, grant['delivery'])
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
+        if role == 'server' and lane == 'vision' and grant.get('contract') == 'robot.vision.stream:1':
+            from .vision_mailbox import VisionMailbox
+            peer.queue = VisionMailbox()
+            for bootstrap in (session.sensor_manifest, session.world_snapshot):
+                if bootstrap is not None:
+                    peer.put(bootstrap)
         peer.consumer = grant.get('consumer') or (grant['lease'] if role == 'server' else '')
         session.peers[key] = peer
+        if lane == 'map' and role == 'server' and session.world_snapshot is not None:
+            peer.put(session.world_snapshot)
         if lane == 'control':session.notify_control_status()
         pump = asyncio.create_task(peer.pump())
         window, count = time.monotonic(), 0
@@ -316,9 +353,17 @@ class Router:
                     count += 1
                     if count > grant['limits']['messages_per_second']:
                         raise Fault('Stream rate exceeded', 429)
-                    session.check(role, lane, message, sender=identity)
+                    meta, _ = session.check(role, lane, message, sender=identity)
                     if session.quarantined:continue
                     forwarded = session.forward(role, lane, message, identity)
+                    if lane == 'vision' and role == 'provider' and meta.get('type') == 'sensor_manifest':
+                        session.sensor_manifest = forwarded
+                    if lane == 'map' and role == 'provider' and grant.get('contract') == 'robot.vision.stream:1':
+                        if meta.get('type') == 'world_snapshot':
+                            if not session.cache_world_snapshot(meta, forwarded):
+                                continue
+                            for target in session.peers_on('server', 'vision'):
+                                target.put(forwarded)
                     for other in session.peers_on('provider' if role == 'server' else 'server', lane):
                         try:
                             other.put(forwarded)
@@ -372,7 +417,27 @@ def listener_tls(config):
     return context
 
 
+async def refresh_device_routes(config):
+    if not config.get("device_routes"):return
+    from .device_routes import DeviceRoutes,refresh_neighbors,provision_routes
+    import subprocess,re
+    registry=DeviceRoutes(config["device_routes"])
+    while True:
+        try:
+            def observe():
+                output=subprocess.check_output(["/usr/sbin/arp","-an"],text=True)
+                neighbors=re.findall(r"\(([0-9.]+)\) at ([0-9a-f:]+) on",output)
+                changes=refresh_neighbors(registry,neighbors)
+                provision_routes(registry,config.get("device_route_provisioning",{}))
+                return changes
+            await asyncio.to_thread(observe)
+        except Exception:
+            logging.getLogger(__name__).exception("Device route discovery failed")
+        await asyncio.sleep(5)
+
+
 async def serve(config):
+    import sys
     from websockets.asyncio.server import serve as websocket_server
     from .app import Application
     validators, secrets = {}, {}
@@ -383,9 +448,11 @@ async def serve(config):
     from .stream_inspection import add_remote
     add_remote(config, secrets, validators)
     clock = None
+    clock_start_task = None
     if config.get('control_ntp'):
         from .control_clock import ControlClock
-        clock = await ControlClock().start()
+        clock = ControlClock()
+        clock_start_task = asyncio.create_task(clock.start())
     router = Router(secrets, validators, peer_status=config.get('peer_status', False), control_clock=clock)
     if config.get('diagnostic_log'):
         from logging.handlers import RotatingFileHandler
@@ -394,6 +461,16 @@ async def serve(config):
         logger.propagate = False
     context = listener_tls(config)
     async def health(connection, request):
+        if request.path == '/device-routes':
+            import hmac
+            supplied=request.headers.get("Authorization","")
+            if not any(hmac.compare_digest(supplied,"Bearer "+str(secret)) for secret in secrets.values()):
+                return connection.respond(403,json.dumps({"error":"unauthorized"}))
+            from .device_routes import DeviceRoutes
+            path=config.get("device_routes")
+            if not path:return connection.respond(503,json.dumps({"error":"registry_unconfigured"}))
+            records=await asyncio.to_thread(lambda:DeviceRoutes(path).list())
+            return connection.respond(200,json.dumps({"schema":"biome.device-routes/1","devices":records}))
         if request.path == '/health':
             response = connection.respond(200, json.dumps({'state': 'ready', 'authorities': sorted(secrets),
                 **router.health(), 'transport': config.get('transport', 'tls'),
@@ -410,9 +487,17 @@ async def serve(config):
             await socket.close(1008, 'Stream rejected')
     try:
         async with websocket_server(handle, config.get('listen', '127.0.0.1'), config.get('port', 8751),
-                                    ssl=context, process_request=health, max_size=4194304, max_queue=1, write_limit=65536):
-            await asyncio.Future()
+                                    ssl=context, process_request=health, max_size=None, max_queue=1, write_limit=65536):
+            route_task=asyncio.create_task(refresh_device_routes(config))
+            try:
+                await asyncio.Future()
+            finally:
+                route_task.cancel()
+                await asyncio.gather(route_task,return_exceptions=True)
     finally:
+        if clock_start_task is not None:
+            clock_start_task.cancel()
+            await asyncio.gather(clock_start_task,return_exceptions=True)
         if clock:
             await clock.close()
 
@@ -421,4 +506,3 @@ if __name__ == '__main__':
     import sys
     with open(sys.argv[1]) as source:
         asyncio.run(serve(json.load(source)))
-

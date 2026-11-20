@@ -1,0 +1,27 @@
+name: Published rover contract
+on: [pull_request]
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: providers/robot-vision:.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install contract test dependencies
+        run: python3 -m pip install numpy==1.26.4 websockets==15.0.1
+      - name: Check fanout, registry changes, network sanitization and derivations
+        run: |
+          python3 -m unittest discover -s providers/robot-vision/tests -p test_rover_stream_contract.py -v
+          python3 -m unittest discover -s providers/robot-vision/tests -p test_parity_derivations.py -v
+          python3 -m unittest discover -s providers/robot-vision/tests -p test_live_capture_contract.py -v
+      - name: Check console compatibility and schema evolution
+        env:
+          ROVER_CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 -m unittest discover -s tests -p test_rover_console_contract.py -v

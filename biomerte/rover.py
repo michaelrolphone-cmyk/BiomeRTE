@@ -7,8 +7,9 @@ from .stream_router import decode
 
 
 class Rover:
-    def __init__(self, remote, resources, task='rover-server', require_provider_ready=False):
+    def __init__(self, remote, resources, task='rover-server', require_provider_ready=False, clock=None):
         self.remote, self.resources, self.task = remote, resources, task
+        self.clock = clock
         self.require_provider_ready = require_provider_ready
         self.descriptors = {}
         self.browsers = set()
@@ -18,23 +19,57 @@ class Rover:
         self.closed = False
         self.tasks = []
         self.map_head = None
+        self.bootstrap = {}
+
+    @property
+    def control_ready(self):
+        return self._control_ready and (self.clock is None or self.clock.ready)
+
+    @control_ready.setter
+    def control_ready(self, value):
+        self._control_ready = value
 
     async def call(self, operation, **args):
         return await asyncio.to_thread(self.remote.call, operation, args)
+
+
+    async def read_capability(self, contract, inputs):
+        """Read through the same controller and capability used by agents."""
+        import uuid
+        operation = 'rover-view-' + uuid.uuid4().hex
+        args = dict(contract=contract, resource=self.resources['robot.vision.stream:1'],
+                    operation=operation, inputs=inputs)
+        await asyncio.to_thread(self.remote.call, 'cap.submit', args)
+        while True:
+            receipt = await asyncio.to_thread(self.remote.call, 'cap.status', {'operation':operation})
+            state = receipt.get('state')
+            if state == 'succeeded':
+                return receipt['result']['result']
+            if state in ('failed', 'denied', 'cancelled', 'abandoned', 'uncertain'):
+                raise RuntimeError('Capability read ' + state)
+            await asyncio.sleep(.25)
 
     @contextlib.asynccontextmanager
     async def subscribe(self):
         # The HTTP adapter authenticates the browser before this call.
         queues = {lane: asyncio.Queue(1 if lane != 'map' else 8)
                   for lane in ('vision', 'map', 'control')}
+        from .vision_mailbox import VisionMailbox
+        queues['vision'] = VisionMailbox(allow_legacy=True)
+        for kind in ('sensor_manifest', 'world_snapshot'):
+            if kind in self.bootstrap:
+                queues['vision'].put_nowait(self.bootstrap[kind])
         record = id(queues)
         member = (record, queues)
         self.browsers.add(record)
         if not hasattr(self, '_queues'):
             self._queues = {}
         self._queues[record] = queues
-        if self.map_head is not None:
-            queues['map'].put_nowait(json.dumps(dict(type='snapshot_required', **self.map_head)))
+        for kind in ('world_snapshot', 'snapshot'):
+            if kind in self.bootstrap:queues['map'].put_nowait(self.bootstrap[kind])
+        if 'snapshot' not in self.bootstrap and self.map_head is not None:
+            queues['map'].put_nowait(json.dumps(dict(type='snapshot_required',
+                schema='rover.map.snapshot-required/1',schema_version={'major':1,'minor':0},**self.map_head)))
         try:
             yield queues
         finally:
@@ -43,7 +78,19 @@ class Rover:
 
     def broadcast(self, lane, message):
         if lane in ('vision', 'map'):
-            metadata, unused = decode(message, 4194304)
+            metadata, unused = decode(message)
+            if lane == 'vision' and metadata.get('type') in ('sensor_manifest', 'world_snapshot'):
+                self.bootstrap[metadata['type']] = message
+            if lane == 'map' and metadata.get('type') in ('world_snapshot','snapshot'):
+                self.bootstrap[metadata['type']] = message
+            if metadata.get('type') == 'world_snapshot':
+                for queues in getattr(self, '_queues', {}).values():
+                    if lane == 'map':
+                        if queues[lane].full():queues[lane].get_nowait()
+                        queues[lane].put_nowait(message)
+                    else:
+                        queues[lane].put_nowait(message)
+                return
             revision = metadata.get('map_revision') if lane == 'vision' else metadata.get('revision')
             identity = metadata.get('map_id')
             if isinstance(identity, str) and type(revision) is int and revision >= 0:
@@ -66,7 +113,7 @@ class Rover:
         if not self.control_ready:
             raise RuntimeError('Control stream unavailable')
         self.sequence += 1
-        now = time.time()
+        now = self.clock.lower() if self.clock else time.time()
         value = dict(type='desired', sequence=self.sequence, outputs={'mask':mask},
                      issued_at=now, expires_at=now + ttl_ms/1000)
         if self.intent.full():self.intent.get_nowait()
@@ -93,7 +140,7 @@ class Rover:
                         raise ConnectionError('Lease unavailable')
                     await asyncio.sleep(.5)
                     lease = await self.call('cap.lease', lease=lease['id'])
-                # stream.open reattaches this subscription to the shared session.
+                # Reattach without closing another shared subscription.
                 descriptor = await self.call('stream.open', lease=lease['id'])
                 descriptor['subscription_lease'] = lease['id']
                 self.descriptors[contract] = descriptor
@@ -112,6 +159,7 @@ class Rover:
                     self.descriptors.pop(contract, None)
                     if descriptor is not None and 'map' in descriptor.get('lanes', []):
                         self.map_head = None
+                        self.bootstrap.clear()
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
                 preserve_reservation = False
                 if lease is not None and not self.closed:
@@ -143,28 +191,48 @@ class Rover:
         # epoch. Other lanes keep running. Only authoritative rejection returns
         # to the owner lifecycle to close the superseded session.
         while not self.closed:
+            attached = False
             try:
                 current = await self.call('stream.attach', session=descriptor['id'], role='server')
+                attached = True
                 await self.lane(current, lane)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 status = getattr(error, 'status', getattr(error, 'code', None))
+                if status is None:
+                    status = getattr(getattr(error, 'response', None), 'status_code', None)
                 if status in (403, 404, 409, 410):
                     raise
+                if not attached:
+                    # RPC adapters may lose the original HTTP status. Reconcile
+                    # against the authority instead of retrying a deleted/expired
+                    # grant forever or treating a network outage as a release.
+                    try:
+                        lease = await self.call('cap.lease', lease=descriptor['lease'])
+                        sessions = await self.call('stream.list', lease=descriptor['lease'])
+                    except Exception:
+                        # An unreachable authority proves nothing about ownership.
+                        pass
+                    else:
+                        if (lease['state'] != 'bound' or
+                                lease['generation'] != descriptor['generation'] or
+                                not any(s['id'] == descriptor['id'] for s in sessions)):
+                            raise ConnectionError('Stream ownership no longer current') from error
                 await asyncio.sleep(.5)
 
     async def lane(self, descriptor, lane):
         from websockets.asyncio.client import connect
         headers={'Authorization':'Stream '+descriptor['attachment_credential']}
-        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_queue=1,write_limit=65536) as socket:
+        async with connect(descriptor['url']+'/'+lane,additional_headers=headers,max_size=None if lane in ('vision','map') else 1048576,max_queue=1,write_limit=65536) as socket:
             if lane=='control':
                 self.discard_intent()
                 self.control_ready=not self.require_provider_ready
                 async def send():
                     while True:
                         intent=await self.intent.get()
-                        if not self.control_ready or intent['expires_at']<=time.time():continue
+                        now = self.clock.upper() if self.clock else time.time()
+                        if not self.control_ready or intent['expires_at']<=now:continue
                         intent.update(authority=descriptor['authority'],generation=descriptor['generation'],epoch=descriptor['epoch'])
                         await asyncio.wait_for(socket.send(json.dumps(intent)),.1)
                 task=asyncio.create_task(send())
@@ -174,20 +242,26 @@ class Rover:
                 revision=None
                 async for message in socket:
                     if lane=='control' and self.require_provider_ready:
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message,None if lane in ('vision','map') else descriptor['limits']['max_message_bytes'])
                         if metadata.get('type')=='stream_status':
                             if self.require_provider_ready:
                                 if any(metadata.get(k)!=descriptor[k] for k in ('authority','generation','epoch')):
                                     raise ValueError('Mismatched router peer status')
                                 if any(type(metadata.get(k)) is not bool for k in ('provider_connected','server_connected')):
                                     raise ValueError('Invalid router peer status')
-                                self.discard_intent()
                                 available=metadata.get('authority_available',True)
                                 if type(available) is not bool:raise ValueError('Invalid authority availability')
-                                self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                ready=available and metadata['provider_connected'] and metadata['server_connected']
+                                if not ready or not self.control_ready:
+                                    self.discard_intent()
+                                self.control_ready=ready
                             continue
                     if lane=='map':
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message,None)
+                        if metadata.get('type') in ('world_snapshot','snapshot'):
+                            if metadata.get('type')=='snapshot':revision=metadata['revision']
+                            self.broadcast(lane, message)
+                            continue
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:
                             self.broadcast('map',json.dumps({'type':'snapshot_required','map_id':metadata.get('map_id'),
                                                            'revision':metadata.get('revision')}))
@@ -269,3 +343,4 @@ def web_app(rover, authenticate):
     app.on_startup.append(lambda app:rover.start())
     app.on_cleanup.append(lambda app:rover.close())
     return app
+

@@ -96,7 +96,6 @@ class LiveCameraTests(unittest.TestCase):
                 # query and capture paths remain under test.
                 with patch.object(service.metric, 'start_worker'), \
                      patch.object(service.atlas, 'start'), \
-                     patch.object(service.radio, 'start'), \
                      patch.object(service.ahrs, 'start'), \
                      patch.object(service.ultrasonic, 'start'):
                     with service.live_frames.subscribe() as inbox:
@@ -105,6 +104,9 @@ class LiveCameraTests(unittest.TestCase):
                         captured = frame(1)
                         camera.offer(captured)
                         meta, jpeg = unpack(inbox.get(timeout=1))
+                        while meta.get('type') == 'sensor_manifest':
+                            self.assertEqual(jpeg, b'')
+                            meta, jpeg = unpack(inbox.get(timeout=1))
                         self.assertEqual(meta['frame_id'], 'capture:1')
                         self.assertEqual(jpeg, captured.jpeg_bytes)
                         self.assertFalse(meta['pose']['valid'])
@@ -219,6 +221,41 @@ class LiveCameraTests(unittest.TestCase):
                 if processing.ident is not None:
                     processing.join(2)
                 service.close()
+
+    def test_sensor_tick_survives_actual_leased_sender_and_router(self):
+        import asyncio
+        from leased_publish import packet
+        from biomerte.stream_router import Session, decode
+        from leased_streams import VisionStreams
+        import test_stream_sequence_recovery as recovery
+        metadata=dict(type="telemetry",sensor_tick=True,image_available=False,frame_id="boot:1",
+            processed_monotonic=time.monotonic(),sensor_packet=dict(schema="biome.sensor_tick.v1",
+                receiver_id="device",boot_id="boot",capture_monotonic_us=1))
+        class Response(io.BytesIO):
+            status=200
+        response=Response(packet(metadata,b""))
+        class Local:
+            def request(self,*args):pass
+            def getresponse(self):return response
+            def abort(self):response.close()
+        binding,stop,received=recovery.grant(),threading.Event(),[]
+        router=Session(binding)
+        class Wire:
+            async def send(self,message):
+                router.check("provider","vision",message)
+                received.append(decode(message))
+                stop.set()
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):return False
+        class Remote:
+            def call(self,*args):return dict(url="ws://127.0.0.1:8751/session-a",attachment_credential="fixture")
+        publisher=VisionStreams(Remote(),"fixture")
+        async def run():
+            with patch("leased_streams.LocalConnection",return_value=Local()),patch("websockets.asyncio.client.connect",return_value=Wire()):
+                await asyncio.wait_for(publisher.run(binding,stop),2)
+        asyncio.run(run())
+        self.assertEqual(received[0][0]["type"],"sensor_tick")
+        self.assertEqual(received[0][1],b"")
 
     def test_camera_packet_survives_actual_leased_sender_freshness_and_router_checks(self):
         from leased_publish import packet

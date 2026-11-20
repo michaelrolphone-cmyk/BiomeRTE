@@ -103,7 +103,12 @@ class ControlClock:
         self.interval, self.sampled_at = interval, self.monotonic()
 
     async def start(self):
-        await self.refresh()
+        while True:
+            try:
+                await self.refresh()
+                break
+            except (OSError, ValueError, RuntimeError):
+                await asyncio.sleep(1)
         async def renew():
             while True:
                 await asyncio.sleep(30)
