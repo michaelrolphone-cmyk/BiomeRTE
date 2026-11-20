@@ -334,10 +334,24 @@ _CONNECTIONS_LOCK = threading.RLock()
 _IDLE_CONNECTIONS = []
 
 
+def _claim_idle_connection(entry):
+    # Caller holds the RLock, but allocation can still run a Store finalizer
+    # on this thread. Claim the exact entry only if it remains in the pool;
+    # a finalizer may already have removed and closed a snapshot's handle.
+    # Entries contain identity-only owner keys and SQLite connection objects.
+    try:
+        _IDLE_CONNECTIONS.remove(entry)
+    except ValueError:
+        return False
+    return True
+
+
 def _close_connections(key):
+    idle = []
     with _CONNECTIONS_LOCK:
-        idle = [db for owner, db in _IDLE_CONNECTIONS if owner is key]
-        _IDLE_CONNECTIONS[:] = [(owner, db) for owner, db in _IDLE_CONNECTIONS if owner is not key]
+        for entry in _IDLE_CONNECTIONS[:]:
+            if entry[0] is key and _claim_idle_connection(entry):
+                idle.append(entry[1])
     for db in idle:
         db.close()
 
@@ -438,9 +452,9 @@ class Store:
         """
         db = None
         with _CONNECTIONS_LOCK:
-            for index in range(len(_IDLE_CONNECTIONS) - 1, -1, -1):
-                if _IDLE_CONNECTIONS[index][0] is self._connection_key:
-                    unused, db = _IDLE_CONNECTIONS.pop(index)
+            for entry in reversed(_IDLE_CONNECTIONS[:]):
+                if entry[0] is self._connection_key and _claim_idle_connection(entry):
+                    db = entry[1]
                     break
         if db is None:
             db = self.connect()
@@ -454,17 +468,20 @@ class Store:
                 reusable = True
             except sqlite3.Error:
                 pass
-            evicted = None
+            evicted = []
             if reusable:
                 with _CONNECTIONS_LOCK:
                     _IDLE_CONNECTIONS.append((self._connection_key, db))
-                    if len(_IDLE_CONNECTIONS) > 8:
-                        unused, evicted = _IDLE_CONNECTIONS.pop(0)
+                    for entry in _IDLE_CONNECTIONS[:]:
+                        if len(_IDLE_CONNECTIONS) <= 8:
+                            break
+                        if _claim_idle_connection(entry):
+                            evicted.append(entry[1])
                 db = None
             if db is not None:
                 db.close()
-            if evicted is not None:
-                evicted.close()
+            for idle in evicted:
+                idle.close()
 
     def close(self):
         """Release idle connections; checked-out operations retain ownership."""
