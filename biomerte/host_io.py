@@ -402,7 +402,7 @@ class HostIO:
             # Video processing keeps its native compute dependencies and existing
             # job ledger. The provider has always dispatched these operations
             # through VideoJobs rather than the vision Unix query handler.
-            directory = str(Path(self.settings["device_routes_module_directory"]).resolve())
+            directory = str(Path(policy.get("module_directory") or self.settings["device_routes_module_directory"]).resolve())
             request = inputs.get("request")
             actions = ({"list", "status"} if query.endswith(".read") else
                        {"create", "chunk", "finish", "start", "cancel"})

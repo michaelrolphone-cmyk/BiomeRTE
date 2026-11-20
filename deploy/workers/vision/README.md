@@ -37,14 +37,16 @@ gateway-issued stream endpoints remain in use.
 
 ```sh
 python deploy/workers/vision/render-config.py --native-manifest /path/to/provider-manifest.json --output /path/to/container-provider.json
-python deploy/workers/vision/native-policy.py --native-python /path/to/vision/env/bin/python --output /path/to/vision-policy.json
+python deploy/workers/vision/native-policy.py --native-python /path/to/vision/env/bin/python --native-source /path/to/deployed/vision/modules --output /path/to/vision-policy.json
 ```
 
 The second command renders the value for existing HostIO `vision_queries`:
-an exact `operations` allowlist, `mutations` list, and explicit native
-`python`. It does not update an active bridge configuration. Native
-`device_routes_module_directory` points to the deployed vision source;
-`vision_directory` points to the existing native state. Mutating queries also
+an exact `operations` allowlist, `mutations` list, explicit native
+`python` and optional `module_directory` for the installed VideoJobs implementation.
+It does not update an active bridge configuration. The separate route helper
+`device_routes_module_directory` remains unchanged; `vision_directory` points to
+the existing native state. If no video module directory is configured, the
+existing route module directory remains the compatibility default. Mutating queries also
 require existing top-level `enable_effects=true`. Read-only qualification can
 enable status, snapshot and video import read while keeping effects disabled.
 

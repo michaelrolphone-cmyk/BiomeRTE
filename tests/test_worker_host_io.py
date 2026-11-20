@@ -77,13 +77,15 @@ class WorkerHostIOTests(unittest.TestCase):
 
     def test_video_jobs_run_with_the_configured_native_interpreter(self):
         import sys
-        module = self.root / "video_jobs.py"
+        video_source = self.root / "native-video-source"
+        video_source.mkdir()
+        module = video_source / "video_jobs.py"
         module.write_text("import sys\nclass VideoJobs:\n def __init__(self,state): self.state=state\n"
                           " def handle(self,request): return {'python':sys.executable,'state':self.state,'request':request}\n")
         self.backend.settings.update(
             device_routes_module_directory=str(self.root), vision_directory=str(self.root/"vision"),
             vision_queries={"operations":["robot.video.import.read"],"mutations":[],
-                            "python":sys.executable})
+                            "python":sys.executable, "module_directory":str(video_source)})
         result = self.backend.vision_query("robot.video.import.read", {"request":{"action":"status"}})
         self.assertEqual(result["body"]["python"], sys.executable)
         self.assertEqual(result["body"]["request"], {"action":"status"})
