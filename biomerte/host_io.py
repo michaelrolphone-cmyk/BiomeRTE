@@ -402,20 +402,32 @@ class HostIO:
             # Video processing keeps its native compute dependencies and existing
             # job ledger. The provider has always dispatched these operations
             # through VideoJobs rather than the vision Unix query handler.
-            import sys
             directory = str(Path(self.settings["device_routes_module_directory"]).resolve())
-            if directory not in sys.path:
-                sys.path.insert(0, directory)
-            from video_jobs import VideoJobs
             request = inputs.get("request")
             actions = ({"list", "status"} if query.endswith(".read") else
                        {"create", "chunk", "finish", "start", "cancel"})
             if not isinstance(request, dict) or request.get("action") not in actions:
                 raise ValueError("invalid video job action")
-            try:
-                body = VideoJobs(self.settings["vision_directory"]).handle(request)
-            except (ValueError, KeyError, FileNotFoundError) as error:
-                body = {"ok": False, "error": {"code": "VIDEO_INPUT", "message": str(error)[:500]}}
+            interpreter = Path(policy.get("python", ""))
+            if not interpreter.is_absolute() or not interpreter.is_file():
+                raise ValueError("native vision interpreter must be explicitly configured")
+            # VideoJobs.start launches video_worker with sys.executable. Invoke
+            # it in the actual vision environment, not this small bridge's Python.
+            program = (
+                "import json,sys; sys.path.insert(0,sys.argv[1]); "
+                "from video_jobs import VideoJobs; request=json.load(sys.stdin)\n"
+                "try: result=VideoJobs(sys.argv[2]).handle(request)\n"
+                "except (ValueError,KeyError,FileNotFoundError) as error:\n"
+                " result={'ok':False,'error':{'code':'VIDEO_INPUT','message':str(error)[:500]}}\n"
+                "json.dump(result,sys.stdout,allow_nan=False)\n")
+            completed = subprocess.run(
+                [str(interpreter), "-c", program, directory, self.settings["vision_directory"]],
+                input=json.dumps(request, allow_nan=False), text=True, capture_output=True)
+            if completed.returncode:
+                raise RuntimeError("native video request did not complete")
+            body = json.loads(completed.stdout)
+            if not isinstance(body, dict):
+                raise ValueError("native video response must be an object")
             return {"status": 200, "body": body}
         raw = json.dumps({"operation": query, "inputs": inputs},
                          allow_nan=False, separators=(",", ":")).encode()
