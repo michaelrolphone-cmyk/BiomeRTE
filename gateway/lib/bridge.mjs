@@ -124,8 +124,11 @@ export async function device(req, env, path) {
    if(identities.length!==1)return reply({error:'Device check requires one configured application identity'},409);
    args={controller:identities[0][0]};
   }
-  // Unregistered legacy bridge credentials retain their previous default check.
-  return reply(await runTool(env, 'biome_status',args));
+  // This authenticated device check proves the physical link's round trip.
+  // Managed controller routing belongs to operator calls, not recovery probes:
+  // redirecting here would hide a failed link behind the logical authority.
+  // Unregistered legacy bridge credentials retain their native default check.
+  return reply(await enqueue(env, 'biome_status',args,crypto.randomUUID()));
  }
  const db = env.DB, time = epoch();
  if (path === '/bridge/next') {
