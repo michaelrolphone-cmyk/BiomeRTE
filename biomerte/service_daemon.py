@@ -155,6 +155,10 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
             # history in RAM and would apply new-write lifecycle defaults.
             with contextlib.closing(store.connect()) as db:
                 db.execute("PRAGMA synchronous=FULL")
+                # Give only this bulk connection a 64 MiB page-cache budget.
+                # Canonical inserts and derived-index triggers revisit B-tree
+                # pages; normal spill and FULL/WAL durability remain enabled.
+                db.execute("PRAGMA cache_size=-65536")
                 db.execute("BEGIN IMMEDIATE")
                 try:
                     db.execute("DELETE FROM records")

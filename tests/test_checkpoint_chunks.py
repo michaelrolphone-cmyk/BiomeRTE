@@ -148,6 +148,75 @@ class Blocks(unittest.TestCase):
         finally:
             local.close()
 
+    def test_controller_restore_cache_is_local_and_keeps_durable_triggered_writes(self):
+        try:
+            from biomerte import service_daemon
+        except ModuleNotFoundError as error:
+            if error.name == "aiohttp":
+                self.skipTest("Optional helper restore integration requires aiohttp")
+            raise
+        import contextlib
+        import sqlite3
+        from unittest.mock import patch
+        from biomerte.store import Store
+
+        home = pathlib.Path(self.directory.name) / "cached-authority"
+        private = pathlib.Path(self.directory.name) / "cache-private"
+        private.mkdir()
+        (private / "node.json").write_text("{}")
+        (private / "node.key").write_text("fixture")
+        config = dict(authority_kind="controller", authority_id="authority",
+                      site="site", service_id="controller", controller_aliases=[])
+        packet = self.store.bootstrap(
+            root([shard(self.store.chunks, {"state": "waiting"}, kind="runs")]),
+            {"source_receipt": "fixture"})
+        connections, observed = [], []
+
+        class ObservedStore(Store):
+            def connect(self):
+                db = super().connect()
+                connections.append(db)
+                return db
+
+        def read_block(key):
+            # iter_records reads its first block after DELETE, inside the real
+            # bulk transaction. Inspect that same live SQLite connection.
+            db = connections[-1]
+            observed.append(dict(
+                cache=db.execute("PRAGMA cache_size").fetchone()[0],
+                synchronous=db.execute("PRAGMA synchronous").fetchone()[0],
+                journal=db.execute("PRAGMA journal_mode").fetchone()[0],
+                spill=db.execute("PRAGMA cache_spill").fetchone()[0],
+                transaction=db.in_transaction))
+            return self.store.chunks.get(key)
+
+        with patch.object(service_daemon, "Store", ObservedStore):
+            service_daemon.restore_state(
+                str(home), str(private), packet, config, read_block)
+        self.assertTrue(observed)
+        for settings in observed:
+            self.assertEqual(-65536, settings["cache"])
+            self.assertEqual(2, settings["synchronous"])
+            self.assertEqual("wal", settings["journal"])
+            self.assertGreater(settings["spill"], 0)
+            self.assertTrue(settings["transaction"])
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connections[-1].execute("SELECT 1")
+
+        with contextlib.closing(sqlite3.connect(":memory:")) as ordinary:
+            default_cache = ordinary.execute("PRAGMA cache_size").fetchone()[0]
+        with contextlib.closing(sqlite3.connect(str(home / "site.sqlite"))) as db:
+            # The bulk budget is not persisted or imposed on ordinary readers.
+            self.assertEqual(default_cache, db.execute("PRAGMA cache_size").fetchone()[0])
+            self.assertEqual([("runs", "artifact-1", '{"state":"waiting"}')],
+                             db.execute("SELECT kind,id,value FROM records").fetchall())
+            self.assertEqual("@dirty", db.execute(
+                "SELECT state FROM record_lifecycle WHERE kind='runs' AND id='artifact-1'").fetchone()[0])
+            self.assertIsNotNone(db.execute(
+                "SELECT 1 FROM record_lookup_dirty WHERE kind='runs' AND id='artifact-1'").fetchone())
+            self.assertIsNotNone(db.execute(
+                "SELECT 1 FROM retention_ref_dirty WHERE kind='runs' AND id='artifact-1'").fetchone())
+
 
 class Publisher(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
