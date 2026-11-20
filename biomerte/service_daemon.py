@@ -189,11 +189,17 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
                         if empty:
                             db.execute("INSERT INTO records VALUES(?,?,?)", (kind,key,raw_value))
                         else:
-                            # Do not let UPSERT conceal a duplicate input identity.
+                            # A delta must not conceal a duplicate input identity.
                             db.execute("INSERT INTO temp.controller_restore_seen VALUES(?,?)", (kind,key))
-                            db.execute("INSERT INTO records VALUES(?,?,?) "
-                                       "ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value "
-                                       "WHERE records.value IS NOT excluded.value", (kind,key,raw_value))
+                            # Ordinary statements preserve conflict policies in
+                            # the dirty-index triggers; UPSERT's DO UPDATE does not.
+                            same = db.execute("SELECT value IS ? FROM records WHERE kind=? AND id=?",
+                                              (raw_value,kind,key)).fetchone()
+                            if same is None:
+                                db.execute("INSERT INTO records VALUES(?,?,?)", (kind,key,raw_value))
+                            elif not same[0]:
+                                db.execute("UPDATE records SET value=? WHERE kind=? AND id=?",
+                                           (raw_value,kind,key))
                     if not empty:
                         # Missing records may be removed only after every signed
                         # block/shard/record has passed the input iterator.

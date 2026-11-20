@@ -211,7 +211,9 @@ class ControllerRestoreModes(unittest.TestCase):
                     mode=db.execute("PRAGMA journal_mode").fetchone()[0],
                     synchronous=db.execute("PRAGMA synchronous").fetchone()[0],
                     temp_store=db.execute("PRAGMA temp_store").fetchone()[0],
-                    temp_cache=db.execute("PRAGMA temp.cache_size").fetchone()[0],
+                    temp_cache=(db.execute("PRAGMA temp.cache_size").fetchone()[0]
+                                if any(row[1] == "temp" for row in db.execute("PRAGMA database_list"))
+                                else None),
                     in_transaction=db.in_transaction))
             return self.chunks.get(key)
 
