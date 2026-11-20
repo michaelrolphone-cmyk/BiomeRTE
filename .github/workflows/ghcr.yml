@@ -44,7 +44,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --workflow ci.yml \
             --revision "$SOURCE_COMMIT" --output receipts/qualification.json
           python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
+            --image biomerte-service-runner --image biomerte-service-authority --image biomerte-portable-services \
             --output receipts/private-before.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
@@ -83,13 +83,14 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --workflow ci.yml \
             --revision "$SOURCE_COMMIT" --output receipts/qualification-at-publish.json
           python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
+            --image biomerte-service-runner --image biomerte-service-authority --image biomerte-portable-services \
             --output receipts/private-at-publish.json
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           python3 deploy/docker-services/images.py publish --lock release/images.lock.json \
-            --registry ghcr.io --namespace "$REGISTRY_OWNER"
+            --registry ghcr.io --namespace "$REGISTRY_OWNER" \
+            --repository-prefix biomerte-
           python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
+            --image biomerte-service-runner --image biomerte-service-authority --image biomerte-portable-services \
             --require-existing --output receipts/private-after.json
       - name: Preserve confirmed digest receipts even after a partial push
         if: always()
