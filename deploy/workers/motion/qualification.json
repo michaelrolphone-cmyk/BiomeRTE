@@ -1,0 +1,30 @@
+{
+  "component": "motion",
+  "deployment_gate": "Stop native observer/provider before container handoff; keep SQLite ownership within one kernel.",
+  "durable_state": "Existing worker state/model/training database is external to the image.",
+  "fixture_tests_passed": 33,
+  "image": {
+    "architecture": "arm64",
+    "build_exit": 0,
+    "id": "sha256:3bb07e94f55d8ddaf1ff2457d727df79050618b1e9e3d6ebc09761324acd335c",
+    "qualification_exit": 0,
+    "runtime_user": "501:20",
+    "size_bytes": 183746931,
+    "source_commit": "90cc2f6f6a29f16b2241f65a8e8b243b92545379",
+    "tag": "biomerte-worker-motion:90cc2f6f6a29",
+    "transport_commit": "0269750b1a7516befab1ec5b23083a5e73f2fce3"
+  },
+  "live_cutover_performed_by_qualification": false,
+  "network": "disabled during isolated qualification",
+  "physical_motion_commanded": false,
+  "qualified_platform": "linux/arm64",
+  "recorded_utc": "2026-11-20",
+  "role": "Actual motion model, prediction, inverse planning, training sessions and observer/provider implementation.",
+  "root_filesystem": "read-only",
+  "runtime_user": "501:20",
+  "schema": "biomerte.worker-qualification/1",
+  "source_permissions": "Only packaged /app source permissions adjusted; native files and runtime secrets unchanged.",
+  "superseded_reason": "Initial qualification used root; deployment-UID qualification exposed native maintenance file creation permissions.",
+  "supersedes_image": "biomerte-worker-motion:ab1795f9c5ed",
+  "temporary_filesystem": "tmpfs /tmp"
+}

@@ -30,10 +30,12 @@
     "source_commit": "faa23ea5588c549485842b7779645096bc8eb973"
   },
   "qualified_other_profile": {
-    "health_deadline_fix_requires_rebuild": "7e433e1297004d768a84d6852d35611ec604a17a",
-    "image": "biomerte-worker-vision-provider:ab1795f9c5ed",
-    "image_id": "sha256:a975d57a1c9e1bb22f2c80d199d137a207f9e0e2c8dbca172e6a548d018964c1",
-    "role": "Actual vision capability and stream implementation with native MPS compute boundary."
+    "health_deadline_fix_included": true,
+    "image": "biomerte-worker-vision-provider:90cc2f6f6a29",
+    "image_id": "sha256:9b63e576e57a1d768f82e19f0ae482647aa916a0e14ec3c7cc10347b6f214b1c",
+    "role": "Actual vision capability and stream implementation with native MPS compute boundary.",
+    "runtime_user": "501:20",
+    "source_commit": "90cc2f6f6a29f16b2241f65a8e8b243b92545379"
   },
   "recipe_after_failure": {
     "changes": [
