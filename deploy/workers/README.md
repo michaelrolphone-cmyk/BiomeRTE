@@ -2,8 +2,8 @@
 
 This directory packages the application implementations running on the Mac and Pi.
 Each family has its own image, persistent-state contract and deployment instructions.
-The service runner, service authority and generic portable-services container are
-not the deliverables of this migration.
+The inventory covers application workers, their actual execution code, native
+dependencies and the state needed for a supervised handoff.
 
 ## Implementation coverage
 
@@ -109,3 +109,31 @@ Images use immutable local IDs in prepared deployments. A registry can later hos
 the same images without changing application state or provider identity. Publishing
 an image or selecting a new version is separate from this source conversion;
 automatic updates must retain the same qualification and ownership gates.
+
+## Deployment status on 2026-11-20
+
+The qualification catalog records fourteen built image families. The ToF solver
+has transferred to its container and is processing physical anchor input using
+the original state and clock. Its route-metadata timeout crash was repaired in
+System Apps commit e79ce5ed2a8a; the final image passed 91 tests and a live
+observation of more than 45 seconds with zero restarts, fresh output and unchanged
+native clock identity. /healthz returns 200. /readyz still returns 503 for the
+pending Rover camera dependency, so Docker correctly retains an unhealthy
+readiness status. This is a running, degraded solver, not full camera readiness.
+See [the live qualification record](tof/live-qualification-20261120.json).
+
+Docker CLI, storage and the private chat/image pair returned to their original
+native ownership after guarded replacement attempts failed fresh gateway polling.
+Both native and container requests encounter the site authority's frozen-native-
+write error. Current ledgers, signing identity and pairing were preserved; native
+ownership restoration does not establish healthy provider polling.
+
+GitLab and workspace transitions are gated by existing uncertain operations.
+Motion and vision transitions are gated by stale coherent vision observations
+and unavailable Rover control. Rover and coding have concrete local bundles that
+preserve their existing loopback endpoints; Rover still requires a quiescent route
+state transfer. Replica has explicit credentials, current-IP and native-volume
+attestation wiring, but the current Pi endpoint timed out during SSH banner
+exchange before host-key verification or authentication. No archive transfer was
+attempted. Radio images are built and fixture-tested; physical-device handoff is
+pending. See each family's qualification/preparation record for exact evidence.

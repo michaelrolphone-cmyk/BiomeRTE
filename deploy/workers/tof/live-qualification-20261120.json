@@ -1,0 +1,84 @@
+{
+  "schema": "biomerte.tof-image-rollforward-verification/1",
+  "observed_utc": "2026-11-20T16:50:18.845831+00:00",
+  "state": "running_degraded_camera",
+  "new_container_id": "27b501391f43c0c0432fa1ae1801428134534d3171982c791bf56e0d86f45322",
+  "new_image": "sha256:facd1163e4676b24b66de8a7fe9740706b379d4b82baf44f8513b406944c37d1",
+  "source_revision": "e79ce5ed2a8aecc530a0d6d6a262efd80a4cde5d",
+  "old_container_id": "2ae77a2e35fda7666ac129030cd376f0d63174b42cacf95c2ae48f670d72ef81",
+  "old_image": "sha256:6fc00650b0317a419ebe88fefd87980e09ff6a40df589a2f0d5a3c63442f22d6",
+  "old_restart_count": 11,
+  "new_restart_count": 0,
+  "docker_health": "unhealthy",
+  "hostio_restarted": false,
+  "native_tof_started": false,
+  "current_state_preserved": true,
+  "configuration_image_only_changed": true,
+  "environment_map_equal": true,
+  "guard_note": "Initial environment list order comparison stopped verification after successful start; semantic value maps match exactly. Verification resumed without another restart.",
+  "no_traceback_during_observation": true,
+  "observation_seconds": 51.97,
+  "latest": {
+    "elapsed_s": 46.69,
+    "running": true,
+    "restart_count": 0,
+    "solution_age_s": 1.886,
+    "anchors": 2,
+    "health": {
+      "code": 200,
+      "body": {
+        "schema": "biomerte.tof-health/1",
+        "phase": "active",
+        "live": true,
+        "ready": false,
+        "inputs_valid": true,
+        "loop_age_s": 1.895680375979282,
+        "vision_fresh": true,
+        "anchor_fresh": true,
+        "clock_qualified": true,
+        "camera_ok": false
+      }
+    },
+    "readiness": {
+      "code": 503,
+      "body": {
+        "schema": "biomerte.tof-health/1",
+        "phase": "active",
+        "live": true,
+        "ready": false,
+        "inputs_valid": true,
+        "loop_age_s": 1.9013333339826204,
+        "vision_fresh": true,
+        "anchor_fresh": true,
+        "clock_qualified": true,
+        "camera_ok": false
+      }
+    }
+  },
+  "clock_preflight": {
+    "host_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+    "clock_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b:17f22453291aed703c91a5fb",
+    "raw_range_epoch": "native_host_monotonic",
+    "state_epoch": "unix_utc"
+  },
+  "maintenance_receipts": [
+    "actual-workers-tof-rollforward-20261120-81",
+    "actual-workers-tof-rollforward-observe-20261120-83"
+  ],
+  "post_deployment_clock": {
+    "observed_utc": "2026-11-20T16:51:59.942339+00:00",
+    "updated_at": 1795193519.6988754,
+    "age_s": 0.24345946311950684,
+    "newer_than_replacement_start": true,
+    "clock": {
+      "host_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+      "clock_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b:17f22453291aed703c91a5fb",
+      "raw_range_epoch": "native_host_monotonic",
+      "state_epoch": "unix_utc"
+    },
+    "restart_count": 0,
+    "anchor_count": 2
+  },
+  "sample_count": 10,
+  "all_samples_running_without_restart": true
+}

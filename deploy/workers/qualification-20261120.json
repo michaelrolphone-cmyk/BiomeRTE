@@ -15,7 +15,9 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-gitlab:20261120-38d9b5f76844"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/38d9b5f76844"
     },
     {
       "family": "workspaces",
@@ -30,7 +32,9 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-workspaces:20261120-38d9b5f76844"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/38d9b5f76844"
     },
     {
       "family": "docker-cli",
@@ -45,7 +49,9 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-docker-cli:20261120-46f92bedd9e4"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/46f92bedd9e4"
     },
     {
       "family": "storage",
@@ -60,37 +66,44 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-storage:20261120-38d9b5f76844"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/38d9b5f76844"
     },
     {
       "family": "replica",
-      "tag": "biomerte-worker-replica:20261120-38d9b5f76844",
-      "image_id": "sha256:ade132636d1fc5534c6bc1be7259bf06fb7aad9fe761f809255e428154d48291",
-      "source": "38d9b5f768447895ec2f224966f3150a7a84e291",
+      "tag": "biomerte-worker-replica:20261120-8f6990af09f6",
+      "image_id": "sha256:8011ce31232fc3e4051d81810353ead7066a0052891ac9f7a319a7ff9108ee90",
+      "source": "8f6990af09f65e22bc5b182a392cb8ad03cd2376",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "prepared; configured remote SSH endpoints unavailable",
-      "size_bytes": 268945279,
+      "live_handoff": "prepared_v3; readonly native volume and SSH credential checks passed; current endpoint SSH banner timeout before authentication",
+      "size_bytes": 269194828,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
-        "biomerte-worker-replica:20261120-38d9b5f76844"
-      ]
+        "biomerte-worker-replica:20261120-8f6990af09f6"
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "deployment_plan": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/general-20261120/replica-v3-20261120T164134Z/plan.json",
+      "source_ref": "refs/tags/worker-container-source/20261120/8f6990af09f6"
     },
     {
       "family": "tof",
-      "tag": "biomerte-tof:ci-d472423ec8f4-arm64",
-      "image_id": "sha256:6fc00650b0317a419ebe88fefd87980e09ff6a40df589a2f0d5a3c63442f22d6",
-      "source": "d472423ec8f40af61d28a7d4dcc3aae0ba74745c",
+      "tag": "biomerte-tof:ci-e79ce5ed2a8a-arm64",
+      "image_id": "sha256:facd1163e4676b24b66de8a7fe9740706b379d4b82baf44f8513b406944c37d1",
+      "source": "e79ce5ed2a8aecc530a0d6d6a262efd80a4cde5d",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "container_healthy",
-      "size_bytes": 342766890,
+      "live_handoff": "running_with_fresh_physical_anchor_output; route-timeout crash repaired; camera readiness503 and Docker unhealthy retained",
+      "size_bytes": 342773357,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
-        "biomerte-tof:ci-d472423ec8f4-arm64"
-      ]
+        "biomerte-tof:ci-e79ce5ed2a8a-arm64"
+      ],
+      "source_repository": "michaelrolphone-cmyk/RiscRTE-System-Apps",
+      "tests": 91
     },
     {
       "family": "motion",
@@ -105,7 +118,9 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-motion:90cc2f6f6a29"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/90cc2f6f6a29"
     },
     {
       "family": "vision-provider",
@@ -120,7 +135,9 @@
       "os": "linux",
       "tags": [
         "biomerte-worker-vision-provider:90cc2f6f6a29"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/90cc2f6f6a29"
     },
     {
       "family": "sdr",
@@ -129,13 +146,15 @@
       "source": "0575c049bc8c0c2ca957201c723c5a2bd92837ed",
       "platform": "linux/arm/v7",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
+      "live_handoff": "built_and_image_fixture_qualified; physical Pi/device handoff and RF not exercised",
       "size_bytes": 141619201,
       "architecture": "arm",
       "os": "linux",
       "tags": [
         "biomerte-worker-sdr:0575c049bc8c"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/0575c049bc8c"
     },
     {
       "family": "fm",
@@ -144,28 +163,32 @@
       "source": "0575c049bc8c0c2ca957201c723c5a2bd92837ed",
       "platform": "linux/arm/v7",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
+      "live_handoff": "built_and_image_fixture_qualified; physical Pi/device handoff and RF not exercised",
       "size_bytes": 113675443,
       "architecture": "arm",
       "os": "linux",
       "tags": [
         "biomerte-worker-fm:0575c049bc8c"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/0575c049bc8c"
     },
     {
       "family": "rover",
-      "tag": "biomerte-worker-rover:59f7296380d8",
-      "image_id": "sha256:407b044f16810b8123591c6baecef7aa32c367026319a40cfd5ac80cc282fe68",
-      "source": "59f7296380d88e34c7db136501219d46db61d386",
+      "tag": "biomerte-worker-rover:eee5c5f34029",
+      "image_id": "sha256:632f4c5e47b396b13fb1f302c52425b4b528f4aae10162053f387825a8ab97a5",
+      "source": "eee5c5f34029a86037fc29eedea79d3b6a3a5de4",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
-      "size_bytes": 79208852,
+      "live_handoff": "prepared; existing loopback endpoint preserved; quiescent route state transfer pending",
+      "size_bytes": 79226198,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
-        "biomerte-worker-rover:59f7296380d8"
-      ]
+        "biomerte-worker-rover:eee5c5f34029"
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/eee5c5f34029"
     },
     {
       "family": "coding",
@@ -174,43 +197,49 @@
       "source": "56f4ae8ee2d08edfc1d29e0d96d87981c3eee25c",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
+      "live_handoff": "prepared; existing MCP loopback endpoint and current workspace ledger preserved; dependent providers blocked",
       "size_bytes": 289739171,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
         "biomerte-worker-coding:56f4ae8ee2d0"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/56f4ae8ee2d0"
     },
     {
       "family": "private-chat",
-      "tag": null,
+      "tag": "biomerte-private-chat:ci-393ab568450b-arm64",
       "image_id": "sha256:abc1c24b32ad192a841401b7983fd5fe939e1d6bdd4a712841958eaaf47a3c20",
       "source": "393ab568450b0792a5c0d6c28b37e4620727158a",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
+      "live_handoff": "rolled_back_to_native; current identity and ledgers preserved; gateway authority routing blocks fresh provider polls",
       "size_bytes": 280623477,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
         "biomerte-private-chat:ci-393ab568450b-arm64"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/393ab568450b"
     },
     {
       "family": "private-image",
-      "tag": null,
+      "tag": "biomerte-private-image:ci-393ab568450b-arm64",
       "image_id": "sha256:dab445c894d8568bc681130e770194c741a8103f2f4ec2c931ab73f08bf07b5c",
       "source": "393ab568450b0792a5c0d6c28b37e4620727158a",
       "platform": "linux/arm64",
       "build": "succeeded",
-      "live_handoff": "pending_observation",
+      "live_handoff": "rolled_back_to_native; current identity and ledgers preserved; gateway authority routing blocks fresh provider polls",
       "size_bytes": 280724967,
       "architecture": "arm64",
       "os": "linux",
       "tags": [
         "biomerte-private-image:ci-393ab568450b-arm64"
-      ]
+      ],
+      "source_repository": "michaelrolphone-cmyk/BiomeRTE",
+      "source_ref": "refs/tags/worker-container-source/20261120/393ab568450b"
     }
   ],
   "notes": [
@@ -225,9 +254,74 @@
     "tls_port": 8766,
     "same_clock_identity": true,
     "models_source_pinning": true,
-    "model_engine_migrated": false
+    "model_engine_migrated": false,
+    "source_ref": "refs/tags/worker-container-source/20261120/3775adec5f5d"
   },
   "tof_live": {
+    "image_id": "sha256:facd1163e4676b24b66de8a7fe9740706b379d4b82baf44f8513b406944c37d1",
+    "container_id": "27b501391f43c0c0432fa1ae1801428134534d3171982c791bf56e0d86f45322",
+    "source_revision": "e79ce5ed2a8aecc530a0d6d6a262efd80a4cde5d",
+    "status": "running_degraded_camera",
+    "docker_health": "unhealthy",
+    "liveness_http": 200,
+    "readiness_http": 503,
+    "anchor_count": 2,
+    "solution_age_s_at_final_clock_verification": 0.24345946311950684,
+    "native_clock_preserved": true,
+    "native_tof_started": false,
+    "same_host_state": true,
+    "restart_count_after_rollforward": 0,
+    "observation_seconds": 51.97,
+    "readiness_dependency": "camera; rover_ftm_pending diagnosed",
+    "receipt": "actual-workers-tof-rollforward-observe-20261120-83",
+    "evidence": "tof/live-qualification-20261120.json"
+  },
+  "provider_authority_blocker": {
+    "observed_utc": "2026-11-20T16:20:13Z",
+    "native_and_container_paths_fail": true,
+    "native_error": "Site responsibility is managed by logical authority ab83ff35d44e424652a874572a56eb246a68bc3649851127ab024375fed1cf73; native site writes are frozen",
+    "controller_or_gateway_changed": false,
+    "docker_and_storage_native_owners_restored": true,
+    "unsettled_operations_after_restoration": 0,
+    "private_native_owners_restored": true,
+    "private_evidence": "private/live-handoff-20261120.json"
+  },
+  "qualification_scope": {
+    "image_builds": 14,
+    "mac_platform": "linux/arm64",
+    "radio_platform": "linux/arm/v7",
+    "live_failover_complete": false,
+    "full_cpu_vision_image_built": false,
+    "registry_provisioned": false
+  },
+  "integration": {
+    "base_main": "a199cf6860bc8a87856a6defd6770fc497bfced2",
+    "receipt": "actual-workers-integrated-source-check-20261120-71",
+    "tests": {
+      "host_io": 12,
+      "model_host_io": 12,
+      "docker_provider_dispatch": 3,
+      "private_handoff": 4
+    },
+    "test_result": "all31passed",
+    "git_diff_check": "reports retained whitespace in imported native/vendor sources; not reported as passing",
+    "final_affected_tests": {
+      "replica_container_wiring": 7,
+      "docker_provider_dispatch": 3,
+      "result": "all_passed"
+    }
+  },
+  "publication": {
+    "tof_pr": "https://github.com/michaelrolphone-cmyk/RiscRTE-System-Apps/pull/261",
+    "biomerte_branch": "work/actual-worker-containers-20261120",
+    "source_tags_published_and_verified": 9
+  },
+  "image_identity_verification": {
+    "observed_utc": "2026-11-20T16:44:23.832216+00:00",
+    "all_local_ids_match": true,
+    "failed": []
+  },
+  "tof_initial_handoff": {
     "image_id": "sha256:6fc00650b0317a419ebe88fefd87980e09ff6a40df589a2f0d5a3c63442f22d6",
     "container_id": "2ae77a2e35fda7666ac129030cd376f0d63174b42cacf95c2ae48f670d72ef81",
     "anchor_count": 3,
@@ -236,12 +330,14 @@
     "same_host_state": true,
     "receipt": "actual-workers-tof-resume-after-supervisor-20261120-66"
   },
-  "provider_authority_blocker": {
-    "observed_utc": "2026-11-20T16:20:13Z",
-    "native_and_container_paths_fail": true,
-    "native_error": "Site responsibility is managed by logical authority ab83ff35d44e424652a874572a56eb246a68bc3649851127ab024375fed1cf73; native site writes are frozen",
-    "controller_or_gateway_changed": false,
-    "docker_and_storage_native_owners_restored": true,
-    "unsettled_operations_after_restoration": 0
+  "tof_runtime_repair": {
+    "old_exit_code": 1,
+    "old_restarts_before_replacement": 11,
+    "cause": "Uncaught HTTPS route metadata lookup timeout",
+    "source_revision": "e79ce5ed2a8aecc530a0d6d6a262efd80a4cde5d",
+    "image_tests_passed": 91,
+    "live_new_restart_count": 0,
+    "readiness_weakened": false,
+    "configuration_only_image_changed": true
   }
 }
