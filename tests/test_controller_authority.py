@@ -411,13 +411,13 @@ class ControllerTests(unittest.TestCase):
         from biomerte import exchange
         packet = self.legacy_package()
         for realm in ("local",):
-            with self.assertRaises(Fault):
+            with self.assertRaisesRegex(Fault, "Wrong package destination"):
                 self.app.stores[realm].execute(
-                    lambda tx: exchange.unpack(tx, Context(self.app, realm),
+                    lambda tx: exchange.unpack(tx, Context(self.app, scope=realm),
                                                packet, "outcome", "return"),
                     read_only=True)
         with patch.object(self.app, "controller_runtime", {}):
-            with self.assertRaises(Fault):
+            with self.assertRaisesRegex(Fault, "Wrong package destination"):
                 self.app.stores["site"].execute(
                     lambda tx: exchange.unpack(tx, Context(self.app),
                                                packet, "outcome", "return"),
