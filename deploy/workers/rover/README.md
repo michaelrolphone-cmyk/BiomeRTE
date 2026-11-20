@@ -21,7 +21,7 @@ Copy `rover.example.json` into a private configuration directory and resolve its
 
 The application uses the current controller API and private stream router over the configured network. The existing authenticated native HostIO owner remains responsible for the registered source clock, current device-origin resolution and survey estimator reset. Model/vision/motion implementations and physical relay/camera devices remain separate dependencies. No Docker socket, device node, host process namespace or broad home-directory mount is needed.
 
-The application listens on loopback inside its container and retains the existing outbound authenticated gateway transport. Browser paths remain `/api/state`, `/api/controls`, `/api/led`, `/api/video`, `/api/map/snapshot` and `/api/live/{lane}`; their external ingress remains the existing gateway. The Compose file does not publish an unauthenticated host port. The internal stream-inspection route retains its existing authentication.
+The container configuration explicitly sets `listen_host: 0.0.0.0`; the default remains `127.0.0.1`. Compose publishes container port 8093 only on host `127.0.0.1:8093`, preserving the existing native motion observer endpoint. The application retains its existing outbound authenticated gateway transport. Browser paths remain `/api/state`, `/api/controls`, `/api/led`, `/api/video`, `/api/map/snapshot` and `/api/live/{lane}`; their external ingress remains the existing gateway. The existing browser/API bearer authentication still applies to the published loopback endpoint. The internal stream-inspection route retains its existing authentication.
 
 ## Durable handoff and rollback
 

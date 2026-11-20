@@ -10,6 +10,8 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     command: ["--config","/config/rover.json"]
+    ports:
+      - "127.0.0.1:8093:8093"
     volumes:
       - type: bind
         source: "${BIOME_ROVER_CONFIG:?Set the prepared read-only configuration directory}"

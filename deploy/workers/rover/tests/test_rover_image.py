@@ -161,4 +161,76 @@ class BrowserTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.data,payload)
         await socket.close()
 
+
+class ListenBinding(unittest.IsolatedAsyncioTestCase):
+    async def test_native_default_and_container_listener_use_real_authenticated_http(self):
+        # Exercise the actual entrypoint's TCP binding and HTTP authentication.
+        # External authorities/transports are fixtures; no device or capability is invoked.
+        from aiohttp import ClientSession
+        real_site = web.TCPSite
+        for address in (None, "0.0.0.0"):
+            with self.subTest(listen_host=address), tempfile.TemporaryDirectory() as directory:
+                stopped = asyncio.Event()
+                started = asyncio.Event()
+                sites = []
+                class ObservedSite(real_site):
+                    async def start(self):
+                        await super().start()
+                        sites.append(self)
+                        started.set()
+                class OutboundFixture:
+                    def __init__(self, *args, **kwargs): pass
+                    async def run(self): await stopped.wait()
+                clock = mock.Mock(ready=True)
+                clock.start = mock.AsyncMock(return_value=clock)
+                clock.close = mock.AsyncMock()
+                authority = mock.Mock(node="a"*64, config={"stream_router_secret":"fixture-secret"})
+                application_rover = FixtureRover()
+                application_rover.clock_bounds = mock.Mock(valid=True)
+                root = Path(directory)
+                config = {
+                    "state_mode":"single_host_durable",
+                    "controller_home":str(root/"controller"), "identity_home":str(root/"identity"),
+                    "state_dir":str(root/"state"), "controllers_file":str(root/"controllers.json"),
+                    "host_io_config":str(root/"host-io.json"),
+                    "controller_api":"http://127.0.0.1:8740/v1/call",
+                    "allow_private_controller_http":True,
+                    "gateway":"https://fixture.invalid", "public_stream_gateway":"https://fixture.invalid",
+                    "router_url":"ws://127.0.0.1:8751",
+                    "resources":{"robot.vision.stream:1":"vision.fixture","device.outputs.stream:1":"outputs.fixture"},
+                    "vision_clock":{"resource":"vision.fixture","host_id":"fixture-host"},
+                    "camera_light":{"device_id":"camera.fixture","url":"http://192.0.2.1/api/light"},
+                    "allow_private_device_http":True,
+                    "channels":{"forward":1,"reverse":2,"left":3,"right":4}, "port":0,
+                }
+                if address is not None:
+                    config["listen_host"] = address
+                with contextlib.ExitStack() as patches:
+                    patches.enter_context(mock.patch.object(rover, "LocalAuthority", return_value=authority))
+                    patches.enter_context(mock.patch.object(rover, "RoutedRemote"))
+                    patches.enter_context(mock.patch.object(rover, "ServiceOwnerResolver"))
+                    patches.enter_context(mock.patch.object(rover, "PortableRover", return_value=application_rover))
+                    patches.enter_context(mock.patch.object(rover, "ControlClock", return_value=clock))
+                    patches.enter_context(mock.patch.object(rover.HostIOClient, "from_config", return_value=mock.Mock()))
+                    patches.enter_context(mock.patch.object(rover, "Outbound", OutboundFixture))
+                    patches.enter_context(mock.patch.object(rover, "stop_event", return_value=stopped))
+                    patches.enter_context(mock.patch.object(rover.web, "TCPSite", ObservedSite))
+                    task = asyncio.create_task(rover.run(config))
+                    try:
+                        await asyncio.wait_for(started.wait(), 3)
+                        bound = sites[0]._server.sockets[0].getsockname()
+                        self.assertEqual(bound[0], address or "127.0.0.1")
+                        origin = "http://127.0.0.1:" + str(bound[1])
+                        async with ClientSession() as client:
+                            response = await client.get(origin + "/api/state")
+                            self.assertEqual(response.status, 401)
+                            token = rover.derived("fixture-secret", "rover-site")
+                            response = await client.get(origin + "/api/state",
+                                                        headers={"Authorization":"Bearer "+token})
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual((await response.json())["lease_owner"], "server")
+                    finally:
+                        stopped.set()
+                        await asyncio.wait_for(task, 3)
+
 if __name__=="__main__": unittest.main(verbosity=2)
