@@ -128,3 +128,25 @@ is active. A background native supervisor must not recreate the old owner.
 
 Container creation is not a complete migration. Record the verified active
 container and native-reader outcome, or record a completed rollback.
+
+## Qualified TLS handoff details (2026-11-20)
+
+Use the existing additional TLS listener with
+`--bridge-url https://host.docker.internal:8766 --bridge-ca /absolute/native/ca.pem`.
+Preparation copies the CA into the read-only configuration mount and preserves
+the combined current HostIO configuration, including native model custody.
+
+On this Mac, launchctl prints enabled/disabled words rather than booleans; the
+guard accepts both explicit forms and rejects unknown values. After bootout of
+the adapter, wait for its actual PID and launchd registration to disappear before
+bootstrap. The adapter drains handlers during shutdown; bootout returning does
+not establish completion of that drain. Check model.status has no active request
+before initiating the reload. Preserve HTTP8765 compatibility and the existing
+host clock identity when qualifying TLS8766.
+
+The real handoff produced a healthy solver container, three physical anchors and
+fresh results in the original native-reader state directory. Exact image and
+deployment evidence is recorded in ../qualification-20261120.json. Earlier failed
+handoff attempts and restored native ownership remain recorded in the private
+deployment directory; no older calibration or request ledger was restored over
+new state.

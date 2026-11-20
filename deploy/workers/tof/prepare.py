@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 import plistlib
 import secrets
 import shutil
@@ -79,6 +80,7 @@ def main():
     parser.add_argument("--bridge-config", type=Path,
                         default=DATA/"biomerte-host-io/config/server.active.json")
     parser.add_argument("--bridge-url", default="http://host.docker.internal:8765")
+    parser.add_argument("--bridge-ca", type=Path, help="Native CA file required for an HTTPS HostIO bridge")
     parser.add_argument("--health-port", type=int, default=18771)
     parser.add_argument("--survey-port", type=int, default=18772)
     args = parser.parse_args()
@@ -120,8 +122,16 @@ def main():
     fd = os.open(str(token), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd,"w") as output:
         output.write(secrets.token_urlsafe(48) + "\n")
-    client = dict(url=args.bridge_url, allow_local_http=True,
+    scheme = urlsplit(args.bridge_url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError("HostIO bridge must use HTTP or HTTPS")
+    client = dict(url=args.bridge_url, allow_local_http=scheme == "http",
                   host_id=original["host_id"], token_file="/private/host-io.token")
+    if scheme == "https":
+        if args.bridge_ca is None:
+            raise ValueError("HTTPS HostIO requires --bridge-ca")
+        private_copy(args.bridge_ca, out/"config/host-io-ca.pem")
+        client["ca_file"] = "/config/host-io-ca.pem"
     write(out/"config/host-io.json", client)
     activated = dict(original)
     activated["anchors"] = dict(original.get("anchors", {}), enabled=True)

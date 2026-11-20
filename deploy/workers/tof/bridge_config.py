@@ -31,6 +31,16 @@ def replace_if_hash(target, replacement, expected):
     return sha(raw)
 
 
+def is_disabled(output, label):
+    match = re.search(r'"'+re.escape(label)+r'"\s*=>\s*(\w+)\b', output)
+    if match is None:
+        return False
+    value = match.group(1).lower()
+    if value not in ("true", "false", "enabled", "disabled"):
+        raise RuntimeError("Unknown launchd enabled state")
+    return value in ("true", "disabled")
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("operation",choices=("apply","rollback"))
@@ -43,8 +53,7 @@ def main():
     if args.operation=="apply":
         domain="gui/"+str(plan["uid"])
         disabled=subprocess.check_output(["/bin/launchctl","print-disabled",domain],text=True)
-        pattern=r'"'+re.escape(plan["native"]["label"])+r'"\s*=>\s*true'
-        if not re.search(pattern,disabled):
+        if not is_disabled(disabled, plan["native"]["label"]):
             raise RuntimeError("Native ToF launch agent must be persistently disabled before activation")
         loaded=subprocess.run(["/bin/launchctl","print",domain+"/"+plan["native"]["label"]],
                               capture_output=True,text=True)

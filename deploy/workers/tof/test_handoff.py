@@ -7,11 +7,21 @@ import unittest
 
 ROOT=Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT))
-from bridge_config import replace_if_hash, sha
+from bridge_config import replace_if_hash, sha, is_disabled
 from prepare import render
 
 
 class HandoffPreparationTests(unittest.TestCase):
+    def test_native_launchd_word_and_boolean_state(self):
+        label = "org.biomerte.tof-coordinator"
+        for value in ("true", "disabled"):
+            self.assertTrue(is_disabled(f'"{label}" => {value}', label))
+        for value in ("false", "enabled"):
+            self.assertFalse(is_disabled(f'"{label}" => {value}', label))
+        self.assertFalse(is_disabled(f'"{label}.other" => disabled', label))
+        with self.assertRaises(RuntimeError):
+            is_disabled(f'"{label}" => unknown', label)
+
     def test_concurrent_bridge_edit_is_preserved(self):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name);current=root/"current.json";proposal=root/"proposal.json"
