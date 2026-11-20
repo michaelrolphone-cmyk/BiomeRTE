@@ -1,3 +1,4 @@
+import {controllerRuntimeConfig} from './controller-runtime.mjs';
 import {runTool,toolError,routedControllerCall,DEFAULT_DISCOVERY_LIMIT} from './bridge.mjs';
 import {masterDiscovery} from './capability-map.mjs';
 import {controllerNetworkSchema,controllerNetworkRegistration} from './controller-network.mjs';
@@ -57,7 +58,8 @@ export async function discoverPage(env,args={},realm='site'){
   }
   catch(error){return toolError(error.message)}
  }
- if(args.controller===undefined&&env.CONTROLLER_COORDINATION_MODE==='local'&&(['contracts','offers'].includes(args.section)||args.cursor?.startsWith('master1.')))return masterDiscovery(env,args,realm);
+ let managed;try{managed=realm==='site'?await controllerRuntimeConfig(env):null}catch(error){return toolError(error.message)}
+ if(!managed&&args.controller===undefined&&env.CONTROLLER_COORDINATION_MODE==='local'&&(['contracts','offers'].includes(args.section)||args.cursor?.startsWith('master1.')))return masterDiscovery(env,args,realm);
  const {controller,...inputs}=args;
  const result=await runTool(env,'biome_invoke',{
   operation:'system.discovery',arguments:inputs,realm,...(controller===undefined?{}:{controller}),

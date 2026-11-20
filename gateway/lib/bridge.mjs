@@ -1,3 +1,4 @@
+import {controllerRuntimeTool} from './controller-runtime.mjs';
 import {routeProviderInvocation,rememberProviderInvocation} from './provider-topology.mjs';
 import {routeCapabilityInvocation,federatedCatalog} from './capability-map.mjs';
 import {activeQueueDiagnostics} from './diagnostics.mjs';
@@ -234,6 +235,8 @@ export async function runTool(env, name, args={}) {
  } else if (Object.keys(args).some(k=>k!=='controller')) return toolError('This tool accepts only an optional controller selector');
  const routed=name==='biome_invoke'&&args.operation==='controller.invoke';
  if(routed){try{args=controllerInvocation(args)}catch(error){return toolError(error.message)}}
+ const managed=await controllerRuntimeTool(env,name,args);
+ if(managed)return routed?routedControllerResult(managed,args.controller,args.realm,args.operation==='system.discovery'):managed;
  if(args.controller!==undefined){try{await resolveControllerOwner(env,args.controller)}catch(error){return toolError(error.message)}
   if(name==='biome_invoke'&&(args.operation.startsWith('maintenance.')||args.operation.startsWith('controller.')))return toolError('Gateway maintenance and recovery cannot be redirected with a controller selector');
  }
