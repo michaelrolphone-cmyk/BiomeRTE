@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -276,6 +277,53 @@ def verify(args):
             raise ValueError("Archive integrity failed: " + path.name)
     return {"verified": True, "source_commit": data["source_commit"], "images": len(data["images"])}
 
+
+def combine(args):
+    """Verify and combine same-source platform exports; never builds or publishes."""
+    sources = [Path(path).resolve() for path in args.lock]
+    if not sources:
+        raise ValueError("Supply at least one release lock")
+    releases = [release(path) for path in sources]
+    comparable = lambda data: {key: value for key, value in data.items()
+                              if key not in ("created_at", "images")}
+    baseline = comparable(releases[0])
+    if any(comparable(data) != baseline for data in releases[1:]):
+        raise ValueError("Release source provenance or top-level metadata differs")
+    seen = set()
+    for path, data in zip(sources, releases):
+        verify(type("Args", (), {"lock": path})())
+        for item in data["images"]:
+            key = (item["id"], item["platform"])
+            if key in seen:
+                raise ValueError("Duplicate image target across release locks")
+            seen.add(key)
+    output = Path(args.output_dir).resolve()
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("Combined release output must be empty")
+    output.mkdir(parents=True, exist_ok=True)
+    combined = dict(releases[0], complete=False, images=[],
+                    created_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    lock_path = output / "images.lock.json"
+    save_json(lock_path, combined)
+    for path, data in zip(sources, releases):
+        for original in data["images"]:
+            item = dict(original)
+            artifact = dict(original["archive"])
+            name = "{}-{}.tar".format(item["id"], item["platform"].replace("/", "-"))
+            shutil.copyfile(path.parent / artifact["file"], output / name)
+            artifact["file"] = name
+            item["archive"] = artifact
+            combined["images"].append(item)
+    # Recheck copied bytes before marking the combined lock complete.
+    for item in combined["images"]:
+        artifact = output / item["archive"]["file"]
+        if artifact.stat().st_size != item["archive"]["bytes"] or checksum(artifact) != item["archive"]["sha256"]:
+            raise ValueError("Copied release archive failed integrity verification")
+    combined["complete"] = True
+    save_json(lock_path, combined)
+    return {"lock": str(lock_path), "source_commit": combined["source_commit"],
+            "images": len(combined["images"])}
+
 def registry_prefix(registry, namespace):
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.-]*(?::[0-9]+)?", registry or ""):
         raise ValueError("Supply an actual registry hostname, without credentials or URL scheme")
@@ -344,6 +392,10 @@ def main():
     p = commands.add_parser("verify")
     p.add_argument("--lock", required=True)
     p.set_defaults(func=verify)
+    p = commands.add_parser("combine")
+    p.add_argument("--lock", action="append", required=True)
+    p.add_argument("--output-dir", required=True)
+    p.set_defaults(func=combine)
     p = commands.add_parser("publish")
     p.add_argument("--lock", required=True)
     p.add_argument("--registry", required=True)

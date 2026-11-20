@@ -172,5 +172,51 @@ class ImageReleaseTests(unittest.TestCase):
             self.assertEqual(manifest["images"]["linux/arm64"], "sha256:" + "b" * 64)
             self.assertEqual(manifest["effect_policy"], "stateless")
 
+    def test_combine_preserves_two_platforms_and_extra_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            paths = []
+            for platform in ("linux/arm64", "linux/amd64"):
+                source = root / platform.rsplit("/", 1)[-1]
+                source.mkdir()
+                path, lock, _ = self.sample(source)
+                lock["images"][0]["platform"] = platform
+                lock["images"][0]["secondary_source"] = {"commit": "c"*40}
+                images.save_json(path, lock)
+                paths.append(path)
+            args = type("Args", (), {"lock": paths, "output_dir": root/"combined"})()
+            result = images.combine(args)
+            combined = images.release(result["lock"])
+            self.assertEqual(len(combined["images"]), 2)
+            self.assertEqual({x["platform"] for x in combined["images"]}, {"linux/arm64", "linux/amd64"})
+            self.assertTrue(all(x["secondary_source"]["commit"] == "c"*40 for x in combined["images"]))
+            self.assertTrue(images.verify(type("Args", (), {"lock": result["lock"]})())["verified"])
+
+    def test_combine_rejects_different_sources_duplicates_and_corruption_before_output(self):
+        for change in ("source", "duplicate", "archive", "extra"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                paths = []
+                for name in ("first", "second"):
+                    source = root/name
+                    source.mkdir()
+                    path, lock, artifact = self.sample(source)
+                    if name == "second":
+                        lock["images"][0]["platform"] = "linux/amd64"
+                        if change == "source":
+                            lock["source_commit"] = "d"*40
+                        elif change == "duplicate":
+                            lock["images"][0]["platform"] = "linux/arm64"
+                        elif change == "archive":
+                            artifact.write_bytes(b"corrupt")
+                        elif change == "extra":
+                            lock["other_provenance"] = "different"
+                        images.save_json(path, lock)
+                    paths.append(path)
+                output = root/"combined"
+                with self.assertRaises(ValueError):
+                    images.combine(type("Args", (), {"lock": paths, "output_dir": output})())
+                self.assertFalse(output.exists())
+
 if __name__ == "__main__":
     unittest.main()
