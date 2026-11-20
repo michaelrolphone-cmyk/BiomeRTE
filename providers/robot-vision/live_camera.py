@@ -3,6 +3,8 @@
 Processing updates a separate, explicitly frame-bound analysis reference.
 It never publishes an image or delays the camera's latest-frame consumer.
 """
+from datetime import datetime, timezone
+import logging
 import threading
 import time
 
@@ -60,6 +62,10 @@ class LiveCamera:
             return False
         if metadata.get('frame_id') != captured.metadata['frame_id']:
             raise ValueError('live_camera_frame_identity_mismatch')
+        metadata=dict(metadata)
+        if "processing_timestamp" not in metadata:
+            metadata["processing_timestamp"]=datetime.now(timezone.utc).isoformat()
+            metadata["processing_stage"]="live_capture_publication"
         self.output.publish(metadata, image)
         self._sequence = captured.sequence
         self._counts['captures_published'] += 1
@@ -82,6 +88,8 @@ class LiveCamera:
                 with self._lock:
                     self._publish(captured, metadata, image)
             except Exception as exc:
+                if self._error != type(exc).__name__ + ':' + str(exc)[:180]:
+                    logging.getLogger(__name__).exception('Independent live camera publication failed')
                 with self._lock:
                     self._error = type(exc).__name__ + ':' + str(exc)[:180]
                 self._stop.wait(0.1)

@@ -1,0 +1,29 @@
+name: Rear sensor socket qualification
+on:
+  pull_request:
+    paths:
+      - 'providers/robot-vision/rear_sensor_push.py'
+      - 'providers/robot-vision/camera_rig.py'
+      - 'providers/robot-vision/tests/test_rear_sensor_push.py'
+      - '.github/workflows/rear-sensor-socket.yml'
+  push:
+    branches: ['work/rear-camera-slam-*']
+    paths:
+      - 'providers/robot-vision/rear_sensor_push.py'
+      - 'providers/robot-vision/camera_rig.py'
+      - 'providers/robot-vision/tests/test_rear_sensor_push.py'
+      - '.github/workflows/rear-sensor-socket.yml'
+permissions:
+  contents: read
+jobs:
+  socket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install websockets==15.0.1
+      - run: python -m unittest discover -s providers/robot-vision/tests -p test_rear_sensor_push.py -v
+        env:
+          PYTHONPATH: providers/robot-vision

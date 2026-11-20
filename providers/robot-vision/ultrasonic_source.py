@@ -1,6 +1,6 @@
 """Four HC-SR04 readings, polled independently of vision and AHRS."""
 import math
-from camera_telemetry import CameraTelemetrySource, _integer, _text
+from camera_telemetry import SensorTelemetrySource, _integer, _text
 
 DIRECTIONS = {"front", "left", "right", "rear"}
 
@@ -44,7 +44,7 @@ def validate_ultrasonic(value):
     return value
 
 
-class UltrasonicSource(CameraTelemetrySource):
+class UltrasonicSource(SensorTelemetrySource):
     def __init__(self, camera_config, config=None, **kwargs):
         settings = {"enabled": True, "poll_interval_s": .26,
                     "network_timeout_s": 1.0, "freshness_threshold_s": 1.0,
