@@ -28,12 +28,11 @@ class Remote:
     def __init__(self, cfg):
         self.node = cfg['provider']
         self.site = cfg['site']
-        self.controller = cfg.get('controller')
 
     def call(self, name, args, rid=None):
-        if self.controller:
-            return gateway.invoke('controller.invoke', dict(controller=self.controller, operation=name, arguments=args), rid, self.realm)
-        return gateway.invoke(name, args, rid, self.realm)
+        # The gateway owns placement; a saved native controller may no longer
+        # own site operations after an authority transition.
+        return gateway.invoke_provider(name, args, rid, self.realm, self.node)
 
 
 def offer(cfg, state):
