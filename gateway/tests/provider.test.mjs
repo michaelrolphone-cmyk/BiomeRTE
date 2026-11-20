@@ -134,7 +134,7 @@ test('provider queue database failures are safe and do not expose exception mess
   f.env.DB={prepare(){throw Error('D1_ERROR: payload-canary auth-canary')}};
   const response=await f.send('/api/provider/call',packet());assert.equal(response.status,503);
   assert.deepEqual(await response.json(),{error:'Controller gateway unavailable'});
-  assert.equal(logs.length,1);assert.equal(logs[0].reason,'queue_cleanup_failed');assert.equal(logs[0].error_kind,'database_error');assertSafeLog(logs);
+  assert.equal(logs.length,1);assert.equal(logs[0].reason,'runtime_configuration_failed');assert.equal(logs[0].error_kind,'database_error');assertSafeLog(logs);
  }finally{f.sql.close()}
 });
 test('provider stored result failure is separate from a controller-returned error',async t=>{

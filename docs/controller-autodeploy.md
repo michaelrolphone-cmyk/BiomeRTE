@@ -353,3 +353,74 @@ watcher transaction to restart both services from its last-good release.
 
 The maintenance agent, providers, gateway credentials and independently
 installed watcher program remain outside this paired source switch.
+
+## Frozen-source custody and recovery
+
+A native home with `controller-authority.json` in `frozen-source` mode remains
+a physical source identity. Its permitted site health operation is
+`cluster.status`, with exact source node, logical service and authority,
+`mode: managed-source`, `site_writes: frozen` and
+`automatic_failover: false`. It must not execute `system.discovery` to prove
+health. Both the watcher and watchdog use this source-aware read path while
+retaining their local identity, running-source and external delivery checks.
+The source's Application write restrictions are unchanged.
+
+Install `controller_custody.py` beside each stable recovery program: the
+watcher, exec launcher and native service helper, and the watchdog's private
+copy under the native home's `recovery` directory. The watchdog installer
+copies this dependency. These are independent installed programs: merging a
+controller release alone does not upgrade the recovery boundary.
+
+Before importing a candidate, accepting a bootstrap, switching a candidate or
+rollback pointer, restarting, or executing the selected command, recovery
+checks a marked home's source compatibility. The literal
+`CUSTODY_PROTOCOL = 1` declarations in Application, Store, and any bundled
+gateway entrypoint/event engine are the release's compatibility contract.
+Keep that version only while all corresponding custody guards remain. The
+stable helper reads declarations using AST without importing candidate code or
+opening controller databases. Missing, malformed or incompatible sources are
+rejected. A marked managed-authority home is never a native source target.
+
+For a marked home, the launcher accepts a pinned Python command with `-S`
+and either `-m biomerte --home /absolute/home serve`, the selected release's
+`deploy/controller_trace.py --diagnostic-log /absolute/existing.log --home /absolute/home serve`,
+or `deploy/gateway-agent.py` / `gateway/deploy/gateway-agent.py` with the matching
+explicit `--home`. The diagnostic wrapper has its own protocol declaration and
+forwards the original guarded Application/Store methods; preserve the existing
+absolute diagnostic log path when moving an old wrapper into the new release. Unreviewed wrappers, isolated/import-ignoring interpreter
+options, an entrypoint in an older release, or a different home fail closed.
+Unmarked installations retain their existing command behavior.
+
+The Mac watchdog also needs an explicit `service_configs` mapping in its
+private configuration, pointing to the same stable launcher configurations
+used by the real services:
+
+```json
+{
+  "service_configs": {
+    "controller": "/absolute/private/biomerte-autodeploy/config.json",
+    "link": "/absolute/private/biomerte-autodeploy/gateway-link.json"
+  }
+}
+```
+
+After custody exists, missing mappings or mismatched source home, service
+label, domain, selected release or command prevent the watchdog from issuing
+a restart. The exec launcher checks again when launchd or systemd starts a
+process, including their automatic restarts. A previously healthy unpatched
+LKG is now ineligible: rollback records `rollback_failed`, preserves the
+current pointer and pending evidence, and continues to admit a later compatible
+repair. It never temporarily points boot recovery at that unsafe LKG.
+
+For first adoption, pause existing recovery actors and stop all unpatched site
+and event writers. Hold the existing shared `recovery_lock` across verifying
+the independently installed helpers, selecting the compatible physical source,
+verifying actual service routing/process source, and installing the source
+marker against the reviewed canonical digest. Install the guard on every
+actual launch path, including a Pi unit that previously executed a release
+directly. Preserve service environments, credentials and independent provider
+jobs. The exec child does not acquire its watcher's lock again; that would
+deadlock a normal deployment. Only resume recovery after the new native
+process proves the exact frozen-source status and rejects native site writes.
+Retain stopped legacy releases for evidence; do not select them for a marked
+home. Do not remove or relax the custody marker to make recovery green.

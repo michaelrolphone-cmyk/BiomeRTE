@@ -4,6 +4,11 @@ All domain updates, receipts and pending operations for a command commit togethe
 The SQLite mirror is disposable in shared mode. A failed CAS never becomes local
 authority. Offline work uses its own database and explicit scopes.
 """
+
+# Native recovery checks this literal before executing a marked source home.
+# Keep version 1 only while the source/site and event custody guards remain.
+CUSTODY_PROTOCOL = 1
+
 import base64
 import contextlib
 import hashlib
@@ -342,6 +347,8 @@ class Store:
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        # Opt-in controller custody check; derived indexes remain local.
+        self.write_guard = None
         self._connection_key = object()
         self._connection_finalizer = weakref.finalize(self, _close_connections, self._connection_key)
         self._writer_diagnostic = None
@@ -611,11 +618,15 @@ class Store:
                     tx = Records(db, 'Read-only operation changed records')
                 if self.remote and not cached and not read_only:
                     db.execute('SAVEPOINT proposal')
+                if not (read_only or cached) and self.write_guard:
+                    self.write_guard()
                 owner[1] = 'callback'
                 tx.journal_sequence = seq + 1 if self.remote and not cached and not read_only else None
                 result = fn(tx)
                 if (cached or read_only) and tx.changes:
                     raise Fault('Read-only operation changed records', 409)
+                if not (read_only or cached) and self.write_guard:
+                    self.write_guard()
                 if self.remote and tx.changes:
                     owner[1] = 'encode-proposal'
                     changes = [[k, i, v] for (k, i), v in sorted(tx.changes.items())]
@@ -667,6 +678,8 @@ class Store:
                         raise Fault('Shared journal history mismatch', 409)
                     # A caller already at or beyond this entry has replayed a
                     # validated journal chain. Do not overwrite its newer state.
+                if not (read_only or cached) and self.write_guard:
+                    self.write_guard()
                 owner[1] = 'commit'
                 db.commit()
                 return result

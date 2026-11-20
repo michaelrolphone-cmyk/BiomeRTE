@@ -464,6 +464,9 @@ def activate_action(tx, ctx, a):
     if l['provider'] == 'builtin' and l['contract'] == 'human.decision:1':
         from .decisions import start_action
         start_action(tx, ctx, a)
+    if l['provider'] == 'builtin' and l['contract'] == 'assistant.controller.command:1':
+        from .assistant_support import start_controller_action
+        start_controller_action(tx, ctx, a)
     if l['provider'] == 'routine':
         from .process import new_run
         spec = tx.need('offers', l['offer'])['configuration']

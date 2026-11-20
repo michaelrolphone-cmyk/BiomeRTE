@@ -31,7 +31,10 @@ def verify_destination(conf, settings, values):
 
 
 def heartbeat_payload(health):
-    return {'position': 0, 'ready': health.get('realms', {}).get('site') == 'ready',
+    realms = health.get('realms', {})
+    ready = realms.get('site') == 'ready' or (
+        realms.get('site') == 'managed-read-only' and realms.get('local') == 'ready')
+    return {'position': 0, 'ready': ready,
             'load': os.getloadavg()[0] / (os.cpu_count() or 1), 'host': socket.gethostname()}
 
 

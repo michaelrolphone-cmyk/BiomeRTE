@@ -40,3 +40,11 @@ class LocalLinkTests(unittest.TestCase):
             self.assertEqual(maintain(),{'active':False})
             self.assertEqual(calls,[])
             self.assertEqual(os.listdir(home),[])
+
+
+    def test_frozen_site_keeps_healthy_local_bridge_available(self):
+        module=load('local_link')
+        self.assertTrue(module.heartbeat_payload(
+            {'realms':{'site':'managed-read-only','local':'ready'}})['ready'])
+        self.assertFalse(module.heartbeat_payload(
+            {'realms':{'site':'managed-read-only','local':'unavailable'}})['ready'])

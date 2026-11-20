@@ -12,6 +12,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from controller_custody import CustodyError, require_release
+
 
 class ServiceError(Exception):
     pass
@@ -32,6 +35,10 @@ def run_command(argv, timeout, check=True):
 
 
 def restart(config, runner=None):
+    # Stable exec repeats this check at launch. Avoid stopping a good process
+    # first when the selected recovery target is already known to be unsafe.
+    if config.get('home'):
+        require_release(config)
     runner = runner or run_command
     service = config['service']
     timeout = config.get('command_timeout', 60)

@@ -11,6 +11,8 @@ import os
 import sqlite3
 import threading
 
+from .checkpoint_chunks import ChunkStore, ChunkError, STATE_FORMAT, state_blocks
+
 PROTOCOL = "biomerte-service-checkpoint/1"
 ADAPTER_PROTOCOL = "biomerte-service-adapter/1"
 BINDING_FIELDS = ("service_id", "manifest_revision", "worker_id",
@@ -94,12 +96,15 @@ class CheckpointStore:
         self.path, self.service_id = path, service_id
         self.scope_digest, self.key = scope_digest, key
         self.lock = threading.RLock()
+        self._chunks = None
         directory = os.path.dirname(os.path.abspath(path))
         os.makedirs(directory, mode=0o700, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         os.chmod(path, 0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("PRAGMA wal_autocheckpoint=128")
+        self.db.execute("PRAGMA journal_size_limit=1048576")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS packets (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -115,6 +120,22 @@ class CheckpointStore:
             CREATE TABLE IF NOT EXISTS receipts (
                 id TEXT PRIMARY KEY, request_digest TEXT NOT NULL, reply TEXT NOT NULL);
         """)
+
+    @property
+    def chunks(self):
+        with self.lock:
+            if self._chunks is None:
+                self._chunks = ChunkStore(self.path + ".chunks")
+            return self._chunks
+
+    def require_chunks(self, state):
+        try:
+            refs = state_blocks(state)
+            if refs is not None:
+                self.chunks.require(state)
+            return refs
+        except ChunkError as error:
+            raise CheckpointError(str(error))
 
     def close(self):
         with self.lock:
@@ -145,6 +166,10 @@ class CheckpointStore:
                 raise CheckpointError("Checkpoint belongs to another service")
         if not isinstance(payload.get("state"), dict):
             raise CheckpointError("Scoped checkpoint state required")
+        try:
+            state_blocks(payload["state"])
+        except ChunkError as error:
+            raise CheckpointError(str(error))
         return payload
 
     def packet(self):
@@ -159,6 +184,7 @@ class CheckpointStore:
     def install(self, packet):
         """Commit before acknowledging. Same packet is idempotent; rollback is refused."""
         payload = self.verify(packet)
+        self.require_chunks(payload["state"])
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
@@ -210,6 +236,7 @@ class CheckpointStore:
     def retain(self, packet):
         """A replica ack certifies durable bytes, never publication or freshness."""
         payload=self.verify(packet)
+        self.require_chunks(payload["state"])
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
@@ -265,11 +292,27 @@ class CheckpointStore:
     def published(self, reference):
         """Bound payload storage after independently observed witness publication."""
         with self.lock:
-            self.get(reference)
+            packet = self.get(reference)
             phase=self.phase()
             keep=phase["checkpoint"] if phase else ""
-            self.db.execute("DELETE FROM archive WHERE sequence<? AND digest!=? AND digest!=?",
-                            (reference["sequence"]-1,reference["digest"],keep))
+            controller = packet["payload"]["state"].get("format") == STATE_FORMAT
+            if controller:
+                # The witness has advanced. Old root payloads are not replay
+                # authority; preserve only the witnessed root and newer drafts.
+                self.db.execute("DELETE FROM archive WHERE sequence<? AND digest!=?",
+                                (reference["sequence"], reference["digest"]))
+                self.db.execute("DELETE FROM lineage WHERE sequence<? AND digest NOT IN "
+                                "(SELECT digest FROM archive)", (reference["sequence"] - 1,))
+                references = set()
+                for (raw,) in self.db.execute("SELECT packet FROM archive"):
+                    refs = state_blocks(json.loads(raw)["payload"]["state"])
+                    if refs is not None:
+                        references.update(refs)
+                self.chunks.prune(references)
+                self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            else:
+                self.db.execute("DELETE FROM archive WHERE sequence<? AND digest!=? AND digest!=?",
+                                (reference["sequence"]-1,reference["digest"],keep))
 
     def generation_floors(self, resources):
         floors={resource:0 for resource in resources}

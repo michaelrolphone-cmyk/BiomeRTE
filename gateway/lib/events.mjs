@@ -1,3 +1,4 @@
+import {controllerRuntimeEvent} from './controller-runtime.mjs';
 import {digest} from './oauth.mjs';
 import {enqueue,resolveControllerOwner} from './bridge.mjs';
 
@@ -40,13 +41,15 @@ export async function changeSubscription(env,method,params,owner,grant){
   return {error:{code:-32602,message:'Invalid event subscription'}};
  const args={owner,grant,method,params:{name:params.name,arguments:params.arguments,delivery:params.delivery}};
  if(params.controller!==undefined){
-  try{await resolveControllerOwner(env,params.controller)}catch(error){return {error:{code:-32602,message:error.message}}}
   // Routing metadata is outside event filters, but travels with the producer's
   // subscription so renewal, unsubscribe and signed delivery name one owner.
   args.controller=params.controller;args.params.controller=params.controller;
  }
  if(params.ttlMs!==undefined)args.params.ttlMs=params.ttlMs;
  if(params.cursor!==undefined)args.params.cursor=params.cursor;
+ const managed=await controllerRuntimeEvent(env,'change',args);
+ if(managed!==null)return managed;
+ if(params.controller!==undefined){try{await resolveControllerOwner(env,params.controller)}catch(error){return {error:{code:-32602,message:error.message}}}}
  const result=await enqueue(env,'mcp_event_change',args,'event-'+crypto.randomUUID());
  if(result.isError)return {error:{code:-32015,message:'Controller could not verify the subscription',data:{reason:'controller_unavailable'}}};
  return JSON.parse(result.content[0].text);

@@ -30,7 +30,13 @@ def bundle(ctx, kind, to, data):
 
 def unpack(tx, ctx, packet, kind, scope):
     p = packet['payload']
-    if p['format'] != 1 or p['kind'] != kind or p['to'] != ctx.app.node:
+    # Migrated site packages retain their original signed native destination.
+    # Local realms and unconfigured applications still accept only their own ID.
+    aliases = (getattr(ctx.app, 'controller_aliases', ())
+               if ctx.scope == 'site' and getattr(ctx.app, 'controller_runtime', None)
+               else ())
+    if (p['format'] != 1 or p['kind'] != kind or
+            p['to'] != ctx.app.node and p['to'] not in aliases):
         raise Fault('Wrong package destination or type')
     peer = tx.need('peers', p['sender'])
     if not peer['enabled'] or scope not in peer['scopes']:
