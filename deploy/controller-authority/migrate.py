@@ -762,6 +762,13 @@ def load_source(path):
     """Accept a snapshot or a copied backup manifest beside its SQLite payload."""
     path = pathlib.Path(path)
     value = load_json(path)
+    if isinstance(value, dict) and value.get("format") == "biomerte-controller-source-chunks/1":
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "controller_source_chunks", pathlib.Path(__file__).with_name("source_chunks.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.load_manifest(path)
     if (isinstance(value, dict) and value.get("format") == FORMAT
             and isinstance(value.get("records"), list)):
         return value

@@ -18,9 +18,10 @@ file copied while its WAL is active is not a complete backup.
    API. Each backup includes its committed WAL content. Freeze both writers
    before the final pair of backups; separate live backups are not an atomic
    cross-database snapshot.
-3. Copy each private backup and its manifest to both authorized hosts. Verify the
-   actual bytes and canonical record digest on each host. Keep enough disk
-   headroom for both backups, chunked checkpoints and the restored runtime.
+3. Retain each original private backup. Copy its verified canonical source
+   package, or the unchanged SQLite backups and manifest, to the other authorized
+   host. Verify every byte and the original canonical digest. Keep enough disk
+   headroom for source backups, chunked checkpoints and the restored runtime.
 4. Review the collision plan. Resolve each ambiguous mutable record explicitly.
    Do not combine controller-local event sequences, receipt slots, or request
    identities by choosing the most recently timestamped row.
@@ -143,6 +144,64 @@ marker or marker bound to a different source digest. Its output contains state
 and authorization for CheckpointStore.bootstrap; use the runtime's chunking
 layer for distribution.
 
+## Private source transfer through the existing helper transport
+
+A detached source package is not a runtime checkpoint. It preserves original
+canonical records and all three event-delivery tables, compresses a JSON-lines
+stream directly into bounded 256 KiB content-addressed blocks, and signs the
+inventory, stream digests and block descriptors with the original controller's
+node key. Packing uses row-sized memory and does not write a full JSON snapshot.
+The existing SQLite backups remain unchanged.
+
+Stage only the new controller service's own authenticated helpers and exact
+current preparation binding. Keep its authority child unadmitted. Never reuse
+a relay service's grant. Existing helper chunk-get/put/missing allow detached
+blocks within that scope; installing a head is a separate operation. Do not
+publish any checkpoint while staging these source blocks: unreferenced blocks
+older than 600 seconds are eligible for collection after a publication.
+
+On the source host, place the small manifest beside the helper chunk directory:
+
+    python3 deploy/controller-authority/source_chunks.py pack \
+      --home /private/source-home \
+      --source /private/migration/pi-backup.json \
+      --chunks /private/new-helper/checkpoints.sqlite.chunks \
+      --output /private/new-helper/pi-source.json
+
+The command prints only the original source fingerprint/digest, compressed byte
+count, block count and one manifest-chunk digest. The private packet includes
+the source public key; no private identity key is copied. This packet cannot be
+passed to CheckpointStore.install or bootstrap as a runtime checkpoint.
+
+On the larger destination host, use its private coordinator transport
+configuration, the observed remote helper worker/incarnation, and the exact
+current preparation binding. The binding file contains a private grant token;
+never print it or place it in version control.
+
+    python3 deploy/controller-authority/source_chunks.py pull \
+      --manifest-digest "<observed source manifest SHA256>" \
+      --source-node "<original pi fingerprint>" \
+      --config /private/new-helper/service.json \
+      --worker /private/migration/pi-helper-worker.json \
+      --binding /private/migration/preparation-binding.json \
+      --chunks /private/migration/pi-source.chunks \
+      --output /private/migration/pi-source.json \
+      --receipt /private/migration/pi-source-verified.json
+
+Pull uses the existing HTTPS service-checkpoints/chunk-get endpoint. Every
+reply must match the source helper identity, incarnation, live preparation
+binding and gateway epoch. It verifies the pinned manifest digest and source
+signature, every block hash/length, both compressed and decoded stream hashes,
+all canonical records, and all event table counts/digests. Interrupted copies
+resume from verified local blocks. A successful receipt explicitly records
+that no runtime head was installed and effect admission did not change.
+
+The planner accepts pi-source.json through the ordinary --source argument.
+Perform loading and merging on the larger host; the planner retains parsed
+records in memory. The compressed package remains a private source backup.
+Native host recovery credentials and service configuration are separate private
+recovery material; they are not embedded in this application-state package.
+
 ## Freeze and verify through independent maintenance
 
 The source-fence installer closes the hash-to-marker race by holding SQLite
@@ -225,6 +284,8 @@ alone is insufficient because ordinary receipt retention can later remove it.
 Run the focused suite in the physical development workspace:
 
     python3 -m unittest discover -s tests -p test_controller_state_migration.py
+    python3 -m unittest discover -s tests -p test_controller_source_transfer.py
+    python3 -m unittest discover -s tests -p test_controller_state_deployment.py
 
 Cases cover WAL-safe backup, source immutability, streaming snapshot/hash
 equivalence, preservation of paused state and source records, explicit mutable
@@ -232,4 +293,7 @@ conflicts, event-domain blockers, receipt conflict quarantine, monotonic floors,
 DAG reconstruction, exact marker/plan binding, event sidecar byte binding,
 source-alias cursor continuity, exact receiver-column preservation and private
 exclusive outputs.
-Runtime admission and two-host takeover tests remain separate requirements.
+Detached-transfer cases cover original signatures, corrupted/missing blocks,
+stream limits, exact receiver preservation, private manifest loading, interrupted
+copy resumption and stale helper/grant rejection. Runtime admission and two-host
+takeover tests remain separate requirements.
