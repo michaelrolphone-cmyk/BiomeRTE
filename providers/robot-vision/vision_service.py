@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from camera_source import CameraSource, utc_now
+from sensor_tick_stream import SensorTickStream
 from detector import ObjectDetector
 from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
@@ -89,6 +90,7 @@ class VisionService:
         self._stop = threading.Event()
         self._thread = None
         self._live_camera = None
+        self.sensor_ticks = SensorTickStream(self)
         self._started = time.monotonic()
         self._frames = 0
         self._skipped = 0
@@ -341,6 +343,7 @@ class VisionService:
         self.ahrs.start()
         self.ultrasonic.start()
         self.camera.start()
+        self.sensor_ticks.start()
         from live_camera import LiveCamera
         self._live_camera = LiveCamera(self.camera, self.live_frames, self._raw_live_metadata).start()
         self._thread = threading.Thread(target=self._run, name="vision-processing", daemon=True)
@@ -728,7 +731,7 @@ class VisionService:
         age=frame.get('capture_age_at_decode_upper_s',0.)+max(0.,time.monotonic()-frame['receive_decode_monotonic_s'])
         return {**copy.deepcopy(raw),'frame_id':frame['frame_id'],
                 'capture_monotonic_us':packet['capture_monotonic_us'],
-                'sample_reference':'camera_capture','timing_qualified':True,
+                'sample_reference':'sensor_tick' if packet.get('schema')=='biome.sensor_tick.v1' else 'camera_capture','timing_qualified':True,
                 'snapshot':{'telemetry':copy.deepcopy(raw),'elapsed_since_receive_s':age,'request_duration_s':0.}}
 
     def _stream_radio(self,frame):
@@ -1241,6 +1244,7 @@ class VisionService:
             self.atlas.close()
         if self._live_camera is not None:
             self._live_camera.close()
+        self.sensor_ticks.close()
         self.live_frames.close()
         self.live_maps.close()
         self._stop.set()
@@ -1422,4 +1426,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
-

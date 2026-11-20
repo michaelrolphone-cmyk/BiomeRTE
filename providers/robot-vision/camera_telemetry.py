@@ -401,6 +401,12 @@ class CameraTelemetrySource:
             for index, row in enumerate(value["telemetry"][radio])
         ]
 
+    def set_push_source(self, reader):
+        """Use device-clock push snapshots; None explicitly restores HTTP acquisition."""
+        if reader is not None and not callable(reader):
+            raise TypeError('Push source must be callable')
+        self._push_reader = reader
+
     def poll_once(self):
         """Perform one polling attempt; intended for the poller or diagnostics."""
         if not self.enabled or self._stop.is_set():
@@ -408,8 +414,14 @@ class CameraTelemetrySource:
         started = self._monotonic()
         attempted_at = self._utc_clock()
         try:
-            telemetry = self._read_snapshot()
-            received = self._monotonic()
+            reader = getattr(self, '_push_reader', None)
+            if reader is None:
+                telemetry = self._read_snapshot()
+                received = self._monotonic()
+            else:
+                pushed = reader()
+                if pushed is None: return False
+                telemetry, started, received = pushed
             if self._stop.is_set():
                 return False
             record = {

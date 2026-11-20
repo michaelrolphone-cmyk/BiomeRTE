@@ -5,8 +5,8 @@ import re
 
 UINT32=(1<<32)-1
 
-def validate_packet(packet):
-    if not isinstance(packet,dict) or packet.get('schema')!='biome.capture.v1':
+def validate_packet(packet,allow_sensor_tick=False):
+    if not isinstance(packet,dict) or packet.get('schema') not in (('biome.capture.v1','biome.sensor_tick.v1') if allow_sensor_tick else ('biome.capture.v1',)):
         raise ValueError('Unknown capture packet schema')
     for name in ('receiver_id','boot_id','frame_id'):
         if not isinstance(packet.get(name),str) or not packet[name]:
@@ -17,7 +17,10 @@ def validate_packet(packet):
     if packet['frame_id']!=packet['boot_id']+':'+str(t):raise ValueError('Capture frame identity does not match its timestamp')
     served=packet.get('served_monotonic_us')
     if type(served) is not int or served<t:raise ValueError('Invalid capture service clock')
-    for name in ('width','height'):
+    if packet['schema']=='biome.sensor_tick.v1':
+        if packet.get('image_available') is not False or packet.get('capture_timestamp_semantics')!='sensor_snapshot_tick_no_camera_frame':
+            raise ValueError('Sensor tick cannot claim a camera image')
+    for name in (() if packet['schema']=='biome.sensor_tick.v1' else ('width','height')):
         if type(packet.get(name)) is not int or not 1<=packet[name]<=16384:
             raise ValueError('Invalid frame dimensions')
     for name in ('ahrs','radio','ultrasonic'):
@@ -91,7 +94,7 @@ class CaptureSequence:
 
 def frame_ahrs_snapshot(frame):
     from ahrs_source import validate_ahrs_snapshot, _sensor, _calibration
-    packet=validate_packet(frame['sensor_packet'])
+    packet=validate_packet(frame['sensor_packet'],allow_sensor_tick=True)
     raw=packet.get('ahrs')
     if raw is None:return None
     validate_ahrs_snapshot(raw)
@@ -101,7 +104,7 @@ def frame_ahrs_snapshot(frame):
     return dict(source_id=frame.get('source_id'),receiver_id=raw['receiver_id'],boot_id=raw['boot_id'],
                 received_monotonic=tick,received_at=None,request_duration_s=0.,
                 telemetry=raw,sensors=sensors,calibration=_calibration(raw['ahrs']),
-                available=True,device_frame_aligned=True,
+                available=True,device_frame_aligned=packet['schema']=='biome.capture.v1',sensor_tick_aligned=packet['schema']=='biome.sensor_tick.v1',
                 capture_monotonic_us=packet['capture_monotonic_us'])
 
 
