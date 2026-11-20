@@ -59,7 +59,7 @@ Each host receives the same logical scope and credentials, with its own worker I
   "adapter_ca_file": "/config/helper-ca.pem",
   "helper_tls_cert_file": "/config/helper.crt",
   "helper_tls_key_file": "/config/helper-tls.key",
-  "child_url_template": "http://{container_name}:8871/fence",
+  "child_url_template": "http://{container_name}:8871",
   "helper_port": 8870,
   "authority_port": 8871,
   "event_authorize_url": "https://SITE_ORIGIN/internal/controller-events/authorize",
@@ -68,6 +68,8 @@ Each host receives the same logical scope and credentials, with its own worker I
   "maintenance_interval_s": 1
 }
 ```
+
+`child_url_template` is the child base URL; the helper appends `/fence`. `private_dir` must be the actual mounted directory holding `node.json` and `node.key` (`/config` if those files are directly in the private mount). The example uses a separate `/config/identity` subdirectory.
 
 `event_site_access_file` is an optional private JSON file containing `token` when Site platform access requires that extra header. Event authorization still requires its own shared secret. The configured proxy must already be an enabled peer with exactly the intended fingerprint; its explicit operator mapping preserves historical native `admin` receipt identities. Other peers keep native authorization and are never inferred to be operators from a broad peer scope.
 
