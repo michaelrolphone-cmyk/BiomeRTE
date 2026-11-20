@@ -85,6 +85,11 @@ def start(worker, action, adapter, schema, signature):
     finish(worker, action, adapter, schema, signature)
 
 
+def publication_id(signature, name, arguments):
+    """Replay one immutable observation through the existing durable API receipt."""
+    return 'supervised-' + digest([signature, name, arguments])
+
+
 def finish(worker, action, adapter, schema, signature):
     root = os.path.join(os.path.dirname(worker.path), 'command-runners')
     directory = runner.location(root, action['id'])
@@ -134,9 +139,12 @@ def finish(worker, action, adapter, schema, signature):
             time.sleep(min(.2, interval))
             observation = runner.inspect(directory)
         try:
-            worker.remote.call('provider.custody', dict(args, observation=dict(
+            # This final snapshot is immutable evidence, not a live heartbeat.
+            custody = dict(args, observation=dict(
                 observation, signature=signature, recovery_path=directory,
-                local_observed_at=observation.get('observed_at'))))
+                local_observed_at=observation.get('observed_at')))
+            worker.remote.call('provider.custody', custody,
+                               publication_id(signature, 'provider.custody', custody))
         except Exception:
             pass
         if observation['state'] == 'not_started':
@@ -163,11 +171,17 @@ def finish(worker, action, adapter, schema, signature):
             out = {'reason': observation.get('reason', 'Adapter did not return a valid result'),
                    'runner': observation, 'replay_allowed': False,
                    'recovery_path': directory}
-        worker.db.execute('UPDATE actions SET state=?,result=? WHERE id=? AND signature=?',
-                          (state, encode(out), action['id'], signature))
+        encoded = encode(out)
+        if (state, encoded) != (local[1], local[2]):
+            worker.db.execute('UPDATE actions SET state=?,result=? WHERE id=? AND signature=?',
+                              (state, encoded, action['id'], signature))
     args.update(state=state, result=out)
     try:
-        acknowledged = worker.remote.call('provider.result', args)
+        if state == 'uncertain':
+            acknowledged = worker.remote.call('provider.result', args,
+                publication_id(signature, 'provider.result', args))
+        else:
+            acknowledged = worker.remote.call('provider.result', args)
     except Exception:
         # Only a successful authoritative read can park a missing receipt.
         # Unreachable transport remains retryable; neither case permits replay.
@@ -194,7 +208,8 @@ def finish(worker, action, adapter, schema, signature):
                           (action['id'], signature, state, digest(out)))
         cleanup(worker, action, adapter, signature)
     elif state == 'uncertain':
-        # Retain evidence and ownership, but don't busy-loop a known lost custodian.
+        # Keep the pending identity and evidence. Reinspection may discover a
+        # completion; unchanged reports reuse their durable receipt.
         raise Fault('Runner requires reconciliation: ' + directory, 409)
     else:
         raise Fault('Runner result acknowledgement mismatch', 409)
