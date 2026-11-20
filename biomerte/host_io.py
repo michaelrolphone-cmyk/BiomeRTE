@@ -192,6 +192,9 @@ class HostIO:
         self.route_lock = threading.Lock()
         self.stop = threading.Event()
         self.refresh_thread = None
+        self._gateway = None
+        self._gitlab = None
+        self._gateway_lock = threading.Lock()
         self.route_health = dict(state="disabled")
         self.anchors = AnchorHub(self.settings.get("anchors", {}), self.clock_id)
 
@@ -330,6 +333,113 @@ class HostIO:
             raise ValueError("invalid survey control response")
         return json.loads(raw)
 
+    def gateway_invoke(self, operation, arguments, request_id=None, realm="site", provider_context=None):
+        """Use the native OAuth owner; preserve the caller's operation identity."""
+        config = self.settings.get("gateway", {})
+        module_path = config.get("module")
+        if config.get("enabled") is not True:
+            raise PermissionError("native gateway forwarding is not active")
+        if (not isinstance(operation, str) or not operation
+                or not isinstance(arguments, dict) or realm not in ("site", "local")
+                or (request_id is not None and not isinstance(request_id, str))):
+            raise ValueError("invalid gateway request")
+        if provider_context is not None:
+            if (not isinstance(provider_context, dict)
+                    or set(provider_context) - {"provider", "host", "addresses"}
+                    or not isinstance(provider_context.get("provider"), str)
+                    or not isinstance(provider_context.get("host"), str)):
+                raise ValueError("invalid provider context")
+            if "addresses" in provider_context and (
+                    not isinstance(provider_context["addresses"], list)
+                    or any(not isinstance(value, str) for value in provider_context["addresses"])):
+                raise ValueError("invalid provider addresses")
+        path = Path(module_path) if isinstance(module_path, str) else None
+        if path is None or not path.is_absolute() or not path.is_file():
+            raise ValueError("configured native gateway module is unavailable")
+        with self._gateway_lock:
+            if self._gateway is None:
+                import sys
+                if str(path.parent) not in sys.path:
+                    sys.path.insert(0, str(path.parent))
+                spec = importlib.util.spec_from_file_location("biomerte_host_gateway", path)
+                gateway = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(gateway)
+                self._gateway = gateway
+        return self._gateway.invoke(operation, arguments, request_id, realm,
+                                    provider_context=provider_context)
+
+    def gitlab_token(self):
+        """Refresh through the native GitLab credential owner, never a VM copy."""
+        config = self.settings.get("gitlab", {})
+        module_path = config.get("module")
+        if config.get("enabled") is not True:
+            raise PermissionError("native GitLab credential forwarding is not active")
+        path = Path(module_path) if isinstance(module_path, str) else None
+        if path is None or not path.is_absolute() or not path.is_file():
+            raise ValueError("configured native GitLab module is unavailable")
+        with self._gateway_lock:
+            if self._gitlab is None:
+                import sys
+                if str(path.parent) not in sys.path:
+                    sys.path.insert(0, str(path.parent))
+                spec = importlib.util.spec_from_file_location("biomerte_host_gitlab", path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self._gitlab = module
+        return self._gitlab.token()
+
+    def vision_query(self, query, inputs):
+        """Call only the configured existing vision contract on its native socket."""
+        policy = self.settings.get("vision_queries", {})
+        allowed = policy.get("operations", [])
+        mutations = policy.get("mutations", [])
+        if (not isinstance(query, str) or query not in allowed
+                or not isinstance(inputs, dict)):
+            raise ValueError("vision query is not in the configured contract set")
+        if query in mutations and self.settings.get("enable_effects") is not True:
+            raise PermissionError("host effects are not active")
+        if query in ("robot.video.import.read", "robot.video.import.write"):
+            # Video processing keeps its native compute dependencies and existing
+            # job ledger. The provider has always dispatched these operations
+            # through VideoJobs rather than the vision Unix query handler.
+            import sys
+            directory = str(Path(self.settings["device_routes_module_directory"]).resolve())
+            if directory not in sys.path:
+                sys.path.insert(0, directory)
+            from video_jobs import VideoJobs
+            request = inputs.get("request")
+            actions = ({"list", "status"} if query.endswith(".read") else
+                       {"create", "chunk", "finish", "start", "cancel"})
+            if not isinstance(request, dict) or request.get("action") not in actions:
+                raise ValueError("invalid video job action")
+            try:
+                body = VideoJobs(self.settings["vision_directory"]).handle(request)
+            except (ValueError, KeyError, FileNotFoundError) as error:
+                body = {"ok": False, "error": {"code": "VIDEO_INPUT", "message": str(error)[:500]}}
+            return {"status": 200, "body": body}
+        raw = json.dumps({"operation": query, "inputs": inputs},
+                         allow_nan=False, separators=(",", ":")).encode()
+        if len(raw) > 64 * 1024:
+            raise ValueError("native vision request exceeds its contract limit")
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(policy.get("timeout_s"))
+            sock.connect(str(Path(self.settings["vision_directory"]) / "vision.sock"))
+            connection = http.client.HTTPConnection("localhost")
+            connection.sock = sock
+            try:
+                connection.request("POST", "/v1/query", raw,
+                                   {"Content-Type": "application/json"})
+                with connection.getresponse() as response:
+                    body = response.read(MAX_FRAME + 1)
+                    if len(body) > MAX_FRAME:
+                        raise ValueError("native vision response exceeds its contract limit")
+                    value = json.loads(body)
+                    if not isinstance(value, dict):
+                        raise ValueError("native vision response must be an object")
+                    return {"status": response.status, "body": value}
+            finally:
+                connection.close()
+
     def health(self):
         vision = Path(self.settings["vision_directory"]) / "vision.sock"
         provisioning = bool(self.settings.get("device_provisioning") and
@@ -346,7 +456,9 @@ class HostIO:
                    "routes.list": self.routes.list, "routes.get": self.routes.get,
                    "routes.candidates": self.candidates, "routes.observe_anchor": self.observe_anchor,
                    "routes.refresh": self.refresh, "survey.zero": self.survey_zero,
-                   "device.request": self.device_request, "anchors.send": self.anchors.send}
+                   "device.request": self.device_request, "anchors.send": self.anchors.send,
+                   "vision.query": self.vision_query, "gateway.invoke": self.gateway_invoke,
+                   "gitlab.token": self.gitlab_token}
         if operation not in methods:
             raise ValueError("unsupported host operation")
         if operation == "routes.refresh" and self.settings.get("route_refresh_interval_s", 0) < 1:
@@ -403,7 +515,7 @@ def make_server(settings, backend):
                 return self.reply(404, {"error": "not_found"})
             try:
                 size = int(self.headers.get("Content-Length", "0"))
-                if not 0 < size <= MAX_JSON:
+                if size <= 0 or (size > MAX_JSON and settings.get("gateway", {}).get("enabled") is not True):
                     raise ValueError("invalid request length")
                 self.connection.settimeout(5)
                 body = json.loads(read_exact(self.rfile, size))

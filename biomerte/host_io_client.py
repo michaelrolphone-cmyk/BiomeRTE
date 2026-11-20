@@ -11,6 +11,8 @@ import http.client
 import ipaddress
 import json
 import math
+import os
+import socket
 from pathlib import Path
 import ssl
 import struct
@@ -22,6 +24,7 @@ from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, ProxyHand
 PROTOCOL = "biomerte-host-io/1"
 MAX_JSON = 1024 * 1024
 MAX_FRAME = 16 * 1024 * 1024
+_DEFAULT_TIMEOUT = object()
 INTERVAL_FIELDS = frozenset(("capture_host_monotonic_interval_s",
                              "capture_host_interval_s"))
 POINT_FIELDS = frozenset(("received_monotonic", "received_monotonic_s",
@@ -189,7 +192,7 @@ class HostIOClient:
     def from_config(cls, path, **kwargs):
         return cls(json.loads(Path(path).read_text()), **kwargs)
 
-    def _request(self, path, body=None, timeout=None):
+    def _request(self, path, body=None, timeout=_DEFAULT_TIMEOUT):
         token = Path(self.config["token_file"]).read_text().strip()
         if not token:
             raise ValueError("host I/O credential file is empty")
@@ -198,14 +201,15 @@ class HostIOClient:
         raw = None if body is None else json.dumps(
             body, allow_nan=False, separators=(",", ":")).encode()
         request = Request(self.url + path, raw, headers)
-        kwargs = {"timeout": self.timeout if timeout is None else timeout}
+        kwargs = {"timeout": self.timeout if timeout is _DEFAULT_TIMEOUT else timeout}
         return self._opener(request, **kwargs)
 
-    def _call(self, operation, **arguments):
+    def _call(self, host_operation, *, _response_limit=MAX_JSON, _timeout=_DEFAULT_TIMEOUT, **arguments):
         with self._request("/v1/host-io/call",
-                           dict(protocol=PROTOCOL, operation=operation, arguments=arguments)) as response:
-            raw = response.read(MAX_JSON + 1)
-        if len(raw) > MAX_JSON:
+                           dict(protocol=PROTOCOL, operation=host_operation, arguments=arguments),
+                           timeout=_timeout) as response:
+            raw = response.read() if _response_limit is None else response.read(_response_limit + 1)
+        if _response_limit is not None and len(raw) > _response_limit:
             raise ValueError("host I/O response exceeds limit")
         value = json.loads(raw)
         if self.config.get("host_id") and value.get("host_id") != self.config["host_id"]:
@@ -236,6 +240,39 @@ class HostIOClient:
             host_id=value.get("host_id"))
         self._bounds._check()
         return self._bounds
+
+    def call(self, operation, arguments=None):
+        """Forward an existing host operation without altering its request ID."""
+        if arguments is None:
+            arguments = {}
+        if not isinstance(operation, str) or not isinstance(arguments, dict):
+            raise ValueError("invalid host operation")
+        native_auth = operation in ("gateway.invoke", "gitlab.token")
+        timeout = self.config.get("gateway_timeout_s") if native_auth else _DEFAULT_TIMEOUT
+        limit = None if operation == "gateway.invoke" else MAX_JSON
+        return self._call(operation, _timeout=timeout, _response_limit=limit, **arguments)["result"]
+
+    def vision_query(self, operation, inputs):
+        if not isinstance(operation, str) or not isinstance(inputs, dict):
+            raise ValueError("invalid vision query")
+        self.clock()
+        envelope = self._call("vision.query", query=operation, inputs=inputs,
+                              _response_limit=MAX_FRAME + 65536,
+                              _timeout=self.config.get("vision_query_timeout_s"))
+        result = envelope["result"]
+        if (not isinstance(result, dict) or type(result.get("status")) is not int
+                or not isinstance(result.get("body"), dict)):
+            raise ValueError("invalid native vision query response")
+        if not 200 <= result["status"] < 300:
+            error = result["body"].get("error", {})
+            if not isinstance(error, dict):
+                error = {}
+            raise VisionQueryError(error.get("code", "service_error"),
+                                   error.get("message", "Native vision query failed."))
+        return self.clock().metadata(result["body"], envelope["clock_id"])
+
+    def open_vision_stream(self, stream="live"):
+        return VisionFrameStream(self, stream)
 
     def list_routes(self):
         return self._call("routes.list")["result"]
@@ -280,19 +317,9 @@ class HostIOClient:
         return self._call("health")["result"]
 
     def vision_frames(self, stream="live"):
-        if stream not in ("live", "rear", "map"):
-            raise ValueError("unsupported vision stream")
-        self.clock()
-        with self._request("/v1/host-io/vision/" + stream, timeout=5.) as response:
+        with self.open_vision_stream(stream) as source:
             while True:
-                total, size = struct.unpack("!II", read_exact(response, 8))
-                if not 4 <= total <= MAX_FRAME or not 0 < size <= min(MAX_JSON, total - 4):
-                    raise ValueError("invalid vision frame length")
-                envelope = json.loads(read_exact(response, size))
-                jpeg = read_exact(response, total - 4 - size)
-                bounds = self.clock()
-                metadata = bounds.metadata(envelope["metadata"], envelope["clock"]["clock_id"])
-                yield metadata, jpeg
+                yield source.read_frame()
 
     def anchor_datagrams(self):
         self.clock()
@@ -314,3 +341,66 @@ class HostIOClient:
                 yield dict(payload=payload, peer=(item["peer"][0], int(item["peer"][1])),
                            received_interval_s=interval, sequence=item["sequence"],
                            dropped=item.get("dropped", 0), source_clock_id=item["clock_id"])
+
+
+class VisionQueryError(RuntimeError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+class VisionFrameStream:
+    """Interruptible native frame reader with explicit source clock conversion."""
+    def __init__(self, client, stream):
+        if stream not in ("live", "rear", "map"):
+            raise ValueError("unsupported vision stream")
+        self.client, self.stream = client, stream
+        self.response = None
+        self._closed = False
+
+    def open(self):
+        if self.response is not None:
+            raise RuntimeError("vision stream already open")
+        self.client.clock()
+        self.response = self.client._request("/v1/host-io/vision/" + self.stream, timeout=5.)
+        if self._closed:
+            self.abort()
+            raise OSError("vision stream was closed during attachment")
+        return self
+
+    def read_frame(self):
+        if self.response is None:
+            raise RuntimeError("vision stream is not open")
+        total, size = struct.unpack("!II", read_exact(self.response, 8))
+        if not 4 <= total <= MAX_FRAME or not 0 < size <= min(MAX_JSON, total - 4):
+            raise ValueError("invalid vision frame length")
+        envelope = json.loads(read_exact(self.response, size))
+        jpeg = read_exact(self.response, total - 4 - size)
+        metadata = self.client.clock().metadata(
+            envelope["metadata"], envelope["clock"]["clock_id"])
+        return metadata, jpeg
+
+    def abort(self):
+        self._closed = True
+        response, self.response = self.response, None
+        if response is None:
+            return
+        # shutdown interrupts an in-flight read without waiting for the next frame.
+        # Duplicating the public descriptor keeps ownership with the response.
+        try:
+            duplicate = socket.socket(fileno=os.dup(response.fileno()))
+            try:
+                duplicate.shutdown(socket.SHUT_RDWR)
+            finally:
+                duplicate.close()
+        except (OSError, AttributeError, ValueError):
+            pass
+        response.close()
+
+    close = abort
+
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, *unused):
+        self.abort()
