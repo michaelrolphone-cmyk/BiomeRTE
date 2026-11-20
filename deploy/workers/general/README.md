@@ -30,6 +30,8 @@ The receipt is copied into the frozen plan. Storage, replica and GitLab preserve
 the native account UID/GID. A supplementary group alone is not treated as proof
 of Docker Desktop socket access.
 
+Storage mounts only the existing terminal identity/node.json and terminal-manifest.json metadata; the native identity directory and private keys are not exposed. GitLab, workspace-worker and workspace-monitor explicitly mount the configured Git workspace_root at the identical absolute path, including when it is outside their state directories. Preparation requires that source to exist.
+
 The existing HTTPS HostIO configuration, CA and token remain readonly mounts.
 No HostIO production port is compiled into this script. For capability workers,
 the bridge and selected controller must answer before any native owner is

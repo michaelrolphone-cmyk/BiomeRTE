@@ -29,6 +29,7 @@ services:
     volumes:
       - ${BIOME_HOST_IO_CLIENT_DIR:?Set qualified client directory}:/run/biome:ro
       - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+      - ${BIOME_GIT_WORKSPACES:?Set configured Git workspace root}:${BIOME_GIT_WORKSPACES}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "${BIOME_GITLAB_HOST:?Set hostname from existing GitLab config}:host-gateway"
@@ -43,6 +44,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${BIOME_MAC_HOME}/.local/share/biome-workspaces:${BIOME_MAC_HOME}/.local/share/biome-workspaces
       - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+      - ${BIOME_GIT_WORKSPACES:?Set configured Git workspace root}:${BIOME_GIT_WORKSPACES}
   workspace-monitor:
     <<: *worker
     profiles: [workspaces]
@@ -55,6 +57,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${BIOME_MAC_HOME}/.local/share/biome-workspaces:${BIOME_MAC_HOME}/.local/share/biome-workspaces
       - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+      - ${BIOME_GIT_WORKSPACES:?Set configured Git workspace root}:${BIOME_GIT_WORKSPACES}
   docker-cli:
     <<: *worker
     profiles: [docker-cli]
@@ -76,7 +79,7 @@ services:
       - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
       - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage:${BIOME_MAC_HOME}/.local/share/biome-mac-storage
       - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount:${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount
-      - ${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity:${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity/node.json:${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity/node.json:ro
       - ${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/terminal-manifest.json:${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/terminal-manifest.json:ro
   replica:
     <<: *worker
