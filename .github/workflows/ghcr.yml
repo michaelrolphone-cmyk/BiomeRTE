@@ -1,165 +1,42 @@
-name: Inspect exact GHCR publication inventory
+name: Guarded cleanup of original GHCR publication
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify inventory or delete only the original six versions
+        type: choice
+        required: true
+        default: verify
+        options:
+          - verify
+          - delete
 permissions:
   contents: read
-  packages: read
+  packages: write
+concurrency:
+  group: ghcr-original-publication-cleanup-44648102932
+  cancel-in-progress: false
 jobs:
-  inspect:
-    if: github.repository == 'michaelrolphone-cmyk/BiomeRTE'
+  cleanup:
+    if: github.repository == 'michaelrolphone-cmyk/BiomeRTE' && github.ref == 'refs/heads/work/ghcr-guarded-cleanup-20261120'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Read only the original three packages and every version
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify the exact cleanup guards without network access
+        run: python3 -B -m unittest discover -s tests -p test_ghcr_cleanup.py -v
+      - name: Inspect or clean up the verified original publication
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 - <<'PY'
-          import datetime
-          import json
-          import os
-          from pathlib import Path
-          import re
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-
-          OWNER = "michaelrolphone-cmyk"
-          REPOSITORY = OWNER + "/BiomeRTE"
-          PACKAGES = {"service-runner": 17087076, "service-authority": 17087080, "portable-services": 17087092}
-          EXPECTED = {'service-runner': {'sha256:92d1d9803249b55ad2588b88291d033b3763a648de1ceeda095e394651ce6c05': ['a81497cf0465-linux-arm64'], 'sha256:54a942a9f620952f4b41a54ce4054d2f180de2ba1886792489f99269697d6d38': ['a81497cf0465-linux-arm-v7']}, 'service-authority': {'sha256:e66fac75207dad0a133ac31300b21bcd8a8721ac2def953f3b25b2cce42d7292': ['a81497cf0465-linux-arm64'], 'sha256:bf64fcfa88b926997e307405c20cd6d5775e4c031c893bc322bdf3cabe9f7d28': ['a81497cf0465-linux-arm-v7']}, 'portable-services': {'sha256:f356ab913689f96a8876506f567f01576ee78b57571384d79e9e10298664acae': ['a81497cf0465-linux-arm64'], 'sha256:1403d559ccc756dfb7d4add01c36a63e7d4a85a04fb46c3eddab23e581cdf0d2': ['a81497cf0465-linux-arm-v7']}}
-          OUTPUT = Path("ghcr-original-publication-inventory.json")
-
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self, request, fp, code, message, headers, url):
-                  return None
-
-          opener = urllib.request.build_opener(NoRedirect())
-
-          def api(url, expected_path):
-              parsed = urllib.parse.urlsplit(url)
-              if (parsed.scheme != "https" or parsed.netloc != "api.github.com"
-                      or parsed.path != expected_path or parsed.fragment):
-                  raise ValueError("Unexpected GitHub pagination destination")
-              request = urllib.request.Request(url, headers={
-                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "User-Agent": "biomerte-exact-publication-inventory",
-              }, method="GET")
-              try:
-                  with opener.open(request, timeout=30) as response:
-                      if response.status != 200:
-                          raise ValueError("GitHub inventory response was not HTTP 200")
-                      return json.load(response), response.headers.get("Link", "")
-              except urllib.error.HTTPError as error:
-                  raise ValueError("GitHub inventory read failed with HTTP " + str(error.code)) from None
-              except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-                  raise ValueError("GitHub inventory read did not return verified JSON") from None
-
-          def version_inventory(path):
-              url = "https://api.github.com" + path
-              seen = set()
-              versions = []
-              while url:
-                  if url in seen or len(seen) >= 100:
-                      raise ValueError("GitHub version pagination was incomplete or cyclic")
-                  seen.add(url)
-                  page, links = api(url, path)
-                  if not isinstance(page, list) or any(not isinstance(item, dict) for item in page):
-                      raise ValueError("GitHub versions response was not a list of metadata records")
-                  versions.extend(page)
-                  url = None
-                  for link in links.split(",") if links else []:
-                      match = re.fullmatch(r'\s*<([^>]+)>;\s*rel="([^"]+)"\s*', link)
-                      if not match:
-                          raise ValueError("Unrecognized GitHub pagination metadata")
-                      if match.group(2) == "next":
-                          if url is not None:
-                              raise ValueError("Multiple next version pages")
-                          url = match.group(1)
-              ids = [item.get("id") for item in versions]
-              if any(type(value) is not int or value <= 0 for value in ids) or len(ids) != len(set(ids)):
-                  raise ValueError("GitHub version IDs were invalid or duplicated")
-              return versions, len(seen)
-
-          if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
-              raise SystemExit("Unexpected diagnostic workflow repository")
-
-          receipt = {
-              "schema": "biomerte-ghcr-publication-inventory/1",
-              "read_only": True,
-              "original_run_id": 44648102932,
-              "original_source_commit": "a81497cf0465e980585cf72562c5bef059b3c7b7",
-              "publication_window": {"start": "2026-11-20T00:49:45Z", "end": "2026-11-20T00:50:17Z"},
-              "observed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "repository": REPOSITORY,
-              "packages": [],
-          }
-          failed = False
-          try:
-              for name, package_id in PACKAGES.items():
-                  entry = {"requested_name": name, "expected_package_id": package_id}
-                  receipt["packages"].append(entry)
-                  try:
-                      path = "/users/" + OWNER + "/packages/container/" + name
-                      package, _ = api("https://api.github.com" + path, path)
-                      if not isinstance(package, dict):
-                          raise ValueError("GitHub package response was not metadata")
-                      source = package.get("repository") or {}
-                      owner = package.get("owner") or {}
-                      entry["package"] = {
-                          "id": package.get("id"), "name": package.get("name"),
-                          "package_type": package.get("package_type"),
-                          "visibility": package.get("visibility"),
-                          "owner": {"id": owner.get("id"), "login": owner.get("login")},
-                          "repository": {"id": source.get("id"), "full_name": source.get("full_name"),
-                                         "visibility": source.get("visibility"), "private": source.get("private")},
-                          "created_at": package.get("created_at"),
-                          "updated_at": package.get("updated_at"),
-                          "version_count": package.get("version_count"),
-                      }
-                      entry["identity_verified"] = (
-                          package.get("id") == package_id and package.get("name") == name
-                          and package.get("package_type") == "container"
-                          and package.get("visibility") == "public"
-                          and owner.get("login", "").lower() == OWNER
-                          and source.get("full_name", "").lower() == REPOSITORY.lower()
-                      )
-                      versions, pages = version_inventory(path + "/versions")
-                      entry["inventory_complete"] = True
-                      entry["pages_read"] = pages
-                      entry["versions"] = [{
-                          "id": value.get("id"), "digest": value.get("name"),
-                          "created_at": value.get("created_at"), "updated_at": value.get("updated_at"),
-                          "tags": value.get("metadata", {}).get("container", {}).get("tags"),
-                      } for value in versions]
-                      expected = EXPECTED[name]
-                      observed = {item["digest"]: item["tags"] for item in entry["versions"]}
-                      entry["matches_original_publication"] = (
-                          package.get("version_count") == len(versions) == len(expected)
-                          and len(observed) == len(versions)
-                          and observed == expected
-                      )
-                      if not entry["identity_verified"] or not entry["matches_original_publication"]:
-                          failed = True
-                  except (ValueError, TypeError, AttributeError) as error:
-                      entry["error"] = str(error)
-                      failed = True
-                  print(json.dumps(entry, sort_keys=True), flush=True)
-          finally:
-              receipt["verified"] = not failed and len(receipt["packages"]) == len(PACKAGES)
-              OUTPUT.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-              print(json.dumps({"receipt": str(OUTPUT), "verified": receipt["verified"],
-                                "read_only": True}), flush=True)
-          if failed:
-              raise SystemExit(1)
-          PY
-      - name: Retain nonsecret package and version metadata
+          CLEANUP_MODE: ${{ inputs.mode }}
+        run: python3 -B deploy/docker-services/ghcr_cleanup.py --mode "$CLEANUP_MODE"
+      - name: Retain nonsecret cleanup receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ghcr-original-publication-inventory
-          path: ghcr-original-publication-inventory.json
+          name: ghcr-cleanup-44648102932-receipt
+          path: ghcr-cleanup-44648102932.receipt.json
           if-no-files-found: error
           retention-days: 30

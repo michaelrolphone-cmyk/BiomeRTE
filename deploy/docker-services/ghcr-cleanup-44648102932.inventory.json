@@ -1,0 +1,156 @@
+{
+  "observed_at": "2026-11-20T01:12:45.522954+00:00",
+  "original_run_id": 44648102932,
+  "original_source_commit": "a81497cf0465e980585cf72562c5bef059b3c7b7",
+  "packages": [
+    {
+      "expected_package_id": 17087076,
+      "identity_verified": true,
+      "inventory_complete": true,
+      "matches_original_publication": true,
+      "package": {
+        "created_at": "2026-11-20T00:49:44Z",
+        "id": 17087076,
+        "name": "service-runner",
+        "owner": {
+          "id": 247690798,
+          "login": "michaelrolphone-cmyk"
+        },
+        "package_type": "container",
+        "repository": {
+          "full_name": "michaelrolphone-cmyk/BiomeRTE",
+          "id": 1443999162,
+          "private": false,
+          "visibility": null
+        },
+        "updated_at": "2026-11-20T00:49:50Z",
+        "version_count": 2,
+        "visibility": "public"
+      },
+      "pages_read": 1,
+      "requested_name": "service-runner",
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:49:50Z",
+          "digest": "sha256:54a942a9f620952f4b41a54ce4054d2f180de2ba1886792489f99269697d6d38",
+          "id": 1601148605,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:49:50Z"
+        },
+        {
+          "created_at": "2026-11-20T00:49:44Z",
+          "digest": "sha256:92d1d9803249b55ad2588b88291d033b3763a648de1ceeda095e394651ce6c05",
+          "id": 1601148152,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:49:44Z"
+        }
+      ]
+    },
+    {
+      "expected_package_id": 17087080,
+      "identity_verified": true,
+      "inventory_complete": true,
+      "matches_original_publication": true,
+      "package": {
+        "created_at": "2026-11-20T00:49:56Z",
+        "id": 17087080,
+        "name": "service-authority",
+        "owner": {
+          "id": 247690798,
+          "login": "michaelrolphone-cmyk"
+        },
+        "package_type": "container",
+        "repository": {
+          "full_name": "michaelrolphone-cmyk/BiomeRTE",
+          "id": 1443999162,
+          "private": false,
+          "visibility": null
+        },
+        "updated_at": "2026-11-20T00:50:02Z",
+        "version_count": 2,
+        "visibility": "public"
+      },
+      "pages_read": 1,
+      "requested_name": "service-authority",
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:50:02Z",
+          "digest": "sha256:bf64fcfa88b926997e307405c20cd6d5775e4c031c893bc322bdf3cabe9f7d28",
+          "id": 1601149362,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:50:02Z"
+        },
+        {
+          "created_at": "2026-11-20T00:49:56Z",
+          "digest": "sha256:e66fac75207dad0a133ac31300b21bcd8a8721ac2def953f3b25b2cce42d7292",
+          "id": 1601148967,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:49:56Z"
+        }
+      ]
+    },
+    {
+      "expected_package_id": 17087092,
+      "identity_verified": true,
+      "inventory_complete": true,
+      "matches_original_publication": true,
+      "package": {
+        "created_at": "2026-11-20T00:50:09Z",
+        "id": 17087092,
+        "name": "portable-services",
+        "owner": {
+          "id": 247690798,
+          "login": "michaelrolphone-cmyk"
+        },
+        "package_type": "container",
+        "repository": {
+          "full_name": "michaelrolphone-cmyk/BiomeRTE",
+          "id": 1443999162,
+          "private": false,
+          "visibility": null
+        },
+        "updated_at": "2026-11-20T00:50:17Z",
+        "version_count": 2,
+        "visibility": "public"
+      },
+      "pages_read": 1,
+      "requested_name": "portable-services",
+      "versions": [
+        {
+          "created_at": "2026-11-20T00:50:17Z",
+          "digest": "sha256:1403d559ccc756dfb7d4add01c36a63e7d4a85a04fb46c3eddab23e581cdf0d2",
+          "id": 1601150350,
+          "tags": [
+            "a81497cf0465-linux-arm-v7"
+          ],
+          "updated_at": "2026-11-20T00:50:17Z"
+        },
+        {
+          "created_at": "2026-11-20T00:50:09Z",
+          "digest": "sha256:f356ab913689f96a8876506f567f01576ee78b57571384d79e9e10298664acae",
+          "id": 1601149827,
+          "tags": [
+            "a81497cf0465-linux-arm64"
+          ],
+          "updated_at": "2026-11-20T00:50:09Z"
+        }
+      ]
+    }
+  ],
+  "publication_window": {
+    "end": "2026-11-20T00:50:17Z",
+    "start": "2026-11-20T00:49:45Z"
+  },
+  "read_only": true,
+  "repository": "michaelrolphone-cmyk/BiomeRTE",
+  "schema": "biomerte-ghcr-publication-inventory/1",
+  "verified": true
+}
