@@ -32,7 +32,8 @@ from session_protocol import SessionServer as ChatServer, public
 from session_client import SessionClient as ChatClient
 from image_protocol import SessionServer as ImageServer
 from image_client import SessionClient as ImageClient
-from private_image import store_envelope
+with patch.dict(os.environ, {"BIOME_GATEWAY_CODE": str(ROOT / "providers/mac-terminal")}):
+    from private_image import store_envelope
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
