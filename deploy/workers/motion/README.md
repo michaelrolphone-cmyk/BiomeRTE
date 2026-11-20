@@ -63,3 +63,11 @@ Preserve the complete database/WAL custody state and provider worker state durin
 handoff. Do not copy an active SQLite database as a single file. Rollback first stops
 both containers, then restores the native ownership arrangement. No native service
 stop/start or cutover is performed by the build, qualification, or renderer.
+
+## Concrete native-state preparation
+
+`prepare.py` renders a private bundle from the actual native manifest and production
+HostIO TLS8766 client, preserves exact rollback plists, validates the immutable image
+and Compose configuration, and records read-only ledger/training custody. It does
+not start or stop services. See [HANDOFF.md](HANDOFF.md) and
+[the actual preparation receipt](preparation-20261120.json) for current runtime gates.
