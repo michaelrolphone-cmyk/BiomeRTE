@@ -8,7 +8,8 @@ def healthy():
     poll = Path(os.environ.get("BIOME_WORKER_HEALTH", "/run/biome-health/poll.json"))
     try:
         state = json.loads(poll.read_text())
-        if state.get("state") == "online" and 0 <= time.time()-state["last_poll"] < 180:
+        contacted = state.get("last_contact", state.get("last_poll"))
+        if state.get("state") == "online" and 0 <= time.time()-contacted < 180:
             return True
     except (OSError, ValueError, KeyError, TypeError):
         pass
