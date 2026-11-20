@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import unittest
@@ -12,6 +13,11 @@ ghcr = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ghcr)
 
 class GHCRReleaseTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def run_data(self, **change):
         value = {"id": 10, "run_attempt": 1, "head_sha": "a" * 40,
                  "head_branch": "main", "event": "push", "status": "completed",
@@ -43,10 +49,12 @@ class GHCRReleaseTests(unittest.TestCase):
         with patch.object(ghcr, "api", side_effect=[
                 {"type": "User", "login": "owner"},
                 {"name": "first", "package_type": "container", "visibility": "private", "id": 1},
-                None]) as query:
-            result = ghcr.private_packages("owner", ["second", "first"])
+                None,
+                {"full_name": "owner/publisher", "private": True, "visibility": "private"}]) as query:
+            result = ghcr.private_packages("owner", ["second", "first"], repository="owner/publisher")
             self.assertEqual([x["state"] for x in result["packages"]], ["existing", "absent"])
-            self.assertEqual(query.call_args_list[-1].kwargs, {"missing": True})
+            self.assertEqual(query.call_args_list[2].kwargs, {"missing": True})
+            self.assertEqual(result["packages"][1]["creation_repository"]["name"], "owner/publisher")
 
     def test_public_internal_unknown_visibility_rejected(self):
         for visibility in ["public", "internal", None]:
@@ -72,3 +80,54 @@ class GHCRReleaseTests(unittest.TestCase):
                 ghcr.api("/user")
             self.assertNotIn(secret, str(raised.exception))
             self.assertIn("403", str(raised.exception))
+
+    def test_absent_package_from_public_internal_or_unknown_repository_fails_closed(self):
+        for visibility, private in [("public", False), ("internal", True), (None, None)]:
+            with self.subTest(visibility=visibility), patch.object(ghcr, "api", side_effect=[
+                    {"type": "User", "login": "owner"}, None,
+                    {"full_name": "owner/publisher", "visibility": visibility, "private": private}]):
+                with self.assertRaisesRegex(ValueError, "Refusing private package creation") as raised:
+                    ghcr.private_packages("owner", ["image"], repository="owner/publisher")
+                self.assertIn("visibility="+json.dumps(visibility), str(raised.exception))
+
+    def test_absent_package_without_publishing_context_fails_closed(self):
+        with patch.object(ghcr, "api", side_effect=[{"type": "User", "login": "owner"}, None]) as query:
+            with self.assertRaisesRegex(ValueError, "publishing repository is required"):
+                ghcr.private_packages("owner", ["image"])
+            self.assertEqual(query.call_count, 2)
+
+    def test_existing_private_package_does_not_require_private_publisher(self):
+        with patch.object(ghcr, "api", side_effect=[
+                {"type": "User", "login": "owner"},
+                {"name": "image", "package_type": "container", "visibility": "private"}]) as query:
+            result = ghcr.private_packages("owner", ["image"], repository="owner/public-source")
+            self.assertEqual(result["packages"][0]["visibility"], "private")
+            self.assertEqual(query.call_count, 2)
+
+    def test_workflow_repository_cannot_be_overridden_for_creation(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "owner/public-source"}), \
+                patch.object(ghcr, "api", side_effect=[{"type": "User", "login": "owner"}, None]) as query:
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                ghcr.private_packages("owner", ["image"], repository="owner/private-publisher")
+            self.assertEqual(query.call_count, 2)
+
+    def test_workflow_repository_is_verified_for_creation(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "owner/private-publisher"}), \
+                patch.object(ghcr, "api", side_effect=[
+                    {"type": "User", "login": "owner"}, None,
+                    {"full_name": "owner/private-publisher", "visibility": "private", "private": True}]) as query:
+            result = ghcr.private_packages("owner", ["image"])
+            self.assertEqual(result["packages"][0]["creation_repository"]["name"], "owner/private-publisher")
+            self.assertEqual(query.call_args.args[0], "/repos/owner/private-publisher")
+
+    def test_missing_postflight_never_becomes_permission_to_create(self):
+        with patch.object(ghcr, "api", side_effect=[{"type": "User", "login": "owner"}, None]):
+            with self.assertRaisesRegex(ValueError, "Required private package"):
+                ghcr.private_packages("owner", ["image"], require_existing=True)
+
+    def test_rejected_package_error_records_actual_visibility(self):
+        with patch.object(ghcr, "api", side_effect=[
+                {"type": "User", "login": "owner"},
+                {"name": "image", "package_type": "container", "visibility": "public"}]):
+            with self.assertRaisesRegex(ValueError, 'visibility="public"'):
+                ghcr.private_packages("owner", ["image"])

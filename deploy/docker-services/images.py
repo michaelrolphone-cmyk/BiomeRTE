@@ -337,6 +337,9 @@ def registry_prefix(registry, namespace):
 def publish(args):
     data = release(args.lock)
     prefix = registry_prefix(args.registry, args.namespace)
+    repository_prefix = getattr(args, "repository_prefix", "")
+    if not isinstance(repository_prefix, str) or (repository_prefix and not ID.fullmatch(repository_prefix)):
+        raise ValueError("Repository prefix must be a lowercase repository-name fragment")
     # Check every target before any tag or push, so a bad later entry cannot
     # cause a partially published release under a different source or target.
     for item in data["images"]:
@@ -344,7 +347,7 @@ def publish(args):
         check_provenance(inspected, expected_labels(
             data["source_commit"], data["source_url"], item["id"], item["platform"]))
     for item in data["images"]:
-        tag = "{}/{}:{}-{}".format(prefix, item["id"], data["source_commit"][:12],
+        tag = "{}/{}:{}-{}".format(prefix, repository_prefix + item["id"], data["source_commit"][:12],
                                    item["platform"].replace("/", "-"))
         call([args.docker, "tag", item["image_id"], tag])
         output = call([args.docker, "push", tag])
@@ -400,6 +403,7 @@ def main():
     p.add_argument("--lock", required=True)
     p.add_argument("--registry", required=True)
     p.add_argument("--namespace", required=True)
+    p.add_argument("--repository-prefix", default="", help="Prefix registry names without changing logical image IDs")
     p.add_argument("--docker", default="docker")
     p.set_defaults(func=publish)
     p = commands.add_parser("render")

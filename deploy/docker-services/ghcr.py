@@ -32,7 +32,26 @@ def api(path, missing=False):
     except (URLError, json.JSONDecodeError):
         raise ValueError("GitHub authorization check did not return verified metadata") from None
 
-def private_packages(owner, images, require_existing=False):
+def publishing_repository(repository, owner):
+    actual = os.environ.get("GITHUB_REPOSITORY")
+    if actual:
+        if repository and repository.lower() != actual.lower():
+            raise ValueError("Publishing repository does not match the workflow repository")
+        repository = actual
+    if (not isinstance(repository, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repository)
+            or repository.split("/", 1)[0].lower() != owner.lower()):
+        raise ValueError("A verified publishing repository is required before creating a private package")
+    value = api("/repos/" + repository)
+    if (value.get("full_name", "").lower() != repository.lower() or
+            value.get("private") is not True or value.get("visibility") != "private"):
+        raise ValueError("Refusing private package creation from publishing repository {} "
+                         "(visibility={}, private={})".format(
+                             repository, json.dumps(value.get("visibility")),
+                             json.dumps(value.get("private"))))
+    return {"name": value["full_name"], "visibility": "private", "private": True}
+
+def private_packages(owner, images, require_existing=False, repository=None):
     if not OWNER.fullmatch(owner) or not images or any(not NAME.fullmatch(x) for x in images):
         raise ValueError("Expected a GitHub owner and explicit image IDs")
     account = api("/users/" + quote(owner, safe=""))
@@ -40,14 +59,26 @@ def private_packages(owner, images, require_existing=False):
     if not kind or account.get("login", "").lower() != owner.lower():
         raise ValueError("GitHub did not confirm the registry owner")
     packages = []
+    creation_repository = None
     for name in sorted(set(images)):
         package = api("/{}/{}/packages/container/{}".format(
             kind, quote(owner, safe=""), quote(name, safe="")), missing=not require_existing)
         if package is None:
-            packages.append({"name": name, "state": "absent", "new_package_visibility": "private"})
+            if require_existing:
+                raise ValueError("Required private package was not found: " + name)
+            # GITHUB_TOKEN creation inherits the publishing repository's
+            # visibility. The generic Container registry private default
+            # does not establish privacy for a workflow in a public repo.
+            if creation_repository is None:
+                creation_repository = publishing_repository(repository, owner)
+            packages.append({"name": name, "state": "absent",
+                             "expected_new_package_visibility": "private",
+                             "visibility_verified": False,
+                             "creation_repository": creation_repository})
             continue
         if package.get("visibility") != "private":
-            raise ValueError("Refusing a package without verified private visibility: " + name)
+            raise ValueError("Refusing a package without verified private visibility: {} "
+                             "(visibility={})".format(name, json.dumps(package.get("visibility"))))
         if package.get("name") != name or package.get("package_type") != "container":
             raise ValueError("GitHub returned mismatched package metadata: " + name)
         packages.append({"name": name, "state": "existing", "visibility": "private",
@@ -83,6 +114,7 @@ def main():
     sub = parser.add_subparsers(dest="operation", required=True)
     private = sub.add_parser("private")
     private.add_argument("--owner", required=True)
+    private.add_argument("--repository", help="Publishing repository; defaults to GITHUB_REPOSITORY")
     private.add_argument("--image", action="append", required=True)
     private.add_argument("--require-existing", action="store_true")
     private.add_argument("--output", required=True)
@@ -94,7 +126,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.operation == "private":
-            result = private_packages(args.owner, args.image, args.require_existing)
+            result = private_packages(args.owner, args.image, args.require_existing, args.repository)
         else:
             result = qualified(args.repository, args.workflow, args.revision)
         result["checked_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
