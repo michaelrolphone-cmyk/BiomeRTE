@@ -16,6 +16,7 @@ RESULT_DEBUG_COUNT = 100
 RESULT_DEBUG_BYTES = 1024 * 1024
 RECONCILIATION_DEBUG_COUNT = 100
 RECONCILIATION_DEBUG_BYTES = 1024 * 1024
+HEALTH_HEARTBEAT_SECONDS = 5
 
 
 def post(url, path, body, ca=None, token=None, timeout=30):
@@ -214,6 +215,12 @@ class Worker:
                             'pending': pending, 'blocked': errors}
         if historical_debt is not None:
             self.last_health['historical_debt']=historical_debt
+        # Compare a serialized snapshot: errors and debt contain mutable nested
+        # values that callers may reuse on later polls.
+        semantic = encode({key: value for key, value in self.last_health.items()
+                           if key != 'observed_at'})
+        observed_mono = time.monotonic()
+        publication = getattr(self, '_health_publication', None)
         path = os.path.join(os.path.dirname(self.path), 'worker-health.json')
         # One reusable staging file bounds future crash leftovers. A separate
         # stable lock serializes writers across processes; locking the staging
@@ -229,6 +236,7 @@ class Worker:
                 opened = os.fstat(fd)
                 if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
                     raise Fault('Worker health file changed during write', 409)
+            return current
 
         def safe_open(name):
             # NONBLOCK also prevents a planted FIFO from stalling the worker.
@@ -240,13 +248,25 @@ class Worker:
                 os.close(fd)
                 raise
 
+        def fingerprint(current):
+            return (current.st_dev, current.st_ino, current.st_mode,
+                    current.st_nlink, current.st_size,
+                    current.st_mtime_ns, current.st_ctime_ns)
+
         lock_path = path + '.write-v1.lock'
         temporary = path + '.pending-v1'
         with os.fdopen(safe_open(lock_path), 'a') as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             check_file(lock_path, lock.fileno())
-            if os.path.lexists(path):
-                check_file(path)
+            current = check_file(path) if os.path.lexists(path) else None
+            if (publication is not None and semantic == publication[0] and
+                    0 <= observed_mono - publication[1] < HEALTH_HEARTBEAT_SECONDS and
+                    0 <= self.last_health['observed_at'] - publication[2] < HEALTH_HEARTBEAT_SECONDS and
+                    current is not None and fingerprint(current) == publication[3]):
+                return
+            # A failed write or either failed fsync must be retried, even if a
+            # replacement became visible before directory durability failed.
+            self._health_publication = None
             with os.fdopen(safe_open(temporary), 'w') as out:
                 os.ftruncate(out.fileno(), 0)
                 out.write(encode(self.last_health))
@@ -254,11 +274,16 @@ class Worker:
                 os.fsync(out.fileno())
                 check_file(temporary, out.fileno())
                 os.replace(temporary, path)
+                published = fingerprint(os.fstat(out.fileno()))
             directory = os.open(os.path.dirname(self.path) or '.', os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
                 os.close(directory)
+            # The cache is only a publication optimization, never an ACK or
+            # execution record. Keep it unset until both fsyncs have succeeded.
+            self._health_publication = (semantic, observed_mono,
+                                        self.last_health['observed_at'], published)
 
     def fence(self, l):
         resource, gen, holder = l['resource'], l['generation'], l['id']

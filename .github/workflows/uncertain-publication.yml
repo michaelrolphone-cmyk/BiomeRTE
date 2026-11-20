@@ -10,4 +10,4 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m unittest tests.test_supervised_publication tests.test_worker_fast_follow -v
+      - run: python -m unittest tests.test_supervised_publication tests.test_worker_fast_follow tests.test_worker_health_heartbeat -v
