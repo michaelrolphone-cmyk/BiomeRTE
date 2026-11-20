@@ -20,7 +20,7 @@ class ReplicaContainerWiring(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.base=Path(self.temp.name)
-        self.env=mock.patch.dict(os.environ,{"BIOME_STORAGE_HOME":str(self.base)},clear=True)
+        self.env=mock.patch.dict(os.environ,{"BIOME_STORAGE_HOME":str(self.base),"HOME":str(self.base)},clear=True)
         self.env.start();self.addCleanup(self.env.stop)
         with mock.patch.object(sys,"path",sys.path[:]):
             sys.path.insert(0,str(ROOT))
