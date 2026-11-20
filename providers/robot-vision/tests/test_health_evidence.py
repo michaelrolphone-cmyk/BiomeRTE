@@ -24,19 +24,19 @@ class HealthEvidenceTests(unittest.TestCase):
                             offline.append(args['contract']);advertised.set()
                         return {}
                 class Client:
-                    def __init__(self,*args):pass
+                    def __init__(self,*args,**kwargs):pass
                     def query(self,*args):
                         queried.set()
                         raise adapter.ServiceError('service_unavailable','No completed health reply') from cause
                 class Worker:
-                    def __init__(self,*args):self.db=types.SimpleNamespace(close=lambda:None)
+                    def __init__(self,*args,**kwargs):self.db=types.SimpleNamespace(close=lambda:None)
                     def once(self,pool):
                         queried.wait(.5);advertised.wait(.1)
                         closing.set();handlers[adapter.signal.SIGTERM](None,None)
                 class Pool:
-                    def __init__(self,*args):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
+                    def __init__(self,*args,**kwargs):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
                 class Streams:
-                    def __init__(self,*args,sequence_path=None):sequence_paths.append(sequence_path)
+                    def __init__(self,*args,sequence_path=None, rear_resource=None):sequence_paths.append(sequence_path)
                     def update(self,*args):pass
                     def close(self):pass
                 with tempfile.TemporaryDirectory() as folder:

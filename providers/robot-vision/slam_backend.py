@@ -25,6 +25,41 @@ PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
 
+def reconcile_keyframe_points(keyframe, *, restored=False):
+    """A landmark has one feature observation per keyframe in native pySLAM."""
+    slots = keyframe.points
+    if slots is None:
+        return
+    seen = {}
+    for index, point in enumerate(slots):
+        # During native deserialization slots temporarily hold numeric IDs.
+        if point is None or isinstance(point, (int, np.integer)):
+            continue
+        first = seen.setdefault(id(point), index)
+        if first == index:
+            continue
+        # Existing checkpoints carry the exact feature used by bundle adjustment.
+        # On promotion native observations are created afterwards, in slot order.
+        if restored and point.get_observation_idx(keyframe) == index:
+            slots[first] = None
+            seen[id(point)] = index
+        else:
+            slots[index] = None
+
+
+def install_keyframe_point_ownership(keyframe_type):
+    if keyframe_type.__dict__.get("_biome_unique_points"):
+        return
+    create = keyframe_type.__init__
+
+    def initialize(keyframe, *args, **kwargs):
+        create(keyframe, *args, **kwargs)
+        reconcile_keyframe_points(keyframe)
+
+    keyframe_type.__init__ = initialize
+    keyframe_type._biome_unique_points = True
+
+
 def next_native_frame_index(runtime, fallback):
     """Continue native image IDs after restore or a rejected attempt."""
     with runtime.map.update_lock:
@@ -37,7 +72,9 @@ def next_native_frame_index(runtime, fallback):
                     runtime.map.add_frame(reference)
                     previous = reference
                     break
-        return int(previous.img_id) + 1 if previous is not None else fallback
+        successor=int(previous.img_id)+1 if previous is not None else fallback
+        reserved=getattr(runtime,"rig_next_frame_index",None)
+        return max(successor,reserved) if reserved is not None else successor
 
 
 
@@ -246,10 +283,23 @@ class SlamBackend:
         tracker["num_features"] = int(self.config.get("num_features", 2000))
         loop = copy.deepcopy(LoopDetectorConfigs.DBOW3)
         self._states = SlamState
+        from mapper_checkpoint import install_owner_capture
+        from pyslam.slam.local_mapping import LocalMapping
+        from pyslam.slam.keyframe import KeyFrame
+        install_keyframe_point_ownership(KeyFrame)
+        install_owner_capture(LocalMapping)
         runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
                        environment_type=DatasetEnvironmentType.INDOOR, config=None, headless=True)
         runtime.preserve_map_on_tracking_loss = True
         return runtime
+
+    def rig_anchor(self, pose):
+        from rig_native_map import anchor
+        return anchor(self,pose)
+
+    def rig_resolve(self, value):
+        from rig_native_map import resolve
+        return resolve(self,value)
 
     def continuity_state(self):
         with self._lock:
@@ -326,6 +376,7 @@ class SlamBackend:
             self._radio_prior = self._last_radio_prior = ()
             self._entities = {}
             self._source_frames = {}
+            self._rig_sources = {}; self._rig_anchors = {}; self._rig_calibrations = {}
             self._next_frame_index = 0
             self._geometry = self._geometry_summary({}, False)
             self._complete_snapshot_pending = False
@@ -343,6 +394,11 @@ class SlamBackend:
                 self._slam = self._new_runtime()
                 if manifest is not None:
                     self._slam.load_system_state(str(path))
+                    with self._slam.map.update_lock:
+                        for keyframe in self._slam.map.get_keyframes():
+                            reconcile_keyframe_points(keyframe, restored=True)
+                    from rig_native_map import restore
+                    restore(self,path)
                     self._slam.preserve_map_on_tracking_loss = True
                     self._source_frames = manifest.get("source_frames", {})
                     self._next_frame_index = int(manifest["next_frame_index"])
@@ -368,6 +424,8 @@ class SlamBackend:
             return self.status()
 
     def _read_entities(self):
+        from rig_native_map import refresh_anchors
+        refresh_anchors(self)
         entities = {}
         for keyframe in self._slam.map.get_keyframes():
             if not keyframe.is_bad():
@@ -380,6 +438,8 @@ class SlamBackend:
         for point in self._slam.map.get_points():
             if not point.is_bad():
                 entities[("sparse_point", str(point.id))] = _point_data(point.pt(), point.color)
+        for (kind,identity),value in entities.items():
+            if kind=="keyframe":value["camera_id"]=getattr(self,"_rig_sources",{}).get(str(value["backend_frame_index"]),"front")
         return entities
 
     def _diff(self, entities, complete=False):
@@ -418,7 +478,7 @@ class SlamBackend:
         """A bounded candidate hint, never a camera pose or acceptance decision."""
         with self._lock:
             selected = []
-            if str(map_id) == self._map_id:
+            if str(map_id) == self._map_id and keyframe_ids is not None:
                 for identifier in keyframe_ids:
                     if isinstance(identifier, bool):
                         continue
@@ -432,6 +492,10 @@ class SlamBackend:
                     if len(selected) == 128:
                         break
             self._radio_prior = tuple(selected)
+
+    def set_survey_revisit(self, confirmed, *, map_id):
+        with self._lock:
+            self._confirmed_survey_revisit = bool(confirmed and str(map_id) == self._map_id)
 
     def set_orientation_prior(self, T_map_camera):
         with self._lock:
@@ -491,9 +555,25 @@ class SlamBackend:
                         matrix[:3, 3] = -matrix[:3, :3] @ center
                         return Isometry3d(matrix), covariance
                     motion.predict_pose = predict_with_attitude
+                # The normal 50-inlier gate is unreachable in a sparse saved
+                # map. A separate repeat scene/grid match permits native PnP
+                # on that map. Never use the archived position as a live pose.
+                confirmed = getattr(self, "_confirmed_survey_revisit", False)
+                self._confirmed_survey_revisit = False
+                parameters = None
+                if confirmed and self._state in ("lost", "relocalizing"):
+                    from pyslam.config_parameters import Parameters
+                    with self._slam.map.update_lock:
+                        count = self._slam.map.num_points()
+                    original = Parameters.kRelocalizationDoPoseOpt2NumInliers
+                    if 18 <= count < original:
+                        parameters = Parameters
+                        parameters.kRelocalizationDoPoseOpt2NumInliers = max(18, (count+1)//2)
                 try:
                     self._slam.track(image, None, None, index, timestamp_s)
                 finally:
+                    if parameters is not None:
+                        parameters.kRelocalizationDoPoseOpt2NumInliers = original
                     if motion is not None:
                         motion.predict_pose = predict
                 native_state = self._slam.tracking.state.name
@@ -562,6 +642,8 @@ class SlamBackend:
                 raise CheckpointError("Checkpoint target must be a fresh empty directory")
             target.mkdir(parents=True, exist_ok=True)
             self._slam.save_system_state(str(target))
+            from rig_native_map import metadata, write_state
+            write_state(target,metadata(self))
             # Upstream can catch a serialization exception internally. Verify
             # actual files and parse the saved map before reporting success.
             document = json.loads((target / "map.json").read_text())
@@ -604,7 +686,8 @@ class SlamBackend:
             native = capture(self._slam, target_dir)
             entities = _saved_entities(native["document"], self._source_frames)
             changes = self._diff(entities, complete=True)
-            return dict(native=native, entities=entities, map_changes=changes,
+            from rig_native_map import metadata
+            return dict(native=native, rig_state=metadata(self), entities=entities, map_changes=changes,
                         geometry=copy.deepcopy(self._geometry), config=copy.deepcopy(self.config),
                         map_id=self._map_id, next_frame_index=self._next_frame_index,
                         source_frames=copy.deepcopy(self._source_frames),
@@ -615,6 +698,8 @@ class SlamBackend:
     def write_checkpoint(self, ticket):
         from async_checkpoint import write
         target = write(ticket["native"])
+        from rig_native_map import write_state
+        write_state(target,ticket.get("rig_state",{}))
         # Upstream can catch a serialization exception internally. Verify
         # actual files and parse the saved map before reporting success.
         document = ticket["native"]["document"]

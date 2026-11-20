@@ -62,7 +62,8 @@ class CameraSource:
             try:
                 options = {"rtsp_transport": "tcp"} if self.config["url"].startswith("rtsp:") else {}
                 timeout = float(self.config.get("network_timeout_s", 5.0))
-                with av.open(self.config["url"], options=options, timeout=(timeout, timeout)) as container:
+                from device_routes import resolve_url
+                with av.open(resolve_url(self.config["url"],self.config), options=options, timeout=(timeout, timeout)) as container:
                     epoch = uuid.uuid4().hex
                     with self._condition:
                         self._epoch = epoch

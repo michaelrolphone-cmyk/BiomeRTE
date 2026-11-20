@@ -312,6 +312,12 @@ class AHRSTelemetrySource:
         if not imu["valid"] and attitude["valid"]:
             attitude.update(valid=False, reason="imu_unavailable")
 
+    def set_push_source(self, reader):
+        """Use device-clock push snapshots; None explicitly restores HTTP acquisition."""
+        if reader is not None and not callable(reader):
+            raise TypeError('Push source must be callable')
+        self._push_reader = reader
+
     def poll_once(self):
         if not self.enabled or self._stop.is_set() or not self._poll_lock.acquire(blocking=False):
             return False
@@ -323,8 +329,15 @@ class AHRSTelemetrySource:
     def _poll_once(self):
         started, attempted_at = self._monotonic(), self._utc_clock()
         try:
-            telemetry = validate_ahrs_snapshot(self.client.get_ahrs())
-            received = self._monotonic()
+            reader = getattr(self, '_push_reader', None)
+            if reader is None:
+                telemetry = validate_ahrs_snapshot(self.client.get_ahrs())
+                received = self._monotonic()
+            else:
+                pushed = reader()
+                if pushed is None: return False
+                telemetry, started, received = pushed
+                validate_ahrs_snapshot(telemetry)
             if self._stop.is_set():
                 return False
             duration = max(0.0, received - started)

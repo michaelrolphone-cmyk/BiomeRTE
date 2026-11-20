@@ -148,7 +148,7 @@ class AHRSServiceTests(unittest.TestCase):
         self.assertEqual(self.client.calls, 2)
         self.assertEqual(later["localization"]["T_map_camera"], identity_pose())
 
-    def test_old_firmware_failure_does_not_break_vision_or_radio_queries(self):
+    def test_old_firmware_failure_does_not_break_vision_or_tof_queries(self):
         service = self.make_service()
         self.client.values.append(CameraHTTPError("camera_http_error", http_status=404))
         self.assertFalse(self.source.poll_once())
@@ -156,7 +156,7 @@ class AHRSServiceTests(unittest.TestCase):
         self.assertTrue(snapshot["localization"]["valid"])
         self.assertFalse(snapshot["spatial_evidence"]["ahrs"]["available"])
         self.assertEqual(service.query("robot.vision.status")["availability"], "available")
-        self.assertIsInstance(service.query("robot.radio.status"), dict)
+        self.assertIsInstance(service.query("robot.tof.status"), dict)
         self.assertFalse(self.source.status()["supported"])
         self.assertEqual(self.client.calls, 1)
 
@@ -284,7 +284,7 @@ class AHRSProviderTests(unittest.TestCase):
     def test_additive_contracts_and_guidance_preserve_mutation_distinction(self):
         import biome_provider as provider
         expected = {"robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate"}
-        self.assertEqual(len(CAPABILITIES), 38)
+        self.assertEqual(len(CAPABILITIES), 39)
         self.assertEqual(set(CAPABILITIES), {spec["name"] for spec in provider.CONTRACTS.values()})
         self.assertTrue(expected.issubset(CAPABILITIES))
         for name in expected:
