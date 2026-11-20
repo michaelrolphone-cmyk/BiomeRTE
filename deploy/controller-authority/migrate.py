@@ -571,7 +571,8 @@ def load_source(path):
     """Accept a snapshot or a copied backup manifest beside its SQLite payload."""
     path = pathlib.Path(path)
     value = load_json(path)
-    if isinstance(value, dict) and "records" in value:
+    if (isinstance(value, dict) and value.get("format") == FORMAT
+            and isinstance(value.get("records"), list)):
         return value
     filename = value.get("backup_file") if isinstance(value, dict) else None
     if not isinstance(filename, str) or not filename or pathlib.Path(filename).name != filename:
