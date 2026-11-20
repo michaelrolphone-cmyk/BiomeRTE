@@ -1,0 +1,38 @@
+{
+  "state_mode": "single_host_durable",
+  "controller_home": "/config/controller",
+  "identity_home": "/config/rover",
+  "state_dir": "/state",
+  "controllers_file": "/config/controllers.json",
+  "host_io_config": "/config/host-io.json",
+  "controller_api": "http://host.docker.internal:8740/v1/call",
+  "allow_private_controller_http": true,
+  "gateway": "https://existing-controller-gateway.example",
+  "public_stream_gateway": "https://existing-stream-gateway.example",
+  "router_url": "ws://stream-router:8751",
+  "private_router_hosts": [
+    "stream-router"
+  ],
+  "resources": {
+    "robot.vision.stream:1": "REGISTERED_VISION_RESOURCE",
+    "device.outputs.stream:1": "REGISTERED_OUTPUT_RESOURCE"
+  },
+  "vision_clock": {
+    "resource": "REGISTERED_VISION_RESOURCE",
+    "host_id": "REGISTERED_PROCESSING_HOST",
+    "allow_legacy_host_monotonic": true
+  },
+  "camera_light": {
+    "device_id": "REGISTERED_CAMERA_ID",
+    "url": "http://registered-device.invalid/api/light"
+  },
+  "allow_private_device_http": true,
+  "channels": {
+    "forward": 1,
+    "reverse": 2,
+    "left": 3,
+    "right": 4
+  },
+  "intent_ttl_ms": 500,
+  "port": 8093
+}
