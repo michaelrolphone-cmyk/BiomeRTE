@@ -207,6 +207,47 @@ def get(tx, ctx, run):
     return require_payload(tx.need('runs', run))
 
 
+@op('process.definition', 'name:str revision?:str', False)
+def definition(tx, ctx, name, revision=''):
+    """Read one exact workflow revision without starting or changing a run."""
+    ident(name)
+    if revision and (len(revision) != 64 or any(c not in '0123456789abcdef' for c in revision)):
+        raise Fault('Invalid workflow revision')
+    if not revision:
+        registered = tx.get('definitions', name)
+        if not registered:
+            raise Fault('Workflow not found', 404)
+        revision = registered['rev']
+    version = tx.get('process_versions', revision)
+    if not version or version.get('name') != name:
+        raise Fault('The requested workflow revision is not available', 404)
+    return version
+
+
+@op('process.summaries', write=False)
+def summaries(tx, ctx):
+    """Read run and current-node metadata, excluding variables and results."""
+    result, versions = {}, {}
+    for run in tx.rows('runs'):
+        summary = {k: run[k] for k in ('id', 'name', 'rev', 'state', 'steps', 'task',
+                   'created_at', 'started_at', 'completed_at', 'finished_at', 'started') if k in run}
+        revision = run.get('rev', '')
+        if revision not in versions:
+            version = tx.get('process_versions', revision) or {}
+            versions[revision] = version.get('graph', {}).get('nodes', {})
+        graph, current = versions[revision], []
+        for item in run.get('tokens', []):
+            node_id = item.get('node') or item.get('at') or item.get('node_id')
+            node = graph.get(node_id, {})
+            projection = {k: node[k] for k in
+                          ('name', 'label', 'title', 'type', 'operation', 'contract', 'process') if k in node}
+            projection.update(id=node_id, state=item.get('state') or item.get('phase', 'active'))
+            current.append(projection)
+        summary['current_nodes'] = current
+        result[run['id']] = summary
+    return {'runs': result}
+
+
 @op('process.list', write=False)
 def listing(tx, ctx):
     return {'definitions': tx.rows('definitions'), 'runs': [
