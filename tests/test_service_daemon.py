@@ -36,7 +36,7 @@ from biomerte.api import Context
 from biomerte import providers
 from biomerte.identity import generate, fingerprint, sign
 from biomerte.service_authority import ScopedAuthority
-from biomerte.service_checkpoint import ADAPTER_PROTOCOL, CheckpointStore, checkpoint_ref
+from biomerte.service_checkpoint import ADAPTER_PROTOCOL, CheckpointError, CheckpointStore, checkpoint_ref
 from biomerte.service_daemon import CheckpointHelper, AuthorityDaemon, local_rpc, scope_digest
 from biomerte.store import Fault
 
@@ -232,7 +232,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        await self.eventually(lambda: worker not in self.workers.links,
+        await self.eventually(lambda: (worker, SERVICE) not in self.workers.links,
                               "helper socket must retire")
 
     async def stop_authority(self, worker):
@@ -472,7 +472,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             self.helpers["mac"].store.get(head)
         self.start_helper("mac")
-        await self.eventually(lambda: "mac" in self.workers.links, "standby helper reconnects")
+        await self.eventually(lambda: ("mac", SERVICE) in self.workers.links, "standby helper reconnects")
         await self.stop_authority("pi")
         self.coordinator.release(self.binding)
         self.clock.advance(6)
@@ -497,7 +497,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(6)
         new_grant = self.heartbeat("mac")["assignments"][0]
         self.start_helper("mac")
-        await self.eventually(lambda: "mac" in self.workers.links, "survivor helper reconnects")
+        await self.eventually(lambda: ("mac", SERVICE) in self.workers.links, "survivor helper reconnects")
         request = self.adapter_request("prepare", self.coordinator_module.grant_binding(new_grant))
         status, reply = await self.post(self.configs["mac"]["adapter_url"], request, token="h" * 48)
         self.assertIn(status, (409, 503), reply)
@@ -519,7 +519,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(5)
         new_grant = self.heartbeat("pi")["assignments"][0]
         self.assertIsNone(self.workers.head(SERVICE))
-        await self.eventually(lambda: "pi" in self.workers.links, "helper reconnects to new witness")
+        await self.eventually(lambda: ("pi", SERVICE) in self.workers.links, "helper reconnects to new witness")
         request = self.adapter_request("prepare", self.coordinator_module.grant_binding(new_grant))
         status, reply = await self.post(self.configs["pi"]["adapter_url"], request, token="h" * 48)
         self.assertIn(status, (409, 503), reply)
@@ -530,7 +530,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.clock.advance(11)
         self.heartbeat("mac", incarnation="mac-2")
         await self.eventually(
-            lambda: self.workers.links.get("mac", {}).get("key") == ("mac", "mac-2"),
+            lambda: self.workers.links.get(("mac", SERVICE), {}).get("key") == ("mac", "mac-2"),
             "helper must refresh the supervisor incarnation while its WS remains connected")
 
 
@@ -631,6 +631,146 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(head["sequence"], before)
         self.assertEqual(checkpoint_ref(self.helpers["pi"].store.get(head)),
                          checkpoint_ref(self.helpers["mac"].store.get(head)))
+
+
+    async def test_legacy_relay_and_scoped_controller_share_workers_with_complete_enrollment(self):
+        from legacy_checkpoint_helper_fixture import LegacyCheckpointHelper
+        from biomerte.checkpoint_chunks import STATE_FORMAT, canonical
+        import hashlib
+
+        # Run the actual deployed registration, RPC, prepare and publish methods.
+        # The same durable fixture stores survive this isolated protocol switch.
+        for worker in ("pi", "mac"):
+            await self.stop_helper(worker)
+            self.helpers[worker].__class__ = LegacyCheckpointHelper
+            self.start_helper(worker)
+        await self.eventually(lambda: len(self.workers.links) == 2,
+                              "legacy helpers must answer the pre-ACK status probe")
+        self.assertTrue(all(link["legacy"] for link in self.workers.links.values()))
+
+        controller_service = "controller-runtime"
+        aliases = ["1" * 64, "2" * 64]
+        self.coordinator.reserved_authorities = frozenset(aliases)
+        controller_private = self.root / "controller-private"
+        controller_identity = initialize(str(controller_private), "integration-site")
+        controller_spec = dict(self.spec, id=controller_service,
+            authority=dict(kind="controller", id=controller_identity["node"],
+                           resources=[], providers=[], controller_aliases=aliases),
+            activation=dict(protocol=ADAPTER_PROTOCOL, binding=controller_service))
+        controller_spec["revision"] = self.coordinator_module.manifest_revision(controller_spec)
+        controller_grant = None
+        for worker in ("pi", "mac"):
+            row = dict(manifest=controller_spec, manifest_revision=controller_spec["revision"],
+                platform="linux/arm64", image_ref=controller_spec["images"]["linux/arm64"],
+                prepared=True, dependencies_ready=True, healthy=None)
+            result = self.coordinator.heartbeat(dict(worker_id=worker,
+                worker_incarnation=worker + "-1", services=[row]))
+            self.assertEqual({}, result["errors"])
+            if worker == "pi":
+                controller_grant = result["assignments"][0]
+        controller_binding = self.coordinator_module.grant_binding(controller_grant)
+        checkpoint_key = self.root / "controller-checkpoint.key"
+        checkpoint_key.write_text("controller-key-" + "c" * 48)
+        controllers, controller_tasks = {}, {}
+        for worker in ("pi", "mac"):
+            config = dict(self.common, authority_kind="controller",
+                service_id=controller_service, authority_id=controller_identity["node"],
+                controller_aliases=aliases, operator_actors=[],
+                checkpoint_key_file=str(checkpoint_key), private_dir=str(controller_private),
+                worker_id=worker, checkpoint_db=str(self.root / ("controller-" + worker) / "checkpoint.sqlite"),
+                authority_home=str(self.root / ("controller-" + worker) / "authority"))
+            helper = CheckpointHelper(config, self.client)
+            controllers[worker] = helper
+            self.helpers["controller-" + worker] = helper
+        primary, standby = controllers["pi"], controllers["mac"]
+        artifact_id = "controller-only"
+        raw = canonical([["artifacts", artifact_id, "initial controller state"]])
+        prefix = hashlib.sha256(artifact_id.encode()).hexdigest()[:2]
+        desc = primary.store.chunks.write_shard("artifacts", prefix, raw)
+        controller_state = dict(format=STATE_FORMAT, authority=controller_identity["node"],
+                                site="integration-site", shards=[desc])
+        packet = primary.store.bootstrap(controller_state, {"source_receipt": "isolated-controller"})
+        for block in desc["blocks"]:
+            standby.store.chunks.put(primary.store.chunks.get(block["digest"]), block["digest"])
+        standby.store.install(packet)
+
+        def start_controller(worker):
+            task = asyncio.create_task(controllers[worker].worker_loop())
+            self.tasks.append(task)
+            controller_tasks[worker] = task
+
+        for worker in ("pi", "mac"):
+            start_controller(worker)
+        expected = {(worker, service) for worker in ("pi", "mac")
+                    for service in (SERVICE, controller_service)}
+        await self.eventually(lambda: set(self.workers.links) == expected,
+                              "two services must coexist on each physical worker")
+        for worker in ("pi", "mac"):
+            self.assertTrue(self.workers.links[(worker, SERVICE)]["legacy"])
+            self.assertFalse(self.workers.links[(worker, controller_service)]["legacy"])
+
+        async def status_for(helper):
+            result = await helper.transport.request("/api/service-checkpoints/status",
+                {"service_id": helper.config["service_id"], "workers": []})
+            self.assertEqual({"pi", "mac"}, {row["worker_id"] for row in result["workers"]})
+            self.assertEqual(2, len(result["workers"]))
+            self.assertTrue(all(row["status"] == 200 and row["result"]["durable"]
+                                for row in result["workers"]))
+            self.assertTrue(all(row["checkpoint"]["service_id"] == helper.config["service_id"]
+                                for row in result["workers"]))
+            return result
+
+        await asyncio.gather(status_for(self.helpers["pi"]), status_for(primary))
+        for worker in ("pi", "mac"):
+            requests = []
+            for helper in (self.helpers[worker], controllers[worker]):
+                requests.append(helper.transport.request("/api/service-checkpoints/get", {
+                    "service_id": helper.config["service_id"],
+                    "worker": {"worker_id": worker, "worker_incarnation": worker + "-1"},
+                    "checkpoint": helper.store.head()}))
+            relay_reply, controller_reply = await asyncio.gather(*requests)
+            self.assertEqual(self.genesis, relay_reply["result"]["package"])
+            self.assertEqual(packet, controller_reply["result"]["package"])
+
+        # No first witness can be created from one replica of either service.
+        # The other service's same-host socket cannot stand in for a missing copy.
+        await self.stop_helper("mac")
+        with self.assertRaises((Fault, CheckpointError)):
+            await self.helpers["pi"].prepare(self.adapter_request("prepare", self.binding))
+        self.assertIsNone(self.workers.head(SERVICE))
+        await status_for(primary)
+        self.start_helper("mac")
+        await self.eventually(lambda: ("mac", SERVICE) in self.workers.links, "relay must reconnect")
+        await self.prepare("pi", self.grant)
+        self.assertEqual("complete", self.helpers["pi"].replication)
+        relay_head = dict(self.workers.head(SERVICE))
+
+        controller_tasks["mac"].cancel()
+        await asyncio.gather(controller_tasks["mac"], return_exceptions=True)
+        await self.eventually(lambda: ("mac", controller_service) not in self.workers.links,
+                              "only the controller helper must retire")
+        request = self.adapter_request("prepare", controller_binding)
+        with self.assertRaises((Fault, CheckpointError)):
+            await primary.prepare(request)
+        self.assertIsNone(self.workers.head(controller_service))
+        await status_for(self.helpers["pi"])
+        start_controller("mac")
+        await self.eventually(lambda: ("mac", controller_service) in self.workers.links,
+                              "controller must reconnect without disturbing relay")
+        prepared = await primary.prepare(request)
+        self.assertEqual("prepared", prepared["phase"])
+        self.assertEqual("complete", primary.replication)
+
+        next_raw = canonical([["artifacts", artifact_id, "new controller state"]])
+        next_desc = primary.store.chunks.write_shard("artifacts", prefix, next_raw)
+        advanced = primary.store.advance(dict(controller_state, shards=[next_desc]), controller_binding)
+        published = await primary.publish_packet(controller_binding, advanced, require_all=True)
+        self.assertEqual(checkpoint_ref(advanced), published["checkpoint"])
+        self.assertEqual(advanced, standby.store.get(checkpoint_ref(advanced)))
+        standby.store.require_chunks(advanced["payload"]["state"])
+        self.assertEqual(relay_head, self.workers.head(SERVICE))
+        self.assertEqual(expected, set(self.workers.links))
+        self.assertEqual({}, self.workers.pending)
 
     async def test_private_helper_https_requires_trusted_certificate_and_completes_activation(self):
         helper = self.helpers["pi"]

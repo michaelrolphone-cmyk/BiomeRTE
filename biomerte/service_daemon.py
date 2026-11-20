@@ -214,8 +214,9 @@ class CheckpointHelper:
             self.store.install(packet)
 
     async def validate(self,b):
-        if b["worker_id"] != self.config["worker_id"]:
-            raise Fault("Adapter request belongs to another host",403)
+        if (b["worker_id"] != self.config["worker_id"] or
+                b["service_id"] != self.config["service_id"]):
+            raise Fault("Adapter request belongs to another host or service",403)
         return await self.transport.validate(b)
 
     async def workers(self):
@@ -528,8 +529,14 @@ class CheckpointHelper:
         reply=dict(type="checkpoint_result",id=message.get("id"),
                    worker_id=worker["worker_id"],worker_incarnation=worker["worker_incarnation"],
                    boot_epoch=message.get("boot_epoch"),binding=b,
+                   service_id=self.config["service_id"],
                    checkpoint=None,status=200,result={"durable":True})
         try:
+            if (message.get("service_id") != self.config["service_id"] or
+                    message.get("worker_id") != worker["worker_id"] or
+                    message.get("worker_incarnation") != worker["worker_incarnation"] or
+                    (b is not None and binding(b)["service_id"] != self.config["service_id"])):
+                raise Fault("Helper RPC belongs to another service or supervisor",403)
             status=await self.transport.request("/api/service-coordinator/status")
             if status["boot_epoch"]!=message.get("boot_epoch"):
                 raise Fault("Stale helper RPC epoch",409)
@@ -606,7 +613,7 @@ class CheckpointHelper:
     async def worker_loop(self):
         while True:
             try:
-                unused,workers=await self.workers()
+                status,workers=await self.workers()
                 worker=workers.get(self.config["worker_id"])
                 if not worker:
                     await asyncio.sleep(1)
@@ -616,8 +623,17 @@ class CheckpointHelper:
                 async with self.session.ws_connect(url,
                     headers={"Authorization":"Bearer "+self.transport.key},
                     heartbeat=15,max_msg_size=MAX_BODY) as ws:
+                    await ws.send_json(dict(type="register",
+                        service_id=self.config["service_id"],**worker))
+                    registered=await ws.receive_json(timeout=self.config.get("request_timeout_s",15))
+                    if (not isinstance(registered,dict) or registered.get("type")!="registered" or
+                            registered.get("protocol")!=PROTOCOL or
+                            registered.get("service_id")!=self.config["service_id"] or
+                            registered.get("worker_id")!=worker["worker_id"] or
+                            registered.get("worker_incarnation")!=worker["worker_incarnation"] or
+                            registered.get("boot_epoch")!=status["boot_epoch"]):
+                        raise Fault("Exact scoped helper registration required",503)
                     self.connection=worker
-                    await ws.send_json(dict(type="register",**worker))
                     monitor=asyncio.create_task(self.watch_incarnation(ws,worker))
                     try:
                         async for event in ws:
