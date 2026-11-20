@@ -16,10 +16,14 @@ def main():
     os.umask(0o077)
     kind=sys.argv[1]
     if kind in ("private-chat","private-image"):
-        # Mac process IDs and native fcntl admission cannot be interpreted from
-        # Docker Desktop's Linux VM. Never bypass native model-memory custody.
-        if sys.platform!="darwin" and os.environ.get("BIOME_MODEL_RUNTIME_DOMAIN")!="isolated-linux":
-            raise SystemExit("Private inference requires a qualified isolated Linux model runtime; native Mac admission is not a shared PID domain.")
+        # Native model custody stays on the Mac. Never interpret its PID queue
+        # or fcntl lock in Docker Desktop's separate Linux kernel.
+        config=os.environ.get("BIOME_MODEL_HOST_IO_CONFIG")
+        if not config:
+            raise SystemExit("Private workers require the configured native Mac model bridge.")
+        from biomerte.host_io_client import HostIOClient
+        from biomerte.model_host_io import require_model_transport
+        require_model_transport(HostIOClient.from_config(config))
     if kind=="replica":
         path=ROOT/"providers/mac-storage/backup.py"
         sys.path.insert(0,str(path.parent))
