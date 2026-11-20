@@ -1,0 +1,17 @@
+# Separate full CPU backend. This is not the active Mac/MPS profile.
+services:
+  vision-cpu:
+    image: ${VISION_CPU_IMAGE:?Set a qualified architecture-specific CPU image}
+    command: ["backend", "--state", "/state", "--config", "/config/vision.json"]
+    user: "${WORKER_UID:?}:${WORKER_GID:?}"
+    environment:
+      HOME: /state/home
+      MPLCONFIGDIR: /state/cache/matplotlib
+      YOLO_CONFIG_DIR: /state/cache/ultralytics
+      NUMBA_CACHE_DIR: /state/cache/numba
+    volumes:
+      - "${VISION_CPU_STATE:?}:/state"
+      - "${VISION_CPU_CONFIG:?}:/config/vision.json:ro"
+      - "${VISION_MODEL_DIRECTORY:?}:/models:ro"
+    restart: unless-stopped
+    init: true

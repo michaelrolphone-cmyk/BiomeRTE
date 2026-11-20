@@ -271,7 +271,9 @@ class VisionService:
             **self.config.get("slam", {}),
             "calibration": copy.deepcopy(calibration),
             "fps": self.config["camera"].get("expected_fps", 5.0),
-            "pyslam_root": str(self.state_dir / "vendor/pyslam"),
+            "pyslam_root": str(self.config.get("slam", {}).get("pyslam_root") or
+                               os.environ.get("BIOME_VISION_PYSLAM_ROOT") or
+                               self.state_dir / "vendor/pyslam"),
         }
         backend = self.backend_factory(cfg, self.state_dir)
         try:

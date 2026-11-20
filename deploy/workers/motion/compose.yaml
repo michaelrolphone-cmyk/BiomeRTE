@@ -10,6 +10,7 @@ services:
       - "${MOTION_OBSERVER_CONFIG:?}:/config/observer.json:ro"
       - "${HOST_IO_CLIENT_CONFIG:?}:/run/biome/host-io.json:ro"
       - "${HOST_IO_TOKEN_FILE:?}:/run/biome/host-io.token:ro"
+      - "${HOST_IO_CA_FILE:?}:/run/biome/host-io-ca.pem:ro"
       - "${ROVER_OBSERVER_TOKEN_FILE:?}:/run/biome/rover.token:ro"
       - "${MOTION_DATABASE_DIRECTORY:?}:${MOTION_DATABASE_DIRECTORY:?}"
     restart: unless-stopped
@@ -25,6 +26,7 @@ services:
       - "${MOTION_PROVIDER_CONFIG:?}:/config/provider.json:ro"
       - "${HOST_IO_CLIENT_CONFIG:?}:/run/biome/host-io.json:ro"
       - "${HOST_IO_TOKEN_FILE:?}:/run/biome/host-io.token:ro"
+      - "${HOST_IO_CA_FILE:?}:/run/biome/host-io-ca.pem:ro"
       - "${MOTION_PROVIDER_STATE:?}:${MOTION_PROVIDER_STATE:?}"
       - "${MOTION_DATABASE_DIRECTORY:?}:${MOTION_DATABASE_DIRECTORY:?}"
     restart: unless-stopped

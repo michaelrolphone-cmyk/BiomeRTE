@@ -61,3 +61,38 @@ identity and durable worker/stream sequence state. Keep the native vision backen
 running. Cross-kernel file locks cannot prevent duplicate native/container owners.
 The deployment owner controls this handoff and rollback; build/render/qualification
 commands make no live service changes.
+
+## Full Linux CPU backend profile
+
+`Dockerfile.cpu` contains the complete deployed detector and SLAM implementation,
+including its twelve verified source patches, ORB2 features, g2o optimization,
+DBoW3 vocabulary, map/checkpoint code, camera/sensor modules and video processing.
+The Miniforge index is pinned by digest; pySLAM is pinned to
+`a4e6a31f211ac6b2f9ecf4ab628734f6194caa15`. Installation records actual
+Conda packages, native binary hashes, Python versions and vocabulary hash under
+`/opt/vision/slam-installation.json` and `/opt/vision/setup-logs`.
+
+Build this larger image independently for Linux arm64 or amd64. The explicit
+`linux-cpu` installer profile selects Linux compiler/shared-library conventions
+and CPU PyTorch packages. Native macOS setup retains its existing default.
+The full backend launcher requires `detector.device=cpu`; an existing MPS
+configuration is rejected rather than rewritten.
+
+```sh
+docker build -f deploy/workers/vision/Dockerfile.cpu --build-arg VISION_BUILD_JOBS=2 -t biomerte-worker-vision-cpu:<source-sha> .
+docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp/vision-home -e MPLCONFIGDIR=/tmp/matplotlib -e YOLO_CONFIG_DIR=/tmp/ultralytics -e NUMBA_CACHE_DIR=/tmp/numba --mount type=bind,source=/absolute/yolo11n.pt,target=/models/yolo11n.pt,readonly biomerte-worker-vision-cpu:<source-sha> qualify --model /models/yolo11n.pt
+```
+
+Qualification runs the real detector on generated fixtures, solves a synthetic g2o
+pose graph and processes generated frames through the actual SLAM adapter. It
+does not establish real camera timing, checkpoint/relocalization equivalence,
+or throughput sufficient to replace the Mac's MPS production workload.
+
+`compose.cpu.yaml` is a separate full-backend profile. Supply a complete explicit
+CPU configuration, camera/route network reachability, calibrated sensor definitions,
+model weights and exclusively owned persistent state before activation. Mount
+weights at `/models` and use an absolute model path in the config. Dependencies
+remain baked at `/opt/vision/vendor/pyslam`; mutable maps and checkpoints stay
+in the supplied state volume. Never run this profile against the active native
+Mac state/SQLite files from both kernels. The current Mac deployment uses the
+qualified small provider image with its unchanged native Metal/MPS backend.

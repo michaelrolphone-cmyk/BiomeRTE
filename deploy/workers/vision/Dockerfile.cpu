@@ -1,0 +1,17 @@
+# Complete Linux CPU detector + deployed patched pySLAM implementation.
+# Resolve this index separately for linux/arm64 and linux/amd64 images.
+ARG MINIFORGE_IMAGE=condaforge/miniforge3@sha256:0a788afa8b54165d855d08552ce6d86e1e2553be2a9a18d542c69cfb02a6deaa
+FROM ${MINIFORGE_IMAGE}
+ARG VISION_BUILD_JOBS=2
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git pkg-config ca-certificates openssl libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+COPY providers/robot-vision /app/providers/robot-vision
+COPY biomerte /app/biomerte
+COPY deploy/workers/vision /app/deploy/workers/vision
+RUN python /app/providers/robot-vision/setup_slam.py --state-dir /opt/vision --conda /opt/conda/bin/conda --platform-profile linux-cpu --phase environment
+RUN /opt/vision/env/bin/python /app/providers/robot-vision/setup_detector.py --state /opt/vision --platform-profile linux-cpu
+RUN python /app/deploy/workers/vision/build-cpu.py --jobs ${VISION_BUILD_JOBS} && git config --system --add safe.directory /opt/vision/vendor/pyslam
+RUN /opt/vision/env/bin/python -m pip install --no-cache-dir -r /app/providers/robot-vision/requirements-streaming.txt && /opt/conda/bin/conda clean --all --yes
+ENV PATH=/opt/vision/env/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONPATH=/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYSLAM_USE_CPP=false BIOME_VISION_PLATFORM_PROFILE=linux-cpu BIOME_VISION_PYSLAM_ROOT=/opt/vision/vendor/pyslam
+ENTRYPOINT ["/opt/vision/env/bin/python", "/app/deploy/workers/vision/entrypoint-cpu.py"]
+CMD ["--help"]
