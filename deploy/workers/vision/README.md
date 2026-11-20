@@ -1,6 +1,6 @@
 # Vision worker packaging
 
-## Current Mac profile
+## Mac migration profile
 
 The small `Dockerfile` packages the actual capability implementation, all 47 declared
 vision/video/map/rig contracts, leased front/rear/map streaming, and the deployed
@@ -66,6 +66,12 @@ commands make no live service changes.
 
 ## Full Linux CPU backend profile
 
+**This full CPU image has not been built.** The Linux environment and detector
+installation succeeded, including both Torch/OpenCV import orders. The Docker VM
+then ran out of storage during the upstream checkout, before engine compilation.
+The bounded recipe changes below have not been rebuilt. See
+`qualification-cpu.json` for the exact attempt, source proof and outstanding gates.
+
 `Dockerfile.cpu` contains the complete deployed detector and SLAM implementation,
 including its twelve verified source patches, ORB2 features, g2o optimization,
 DBoW3 vocabulary, map/checkpoint code, camera/sensor modules and video processing.
@@ -96,5 +102,14 @@ model weights and exclusively owned persistent state before activation. Mount
 weights at `/models` and use an absolute model path in the config. Dependencies
 remain baked at `/opt/vision/vendor/pyslam`; mutable maps and checkpoints stay
 in the supplied state volume. Never run this profile against the active native
-Mac state/SQLite files from both kernels. The current Mac deployment uses the
-qualified small provider image with its unchanged native Metal/MPS backend.
+Mac state/SQLite files from both kernels. The Mac migration profile pairs the
+small provider image with the unchanged native Metal/MPS backend. Production
+handoff remains controlled by the deployment owner.
+
+The Linux checkout retains the complete pySLAM core, root configuration/licensing,
+settings/data and the actual g2opy, ORB2, pyDBoW3 and GTSAM-factor dependency trees.
+All twelve installed vendor patches fall within those selected paths and were
+verified again against the deployed patched files. Unselected upstream engine
+media/weight trees are excluded. Conda/pip download caches are removed before
+layer commit. These changes reduce build storage use; they are not a successful
+CPU image or runtime qualification.

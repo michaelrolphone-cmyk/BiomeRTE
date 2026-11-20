@@ -496,6 +496,14 @@ class Installer:
         if not self.source.exists():
             self.run(["/usr/bin/git", "clone", "--no-checkout", "--filter=blob:none",
                       PYSLAM_URL, str(self.source)], "source-clone")
+            if self.platform_profile == "linux-cpu":
+                # Preserve the deployed ORB2/g2o/DBoW3 profile and complete core.
+                # Other upstream engines include large unused media/weight trees.
+                self.run(["/usr/bin/git", "-C", str(self.source), "sparse-checkout",
+                          "set", "--cone", "pyslam", "cpp", "settings", "data",
+                          "thirdparty/g2opy", "thirdparty/orbslam2_features",
+                          "thirdparty/pydbow3", "thirdparty/gtsam_factors"],
+                         "source-selected-dependencies")
             self.run(["/usr/bin/git", "-C", str(self.source), "checkout", "--detach", PYSLAM_COMMIT],
                      "source-checkout")
         revision = subprocess.check_output(
