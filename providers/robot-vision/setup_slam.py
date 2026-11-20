@@ -476,15 +476,19 @@ class Installer:
         temporary.replace(self.receipt_path)
 
     def environment(self):
+        # Linux aarch64 GTSAM 4.2 wheels use the split Boost 1.86 packages.
+        # Keep the qualified native Mac package family unchanged.
+        packages = ([p for p in CONDA_PACKAGES if not p.startswith("boost-cpp=")] +
+                    ["libboost-devel=1.86"]) if self.platform_profile == "linux-cpu" else CONDA_PACKAGES
         exists = self.python.exists()
         command = [self.conda, "install" if exists else "create", "-y", "--solver", "libmamba",
                    "--override-channels", "-c", "conda-forge", "--prefix", str(self.prefix)]
         if exists:
             command.append("--freeze-installed")
-        self.run(command + CONDA_PACKAGES, "environment")
+        self.run(command + packages, "environment")
         self.run([self.conda, "list", "--prefix", str(self.prefix), "--explicit"],
                  "conda-explicit")
-        self.record("environment", {"packages": CONDA_PACKAGES,
+        self.record("environment", {"packages": packages,
                                     "explicit_log": str(self.logs / "conda-explicit.log")})
 
     def checkout(self):
