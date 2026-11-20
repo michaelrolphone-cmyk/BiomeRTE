@@ -114,7 +114,17 @@ fencing using the deployment procedure, then export:
       --marker /private/migration/mac-controller-authority.json \
       --output /private/migration/bootstrap-state.json
 
-Export rejects a changed source, modified plan, unresolved collision, missing
+For the actual helper bootstrap, replace the export command with bootstrap and
+add --config /private/migration/staging-helper.json. Use a fresh checkpoint_db
+path in that private configuration, the final logical service scope and the
+same checkpoint key that both helpers will use. This command writes each
+kind/hash-prefix shard directly into the staging checkpoint chunk store, then
+signs a small root manifest. The --output file is the root packet; the adjacent
+checkpoint SQLite and its .chunks directory contain the durable payloads.
+Transfer and verify the complete staging store on both hosts. The bootstrap
+command rejects an existing checkpoint path and never modifies a live helper.
+
+Export and bootstrap reject a changed source, modified plan, unresolved collision, missing
 marker or marker bound to a different source digest. Its output contains state
 and authorization for CheckpointStore.bootstrap; use the runtime's chunking
 layer for distribution.

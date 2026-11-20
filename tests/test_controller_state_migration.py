@@ -234,6 +234,56 @@ class ControllerMigration(unittest.TestCase):
         self.assertEqual(migration.encoded_size(self.pi["records"]), summary["canonical_bytes"])
 
 
+class ChunkedMigration(unittest.TestCase):
+    class Chunks:
+        def __init__(self):
+            self.raw = {}
+        def write_shard(self, kind, prefix, raw):
+            key = hashlib.sha256(raw).hexdigest()
+            self.raw[(kind, prefix)] = raw
+            return {"kind": kind, "prefix": prefix, "digest": key, "bytes": len(raw),
+                    "blocks": [{"digest": key, "bytes": len(raw)}]}
+
+    def test_chunk_manifest_preserves_all_rows_in_hash_selected_shards(self):
+        rows = sorted([["work", "a", {"title": "A"}], ["work", "b", {"title": "B"}],
+                       ["assistant_responsibilities", "worker", {"desired": "pause"}],
+                       ["artifacts", "large", {"data": "x" * 300000}]],
+                      key=lambda row: (row[0], row[1]))
+        chunks = self.Chunks()
+        manifest = migration.chunk_state({"authority": AUTH, "site": "same-site",
+                                          "records": rows}, chunks)
+        self.assertEqual("biomerte-controller-state/1", manifest["format"])
+        self.assertNotIn("records", manifest)
+        self.assertLess(migration.encoded_size(manifest), 4096)
+        recovered = []
+        for shard in manifest["shards"]:
+            raw = chunks.raw[(shard["kind"], shard["prefix"])]
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), shard["digest"])
+            for row in json.loads(raw):
+                self.assertEqual(shard["kind"], row[0])
+                self.assertEqual(shard["prefix"], hashlib.sha256(row[1].encode()).hexdigest()[:2])
+                recovered.append(row)
+        self.assertEqual(rows, sorted(recovered, key=lambda row: (row[0], row[1])))
+
+    def test_duplicate_or_unsorted_canonical_rows_are_not_repackaged(self):
+        for rows in ([["work", "z", {}], ["work", "a", {}]],
+                     [["work", "a", {}], ["work", "a", {}]]):
+            with self.subTest(rows=rows):
+                with self.assertRaises(migration.MigrationError):
+                    migration.chunk_state({"authority": AUTH, "site": "same-site",
+                                           "records": rows}, self.Chunks())
+
+    def test_bootstrap_rejects_wrong_target_before_touching_checkpoint_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "must-not-exist.sqlite"
+            with self.assertRaises(migration.MigrationError):
+                migration.bootstrap_controller(
+                    {"state": {"authority": AUTH, "site": "same-site", "records": []}},
+                    {"authority_kind": "controller", "authority_id": PI,
+                     "site": "same-site", "checkpoint_db": str(path)})
+            self.assertFalse(path.exists())
+
+
 class PrivateSQLiteOperations(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

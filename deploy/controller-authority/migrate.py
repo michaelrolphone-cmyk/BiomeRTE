@@ -493,7 +493,8 @@ def export_state(snapshots, plan, markers):
             raise MigrationError("Freeze marker does not bind this exact source and migration")
     provenance = {"id": plan["migration_id"], "plan_digest": plan["plan_digest"],
                   "sources": plan["sources"], "policy": plan["policy"],
-                  "collisions": plan["collisions"], "source_fences": [by_source[source] for source in sorted(by_source)],
+                  "collisions": plan["collisions"], "target": plan["target"],
+                  "source_fences": [by_source[source] for source in sorted(by_source)],
                   "replay_allowed_for_archived_records": False}
     rows[("_controller_migrations", plan["migration_id"])] = provenance
     state = {"authority": plan["target"]["authority_id"], "site": plan["target"]["site"],
@@ -501,10 +502,65 @@ def export_state(snapshots, plan, markers):
     authorization = {"source_receipt": {
         "format": FORMAT, "migration_id": plan["migration_id"],
         "plan_digest": plan["plan_digest"], "state_digest": digest(state),
+        "target": plan["target"],
         "source_digests": {item["source_node"]: item["digest"] for item in plan["sources"]},
         "source_fence_digests": {source: digest(marker) for source, marker in sorted(by_source.items())},
         "physical_effect_outcomes_inferred": False}}
     return {"state": state, "authorization": authorization}
+
+
+def chunk_state(state, chunks):
+    """Package canonical rows once; at most one shard is serialized at a time."""
+    if (not isinstance(state, dict) or not isinstance(state.get("records"), list)
+            or not isinstance(state.get("authority"), str) or not isinstance(state.get("site"), str)):
+        raise MigrationError("Canonical controller state required")
+    buckets = {}
+    previous = None
+    for row in state["records"]:
+        if not isinstance(row, list) or len(row) != 3 or not all(isinstance(x, str) for x in row[:2]):
+            raise MigrationError("Canonical controller row required")
+        kind, key, unused = row
+        pair = (kind, key)
+        if previous is not None and pair <= previous:
+            raise MigrationError("Controller rows must be strictly sorted")
+        previous = pair
+        prefix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:2]
+        buckets.setdefault((kind, prefix), []).append(row)
+    shards = []
+    for (kind, prefix), rows in sorted(buckets.items()):
+        shards.append(chunks.write_shard(kind, prefix, canonical(rows)))
+    return {"format": "biomerte-controller-state/1", "authority": state["authority"],
+            "site": state["site"], "shards": shards}
+
+
+def bootstrap_controller(exported, config):
+    """Create a new staging checkpoint and its local content-addressed blocks."""
+    if (config.get("authority_kind") != "controller"
+            or config.get("authority_id") != exported["state"]["authority"]
+            or config.get("site") != exported["state"]["site"]):
+        raise MigrationError("Bootstrap config differs from reviewed controller target")
+    target = exported.get("authorization", {}).get("source_receipt", {}).get("target")
+    if (not isinstance(target, dict) or config.get("service_id") != target.get("service_id")
+            or sorted(config.get("controller_aliases", [])) != target.get("controller_aliases")):
+        raise MigrationError("Bootstrap service scope differs from reviewed migration target")
+    path = pathlib.Path(config["checkpoint_db"])
+    if os.path.lexists(str(path)):
+        raise MigrationError("Use a new staging checkpoint path, never replace live helper state")
+    import sys
+    root = str(pathlib.Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from biomerte.service_checkpoint import CheckpointStore
+    from biomerte.service_daemon import scope_digest
+    key = pathlib.Path(config["checkpoint_key_file"]).read_text(encoding="utf-8").strip().encode()
+    store = CheckpointStore(str(path), config["service_id"], scope_digest(config), key)
+    try:
+        manifest = chunk_state(exported["state"], store.chunks)
+        authorization = copy.deepcopy(exported["authorization"])
+        authorization["source_receipt"]["checkpoint_state_digest"] = digest(manifest)
+        return store.bootstrap(manifest, authorization)
+    finally:
+        store.close()
 
 
 def load_json(path):
@@ -555,11 +611,14 @@ def main():
     command.add_argument("--target", required=True)
     command.add_argument("--migration-id", required=True)
     command.add_argument("--output", required=True)
-    command = sub.add_parser("export")
-    command.add_argument("--source", action="append", required=True)
-    command.add_argument("--plan", required=True)
-    command.add_argument("--marker", action="append", required=True)
-    command.add_argument("--output", required=True)
+    for name in ("export", "bootstrap"):
+        command = sub.add_parser(name)
+        command.add_argument("--source", action="append", required=True)
+        command.add_argument("--plan", required=True)
+        command.add_argument("--marker", action="append", required=True)
+        command.add_argument("--output", required=True)
+        if name == "bootstrap":
+            command.add_argument("--config", required=True)
     args = parser.parse_args()
     if args.command in ("snapshot", "backup"):
         config = load_json(pathlib.Path(args.home) / "node.json")
@@ -587,10 +646,20 @@ def main():
     else:
         value = export_state([load_source(p) for p in args.source], load_json(args.plan),
                              [load_json(p) for p in args.marker])
-        private_json(args.output, value)
-        print(json.dumps({"state_digest": digest(value["state"]),
-                          "records": len(value["state"]["records"]),
-                          "canonical_bytes": encoded_size(value["state"])}, sort_keys=True))
+        if args.command == "bootstrap":
+            packet = bootstrap_controller(value, load_json(args.config))
+            private_json(args.output, packet)
+            manifest = packet["payload"]["state"]
+            print(json.dumps({"checkpoint_digest": packet["digest"],
+                "state_digest": digest(value["state"]),
+                "records": len(value["state"]["records"]),
+                "shards": len(manifest["shards"]),
+                "root_packet_bytes": encoded_size(packet)}, sort_keys=True))
+        else:
+            private_json(args.output, value)
+            print(json.dumps({"state_digest": digest(value["state"]),
+                              "records": len(value["state"]["records"]),
+                              "canonical_bytes": encoded_size(value["state"])}, sort_keys=True))
 
 
 if __name__ == "__main__":
