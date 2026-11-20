@@ -11,9 +11,15 @@ from . import shared_streams, redeployment
 import re
 
 
-def settings(ctx):
+def settings(ctx, authority=None):
     secret = ctx.app.config.get('stream_router_secret', '')
     url = ctx.app.config.get('stream_gateway_url', '')
+    if authority is not None and authority != ctx.app.node:
+        if (ctx.scope != 'site' or not getattr(ctx.app,'controller_runtime',None)
+                or authority not in ctx.app.controller_aliases):
+            raise Fault('Stream belongs to another controller authority',403)
+        legacy = ctx.app.config.get('stream_authorities',{}).get(authority,{})
+        secret, url = legacy.get('secret',''), legacy.get('url','')
     if len(secret) < 32 or not url.startswith('wss://'):
         raise Fault('Configure stream_router_secret and a wss stream_gateway_url for the persistent router', 503)
     return secret, url
@@ -29,10 +35,13 @@ def authorize(tx, ctx, grant, role='server'):
 
 
 def valid(tx, ctx, grant):
+    authorities = {ctx.app.node}
+    if ctx.scope == 'site' and getattr(ctx.app,'controller_runtime',None):
+        authorities.update(ctx.app.controller_aliases)
     lease = tx.get('leases', grant['lease'])
     guard = tx.get('guards', lease.get('guard', '')) if lease else None
     if (grant['state'] != 'open' or redeployment.current(tx, grant['resource']) or grant['expires_at'] <= time.time() or
-            grant['authority'] != ctx.app.node or grant['realm'] != ctx.scope or
+            grant['authority'] not in authorities or grant['realm'] != ctx.scope or
             not lease or lease['state'] != 'bound' or not guard or
             (guard['holder'], guard['generation']) != (lease['id'], grant['generation'])):
         raise Fault('Stream authority superseded', 409)
@@ -44,7 +53,7 @@ def valid(tx, ctx, grant):
 
 
 def token(ctx, grant, role, consumer=''):
-    secret, unused = settings(ctx)
+    secret, unused = settings(ctx, grant['authority'])
     payload = dict(grant, role=role, credential_expires_at=min(grant['expires_at'], time.time() + 120))
     payload.update(attachment_id=uid(), consumer=consumer)
     raw = encode(payload).encode()
@@ -95,7 +104,8 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
                                              if item != subscription['id']]
                 tx.put('_stream_grants', prior['id'], prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
-            return dict(shared_streams.public(tx, prior), url=url.rstrip('/') + '/' + prior['id'],
+            unused, prior_url = settings(ctx, prior['authority'])
+            return dict(shared_streams.public(tx, prior), url=prior_url.rstrip('/') + '/' + prior['id'],
                         role='server', attachment_credential=token(ctx, prior, 'server', member['id']))
     direction = stream.get('direction', 'provider_to_server')
     delivery = stream.get('delivery', 'supersedable')
@@ -130,7 +140,7 @@ def attach(tx, ctx, session, role, lease=''):
         raise Fault('Invalid stream role')
     grant = valid(tx, ctx, tx.need('_stream_grants', session))
     authorize(tx, ctx, grant, role)
-    unused, url = settings(ctx)
+    unused, url = settings(ctx, grant['authority'])
     member = shared_streams.consumer(tx, ctx, grant, tx.need('leases', lease) if lease else None)['id'] if role == 'server' else ''
     return dict(shared_streams.public(tx, grant), url=url.rstrip('/') + '/' + session, role=role,
                 attachment_credential=token(ctx, grant, role, member))

@@ -365,7 +365,8 @@ def protocol_stage(tx,ctx,f,p,s):
                 r=responsibility(tx,f);r['desired']={'resume':'run','pause':'pause','stop':'stop'}.get(f['command'],r['desired']);r['revision']+=1;tx.put('assistant_responsibilities',r['id'],r)
                 if f['command']=='resume':tx.put('assistant_wake_outbox',f['command_id'],{'id':f['command_id'],'responsibility':r['id'],'trigger':f['command_id'],'ready':True})
         elif p=='registration':f['registration_receipt']=tx.get('assistant_responsibilities',f.get('responsibility_id',''))
-        elif p=='revision_adoption':f['adoption_confirmed']=bool(f.get('last_result',{}).get('revision'))
+        elif p=='revision_adoption':
+            result=f.get('last_result',{});f['adoption_confirmed']=bool(result.get('result',result).get('revision'))
         elif p=='containment':
             match=next((x for x in cfg.get('containment_actions',[]) if x.get('trigger')==f.get('incident_kind')),None)
             if match:
@@ -584,7 +585,53 @@ def pump(tx,ctx):
         if due and r['desired']=='run':admit(tx,ctx,r,row['trigger'],row.get('successor'));tx.drop('assistant_wake_outbox',row['id'])
 
 # Binding helpers: actions are immutable concrete descriptors before authorization.
-def cli_action(tx,cfg,operation,arguments):
+CONTROLLER_CONTRACT = 'assistant.controller.command:1'
+CONTROLLER_OPERATIONS = frozenset(('assistant.register','assistant.adopt','assistant.episode_start'))
+
+def controller_resource(app):
+    return 'controller.'+digest(['site',app.site])
+
+def seed_controller_control(tx,app):
+    """Install a protected, transaction-local command binding only in managed mode."""
+    if not getattr(app,'controller_runtime',None):
+        raise Fault('Managed controller runtime required',403)
+    ctx=Context(app,scope='site');resource=controller_resource(app)
+    if not tx.get('contracts',CONTROLLER_CONTRACT):
+        providers.define(tx,ctx,'assistant.controller.command',
+                         {'operation':'str','arguments':'obj'},{'result':'obj'},
+                         description='Apply an exactly authorized assistant controller intent in its owning transaction.')
+    offer_id=digest(['builtin',CONTROLLER_CONTRACT,resource])
+    if not tx.get('offers',offer_id):
+        providers.offer(tx,ctx,'builtin',CONTROLLER_CONTRACT,resource,capacity=0)
+    if not tx.get('_authorization_protected',digest([CONTROLLER_CONTRACT,resource])):
+        authorization.protect(tx,ctx,CONTROLLER_CONTRACT,resource)
+
+def start_controller_action(tx,ctx,action):
+    """Consume the same exact grant/operation identity inside the authority transaction."""
+    if not getattr(ctx.app,'controller_runtime',None):
+        raise Fault('Native controller command requires its managed owner',403)
+    inputs=action['inputs'];operation=inputs['operation'];arguments=inputs['arguments']
+    if operation not in CONTROLLER_OPERATIONS or action['resource']!=controller_resource(ctx.app):
+        raise Fault('Operation is outside the native assistant control binding',403)
+    # The provider guard is mandatory even for calls that bypass the workflow
+    # wrapper. Do not infer authorization from an approved configuration alone.
+    usage=tx.need('authorization_usage',action['id'])
+    authorization.guard(tx,action['id'],action['contract'],action['resource'],inputs,ctx)
+    if usage['state'] not in ('reserved','queued','claimed'):
+        raise Fault('Controller authorization is already consumed',409)
+    from .api import command
+    request_id='assistant-'+digest([operation,arguments])
+    result=command(tx,Context(ctx.app,scope='site'),operation,arguments,request_id)
+    action.update(state='succeeded',result={'result':result},
+                  controller_request_id=request_id,
+                  authorization_id=usage['authorization_id'])
+
+def cli_action(tx,cfg,operation,arguments,ctx=None):
+    if ctx is not None and getattr(ctx.app,'controller_runtime',None):
+        if operation not in CONTROLLER_OPERATIONS:
+            raise Fault('Unsupported native assistant controller operation',403)
+        return {'contract':CONTROLLER_CONTRACT,'resource':controller_resource(ctx.app),
+                'inputs':{'operation':operation,'arguments':copy.deepcopy(arguments)}}
     resource=select_resource(tx,'host.terminal.run:1','controller_terminal',cfg)
     home=cfg['controller_home']
     if not isinstance(home,str) or not home.startswith('/'):raise Fault('Controller home must be an absolute deployment path')
@@ -645,10 +692,10 @@ def before(tx,ctx,logical_process,task,frame):
         definition={'id':f['episode_id'],'responsibility_id':f['responsibility_id'],'owner_epoch':f['owner_epoch'],'task_id':f['assignment']['id'],'frame':copy.deepcopy(f)}
         intent_digest=digest(definition)
         tx.put('assistant_episode_intents',intent_digest,definition)
-        a=cli_action(tx,cfg,'assistant.episode_start',{'definition':{'id':f['episode_id'],'intent_digest':intent_digest}})
+        a=cli_action(tx,cfg,'assistant.episode_start',{'definition':{'id':f['episode_id'],'intent_digest':intent_digest}},ctx)
         f['proposal']=proposal(a,f,'Start one independent reasoning episode for the reserved task')
     elif key in ('registration.apply','revision_adoption.apply'):
-        intent=f['controller_intent'];a=cli_action(tx,cfg,intent['operation'],intent['arguments']);f['proposal']=proposal(a,f,'Apply the exact reviewed controller responsibility definition')
+        intent=f['controller_intent'];a=cli_action(tx,cfg,intent['operation'],intent['arguments'],ctx);f['proposal']=proposal(a,f,'Apply the exact reviewed controller responsibility definition')
     elif key=='development.code':f['runtime_phase']='development'
     elif key in ('development.apply','reasoning.step','governed.guard'):
         if key!='governed.guard':

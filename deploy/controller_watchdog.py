@@ -12,11 +12,15 @@ import json
 import os
 import plistlib
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from controller_custody import read_custody, require_release, site_readiness
 
 LABELS = {'controller': 'org.biomerte.controller',
           'link': 'org.biomerte.controller-link'}
@@ -126,8 +130,7 @@ class Probes:
 
         check('local', lambda: invoke('local', 'system.info', {}),
               lambda v: v.get('node') == conf['node'] and v.get('realm') == 'local')
-        check('site', lambda: invoke('site', 'system.discovery', {'section': 'guide'}),
-              lambda v: v.get('section') == 'guide' and isinstance(v.get('items'), list) and bool(v['items']))
+        check('site', lambda: site_readiness(config['home'], invoke), lambda v: True)
         # A gateway/network/journal outage is not a reason to restart the host.
         check('upstream', lambda: remote('/bridge/ha/status'),
               lambda v: v.get('site') == conf['site'] and isinstance(v.get('nodes'), list))
@@ -190,7 +193,7 @@ class Recovery:
         return self.state
 
 
-def restart_service(service, recovery_lock=None):
+def restart_service(service, recovery_lock=None, config=None):
     descriptor = None
     try:
         if recovery_lock:
@@ -202,6 +205,19 @@ def restart_service(service, recovery_lock=None):
                     raise RecoveryDeferred()
                 raise
         label = LABELS[service]
+        if config is not None and read_custody(config['home']) is not None:
+            # An explicit mapping binds this watchdog to the same stable
+            # launcher configs used by the two actual native services.
+            path = config.get('service_configs', {}).get(service)
+            if not isinstance(path, str) or not os.path.isabs(path):
+                raise ProbeError('custody_service_config_required')
+            selected = json.loads(Path(path).read_text())
+            native = selected.get('service', {})
+            if (os.path.realpath(selected.get('home', '')) != os.path.realpath(config['home'])
+                    or native.get('manager') != 'launchd' or native.get('label') != label
+                    or native.get('domain') != 'gui/{}'.format(os.getuid())):
+                raise ProbeError('custody_service_config_mismatch')
+            require_release(selected)
         target = 'gui/{}/{}'.format(os.getuid(), label)
         # A deliberately unloaded service stays unloaded. Never run capability
         # commands or alter provider jobs while supervising controller services.
@@ -218,6 +234,10 @@ def install(home, origin, key, python):
     directory = Path(home) / 'recovery'
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     script = directory / 'controller_watchdog.py'
+    helper = directory / 'controller_custody.py'
+    helper_source = Path(__file__).resolve().with_name('controller_custody.py')
+    if helper_source != helper.resolve():
+        helper.write_bytes(helper_source.read_bytes())
     if Path(__file__).resolve() != script.resolve():
         script.write_bytes(Path(__file__).read_bytes())
     config = dict(DEFAULTS, home=str(home), origin=origin, key=str(key), enabled=True)
@@ -257,7 +277,7 @@ def main():
         else:
             try:
                 state = recovery.observe(Probes(config).collect(),
-                                         lambda service: restart_service(service, config.get('recovery_lock')))
+                                         lambda service: restart_service(service, config.get('recovery_lock'), config))
             except Exception as error:
                 state = dict(recovery.state, status='probe_error', observed_at=time.time(),
                              error=error.kind if isinstance(error, ProbeError) else type(error).__name__)

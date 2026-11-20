@@ -1,6 +1,7 @@
 """Docker entry points for replicated service state and scoped authorities."""
 import argparse
 import asyncio
+import base64
 import contextlib
 import hmac
 import json
@@ -9,6 +10,7 @@ import os
 import pathlib
 import ssl
 import time
+import tempfile
 from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
@@ -19,6 +21,9 @@ from .service_checkpoint import (
     CheckpointStore, binding, canonical, checkpoint_ref, digest, same_ref,
     select_current)
 from .service_authority import ScopedAuthority
+from .controller_authority import ControllerAuthority
+from .checkpoint_chunks import (ChunkError, STATE_FORMAT, BLOCK_BYTES, state_blocks,
+                                valid_digest, iter_records)
 from .docker_services import container_name
 
 LOG = logging.getLogger("biomerte.service")
@@ -39,6 +44,17 @@ def env_binding():
 
 
 def scope_digest(config):
+    if config.get("authority_kind", "physical") == "controller":
+        return digest(dict(authority_kind="controller",
+            service_id=config["service_id"],authority_id=config["authority_id"],site=config["site"],
+            controller_aliases=sorted(config.get("controller_aliases",[])),
+            operator_actors=sorted(config.get("operator_actors",[])),
+            operator_actor_aliases=config.get("operator_actor_aliases",{}),
+            replication_policy=config.get("replication_policy","available-peers"),
+            event_default_controller=config.get("event_default_controller")))
+    if config.get("authority_kind", "physical") != "physical":
+        raise CheckpointError("Unknown logical authority kind")
+    # Preserve existing physical-service checkpoint identities byte for byte.
     return digest({k:config[k] for k in (
         "service_id","authority_id","site","resources","providers","contracts")})
 
@@ -97,13 +113,20 @@ async def local_rpc(session, url, token, body, timeout=15, ca_file=None):
         return await response.json()
 
 
-def restore_state(home, private_dir, packet, config):
+def restore_state(home, private_dir, packet, config, chunk_reader=None):
     state = packet["payload"]["state"]
     if state.get("authority") != config["authority_id"] or state.get("site") != config["site"]:
         raise CheckpointError("Checkpoint private identity mismatch")
-    rows = state.get("records")
-    if not isinstance(rows,list) or any(not isinstance(row,list) or len(row)!=3 for row in rows):
-        raise CheckpointError("Canonical scoped records required")
+    controller = config.get("authority_kind") == "controller"
+    if controller:
+        if state.get("format") != STATE_FORMAT or chunk_reader is None:
+            raise CheckpointError("Complete controller shard root and block reader required")
+        state_blocks(state)
+        rows = iter_records(state, chunk_reader)
+    else:
+        rows = state.get("records")
+        if not isinstance(rows,list) or any(not isinstance(row,list) or len(row)!=3 for row in rows):
+            raise CheckpointError("Canonical scoped records required")
     directory = pathlib.Path(home)
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     for name in ("node.json","node.key"):
@@ -116,15 +139,60 @@ def restore_state(home, private_dir, packet, config):
             raise CheckpointError("Service private material must use its read-only binding")
         else:
             target.symlink_to(expected)
+    marker = directory/"controller-authority.json"
+    expected_marker = {"format":1, "mode":"managed-authority", "site":config["site"],
+        "service_id":config["service_id"], "authority_id":config["authority_id"],
+        "controller_aliases":config.get("controller_aliases", [])}
+    if controller and marker.exists():
+        if marker.is_symlink() or json.loads(marker.read_text()) != expected_marker:
+            raise CheckpointError("Controller authority marker differs from prepared identity")
     # The runner calls prepare before child creation. The helper owns this replace.
     store = Store(str(directory),"site")
     try:
-        def replace(tx):
-            for kind,key in list(tx.db.execute("SELECT kind,id FROM records")):
-                tx.drop(kind,key)
-            for kind,key,value in rows:
-                tx.put(kind,key,value)
-        store.execute(replace)
+        if controller:
+            # Restore canonical values directly in one transaction. Using an
+            # ordinary command's change accumulator would duplicate the entire
+            # history in RAM and would apply new-write lifecycle defaults.
+            with contextlib.closing(store.connect()) as db:
+                db.execute("PRAGMA synchronous=FULL")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("DELETE FROM records")
+                    for kind,key,value in rows:
+                        if len(key) > 512:
+                            raise CheckpointError("Invalid canonical controller record ID")
+                        db.execute("INSERT INTO records VALUES(?,?,?)",
+                                   (kind,key,canonical(value).decode("utf-8")))
+                    db.execute("UPDATE position SET seq=0,hash='' WHERE id=1")
+                    db.commit()
+                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except BaseException:
+                    if db.in_transaction:
+                        db.rollback()
+                    raise
+            if not marker.exists():
+                fd, temporary = tempfile.mkstemp(prefix=".controller-authority-", dir=directory)
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        output.write(canonical(expected_marker))
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temporary, marker)
+                    fd = os.open(str(directory), os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+        else:
+            def replace(tx):
+                for kind,key in list(tx.db.execute("SELECT kind,id FROM records")):
+                    tx.drop(kind,key)
+                for kind,key,value in rows:
+                    tx.put(kind,key,value)
+            store.execute(replace)
     finally:
         store.close()
 
@@ -140,13 +208,15 @@ class CheckpointHelper:
         self.lock = asyncio.Lock()
         self.connection = None
         self.replication = "unobserved"
+        self.replica_blocks = {}
         if self.store.head() is None and config.get("bootstrap_packet"):
             packet=json.loads(pathlib.Path(config["bootstrap_packet"]).read_text())
             self.store.install(packet)
 
     async def validate(self,b):
-        if b["worker_id"] != self.config["worker_id"]:
-            raise Fault("Adapter request belongs to another host",403)
+        if (b["worker_id"] != self.config["worker_id"] or
+                b["service_id"] != self.config["service_id"]):
+            raise Fault("Adapter request belongs to another host or service",403)
         return await self.transport.validate(b)
 
     async def workers(self):
@@ -161,6 +231,86 @@ class CheckpointHelper:
             raise Fault("Witness restarted during checkpoint inspection",503)
         return value,workers
 
+    async def chunk_missing(self, body):
+        b = binding(body.get("binding"))
+        await self.validate(b)
+        keys = body.get("digests")
+        if not isinstance(keys, list) or len(keys) > 256:
+            raise CheckpointError("At most 256 exact block digests required")
+        for key in keys:
+            valid_digest(key)
+        missing = await asyncio.to_thread(self.store.chunks.missing, keys)
+        await self.validate(b)
+        return {"missing": missing}
+
+    async def chunk_put(self, body):
+        b = binding(body.get("binding"))
+        await self.validate(b)
+        block = body.get("block")
+        if not isinstance(block, dict) or not isinstance(block.get("data"), str):
+            raise CheckpointError("Encoded controller block required")
+        if len(block["data"]) > ((BLOCK_BYTES + 2) // 3) * 4:
+            raise CheckpointError("Controller block exceeds transfer limit")
+        try:
+            raw = base64.b64decode(block["data"], validate=True)
+        except (ValueError, TypeError):
+            raise CheckpointError("Invalid controller block encoding")
+        result = await asyncio.to_thread(self.store.chunks.put, raw, valid_digest(block.get("digest")))
+        await self.validate(b)
+        return result
+
+    async def replicate_chunks(self, b, packet, targets):
+        refs = state_blocks(packet["payload"]["state"])
+        if refs is None:
+            return
+        for target in targets:
+            cache_key = (target["worker_id"], target["worker_incarnation"],
+                         b["boot_epoch"], b["grant_token"])
+            known = self.replica_blocks.get(cache_key, set())
+            keys = [key for key in refs if key not in known]
+            for offset in range(0, len(keys), 256):
+                asked = keys[offset:offset + 256]
+                reply = await self.transport.request("/api/service-checkpoints/chunk-missing", {
+                    "service_id": self.config["service_id"], "worker": target,
+                    "binding": b, "digests": asked})
+                missing = reply.get("result", {}).get("missing")
+                if (reply.get("status") != 200 or not isinstance(missing, list) or
+                        len(missing) != len(set(missing)) or not set(missing).issubset(asked)):
+                    raise Fault("Invalid replica missing-block receipt", 503)
+                for key in missing:
+                    raw = await asyncio.to_thread(self.store.chunks.get, key)
+                    reply = await self.transport.request("/api/service-checkpoints/chunk-put", {
+                        "service_id": self.config["service_id"], "worker": target, "binding": b,
+                        "chunk": {"digest": key, "data": base64.b64encode(raw).decode("ascii")}})
+                    value = reply.get("result", {})
+                    if (reply.get("status") != 200 or value.get("digest") != key or
+                            value.get("bytes") != refs[key] or value.get("durable") is not True):
+                        raise Fault("Replica did not durably acknowledge exact block", 503)
+
+    async def fetch_chunks(self, b, packet, source):
+        self.store.verify(packet)
+        refs = state_blocks(packet["payload"]["state"])
+        if refs is None:
+            return
+        missing = await asyncio.to_thread(self.store.chunks.missing, refs)
+        if missing and source is None:
+            raise Fault("Current controller blocks are unavailable", 503)
+        for key in missing:
+            reply = await self.transport.request("/api/service-checkpoints/chunk-get", {
+                "service_id": self.config["service_id"], "worker": source,
+                "binding": b, "chunk": {"digest": key}})
+            value = reply.get("result", {})
+            if (reply.get("status") != 200 or value.get("digest") != key or
+                    value.get("bytes") != refs[key] or not isinstance(value.get("data"), str) or
+                    len(value["data"]) > ((BLOCK_BYTES + 2) // 3) * 4):
+                raise Fault("Source returned a mismatched controller block", 503)
+            try:
+                raw = base64.b64decode(value["data"], validate=True)
+            except (ValueError, TypeError):
+                raise CheckpointError("Source returned invalid block encoding")
+            await asyncio.to_thread(self.store.chunks.put, raw, key)
+        await self.validate(b)
+
     async def publish_packet(self,b,packet,workers=None,require_all=False):
         await self.validate(b)
         if workers is None:
@@ -170,21 +320,55 @@ class CheckpointHelper:
             raise Fault("Witness restart requires every configured replica",503)
         body={"binding":b,"local_durable":True,
               "checkpoint":dict(checkpoint_ref(packet),package=packet),"targets":targets}
+        acknowledged_targets = targets
         try:
+            await self.replicate_chunks(b, packet, targets)
             reply=await self.transport.request("/api/service-checkpoints/replicate",body)
             self.replication="complete" if len(targets)+1==len(self.config["replica_workers"]) else "degraded"
         except (Fault,asyncio.TimeoutError,OSError):
+            self.replica_blocks.clear()
             if require_all:
                 raise
-            # Retrying the same immutable snapshot cannot replay an application
-            # command. Record the current head before any effect-bearing reply.
-            reply=await self.transport.request("/api/service-checkpoints/replicate",
-                                               dict(body,targets=[]))
-            self.replication="degraded"
+            if self.config.get("authority_kind") == "controller":
+                if self.config.get("replication_policy", "available-peers") != "available-peers":
+                    raise CheckpointError("Unsupported controller replication policy")
+                # An advertised peer is still owed the checkpoint. A timeout is
+                # not evidence that it left membership. Refresh exact identities,
+                # then retry; only an actually absent peer permits degradation.
+                unused, current_workers = await self.workers()
+                acknowledged_targets = [row for worker,row in current_workers.items()
+                                        if worker != self.config["worker_id"]]
+                await self.replicate_chunks(b, packet, acknowledged_targets)
+                reply = await self.transport.request("/api/service-checkpoints/replicate",
+                    dict(body, targets=acknowledged_targets))
+                self.replication = ("complete" if len(acknowledged_targets) + 1 ==
+                    len(self.config["replica_workers"]) else "degraded")
+            else:
+                # Retrying this immutable physical snapshot cannot replay a command.
+                reply=await self.transport.request("/api/service-checkpoints/replicate",
+                                                   dict(body,targets=[]))
+                self.replication="degraded"
+                acknowledged_targets = []
         await self.validate(b)
         if (reply.get("binding")!=b or not same_ref(reply.get("head"),checkpoint_ref(packet))
                 or reply["head"].get("boot_epoch")!=b["boot_epoch"]):
             raise Fault("Witness did not acknowledge this exact durable checkpoint",503)
+        acknowledgements = reply.get("acknowledgements", [])
+        expected = {(target["worker_id"], target["worker_incarnation"])
+                    for target in acknowledged_targets}
+        actual = set()
+        for acknowledgement in acknowledgements:
+            key = (acknowledgement.get("worker_id"), acknowledgement.get("worker_incarnation"))
+            if (key in actual or acknowledgement.get("durable") is not True or
+                    not same_ref(acknowledgement.get("checkpoint"), checkpoint_ref(packet))):
+                raise Fault("Witness returned an invalid durable replica acknowledgement", 503)
+            actual.add(key)
+        if actual != expected:
+            raise Fault("Witness acknowledgement set differs from requested replicas", 503)
+        refs = state_blocks(packet["payload"]["state"])
+        if refs is not None:
+            self.replica_blocks = {(target["worker_id"], target["worker_incarnation"],
+                b["boot_epoch"], b["grant_token"]): set(refs) for target in acknowledged_targets}
         await asyncio.to_thread(self.store.published,checkpoint_ref(packet))
         return reply
 
@@ -211,6 +395,12 @@ class CheckpointHelper:
                     heads[row["worker_id"]]=ref
             own=await asyncio.to_thread(self.store.head)
             if own:
+                try:
+                    local_packet = await asyncio.to_thread(self.store.packet)
+                    await asyncio.to_thread(self.store.require_chunks, local_packet["payload"]["state"])
+                except CheckpointError:
+                    own = None
+            if own:
                 if head:
                     local_refs=await asyncio.to_thread(self.store.retained)
                     own=next((v for v in local_refs if same_ref(v,head)),own)
@@ -229,12 +419,13 @@ class CheckpointHelper:
                 if not same_ref(reply.get("checkpoint"),ref) or reply.get("status")!=200:
                     raise Fault("Checkpoint reply does not match selected witness",503)
                 packet=reply["result"]["package"]
-                await asyncio.to_thread(self.store.retain,packet)
+            await self.fetch_chunks(b, packet, workers.get(selected["source"]))
+            await asyncio.to_thread(self.store.retain,packet)
             await self.validate(b)
             await asyncio.to_thread(self.store.select_witnessed,ref)
             await self.publish_packet(b,packet,workers,require_all=selected["reestablish"])
             await asyncio.to_thread(restore_state,self.config["authority_home"],
-                                    self.config["private_dir"],packet,self.config)
+                                    self.config["private_dir"],packet,self.config,self.store.chunks.get)
             await self.validate(b)
             return await asyncio.to_thread(self.store.prepare,request,ref)
 
@@ -249,6 +440,8 @@ class CheckpointHelper:
             if (not isinstance(state,dict) or state.get("authority")!=self.config["authority_id"]
                     or state.get("site")!=self.config["site"]):
                 raise Fault("Wrong logical service state",403)
+            if self.config.get("authority_kind") == "controller" and state.get("format") != STATE_FORMAT:
+                raise Fault("Controller authority requires a complete shard root", 409)
             packet=await asyncio.to_thread(self.store.advance,state,b)
             reply=await self.publish_packet(b,packet)
             return {"checkpoint":reply["checkpoint"],"replication":self.replication}
@@ -284,7 +477,14 @@ class CheckpointHelper:
 
     async def health(self,request):
         head=await asyncio.to_thread(self.store.head)
-        ready=bool(head and self.connection)
+        complete = bool(head)
+        if head:
+            try:
+                packet = await asyncio.to_thread(self.store.packet)
+                await asyncio.to_thread(self.store.require_chunks, packet["payload"]["state"])
+            except CheckpointError:
+                complete = False
+        ready=bool(complete and self.connection)
         return web.json_response({"ready":ready,"checkpoint":head,
                                   "replication":self.replication},status=200 if ready else 503)
 
@@ -302,6 +502,10 @@ class CheckpointHelper:
                 value=await self.activate(body)
             elif body.get("operation")=="publish":
                 value=await self.publish(body)
+            elif body.get("operation")=="chunk_missing":
+                value=await self.chunk_missing(body)
+            elif body.get("operation")=="chunk_put":
+                value=await self.chunk_put(body)
             elif body.get("operation")=="status":
                 b=binding(body.get("binding"))
                 await self.validate(b)
@@ -309,12 +513,12 @@ class CheckpointHelper:
                 if not phase or phase["binding"]!=b:
                     raise Fault("Superseded local service phase",409)
                 value=dict(phase,generation_floors=await asyncio.to_thread(
-                    self.store.generation_floors,self.config["resources"]),
+                    self.store.generation_floors,self.config.get("resources", [])),
                     replication=self.replication)
             else:
                 raise Fault("Unknown service adapter operation",400)
             return web.json_response(value,headers={"Cache-Control":"no-store"})
-        except (CheckpointError,Fault,KeyError,TypeError) as error:
+        except (CheckpointError,ChunkError,Fault,KeyError,TypeError,ValueError) as error:
             return web.json_response({"error":str(error)},status=getattr(error,"status",409))
         except (asyncio.TimeoutError,OSError):
             return web.json_response({"error":"Service transport is unavailable"},status=503)
@@ -325,12 +529,46 @@ class CheckpointHelper:
         reply=dict(type="checkpoint_result",id=message.get("id"),
                    worker_id=worker["worker_id"],worker_incarnation=worker["worker_incarnation"],
                    boot_epoch=message.get("boot_epoch"),binding=b,
+                   service_id=self.config["service_id"],
                    checkpoint=None,status=200,result={"durable":True})
         try:
+            if (message.get("service_id") != self.config["service_id"] or
+                    message.get("worker_id") != worker["worker_id"] or
+                    message.get("worker_incarnation") != worker["worker_incarnation"] or
+                    (b is not None and binding(b)["service_id"] != self.config["service_id"])):
+                raise Fault("Helper RPC belongs to another service or supervisor",403)
             status=await self.transport.request("/api/service-coordinator/status")
             if status["boot_epoch"]!=message.get("boot_epoch"):
                 raise Fault("Stale helper RPC epoch",409)
-            if message["type"]=="checkpoint.put":
+            if message["type"] in ("checkpoint.chunk.put", "checkpoint.chunk.get",
+                                     "checkpoint.chunk.missing"):
+                await self.transport.validate(binding(b))
+                if message["type"] == "checkpoint.chunk.put":
+                    block = message.get("chunk")
+                    if (not isinstance(block, dict) or not isinstance(block.get("data"), str) or
+                            len(block["data"]) > ((BLOCK_BYTES + 2) // 3) * 4):
+                        raise CheckpointError("Invalid bounded block upload")
+                    raw = base64.b64decode(block["data"], validate=True)
+                    reply["result"] = await asyncio.to_thread(
+                        self.store.chunks.put, raw, valid_digest(block.get("digest")))
+                elif message["type"] == "checkpoint.chunk.get":
+                    key = valid_digest(message.get("chunk", {}).get("digest"))
+                    raw = await asyncio.to_thread(self.store.chunks.get, key)
+                    reply["result"] = {"digest": key, "bytes": len(raw),
+                        "data": base64.b64encode(raw).decode("ascii")}
+                else:
+                    keys = message.get("digests")
+                    if not isinstance(keys, list) or len(keys) > 256:
+                        raise CheckpointError("Bounded missing-block query required")
+                    for key in keys:
+                        valid_digest(key)
+                    reply["result"] = {"missing": await asyncio.to_thread(self.store.chunks.missing, keys)}
+                await self.transport.validate(binding(b))
+            elif message["type"]=="checkpoint.published":
+                await self.transport.validate(binding(b))
+                await asyncio.to_thread(self.store.published, ref)
+                reply["checkpoint"] = ref
+            elif message["type"]=="checkpoint.put":
                 await self.transport.validate(binding(b))
                 packet=ref["package"]
                 if not same_ref(ref,checkpoint_ref(packet)):
@@ -343,11 +581,14 @@ class CheckpointHelper:
                 reply["checkpoint"]=checkpoint_ref(packet)
                 reply["result"]["package"]=packet
             elif message["type"]=="checkpoint.status":
+                packet = await asyncio.to_thread(self.store.packet)
+                if packet:
+                    await asyncio.to_thread(self.store.require_chunks, packet["payload"]["state"])
                 reply["checkpoint"]=await asyncio.to_thread(self.store.head)
                 reply["result"]["retained"]=await asyncio.to_thread(self.store.retained)
             else:
                 raise Fault("Unknown helper operation",400)
-        except (CheckpointError,Fault,KeyError,TypeError) as error:
+        except (CheckpointError,ChunkError,Fault,KeyError,TypeError,ValueError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error),result={})
         except (asyncio.TimeoutError,OSError):
             reply.update(status=503,error="Helper validation unavailable",result={})
@@ -372,7 +613,7 @@ class CheckpointHelper:
     async def worker_loop(self):
         while True:
             try:
-                unused,workers=await self.workers()
+                status,workers=await self.workers()
                 worker=workers.get(self.config["worker_id"])
                 if not worker:
                     await asyncio.sleep(1)
@@ -382,8 +623,17 @@ class CheckpointHelper:
                 async with self.session.ws_connect(url,
                     headers={"Authorization":"Bearer "+self.transport.key},
                     heartbeat=15,max_msg_size=MAX_BODY) as ws:
+                    await ws.send_json(dict(type="register",
+                        service_id=self.config["service_id"],**worker))
+                    registered=await ws.receive_json(timeout=self.config.get("request_timeout_s",15))
+                    if (not isinstance(registered,dict) or registered.get("type")!="registered" or
+                            registered.get("protocol")!=PROTOCOL or
+                            registered.get("service_id")!=self.config["service_id"] or
+                            registered.get("worker_id")!=worker["worker_id"] or
+                            registered.get("worker_incarnation")!=worker["worker_incarnation"] or
+                            registered.get("boot_epoch")!=status["boot_epoch"]):
+                        raise Fault("Exact scoped helper registration required",503)
                     self.connection=worker
-                    await ws.send_json(dict(type="register",**worker))
                     monitor=asyncio.create_task(self.watch_incarnation(ws,worker))
                     try:
                         async for event in ws:
@@ -415,10 +665,18 @@ class AuthorityDaemon:
         self.transport=Transport(session,config)
         self.token=secret(config["helper_key_file"])
         self.url=os.environ.get("BIOME_SERVICE_ADAPTER_URL") or config["adapter_url"]
-        self.app=Application(config["authority_home"])
-        self.authority=ScopedAuthority(self.app,config,self.binding)
+        controller=config.get("authority_kind")=="controller"
+        self.app=Application(config["authority_home"],
+                             controller_runtime=config if controller else None)
+        authority_type=ControllerAuthority if controller else ScopedAuthority
+        self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()
         self.connected=False
+        self.events=None
+        if controller and config.get("event_authorize_url"):
+            from .controller_events import ManagedEvents
+            self.events=ManagedEvents(self)
+            self.authority.events=self.events
 
     async def helper(self,operation,**kw):
         return await local_rpc(self.session,self.url,self.token,
@@ -429,6 +687,9 @@ class AuthorityDaemon:
         return await self.helper("status")
 
     async def publish(self):
+        if self.config.get("authority_kind")=="controller":
+            from .controller_checkpoint import publish_controller
+            return await publish_controller(self)
         state=await asyncio.to_thread(self.authority.snapshot)
         return await self.helper("publish",state=state)
 
@@ -445,7 +706,7 @@ class AuthorityDaemon:
 
     async def dispatch(self,message):
         typ=message.get("type")
-        reply=dict(type="inspect_result" if typ=="inspect" else "call_result",
+        reply=dict(type={"inspect":"inspect_result","pair":"pair_result"}.get(typ,"call_result"),
                    id=message.get("id"),binding=self.binding,status=200)
         try:
             if message.get("binding")!=self.binding:
@@ -461,10 +722,20 @@ class AuthorityDaemon:
                     result=await asyncio.to_thread(self.authority.call,
                                       message["envelope"],preparing)
                     reply["result"]=result
+                elif typ=="pair" and self.config.get("authority_kind")=="controller":
+                    reply["result"]=await asyncio.to_thread(self.authority.pair,
+                        message.get("operation"),message.get("payload"),preparing)
                 elif typ=="inspect" and not preparing:
-                    if message.get("authority")!=self.config["authority_id"]:
-                        raise Fault("Wrong logical stream authority",403)
-                    reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
+                    requested=message.get("authority")
+                    if self.config.get("authority_kind")=="controller":
+                        if requested not in [self.config["authority_id"]]+self.config.get("controller_aliases",[]):
+                            raise Fault("Wrong managed stream authority",403)
+                        reply["grant"]=await asyncio.to_thread(
+                            self.authority.inspect,message["session"],requested)
+                    else:
+                        if requested!=self.config["authority_id"]:
+                            raise Fault("Wrong logical stream authority",403)
+                        reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
                 else:
                     raise Fault("Service effect admission is unavailable",503)
                 await self.publish()
@@ -517,6 +788,10 @@ class AuthorityDaemon:
             await asyncio.to_thread(self.authority.maintain)
             await self.publish()
             await self.transport.validate(self.binding,preparing=False)
+            if getattr(self,"events",None) is not None:
+                await asyncio.to_thread(self.events.deliver)
+                await self.publish()
+                await self.transport.validate(self.binding,preparing=False)
 
     async def maintenance_loop(self):
         interval=self.config.get("maintenance_interval_s",1)

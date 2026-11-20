@@ -1,3 +1,4 @@
+import {controllerRuntimeNative,controllerRuntimePair} from './controller-runtime.mjs';
 import {logicalServiceCall} from './service-authorities.mjs';
 import {logProviderFailure} from './diagnostics.mjs';
 import {enqueue,reply,resolveControllerOwner} from './bridge.mjs';
@@ -88,11 +89,15 @@ export async function nativeProviderCall(req,env){
  try{
   const original=await dispatchController(env,d.operation,d.arguments);
   if(original){
+   const runtime=await controllerRuntimeNative(env,raw,original,req);
+   if(runtime)return runtime;
    if(d.controller!==undefined&&d.controller!==original)throw Object.assign(Error('Command belongs to a different dispatch controller'),{status:409});
    await resolveControllerOwner(env,original);controller=original;
   }else{
    const logical=await logicalServiceCall(env,{provider:d.auth.actor},raw);
    if(logical)return logical;
+   const runtime=await controllerRuntimeNative(env,raw,undefined,req);
+   if(runtime)return runtime;
    controller=await providerController(env,d.auth.actor,d.controller);
   }
  }catch(error){return reply({error:error.message},error.status??400)}
@@ -132,7 +137,10 @@ export async function nativeProviderPair(req,env,phase){
  if(!validProviderPair(phase,d))return reply({error:'Invalid pairing envelope'},400);
  let controller;
  try{
-  const selected=pairingController(req),mapping=providerControllers(env);
+  const selected=pairingController(req);
+  const runtime=await controllerRuntimePair(env,phase,raw,selected,req);
+  if(runtime)return runtime;
+  const mapping=providerControllers(env);
   const actor=phase==='finish'?d.key:(env.CONTROLLER_COORDINATION_MODE==='local'||Object.keys(mapping).length?await providerFingerprint(d.public_key):'');
   controller=await providerController(env,actor,selected);
  }catch(error){return reply({error:error.message},error.status??400)}

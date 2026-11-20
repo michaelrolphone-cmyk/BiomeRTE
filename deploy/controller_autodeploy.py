@@ -24,6 +24,10 @@ from contextlib import contextmanager
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlparse
 
+# This helper is installed beside the recovery program, outside releases.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from controller_custody import CustodyError, require_release, site_readiness
+
 SCHEMA = 'biomerte-autodeploy-release/1'
 SHA = re.compile(r'^[0-9a-f]{40}$')
 DEFAULTS = {
@@ -267,6 +271,7 @@ class Watcher:
         os.makedirs(self.releases, mode=0o700, exist_ok=True)
         config, identity = self._identity()
         bootstrap = {'commit': None, 'path': target}
+        self._guard(bootstrap)
         # The existing running controller, its identity and request path must
         # actually work before they become the initial rollback destination.
         self._health(bootstrap)
@@ -301,7 +306,14 @@ class Watcher:
         except (OSError, ValueError):
             return False
 
+    def _guard(self, release):
+        try:
+            return require_release(self.config, release['path'])
+        except CustodyError as error:
+            raise DeployError(error.code, permanent=True)
+
     def _preflight(self, path):
+        self._guard({'path': path})
         # Import the real controller dependency closure with this host's Python.
         # Optional rover/async providers may require a newer Python and are not
         # loaded by the controller; compiling every file would reject valid Pi
@@ -363,11 +375,15 @@ class Watcher:
             shutil.rmtree(temporary)
 
     def _restart(self, release):
+        if (self._guard(release) is not None
+                and os.path.realpath(self.current_link) != os.path.realpath(release['path'])):
+            raise DeployError('custody_release_pointer_changed')
         for command in self.config['restart_commands']:
             run_command(self._expand(command, release),
                         self.config['command_timeout'], env=self._env())
 
     def _health(self, release):
+        self._guard(release)
         config, identity = self._identity()
         origin = self.config.get('local_origin',
                                   'http://127.0.0.1:' + str(config.get('port', 8740)))
@@ -391,9 +407,10 @@ class Watcher:
         if not release.get('commit') and self.config.get('bootstrap_source_command'):
             run_command(self._expand(self.config['bootstrap_source_command'], release),
                         self.config['probe_timeout'], env=self._env())
-        guide = invoke('site', 'system.discovery', {'section': 'guide'})
-        if guide.get('section') != 'guide' or not guide.get('items'):
-            raise DeployError('site_request_path_failed')
+        try:
+            site_readiness(self.home, invoke)
+        except CustodyError as error:
+            raise DeployError(error.code)
         if self.config.get('health_command'):
             run_command(self._expand(self.config['health_command'], release),
                         self.config['probe_timeout'], env=self._env())
@@ -419,6 +436,9 @@ class Watcher:
         self._save(phase='rolling_back', last_error=reason,
                    rejected_commit=rejected_commit, rejected_release=rejected_release)
         try:
+            # The marker can make a formerly healthy LKG permanently unsafe.
+            # Reject it before changing the boot pointer or issuing a restart.
+            self._guard(previous)
             atomic_link(self.current_link, previous['path'])
             self._save(current=previous)
             self._restart(previous)
@@ -449,6 +469,7 @@ class Watcher:
             self._save(phase='activating',
                        pending={'candidate': candidate, 'previous': previous})
             try:
+                self._guard(candidate)
                 atomic_link(self.current_link, candidate['path'])
                 self._save(current=candidate, phase='verifying')
                 self._restart(candidate)

@@ -91,6 +91,8 @@ def command(tx, ctx, name, args, request_id):
         return stream_command(tx, ctx, name, args, request_id)
     ident(text(request_id, 'request_id'))
     key = digest([ctx.actor, request_id])
+    if tx.get('_controller_receipt_conflicts', key):
+        raise Fault('Conflicting original controller receipt histories are preserved; replay_allowed=false', 409)
     signature = digest([name, args])
     old = tx.get('_receipt', key)
     if old:
@@ -112,6 +114,8 @@ def command(tx, ctx, name, args, request_id):
     result = invoke(tx, ctx, name, args)
     receipt = {'signature': signature, 'result': result,
                'format': 2, 'operation': name, 'created_at': time.time()}
+    if hasattr(ctx, 'authenticated_actor'):
+        receipt['authenticated_actor'] = ctx.authenticated_actor
     if name == 'agent.progress' or (name == 'artifact.put' and args.get('ttl_seconds')) or name.startswith(('cap.', 'provider.', 'destination.', 'inbox.', 'stream.')):
         receipt['expires_at'] = time.time() + 900
     tx.put('_receipt', key, receipt)
@@ -135,6 +139,9 @@ def stream_command(tx, ctx, name, args, request_id):
     if type(sequence) is not int or not 1 <= sequence <= RECEIPT_SEQUENCE_MAX:
         raise Fault('Invalid receipt stream sequence')
     key = digest([ctx.actor, slot])
+    conflict = tx.get('_controller_receipt_stream_conflicts', key)
+    if conflict and sequence <= conflict['floor']:
+        raise Fault('Conflicting original controller stream histories are preserved; replay_allowed=false', 409)
     old = tx.get('_receipt_stream', key)
     if old and old.get('ownership_owner'):
         raise Fault('Receipt stream moved to controller ' + old['ownership_owner'], 409)
@@ -152,6 +159,8 @@ def stream_command(tx, ctx, name, args, request_id):
         raise Fault('Receipt stream requires the next consecutive sequence', 409)
     result = invoke(tx, ctx, name, args)
     receipt = {'sequence': sequence, 'signature': signature}
+    if hasattr(ctx, 'authenticated_actor'):
+        receipt['authenticated_actor'] = ctx.authenticated_actor
     # The original caller still receives the complete result. Oversized results
     # retain only their deduplication state, never an unbounded response copy.
     if len(encode(result).encode('utf-8')) <= RECEIPT_RESULT_BYTES:

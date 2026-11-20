@@ -69,3 +69,34 @@ class ControllerTraceTests(unittest.TestCase):
                     trace.emit({'event':'fixture'})
             self.assertEqual(trace.records.qsize(),64)
             trace.close()
+
+    def test_trace_preserves_frozen_source_write_and_tick_rejection(self):
+        from biomerte.store import Fault
+        with tempfile.TemporaryDirectory() as home:
+            node = initialize(home, site='trace-custody')
+            app = Application(home)
+            try:
+                marker = {'format':1, 'mode':'frozen-source',
+                    'source_node':node['node'], 'site':node['site'],
+                    'service_id':'controller-runtime', 'authority_id':'c'*64,
+                    'controller_aliases':[node['node']], 'migration_id':'trace-test',
+                    'source_digest':'a'*64}
+                pathlib.Path(home,'controller-authority.json').write_text(json.dumps(marker))
+                trace = module.RequestTrace(os.path.join(home,'trace.log'),slow_seconds=0)
+                restore = module.install(trace, Application, Store, OPERATIONS)
+                try:
+                    with self.assertRaises(Fault) as write:
+                        app.call('knowledge.put', {'key':'forbidden','body':{}},'frozen-write')
+                    self.assertEqual(write.exception.status,409)
+                    with self.assertRaises(Fault) as tick:
+                        app.tick('site')
+                    self.assertEqual(tick.exception.status,409)
+                    self.assertEqual(app.call('cluster.status')['mode'],'managed-source')
+                    self.assertIsNone(app.stores['site'].execute(
+                        lambda tx: tx.get('documents','forbidden'),read_only=True))
+                finally:
+                    restore()
+                    trace.close()
+            finally:
+                for store in app.stores.values():
+                    store.close()

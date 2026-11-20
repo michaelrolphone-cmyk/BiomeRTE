@@ -43,6 +43,8 @@ def mutate(store, action, args, owner, grant):
     realm = args.get('realm', 'site')
     if realm not in ('site', 'local'):
         raise ValueError('Unknown realm.')
+    if not store.realm_allowed(realm):
+        raise ValueError('Event producer responsibility moved to the managed controller.')
     base = {'receiver','request_id','realm'}
     permitted = base | {'topic','workflow','reply_to','url','key','auth_mode','from_cursor'} if action == 'register' else base
     if set(args) - permitted:

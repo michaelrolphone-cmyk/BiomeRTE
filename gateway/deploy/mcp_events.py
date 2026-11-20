@@ -1,4 +1,9 @@
 """MCP Events subscription and delivery state for one trusted controller link."""
+
+# Native recovery checks this literal before executing a marked source home.
+# Keep version 1 only while the source/site and event custody guards remain.
+CUSTODY_PROTOCOL = 1
+
 import base64
 import datetime
 import hashlib
@@ -110,8 +115,10 @@ def signed_post(send, url, sub_id, keys, event_id, event):
 
 
 class EventStore:
-    def __init__(self, path, feed, authorize, post=post_callback, topic_feed=None, controller=None):
-        self.db = sqlite3.connect(path, timeout=10)
+    def __init__(self, path, feed, authorize, post=post_callback, topic_feed=None, controller=None,
+                 connection=None, realm_allowed=None):
+        self.db = connection if connection is not None else sqlite3.connect(path, timeout=10)
+        self.realm_allowed = realm_allowed or (lambda realm: True)
         self.db.row_factory = sqlite3.Row
         self.feed, self.authorize, self.post, self.topic_feed = feed, authorize, post, topic_feed
         self.controller = controller
@@ -133,6 +140,8 @@ class EventStore:
         if set(args) - allowed or args.get('realm','site') not in ('site','local'):
             raise ValueError('Invalid event filters')
         args = dict(args, realm=args.get('realm','site'))
+        if not self.realm_allowed(args['realm']):
+            raise ValueError('Event producer responsibility moved to the managed controller')
         if 'controller' in params:
             controller = params['controller']
             if (not isinstance(controller, str) or not re.match(r'^[0-9a-f]{64}\Z', controller) or
@@ -214,12 +223,19 @@ class EventStore:
             self.db.execute('UPDATE subscriptions SET cursor=?,failures=0,next_try=0,last_error=? WHERE id=? AND generation=?',
                             (seq,error,sub['id'],sub['generation']))
 
-    def deliver(self):
+    def deliver(self, max_callbacks=None):
+        sent=0
         now=time.time()
         rows=self.db.execute('SELECT * FROM subscriptions WHERE expires>? AND next_try<=? ORDER BY next_try,id',
                              (now,now)).fetchall()
+        if max_callbacks is not None and getattr(self,'delivery_cursor',None):
+            ids=[row['id'] for row in rows]
+            if self.delivery_cursor in ids:
+                at=ids.index(self.delivery_cursor)+1;rows=rows[at:]+rows[:at]
         for sub in rows:
             args=json.loads(sub['args'])
+            if not self.realm_allowed(args.get('realm','site')):
+                continue
             if 'controller' in args and args['controller'] != self.controller:
                 continue
             grok = sub['id'].startswith('grok_')
@@ -256,6 +272,9 @@ class EventStore:
                 keys=[sub['key']]
                 if sub['old_key'] and sub['rotate_until']>time.time():
                     keys.append(sub['old_key'])
+                if max_callbacks is not None and sent>=max_callbacks:
+                    return sent
+                sent+=1;self.delivery_cursor=sub['id']
                 try:
                     if grok:
                         from grok_receivers import send_grok
@@ -299,3 +318,4 @@ class EventStore:
                 scanned = page.get('scanned', sub['cursor'])
                 if scanned > sub['cursor'] and (not page['events'] or scanned > page['events'][-1]['seq']):
                     self.advance(sub, scanned)
+        return sent
