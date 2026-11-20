@@ -12,9 +12,12 @@ file copied while its WAL is active is not a complete backup.
 
 1. Inventory both stores and arrange independent host recovery before changing
    native site admission.
-2. Stop old native binaries that do not implement the source freeze guard.
-   Preserve the source home and the complete SQLite database using the backup
-   API. The backup includes committed WAL content.
+2. Stop old native binaries and gateway event-delivery agents that do not
+   implement the source freeze guard. Preserve the source home, complete site
+   SQLite database and gateway event-delivery SQLite sidecar using the backup
+   API. Each backup includes its committed WAL content. Freeze both writers
+   before the final pair of backups; separate live backups are not an atomic
+   cross-database snapshot.
 3. Copy each private backup and its manifest to both authorized hosts. Verify the
    actual bytes and canonical record digest on each host. Keep enough disk
    headroom for both backups, chunked checkpoints and the restored runtime.
@@ -49,13 +52,24 @@ source database:
 
     python3 deploy/controller-authority/migrate.py backup \
       --home /private/source-home \
+      --events-database /private/gateway-home/events.sqlite \
       --output /private/migration/pi.sqlite \
       --manifest /private/migration/pi-backup.json
 
 The manifest includes the backup filename, byte hash, canonical record digest,
 per-kind counts and state counts. Keep the copied manifest beside the unchanged
 backup filename. The planner accepts those manifests directly, avoiding a
-second full JSON snapshot on the small host.
+second full JSON snapshot on the small host. With --events-database, it also
+creates pi.events.sqlite beside the site backup and binds that sidecar's byte
+hash, canonical digest and table counts. Locate the actual native gateway
+--key directory: its events.sqlite is a different database from site.sqlite.
+Do not read or print the key file. The sidecar path must be observed, not guessed.
+
+The plan requires an explicit observation of subscriptions, receiver_receipts
+and failed_events for every source. An omitted sidecar is a blocker, not proof
+of zero receivers. The snapshot command is a site-only diagnostic and cannot
+produce an admissible migration plan by itself. Keep the manifest and both
+unchanged SQLite filenames in one private directory.
 
 A target file declares a separately provisioned logical identity:
 
@@ -143,7 +157,10 @@ guard after obtaining that same write lock. No canonical database row changes.
 
 An earlier unpatched process must already be stopped; this utility cannot make
 it honor a guard it does not implement. The receipt therefore explicitly says
-runtime_admission_verified=false. Verify actual guarded native calls separately.
+runtime_admission_verified=false. Verify actual guarded native calls separately. Stop the old native gateway
+agents before the final event sidecar backup, and restart only code that applies
+the source marker to site event subscriptions, Grok mutations and delivery.
+Local subscriptions remain with the native host.
 
 On each host, verify the independently observed root reference and every
 content-addressed block/shard before admission or takeover qualification:
@@ -184,8 +201,19 @@ does not prove that sidecar has no undelivered packages.
   need exact source choices. Every displaced original is preserved in
   _controller_migration_archive.
 - Retiring a secondary event domain preserves its original events, delegation
-  history and local cursor metadata in the archive. It does not emit those
-  historical events into the primary's active event stream.
+  history and local cursor metadata. Indexed _controller_source_events and
+  _controller_source_delegation_events retain each alias's original history;
+  _controller_source_feeds binds its old high-water mark and retention floor to
+  the adopted logical high-water mark. Runtime alias feeds continue old numeric
+  cursors and translate future logical sequence numbers. Historical secondary
+  events are not emitted into the primary's active event stream.
+- Native gateway subscriptions, receiver receipts and failed deliveries retain
+  every original SQL column, including callback signing keys, owner/grant,
+  generation, expiry, cursor and retry state. Canonical identities include the
+  original controller alias, so equal native IDs from two sources remain
+  distinct. Site receivers move to the logical runtime without registration or
+  challenge replay. Identifiable local receiver state remains native and is
+  also retained in provenance.
 - Migration does not declare uncertain effects successful, assign replacement
   operation IDs, resume a paused assistant, or reset fencing generations.
 
@@ -201,5 +229,7 @@ Run the focused suite in the physical development workspace:
 Cases cover WAL-safe backup, source immutability, streaming snapshot/hash
 equivalence, preservation of paused state and source records, explicit mutable
 conflicts, event-domain blockers, receipt conflict quarantine, monotonic floors,
-DAG reconstruction, exact marker/plan binding and private exclusive outputs.
+DAG reconstruction, exact marker/plan binding, event sidecar byte binding,
+source-alias cursor continuity, exact receiver-column preservation and private
+exclusive outputs.
 Runtime admission and two-host takeover tests remain separate requirements.

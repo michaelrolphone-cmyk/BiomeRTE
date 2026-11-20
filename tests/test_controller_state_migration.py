@@ -21,7 +21,8 @@ TARGET = {"service_id": "controller-runtime", "authority_id": AUTH,
 
 def snapshot(node, rows):
     return {"format": migration.FORMAT, "source_node": node, "site": "same-site",
-            "records": sorted(copy.deepcopy(rows), key=lambda row: (row[0], row[1]))}
+            "records": sorted(copy.deepcopy(rows), key=lambda row: (row[0], row[1])),
+            "event_delivery": {"subscriptions": [], "receiver_receipts": [], "failed_events": []}}
 
 
 def records(exported):
@@ -86,9 +87,64 @@ class ControllerMigration(unittest.TestCase):
 
     def test_secondary_retention_cursor_is_not_applied_to_primary_events(self):
         self.put(self.pi, "_meta", "operational_retention", {"event_floor": 3})
+        self.put(self.mac, "_meta", "events", 200)
         self.put(self.mac, "_meta", "operational_retention", {"event_floor": 100})
         self.assertEqual({"event_floor": 3},
                          records(self.export())[("_meta", "operational_retention")])
+
+    def test_site_only_snapshot_cannot_silently_drop_event_delivery_state(self):
+        self.mac.pop("event_delivery")
+        plan = self.plan()
+        self.assertFalse(plan["ready"])
+        self.assertTrue(any(row["kind"] == "event_delivery" for row in plan["blocked"]))
+
+    def test_original_alias_feed_offsets_and_retained_rows_are_preserved(self):
+        self.put(self.pi, "_meta", "delegation_sequence", 10)
+        self.put(self.pi, "delegation_events", "%020d" % 10, {"seq": 10, "target": "chatgpt", "data": {}})
+        self.put(self.mac, "_meta", "delegation_sequence", 7)
+        self.put(self.mac, "delegation_events", "%020d" % 7, {"seq": 7, "target": "grok", "data": {}})
+        result = records(self.export())
+        pi = result[("_controller_source_feeds", PI)]
+        mac = result[("_controller_source_feeds", MAC)]
+        self.assertEqual({"high": 5, "logical_high": 5, "floor": 0}, pi["events"])
+        self.assertEqual({"high": 2, "logical_high": 5, "floor": 0}, mac["events"])
+        self.assertEqual({"high": 7, "logical_high": 10, "floor": 0}, mac["delegation_events"])
+        self.assertEqual("mac-event", result[("_controller_source_events", MAC + ":" + "%020d" % 2)]["id"])
+        self.assertEqual("grok", result[("_controller_source_delegation_events", MAC + ":" + "%020d" % 7)]["target"])
+
+    def test_event_delivery_rows_keep_source_identity_and_private_columns(self):
+        site = {"id": "same-sub", "owner": "owner", "grant_id": "grant", "url": "https://fixture.invalid/hook",
+                "args": json.dumps({"realm": "site"}), "key": "private-fixture-key",
+                "old_key": None, "rotate_until": 0, "verified": 1, "expires": 100,
+                "cursor": 2, "failures": 1, "next_try": 3, "generation": "g", "last_error": "503"}
+        local = dict(site, id="local-sub", args=json.dumps({"realm": "local"}))
+        self.pi["event_delivery"]["subscriptions"] = [dict(site, cursor=5)]
+        self.mac["event_delivery"]["subscriptions"] = [local, site]
+        self.mac["event_delivery"]["receiver_receipts"] = [
+            {"id": "receipt", "signature": "exact", "result": json.dumps({"realm": "site", "id": "same-sub"})}]
+        self.mac["event_delivery"]["failed_events"] = [
+            {"sub": "same-sub", "event": "original-event", "status": 503}]
+        result = records(self.export())
+        pi = result[("_gateway_event_subscriptions", migration.digest([PI, "same-sub"]))]
+        mac = result[("_gateway_event_subscriptions", migration.digest([MAC, "same-sub"]))]
+        self.assertEqual(5, pi["record"]["cursor"])
+        self.assertEqual(site, mac["record"])
+        self.assertNotIn(("_gateway_event_subscriptions", migration.digest([MAC, "local-sub"])), result)
+        self.assertTrue(any(value["record"] == local for (kind, unused), value in result.items()
+                            if kind == migration.ARCHIVE))
+        self.assertEqual("exact", result[("_gateway_event_receipts", migration.digest([MAC, "receipt"]))]["record"]["signature"])
+        self.assertEqual(503, result[("_gateway_event_failures", migration.digest([MAC, "same-sub", "original-event"]))]["record"]["status"])
+
+    def test_sidecar_change_after_review_invalidates_plan(self):
+        plan = self.plan()
+        self.mac["event_delivery"]["receiver_receipts"].append(
+            {"id": "late", "signature": "late", "result": "{}"})
+        with self.assertRaises(migration.MigrationError):
+            self.export(plan)
+
+    def test_invalid_original_event_counter_blocks_cursor_bridge(self):
+        self.put(self.mac, "_meta", "events", 1)
+        self.assertFalse(self.plan()["ready"])
 
     def test_unfinished_source_coordination_blocks_adoption(self):
         for kind, value in (
@@ -360,6 +416,47 @@ class PrivateSQLiteOperations(unittest.TestCase):
         migration.private_json(other, manifest)
         with self.assertRaises(migration.MigrationError):
             migration.load_source(other)
+
+    def test_sidecar_backup_is_hash_bound_and_loaded_with_canonical_source(self):
+        events_path = self.root / "events.sqlite"
+        events = sqlite3.connect(str(events_path))
+        try:
+            events.execute("CREATE TABLE subscriptions(id TEXT PRIMARY KEY,args TEXT,key TEXT,cursor INTEGER)")
+            events.execute("CREATE TABLE receiver_receipts(id TEXT PRIMARY KEY,signature TEXT,result TEXT)")
+            events.execute("CREATE TABLE failed_events(sub TEXT,event TEXT,status INTEGER,PRIMARY KEY(sub,event))")
+            events.execute("INSERT INTO subscriptions VALUES(?,?,?,?)",
+                           ("sub", json.dumps({"realm": "site"}), "private-fixture", 2))
+            events.execute("INSERT INTO receiver_receipts VALUES('receipt','signature','{}')")
+            events.execute("INSERT INTO failed_events VALUES('sub','event',503)")
+            events.commit()
+        finally:
+            events.close()
+        target = self.root / "backup.sqlite"
+        metadata = migration.backup(self.path, target, PI, "same-site", events_path)
+        path = self.root / "backup.json"
+        migration.private_json(path, metadata)
+        loaded = migration.load_source(path)
+        observed = migration.read_event_delivery(events_path)
+        self.assertEqual(observed, loaded["event_delivery"])
+        self.assertEqual(migration.digest(observed), migration.event_inventory(events_path)["digest"])
+        self.assertEqual({"failed_events": 1, "receiver_receipts": 1, "subscriptions": 1},
+                         metadata["event_delivery_backup"]["tables"])
+        self.assertEqual("private-fixture", loaded["event_delivery"]["subscriptions"][0]["key"])
+        metadata["event_delivery_backup"]["backup_sha256"] = "wrong"
+        changed = self.root / "changed.json"
+        migration.private_json(changed, metadata)
+        with self.assertRaises(migration.MigrationError):
+            migration.load_source(changed)
+
+    def test_event_backup_cannot_reference_a_different_directory(self):
+        with self.assertRaises(migration.MigrationError):
+            migration.backup(self.path, self.root / "backup.sqlite", PI, "same-site",
+                             self.path, self.root / "elsewhere" / "events.sqlite")
+        self.assertFalse((self.root / "backup.sqlite").exists())
+
+    def test_site_database_is_not_accepted_as_an_empty_event_sidecar(self):
+        with self.assertRaises(migration.MigrationError):
+            migration.read_event_delivery(self.path)
 
     def test_missing_source_does_not_create_empty_database(self):
         path = self.root / "missing.sqlite"

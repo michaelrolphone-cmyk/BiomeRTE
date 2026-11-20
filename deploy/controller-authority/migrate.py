@@ -111,8 +111,13 @@ def summarize_rows(rows, source_node, site):
 
 def inventory(snapshot):
     rows = rows_of(snapshot)
-    return summarize_rows(([kind, key, value] for (kind, key), value in sorted(rows.items())),
-                          snapshot["source_node"], snapshot["site"])
+    result = summarize_rows(([kind, key, value] for (kind, key), value in sorted(rows.items())),
+                            snapshot["source_node"], snapshot["site"])
+    if "event_delivery" in snapshot:
+        delivery = validated_event_delivery(snapshot["event_delivery"])
+        result["event_delivery"] = {"digest": digest(delivery),
+                                   "tables": {table: len(delivery[table]) for table in sorted(EVENT_TABLES)}}
+    return result
 
 
 def database_inventory(database, source_node, site):
@@ -203,8 +208,7 @@ def private_json(path, value):
         raise
 
 
-def backup(database, output, source_node, site):
-    """SQLite's backup API captures WAL content too; never copy the main file alone."""
+def _backup_sqlite(database, output):
     source = pathlib.Path(database).resolve()
     target = pathlib.Path(output).resolve()
     if not source.is_file():
@@ -226,10 +230,112 @@ def backup(database, output, source_node, site):
         sha = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             sha.update(chunk)
-    result = database_inventory(target, source_node, site)
-    result.update(backup_sha256=sha.hexdigest(), backup_bytes=target.stat().st_size,
-                  backup_file=target.name)
+    return {"backup_sha256": sha.hexdigest(), "backup_bytes": target.stat().st_size,
+            "backup_file": target.name}
+
+
+def backup(database, output, source_node, site, events_database=None, events_output=None):
+    """SQLite backup captures WAL state; optional event sidecar is separately bound."""
+    if events_database is not None and not pathlib.Path(events_database).is_file():
+        raise MigrationError("Event delivery sidecar is missing")
+    if events_output is not None and events_database is None:
+        raise MigrationError("Event backup output requires its source sidecar")
+    if (events_output is not None and
+            pathlib.Path(events_output).resolve().parent != pathlib.Path(output).resolve().parent):
+        raise MigrationError("Site and event backups must share the manifest directory")
+    copied = _backup_sqlite(database, output)
+    result = database_inventory(output, source_node, site)
+    result.update(copied)
+    if events_database is not None:
+        target = pathlib.Path(events_output) if events_output else pathlib.Path(output).with_name(
+            pathlib.Path(output).stem + ".events.sqlite")
+        event_copy = _backup_sqlite(events_database, target)
+        event_copy.update(event_inventory(target), source_node=source_node)
+        result["event_delivery_backup"] = event_copy
     return result
+
+
+EVENT_TABLES = {"subscriptions": ("id",), "receiver_receipts": ("id",),
+                "failed_events": ("sub", "event")}
+
+
+def event_rows(connection, table):
+    present = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"subscriptions", "receiver_receipts"} <= present:
+        raise MigrationError("Event delivery sidecar schema is missing")
+    if table not in present:
+        return
+    cursor = connection.execute("SELECT * FROM " + table + " ORDER BY " + ",".join(EVENT_TABLES[table]))
+    columns = [item[0] for item in cursor.description]
+    for row in cursor:
+        value = dict(zip(columns, row))
+        if any(not isinstance(value.get(key), str) or not value[key] for key in EVENT_TABLES[table]):
+            raise MigrationError("Invalid event delivery row identity")
+        yield value
+
+
+def read_event_delivery(database):
+    path = pathlib.Path(database).resolve()
+    if not path.is_file():
+        raise MigrationError("Event delivery sidecar is missing")
+    connection = sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise MigrationError("Event delivery SQLite integrity check failed")
+        return {table: list(event_rows(connection, table)) for table in sorted(EVENT_TABLES)}
+    finally:
+        connection.close()
+
+
+def event_inventory(database):
+    """Read/hash one sidecar row at a time; never print callback URLs or keys."""
+    path = pathlib.Path(database).resolve()
+    if not path.is_file():
+        raise MigrationError("Event delivery sidecar is missing")
+    connection = sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise MigrationError("Event delivery SQLite integrity check failed")
+        hasher, counts, first_table = hashlib.sha256(b"{"), {}, True
+        for table in sorted(EVENT_TABLES):
+            if not first_table:
+                hasher.update(b",")
+            first_table = False
+            hasher.update(canonical(table) + b":[")
+            count = 0
+            for row in event_rows(connection, table):
+                if count:
+                    hasher.update(b",")
+                hasher.update(canonical(row))
+                count += 1
+            hasher.update(b"]")
+            counts[table] = count
+        hasher.update(b"}")
+        return {"digest": hasher.hexdigest(), "tables": counts}
+    finally:
+        connection.close()
+
+
+def validated_event_delivery(value):
+    if not isinstance(value, dict) or set(value) != set(EVENT_TABLES):
+        raise MigrationError("All three event delivery tables must be observed explicitly")
+    for table, keys in EVENT_TABLES.items():
+        rows = value[table]
+        if not isinstance(rows, list):
+            raise MigrationError("Event delivery table rows must be a list")
+        previous = None
+        for row in rows:
+            if not isinstance(row, dict) or any(not isinstance(row.get(k), str) or not row[k] for k in keys):
+                raise MigrationError("Invalid event delivery row")
+            identity = tuple(row[k] for k in keys)
+            if previous is not None and identity <= previous:
+                raise MigrationError("Event delivery rows must be uniquely sorted")
+            previous = identity
+            canonical(row)
+    return value
 
 
 def target_spec(target, sources):
@@ -339,6 +445,9 @@ def _build(snapshots, baseline, target, migration_id, policy):
               "sources": [inventory(sources[source][0]) for source in sorted(sources)],
               "collisions": [], "blocked": [], "archive_records": 0}
     for source, (snapshot, rows) in sorted(sources.items()):
+        if "event_delivery" not in snapshot:
+            report["blocked"].append({"source": source, "kind": "event_delivery", "id": "",
+                "reason": "Explicit event delivery sidecar observation is required"})
         for (kind, key), value in sorted(rows.items()):
             if (kind in ("_session_scope", "_ownership_pending")
                     or kind == "_coordination" and key in ("active", "pending")
@@ -451,6 +560,80 @@ def _build(snapshots, baseline, target, migration_id, policy):
         for source, original in candidates[pair]:
             if digest(original) != digest(merged[pair]):
                 preserve(source, pair, original, "revision_dag_heads")
+    # Preserve each producer's original numeric cursor lineage, and import
+    # delivery state separately for each original controller alias.
+    def adopt(pair, value):
+        if pair in merged and digest(merged[pair]) != digest(value):
+            report["blocked"].append({"kind": pair[0], "id": pair[1],
+                                     "reason": "Derived migration record conflicts with retained state"})
+        else:
+            merged[pair] = value
+    for source, (snapshot, source_rows) in sorted(sources.items()):
+        event_high = source_rows.get(("_meta", "events"), 0)
+        delegation_high = source_rows.get(("_meta", "delegation_sequence"), 0)
+        logical_high = merged.get(("_meta", "events"), 0)
+        logical_delegation_high = merged.get(("_meta", "delegation_sequence"), 0)
+        retention = source_rows.get(("_meta", "operational_retention"), {})
+        event_floor = retention.get("event_floor", 0) if isinstance(retention, dict) else 0
+        numbers = (event_high, delegation_high, logical_high, logical_delegation_high, event_floor)
+        if any(type(value) is not int or value < 0 for value in numbers) or event_floor > event_high:
+            report["blocked"].append({"source": source, "kind": "_meta", "id": "events",
+                                     "reason": "Invalid original or logical feed cursor"})
+            continue
+        adopt(("_controller_source_feeds", source), {
+            "source_controller": source,
+            "events": {"high": event_high, "logical_high": logical_high, "floor": event_floor},
+            "delegation_events": {"high": delegation_high, "logical_high": logical_delegation_high, "floor": 0}})
+        for (kind, key), value in sorted(source_rows.items()):
+            if kind not in EVENT_KINDS:
+                continue
+            high = event_high if kind == "events" else delegation_high
+            if (not isinstance(value, dict) or type(value.get("seq")) is not int
+                    or not 1 <= value["seq"] <= high or key != "%020d" % value["seq"]):
+                report["blocked"].append({"source": source, "kind": kind, "id": key,
+                                         "reason": "Original feed row does not match its cursor lineage"})
+                continue
+            target_kind = "_controller_source_" + kind
+            adopt((target_kind, source + ":" + key), value)
+        if "event_delivery" not in snapshot:
+            continue
+        delivery = validated_event_delivery(snapshot["event_delivery"])
+        local_subscriptions = set()
+        for row in delivery["subscriptions"]:
+            try:
+                arguments = json.loads(row["args"])
+            except (KeyError, TypeError, ValueError):
+                report["blocked"].append({"source": source, "kind": "event_delivery.subscriptions", "id": row["id"],
+                                         "reason": "Subscription filter JSON is invalid"})
+                continue
+            if not isinstance(arguments, dict) or arguments.get("realm", "site") not in ("site", "local"):
+                report["blocked"].append({"source": source, "kind": "event_delivery.subscriptions", "id": row["id"],
+                                         "reason": "Subscription realm is invalid"})
+                continue
+            if arguments.get("realm", "site") == "local":
+                local_subscriptions.add(row["id"])
+                preserve(source, ("event_delivery.subscriptions", row["id"]), row, "native_local_subscription")
+                continue
+            adopt(("_gateway_event_subscriptions", digest([source, row["id"]])),
+                  {"source_controller": source, "record": row})
+        for row in delivery["receiver_receipts"]:
+            try:
+                result = json.loads(row["result"])
+            except (KeyError, TypeError, ValueError):
+                result = None
+            if isinstance(result, dict) and result.get("realm") == "local":
+                preserve(source, ("event_delivery.receiver_receipts", row["id"]), row, "native_local_receipt")
+                continue
+            adopt(("_gateway_event_receipts", digest([source, row["id"]])),
+                  {"source_controller": source, "record": row})
+        for row in delivery["failed_events"]:
+            if row["sub"] in local_subscriptions:
+                preserve(source, ("event_delivery.failed_events", digest([row["sub"], row["event"]])),
+                         row, "native_local_delivery_failure")
+                continue
+            adopt(("_gateway_event_failures", digest([source, row["sub"], row["event"]])),
+                  {"source_controller": source, "record": row})
+
     # Preserve every source row exactly either in canonical state or provenance.
     for source, (snapshot, rows) in sources.items():
         for pair, value in rows.items():
@@ -595,6 +778,23 @@ def load_source(path):
     snapshot = read_snapshot(database, value["source_node"], value["site"])
     if inventory(snapshot)["digest"] != value.get("digest"):
         raise MigrationError("Backup canonical records differ from the retained manifest")
+    event_copy = value.get("event_delivery_backup")
+    if event_copy is not None:
+        event_file = event_copy.get("backup_file") if isinstance(event_copy, dict) else None
+        if (not isinstance(event_file, str) or not event_file or pathlib.Path(event_file).name != event_file
+                or event_copy.get("source_node") != snapshot["source_node"]):
+            raise MigrationError("Event backup manifest does not bind the same source")
+        event_path = path.parent / event_file
+        event_hash = hashlib.sha256()
+        with event_path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                event_hash.update(chunk)
+        if event_hash.hexdigest() != event_copy.get("backup_sha256"):
+            raise MigrationError("Event backup bytes differ from the retained manifest")
+        delivery = read_event_delivery(event_path)
+        if digest(delivery) != event_copy.get("digest"):
+            raise MigrationError("Event delivery records differ from the retained manifest")
+        snapshot["event_delivery"] = delivery
     return snapshot
 
 
@@ -608,6 +808,8 @@ def main():
         command.add_argument("--output", required=True)
         if name == "backup":
             command.add_argument("--manifest", required=True)
+            command.add_argument("--events-database")
+            command.add_argument("--events-output")
     command = sub.add_parser("plan")
     command.add_argument("--source", action="append", required=True)
     command.add_argument("--baseline", required=True)
@@ -636,7 +838,10 @@ def main():
             value = snapshot_file(database, config["node"], config["site"], args.output)
             print(json.dumps(value, sort_keys=True))
         else:
-            value = backup(database, args.output, config["node"], config["site"])
+            if pathlib.Path(args.manifest).resolve().parent != pathlib.Path(args.output).resolve().parent:
+                raise MigrationError("Backup manifest must be beside its SQLite payload")
+            value = backup(database, args.output, config["node"], config["site"],
+                           args.events_database, args.events_output)
             private_json(args.manifest, value)
             print(json.dumps(value, sort_keys=True))
     elif args.command == "plan":
