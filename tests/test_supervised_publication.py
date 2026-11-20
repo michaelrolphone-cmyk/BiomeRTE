@@ -65,8 +65,8 @@ class SupervisedPublicationTests(unittest.TestCase):
         self.worker.db.execute('INSERT OR IGNORE INTO fences VALUES(?,?,?)',
                                (self.lease['guard'], self.lease['generation'], self.lease['id']))
 
-    def call(self, name, **arguments):
-        return self.app.call(name, arguments, uid(), 'site')
+    def call(self, operation, **arguments):
+        return self.app.call(operation, arguments, uid(), 'site')
 
     def post(self, url, path, body, ca=None, token=None, timeout=30):
         # Exercise the actual Remote.call envelope and the real durable API.
