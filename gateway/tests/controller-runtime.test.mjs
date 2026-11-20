@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,createHash,verify,webcrypto} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {controllerRuntimeConfig,controllerRuntimeTool,controllerRuntimeNative,controllerRuntimePair,pythonCanonical} from '../lib/controller-runtime.mjs';
+import {controllerRuntimeConfig,controllerRuntimeTool,controllerRuntimeNative,controllerRuntimePair,controllerRuntimeEvent,pythonCanonical} from '../lib/controller-runtime.mjs';
 globalThis.crypto??=webcrypto;
 const authority='a'.repeat(64),mac='b'.repeat(64),pi='c'.repeat(64),other='d'.repeat(64);
 const keys=generateKeyPairSync('rsa',{modulusLength:2048});
@@ -155,4 +155,28 @@ test('signing canonical form matches Python for real wire JSON, including numeri
   const p=spawnSync('python3',['-c','import sys,json;print(json.dumps(json.load(sys.stdin),sort_keys=True,separators=(",",":"),allow_nan=False))'],{input:JSON.stringify(value),encoding:'utf8'});
   assert.equal(p.status,0,p.stderr);assert.equal(pythonCanonical(value),p.stdout.trim());
  }
+});
+
+test('authenticated event mutations retain producer alias and verified owner context',async()=>{
+ const e={...env(),CONTROLLER_RUNTIME_AUTHORITY:JSON.stringify({...declaration,event_default_controller:pi})};
+ await fetched(async calls=>{
+  const value=await controllerRuntimeEvent(e,'change',{method:'events/subscribe',params:{arguments:{}},owner:'owner-1',grant:'grant-1'});
+  assert.deepEqual(value,{result:{ok:true}});
+  const wire=JSON.parse(calls[0].body);
+  assert.equal(wire.operation,'gateway.events.change');assert.equal(wire.controller,pi);
+  assert.equal(wire.arguments.controller,pi);assert.equal(wire.arguments.owner,'owner-1');assert.equal(wire.arguments.grant,'grant-1');
+ });
+});
+test('general tool invocation cannot forge internal event owner context',async()=>{
+ await fetched(async calls=>{
+  const value=await controllerRuntimeTool(env(),'biome_invoke',{operation:'gateway.events.change',arguments:{owner:'other',grant:null},request_id:'forge'});
+  assert.equal(value.isError,true);assert.equal(value.structuredContent.status,403);assert.equal(calls.length,0);
+ });
+});
+test('local event subscriptions retain local producer behavior',async()=>{
+ await fetched(async calls=>{
+  assert.equal(await controllerRuntimeEvent(env(),'change',{params:{arguments:{realm:'local'}}}),null);
+  assert.equal(await controllerRuntimeEvent(env(),'grok',{args:{realm:'local'}}),null);
+  assert.equal(calls.length,0);
+ });
 });

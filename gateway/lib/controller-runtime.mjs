@@ -8,14 +8,16 @@ const success=value=>({content:[{type:'text',text:JSON.stringify(value)}]});
 const failure=error=>({isError:true,content:[{type:'text',text:error.message??'Controller runtime unavailable'}],
  structuredContent:{error_code:'CONTROLLER_RUNTIME_UNAVAILABLE',status:error.status??503,retry_same_id:true}});
 function validDeclaration(value){
- if(!object(value)||Object.keys(value).some(k=>!['service_id','authority','controller_aliases','operator_actor'].includes(k))||
+ if(!object(value)||Object.keys(value).some(k=>!['service_id','authority','controller_aliases','operator_actor','event_default_controller'].includes(k))||
     typeof value.service_id!=='string'||!value.service_id||!hash(value.authority)||!hash(value.operator_actor)||
     !Array.isArray(value.controller_aliases)||!value.controller_aliases.length||
     value.controller_aliases.some(v=>!hash(v)||v===value.authority)||
-    new Set(value.controller_aliases).size!==value.controller_aliases.length)
+    new Set(value.controller_aliases).size!==value.controller_aliases.length||
+    value.event_default_controller!==undefined&&!value.controller_aliases.includes(value.event_default_controller))
   throw fault('Invalid controller runtime declaration');
  return {service_id:value.service_id,authority:value.authority,
-         controller_aliases:[...value.controller_aliases].sort(),operator_actor:value.operator_actor};
+         controller_aliases:[...value.controller_aliases].sort(),operator_actor:value.operator_actor,
+         ...(value.event_default_controller===undefined?{}:{event_default_controller:value.event_default_controller})};
 }
 function serviceOrigin(env){
  let url;try{url=new URL(env.SERVICE_AUTHORITY_ORIGIN)}catch{throw fault('Controller runtime origin unavailable')}
@@ -116,6 +118,7 @@ async function operatorCall(env,config,operation,args,id,controller){
 }
 export async function controllerRuntimeTool(env,name,args){
  if((args.realm??'site')!=='site'||name==='biome_invoke'&&/^(maintenance\.|controller\.)/.test(args.operation))return null;
+ if(name==='biome_invoke'&&/^gateway\.events\./.test(args.operation))return failure(fault('Use the authenticated event subscription methods',403));
  try{
   const config=await controllerRuntimeConfig(env);
   if(!config||!addresses(config,args.controller))return null;
@@ -147,4 +150,20 @@ export async function controllerRuntimePair(env,phase,raw,selected){
   if(!['begin','finish'].includes(phase))throw fault('Unsupported pairing phase',400);
   return await forward(config,raw,'pair/'+phase);
  }catch(error){return Response.json({error:error.message??'Controller runtime unavailable',retry_same_id:true},{status:error.status??503})}
+}
+
+export async function controllerRuntimeEvent(env,kind,payload){
+ const realm=kind==='change'?payload.params?.arguments?.realm:payload.args?.realm;
+ if((realm??'site')!=='site')return null;
+ try{
+  const config=await controllerRuntimeConfig(env);if(!config)return null;
+  if(!['change','grok'].includes(kind))throw fault('Unsupported event method',400);
+  const controller=payload.controller??config.event_default_controller;
+  if(!config.controller_aliases.includes(controller))throw fault('An exact event producer alias is required',400);
+  const id=kind==='grok'&&payload.args?.request_id?payload.args.request_id:'runtime-event-'+crypto.randomUUID();
+  const value=await operatorCall(env,config,'gateway.events.'+kind,{...payload,controller},id,controller);
+  return kind==='change'?{result:value}:success(value);
+ }catch(error){
+  return kind==='change'?{error:{code:-32015,message:'Controller could not verify the subscription',data:{reason:'controller_unavailable'}}}:failure(error);
+ }
 }

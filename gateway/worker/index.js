@@ -1,3 +1,6 @@
+import {durableWitness} from '../lib/durable-witness.mjs';
+import {controllerRuntimeEvent} from '../lib/controller-runtime.mjs';
+import {controllerEventAuthorization} from '../lib/controller-event-auth.mjs';
 import {consoleRead} from '../lib/console-read.mjs';
 import {gatewayErrorKind} from '../lib/diagnostics.mjs';
 import {nativeProviderCall,nativeProviderPair} from '../lib/provider.mjs';
@@ -19,6 +22,8 @@ const protocols=['2026-07-28','2025-11-25','2025-06-18','2025-03-26','2024-11-05
 async function dispatch(req,env) {
  const url=new URL(req.url), path=url.pathname;
  const conf={...env,ownerPrincipal:r=>ownerPrincipal(r,env)};
+ if(path==='/internal/service-witness/v1')return durableWitness(req,env);
+ if(path==='/internal/controller-events/authorize')return controllerEventAuthorization(req,env);
  if(path==='/api/stream/inspect')return inspectStream(req,env);
  if(path.startsWith('/api/stream/'))return leasedStream(req,env);
  if(path==='/api/console/connection')return reply({connected:!!await ownerPrincipal(req,env),transport:'controller-owner-session'});
@@ -75,6 +80,8 @@ async function dispatch(req,env) {
   const {action,args}=grok;
   if(!args||typeof args!=='object'||Array.isArray(args)||JSON.stringify(args).length>12000)
    return ok({isError:true,content:[{type:'text',text:'Invalid receiver parameters.'}]});
+  const managed=await controllerRuntimeEvent(env,'grok',{owner,grant,action,args,...(params.name==='biome_invoke'&&params.arguments?.controller!==undefined?{controller:params.arguments.controller}:{})});
+  if(managed!==null)return ok(managed);
   const sealed=await sealGrokJob(env,key,{owner,grant,action,args});
   return ok(await enqueue(env,'sealed_grok_receiver',sealed,key));
  }
