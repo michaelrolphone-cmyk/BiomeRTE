@@ -180,7 +180,7 @@ function runtimeFailure(error,req,raw){
  if(req){
   let operation='unknown';try{operation=JSON.parse(raw).operation??'unknown'}catch{}
   logProviderFailure(req,{started:performance.now(),stage:'controller_runtime',
-    reason:'runtime_configuration_failed',operation},503,error);
+    reason:'runtime_configuration_failed',operation,bridge_job:'provider-runtime-'+crypto.randomUUID()},503,error);
  }
  return Response.json({error:'Controller gateway unavailable'},{status:503});
 }
