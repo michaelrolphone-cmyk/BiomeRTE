@@ -1,0 +1,22 @@
+name: Pi gateway Store backport
+on:
+  push:
+    branches: [fix/pi-gateway-wal-reuse-20261120]
+  pull_request:
+    branches: [compat/pi-gateway-bcef-base-20261120]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  connection-lifetime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest tests.test_store_connection_reuse tests.test_gateway_store_lifetime -v
