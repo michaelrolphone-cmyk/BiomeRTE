@@ -491,7 +491,7 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
     async def test_large_shard_uses_bounded_packets_and_unchanged_state_reads_no_bodies(self):
         desc = self.add("large", "x" * (33 * 1024 * 1024))
         await publish_controller(self.daemon)
-        self.assertEqual([desc["digest"]], self.reads)
+        self.assertEqual([desc["digest"], desc["digest"]], self.reads)
         uploads = [body["block"] for operation, body in self.calls if operation == "chunk_put"]
         self.assertTrue(uploads)
         self.assertTrue(all(len(base64.b64decode(block["data"])) <= BLOCK_BYTES for block in uploads))
@@ -499,7 +499,7 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(uploads), len(desc["blocks"]))
         self.calls.clear()
         await publish_controller(self.daemon)
-        self.assertEqual([desc["digest"]], self.reads)
+        self.assertEqual([desc["digest"], desc["digest"]], self.reads)
         self.assertEqual(["publish"], [operation for operation, unused in self.calls])
 
     async def test_incremental_snapshot_uploads_only_changed_shard(self):
@@ -508,7 +508,7 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         new = self.add("two", "second")
         await publish_controller(self.daemon)
-        self.assertEqual([old["digest"], new["digest"]], self.reads)
+        self.assertEqual([old["digest"], old["digest"], new["digest"], new["digest"]], self.reads)
         uploaded = [body["block"]["digest"] for operation, body in self.calls if operation == "chunk_put"]
         self.assertEqual([new["blocks"][0]["digest"]], uploaded)
 
@@ -522,6 +522,176 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         await publish_controller(self.daemon)
         self.assertEqual(["chunk_missing", "publish"], [operation for operation, unused in self.calls])
+
+    async def test_cold_4050_shard_4405_block_root_uses_18_bounded_queries(self):
+        # Use the real 256 KiB block size and generate large shard bodies on
+        # demand, so the production-sized descriptor fixture stays bounded.
+        self.assertEqual(BLOCK_BYTES, 256 * 1024)
+        expected, indexes = [], {}
+        def raw_for(index):
+            kind, key = "cold-%04d" % index, "record-%04d" % index
+            value = str(index) + ("x" * BLOCK_BYTES if index < 355 else "") + str(index)
+            return canonical([[kind, key, value]])
+        for index in range(4050):
+            kind, key = "cold-%04d" % index, "record-%04d" % index
+            desc = describe_shard(kind, hashlib.sha256(key.encode()).hexdigest()[:2],
+                                  raw_for(index))
+            expected.append(desc)
+            indexes[desc["digest"]] = index
+        expected_root = root(expected)
+        refs = state_blocks(expected_root)
+        self.assertEqual(len(refs), 4405)
+        self.manifest = root([{k: v for k, v in desc.items() if k != "blocks"}
+                              for desc in expected])
+        def read(key):
+            self.reads.append(key)
+            return raw_for(indexes[key])
+        self.daemon.authority.snapshot_chunk = read
+        async def seeded_helper(operation, **body):
+            self.calls.append((operation, body))
+            if operation == "chunk_missing":
+                self.assertTrue(set(body["digests"]).issubset(refs))
+                return {"missing": []}
+            self.assertEqual(operation, "publish")
+            self.assertEqual(body["state"], expected_root)
+            return {"checkpoint": {"digest": "c" * 64}, "replication": "complete"}
+        self.daemon.helper = seeded_helper
+        await publish_controller(self.daemon)
+        queries = [body["digests"] for operation, body in self.calls
+                   if operation == "chunk_missing"]
+        self.assertEqual(len(queries), 18)
+        self.assertEqual([len(query) for query in queries], [256] * 17 + [53])
+        asked = [key for query in queries for key in query]
+        self.assertEqual(len(asked), len(set(asked)))
+        self.assertEqual(set(asked), set(refs))
+        self.assertEqual(len(self.reads), 4050)
+        self.assertEqual([operation for operation, unused in self.calls].count("publish"), 1)
+        self.calls.clear()
+        await publish_controller(self.daemon)
+        self.assertEqual(len(self.reads), 4050)
+        self.assertEqual(["publish"], [operation for operation, unused in self.calls])
+
+    async def test_missing_subset_and_shared_blocks_upload_once_across_shards(self):
+        first = self.add("one", "x" * (BLOCK_BYTES * 3))
+        second = self.add("two", "x" * (BLOCK_BYTES * 3))
+        complete = self.add("three", "already present")
+        descriptors = [first, second, complete]
+        shared = set(block["digest"] for block in first["blocks"]) & set(
+            block["digest"] for block in second["blocks"])
+        self.assertTrue(shared)
+        missing = {next(iter(shared)), first["blocks"][0]["digest"]}
+        refs = state_blocks(root(descriptors))
+        for desc in descriptors:
+            raw = self.raws[desc["digest"]]
+            for index, block in enumerate(desc["blocks"]):
+                if block["digest"] not in missing:
+                    self.blocks.put(raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES],
+                                    block["digest"])
+        await publish_controller(self.daemon)
+        queries = [body["digests"] for operation, body in self.calls
+                   if operation == "chunk_missing"]
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(queries[0]), len(refs))
+        self.assertEqual(set(queries[0]), set(refs))
+        uploads = [body["block"]["digest"] for operation, body in self.calls
+                   if operation == "chunk_put"]
+        self.assertEqual(len(uploads), len(missing))
+        self.assertEqual(set(uploads), missing)
+        self.assertEqual(self.reads.count(complete["digest"]), 1)
+        self.blocks.require(root(descriptors))
+        self.assertEqual(self.calls[-1], ("publish", {"state": root(descriptors)}))
+
+    async def test_invalid_missing_reply_never_uploads_or_publishes(self):
+        desc = self.add("one", "value")
+        key = desc["blocks"][0]["digest"]
+        for values in (None, "not a list", ["f" * 64], [key, key], [{}]):
+            with self.subTest(values=values):
+                self.calls.clear()
+                self.daemon._controller_shard_blocks = {}
+                async def invalid(operation, **body):
+                    self.calls.append((operation, body))
+                    self.assertEqual(operation, "chunk_missing")
+                    return {"missing": values}
+                self.daemon.helper = invalid
+                with self.assertRaises(CheckpointError):
+                    await publish_controller(self.daemon)
+                self.assertEqual(["chunk_missing"], [operation for operation, unused in self.calls])
+                self.assertEqual(self.daemon._controller_shard_blocks, {})
+
+    async def test_changed_shard_between_description_and_upload_is_rejected(self):
+        desc = self.add("one", "value")
+        raw = self.raws[desc["digest"]]
+        def changed(key):
+            self.reads.append(key)
+            return raw if len(self.reads) == 1 else b"!" + raw[1:]
+        self.daemon.authority.snapshot_chunk = changed
+        with self.assertRaisesRegex(CheckpointError, "shard changed"):
+            await publish_controller(self.daemon)
+        self.assertEqual(["chunk_missing"], [operation for operation, unused in self.calls])
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
+
+    async def test_invalid_complete_root_fails_before_any_helper_rpc(self):
+        self.add("one", "value")
+        self.manifest["shards"].append(dict(self.manifest["shards"][0]))
+        with self.assertRaisesRegex(ChunkError, "Distinct"):
+            await publish_controller(self.daemon)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
+
+    async def test_lost_root_reply_clears_cache_and_retry_checks_existing_blocks(self):
+        desc = self.add("one", "value")
+        async def lost(operation, **body):
+            result = await self.helper(operation, **body)
+            if operation == "publish":
+                raise OSError("Root reply lost")
+            return result
+        self.daemon.helper = lost
+        with self.assertRaises(OSError):
+            await publish_controller(self.daemon)
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
+        self.calls.clear()
+        self.daemon.helper = self.helper
+        await publish_controller(self.daemon)
+        self.assertEqual(["chunk_missing", "publish"], [operation for operation, unused in self.calls])
+        self.assertEqual(self.daemon._controller_shard_blocks[desc["digest"]], desc["blocks"])
+
+    async def test_real_helper_revalidates_grant_between_batches_and_rejects_wrong_host(self):
+        from biomerte.service_daemon import CheckpointHelper
+        from biomerte.store import Fault
+        for index in range(257):
+            kind, key = "grant-%d" % index, "record-%d" % index
+            raw = canonical([[kind, key, "value"]])
+            desc = describe_shard(kind, hashlib.sha256(key.encode()).hexdigest()[:2], raw)
+            self.raws[desc["digest"]] = raw
+            self.manifest["shards"].append({k: v for k, v in desc.items() if k != "blocks"})
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.config = {"worker_id": B["worker_id"], "service_id": B["service_id"]}
+        helper.store = types.SimpleNamespace(chunks=types.SimpleNamespace(missing=lambda keys: []))
+        validations = []
+        async def validate(current):
+            validations.append(current)
+            if len(validations) == 3:
+                raise Fault("Grant revoked between batches", 503)
+        helper.transport = types.SimpleNamespace(validate=validate)
+        sent_binding = dict(B)
+        async def adapter(operation, **body):
+            self.calls.append((operation, body))
+            self.assertEqual(operation, "chunk_missing")
+            return await helper.chunk_missing(dict(body, binding=sent_binding))
+        self.daemon.helper = adapter
+        with self.assertRaisesRegex(Fault, "revoked between batches"):
+            await publish_controller(self.daemon)
+        self.assertEqual([len(body["digests"]) for operation, body in self.calls], [256, 1])
+        self.assertEqual(len(validations), 3)
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
+        self.calls.clear()
+        validations.clear()
+        sent_binding["worker_id"] = "unrelated-host"
+        with self.assertRaisesRegex(Fault, "another host or service"):
+            await publish_controller(self.daemon)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(validations, [])
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
 
 
 if __name__ == "__main__":
