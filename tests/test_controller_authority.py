@@ -354,5 +354,78 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("site",getattr(self.app,"background_errors",{}))
 
 
+
+    def legacy_package(self, destination="physical-pi", revision="pinned-revision"):
+        payload = dict(format=1, site=self.app.site, sender=self.peer, to=destination,
+            kind="outcome", data=dict(grant="offline-grant", rev=revision,
+                run="original-offline-run", state="completed", result={"ok":True}, trace=[]))
+        return dict(payload=payload, signature=sign(self.peer_key, payload))
+
+    def prepare_legacy_outcome(self):
+        def seed(tx):
+            peer = tx.need("peers", self.peer)
+            peer["scopes"] = ["return"]
+            tx.put("peers", self.peer, peer)
+            tx.put("grants", "offline-grant", dict(id="offline-grant", to=self.peer,
+                task="offline-task", state="issued", rev="pinned-revision"))
+            tx.put("work", "offline-task", dict(id="offline-task", state="delegated",
+                revision=4, attempts=[]))
+        self.app.stores["site"].execute(seed)
+
+    def test_original_signed_offline_return_accepts_managed_destination_alias_once(self):
+        self.prepare_legacy_outcome()
+        packet = self.legacy_package()
+        original = copy.deepcopy(packet)
+        result = self.call("offline.reconcile", {"packet":packet}, "return-original")
+        self.assertEqual(result["state"], "returned")
+        self.assertEqual(result["outcome"]["run"], "original-offline-run")
+        repeated = self.call("offline.reconcile", {"packet":packet}, "return-retry")
+        self.assertEqual(repeated, result)
+        self.assertEqual(packet, original)
+        item = self.app.stores["site"].execute(
+            lambda tx: tx.need("work", "offline-task"), read_only=True)
+        self.assertEqual(item["attempts"], ["original-offline-run"])
+        self.assertEqual(item["revision"], 5)
+
+    def test_alias_package_keeps_exact_signature_and_original_grant_checks(self):
+        self.prepare_legacy_outcome()
+        packet = self.legacy_package()
+        packet["payload"]["to"] = "physical-mac"
+        with self.assertRaises(Fault):
+            self.call("offline.reconcile", {"packet":packet}, "tampered-destination")
+        with self.assertRaises(Fault):
+            self.call("offline.reconcile",
+                {"packet":self.legacy_package(revision="another-revision")}, "wrong-grant")
+        with self.assertRaises(Fault):
+            self.call("offline.reconcile",
+                {"packet":self.legacy_package(destination="foreign-node")}, "foreign-destination")
+        def revoke(tx):
+            peer = tx.need("peers", self.peer)
+            peer["enabled"] = False
+            tx.put("peers", self.peer, peer)
+        self.app.stores["site"].execute(revoke)
+        with self.assertRaises(Fault):
+            self.call("offline.reconcile", {"packet":self.legacy_package()}, "revoked-sender")
+
+    def test_package_aliases_never_extend_local_or_unconfigured_authority(self):
+        from biomerte import exchange
+        packet = self.legacy_package()
+        for realm in ("local",):
+            with self.assertRaises(Fault):
+                self.app.stores[realm].execute(
+                    lambda tx: exchange.unpack(tx, Context(self.app, realm),
+                                               packet, "outcome", "return"),
+                    read_only=True)
+        with patch.object(self.app, "controller_runtime", {}):
+            with self.assertRaises(Fault):
+                self.app.stores["site"].execute(
+                    lambda tx: exchange.unpack(tx, Context(self.app),
+                                               packet, "outcome", "return"),
+                    read_only=True)
+        outbound = exchange.bundle(Context(self.app), "revisions", "remote-peer", {})
+        self.assertEqual(outbound["payload"]["sender"], self.app.node)
+        self.assertEqual(outbound["payload"]["to"], "remote-peer")
+
+
 if __name__ == "__main__":
     unittest.main()

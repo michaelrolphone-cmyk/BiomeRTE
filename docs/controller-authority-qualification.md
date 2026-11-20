@@ -156,11 +156,42 @@ The retained Site custody declaration prevents removing environment flags from s
 
 ### Companion witness
 
-Configure the companion's `DURABLE_WITNESS_ORIGIN`, `DURABLE_WITNESS_SECRET`, `DURABLE_WITNESS_ID` and optional `DURABLE_WITNESS_LEASE_S` (default 120). The witness origin is the Site HTTPS origin. The secret must differ from `STREAM_ROUTER_SECRET`.
+Configure the companion through either explicit witness environment settings or the Git-pinned public `durable-witness.json` deployment declaration:
+
+```json
+{
+  "format": "biomerte-durable-witness-deployment/1",
+  "origin": "https://SITE_ORIGIN",
+  "witness_id": "biomerte-services",
+  "lease_s": 120
+}
+```
+
+The declaration accepts exactly these four public fields and a canonical bare HTTPS origin. A present malformed file or conflicting explicit origin/ID/lease setting stops startup. With that file, the companion derives a separate witness credential from its existing coordinator bearer using the domain-separated `biomerte/durable-witness/deployment/v1` context, origin and witness ID. Provision the matching Site secret privately before the companion rollout. Neither the parent credential nor the derived secret belongs in the file.
+
+The environment-only path requires `DURABLE_WITNESS_ORIGIN` and an explicit `DURABLE_WITNESS_SECRET`; `DURABLE_WITNESS_ID` and `DURABLE_WITNESS_LEASE_S` are optional. An explicit separate secret can override derivation. It must differ from both the stream-router secret and the coordinator bearer. Removing both a deployment file and all witness settings is legacy mode, so release review must retain the intended deployment declaration.
+
+An existing ephemeral service head needs separately proven enrollment before a companion restart. The old coordinator's `release` operation is not a durable pause; a later heartbeat may make that worker eligible again. Do not seed a new D1 reference from a lone helper or from one transient no-grant observation.
 
 The witness lease must cover at least twice the coordinator's configured maximum grant TTL. New epochs use server-time lease exclusion plus quarantine covering the greater of the prior and new maximum grant intervals. Actual service grants are capped by the client's conservative monotonic witness deadline.
 
 D1 stores one current witness lease and one latest sequence/digest/scope reference per service. Runtime records, artifacts and checkpoint chunks remain durable on the hosts. This metadata table is not an execution journal.
+
+
+### Native Python 3.4 boundary
+
+The physical native controller/gateway remains compatible with its Python 3.4 interpreter. Modern controller authority, checkpoint and daemon modules run only inside the pinned Python 3.11 service image. Application and native gateway imports must not eagerly load those modern modules.
+
+The isolated compatibility suite checks the changed native source grammar and blocks accidental managed-module imports. Both deployment event modules remain self-contained so a standalone gateway bundle does not need the core package during its initial imports.
+
+When the Pi is reachable, test the candidate release with its actual interpreter before changing live services:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/absolute/candidate-release /usr/bin/python3 -c 'import sys; from biomerte.app import Application; import biomerte.web; assert sys.version_info[:2] == (3, 4)'
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/absolute/candidate-release/deploy /usr/bin/python3 -c 'import mcp_events; import grok_receivers'
+```
+
+These are source/import smoke checks, with no Application construction or runtime mutation. Record the actual interpreter/version and results. A Mac grammar test or Docker Python 3.11 result does not substitute for this native observation.
 
 ## 3. Source custody and bootstrap
 
@@ -205,7 +236,7 @@ The helper may use Docker `unless-stopped`. The placement child uses restart pol
 python -m biomerte.service_daemon --role authority --config /config/service.json
 ```
 
-Do not manually synthesize its grant environment. The supervisor supplies all six binding fields through `BIOME_SERVICE_ID`, `REVISION`, `WORKER`, `INCARNATION`, `BOOT_EPOCH` and `GRANT`, plus the prepared checkpoint and adapter URL.
+Do not manually synthesize its grant environment. The supervisor supplies all six binding fields through `BIOME_SERVICE_ID`, `BIOME_SERVICE_REVISION`, `BIOME_SERVICE_WORKER`, `BIOME_SERVICE_INCARNATION`, `BIOME_SERVICE_BOOT_EPOCH` and `BIOME_SERVICE_GRANT`, plus the prepared checkpoint and adapter URL.
 
 Declare the complete service only when the reviewed source freeze and bootstrap copies are established. Require this sequence in observed evidence: exact state preparation, witnessed baseline, child preparation, logical fence proof, coordinator effect admission, then active health. During preparation, ordinary site calls and callbacks must fail closed.
 
@@ -264,6 +295,8 @@ On the survivor:
 - Publish a second small qualification revision using the first revision as parent and a fresh request ID. Verify the updated witnessed reference remains available while the former owner is absent.
 
 If the first owner was already absent before installation, this establishes survivor startup and degraded operation only. Full automatic two-host failover still requires recovery of the missing host and an observed ownership transition.
+
+A preserved offline outcome addressed to an original native alias is accepted only by the configured managed site realm. Its original signature, enabled peer/return scope and exact grant binding remain mandatory. Local realms and unconfigured sources retain their original destination rule; outbound packages use the new logical identity and require the receiver's explicit trust in that public key.
 
 Physical provider custody remains physical. Preserve worker-ledger action/result/ACK identities and existing resource generations. An unreported effect remains uncertain until that provider reconciles; controller availability alone is not evidence that the physical effect completed.
 
