@@ -1,0 +1,112 @@
+{
+  "schema": "biomerte.private-workers-dependency-qualification/1",
+  "recorded_at": "2026-11-20T17:03:12.686664+00:00",
+  "state": "prepared_not_migrated",
+  "build_source_commit": "2bf2dcab83ce4173c129c2d061184e5a904b1066",
+  "reason": "Use declared cryptography>=46,<47 instead of inherited independent44.0.2 pin.",
+  "declared_requirement": "cryptography>=46,<47",
+  "requirements_sha256": "d0f3960b79c115f14ccaaa4a9efdd0b3815d560d8433ed1cb06e007070e9b820",
+  "images": {
+    "chat": {
+      "id": "sha256:67b05e0cd31cb00f3dd3bcc806d72e2ce06ae4d385f7e8d71c8d14470b4d4195",
+      "tag": "biomerte-private-chat:ci-2bf2dcab83ce-arm64",
+      "os": "linux",
+      "architecture": "arm64",
+      "size": 283015320,
+      "source_commit": "2bf2dcab83ce4173c129c2d061184e5a904b1066",
+      "cryptography_version": "46.0.7"
+    },
+    "image": {
+      "id": "sha256:d758f001541028a52638f65d4316d1ca769ff7ac92f6f4e1d219761088754a7c",
+      "tag": "biomerte-private-image:ci-2bf2dcab83ce-arm64",
+      "os": "linux",
+      "architecture": "arm64",
+      "size": 283222788,
+      "source_commit": "2bf2dcab83ce4173c129c2d061184e5a904b1066",
+      "cryptography_version": "46.0.7"
+    }
+  },
+  "tests": {
+    "count": 36,
+    "suites": [
+      {
+        "kind": "chat",
+        "argv": [
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/opt/biome/providers/private-chat",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "count": 18,
+        "uid": 501,
+        "gid": 20,
+        "readonly_root": true,
+        "native_state_mounted": false,
+        "network": "none",
+        "log": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-2bf2dcab83ce-crypto46-20261120/test-0.log"
+      },
+      {
+        "kind": "image",
+        "argv": [
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/opt/biome/providers/private-image",
+          "-p",
+          "test_*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "count": 6,
+        "uid": 501,
+        "gid": 20,
+        "readonly_root": true,
+        "native_state_mounted": false,
+        "network": "none",
+        "log": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-2bf2dcab83ce-crypto46-20261120/test-1.log"
+      },
+      {
+        "kind": "image",
+        "argv": [
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/opt/biome/tests",
+          "-p",
+          "test_model_host_io.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "count": 12,
+        "uid": 501,
+        "gid": 20,
+        "readonly_root": true,
+        "native_state_mounted": false,
+        "network": "none",
+        "log": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-2bf2dcab83ce-crypto46-20261120/test-2.log"
+      }
+    ],
+    "network": "none",
+    "read_only_root": true,
+    "user": "501:20",
+    "native_state_mounted": false
+  },
+  "evidence": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-2bf2dcab83ce-crypto46-20261120",
+  "prepared_bundle": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/2bf2dcab83ce-crypto46-20261120",
+  "identity_preflight": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/2bf2dcab83ce-crypto46-20261120/identity-preflight.json",
+  "readonly_status": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-2bf2dcab83ce-crypto46-20261120/readonly-status.json",
+  "prior_393ab568_qualification_and_rollback_preserved": true,
+  "live_handoff_performed": false,
+  "native_dependencies_changed": false,
+  "host_io_restarted": false,
+  "model_generation_performed": false,
+  "physical_android_test_performed": false,
+  "native_model_source_root": "/Users/micahelbyrns/.local/share/biomerte-host-io/releases/workers-3775adec5f5d"
+}
