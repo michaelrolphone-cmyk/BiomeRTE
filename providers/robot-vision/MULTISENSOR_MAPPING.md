@@ -6,10 +6,21 @@ Visual translation is combined with a separate local metric sonar odometry track
 stationary pose just because orientation is available. Large visual orientation
 innovations re-anchor the filter, preserving relocalization and loop closure.
 
-`multisensor_mapping.ahrs.R_camera_imu` supplies a measured IMU-to-camera rotation.
-Without it, paired visual and AHRS rotation increments estimate a mount passively.
-Predominantly planar motion constrains only its observed rotation axis; this is
-an estimated mount, not a claim of full six-degree calibration.
+The rover's configured IMU-to-camera rotation uses the owner's three observed
+motions: left turn increases yaw (-105 to -60 is +45 degrees), front-up decreases
+roll, and right-side-up increases pitch. In camera right/down/forward axes this
+is `R_camera_imu = [[-1,0,0],[0,1,0],[0,0,-1]]`. The approximately 4mm centered
+rearward AHRS position is recorded separately from this axis transform. The
+default service uses this rotation at startup; passive axis learning is a fallback
+for an explicitly unconfigured replacement mount, not a required manual step.
+
+Gyroscope bias calibration is automatic. The independent raw camera callback
+checks two distinct, fresh device captures for unchanged imagery and quiet IMU
+readings, then requests the firmware's two-second bias measurement on a background
+worker. It never waits on SLAM restoration, blocks mapping or blocks video.
+Duplicate/replayed captures cannot trigger calibration. Fresh firmware telemetry
+reconciles success, collection, motion rejection and retry after another stationary
+interval. An existing valid bias is used immediately; a reboot re-arms the check.
 
 Firmware adds four-sonar history to `biome.capture.v1`. Each transducer retains
 its own transmit/echo midpoint measurement time and completion time, on esp_timer.
@@ -55,15 +66,24 @@ endpoints are beam centerline evidence, not exact wall samples; the HC-SR04 beam
 width and mount uncertainty remain attached. Free-space evidence along a ray
 does not certify vehicle clearance or traversability.
 
-Configure `multisensor_mapping.sonar_mounts` by sensor ID with
-`origin_camera_m`, `direction_camera`, and `beam_half_angle_deg`. Camera axes are
-x right, y down, z forward. Current fallback mounts use the user-reported chassis
-dimensions (5.5in wide, 7.25in long, camera 1.75in behind front). These estimates
-are explicitly labelled `chassis_estimate`; the front sonar uses the user-reported 25.4mm height above the floor and
-38.1mm offset below the nominal camera optical center, pointing forward along
-the camera axis. The host projects its beam region into the calibrated image;
-it does not assume an exact center pixel. Other sensor height offsets and exact
-mount positions still require measurement. They must not be described as calibrated.
+The default mounts are measured from `03-1000017388.jpg` against the 20mm
+checkerboard, combined with owner-supplied heights. `measure_rover_mounts.py`
+retains the visible corner/landmark selections, ground homography and explicit
+height-parallax model. `rover-mount-measurements.json` records the source image
+hash and results: 1.48px grid reprojection RMS, and 101.52mm for the independent
+printed 100mm ruler. These are image measurements with recorded uncertainty,
+not substituted half-chassis-width guesses.
+
+Camera-axis origins in millimetres (right, down, forward), rounded to 1mm
+horizontally: front `[5,38.1,44]`, left `[-43,38.1,-49]`, right
+`[43,38.1,-46]`, rear `[2,12.7,-152.35]`. Front/left/right acoustic centers are
+25.4mm above the floor; rear is 50.8mm above it. The rear origin is computed from the photo-measured rear tire plane
+(-146mm in camera forward coordinates) minus the owner-reported 6.35mm
+protrusion, rather than leaving that dimension only in metadata.
+Directions are the owner's forward, left, right and rear assignments. Camera
+height is the previously supplied nominal 63.5mm. These defaults feed the actual
+ray origins, camera beam projection and local metric sonar odometry. Explicit
+`multisensor_mapping.sonar_mounts` configuration can override them.
 
 This change contains no drive, steering, stop, LED, flashing or service-restart
 commands. Installation must be scheduled outside another operator's experiment.

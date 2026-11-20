@@ -1,0 +1,908 @@
+{
+  "files": [
+    {
+      "bytes": 1926,
+      "origin": "native-vision/ftm-only-20261113/FRAME_SENSOR_SYNC.md",
+      "path": "providers/robot-vision/FRAME_SENSOR_SYNC.md",
+      "sha256": "c7ecc8ca6bab166f74ae617bd481c64d7114732ccfee2bd9ee05cf021c3b761d"
+    },
+    {
+      "bytes": 1998,
+      "origin": "native-vision/ftm-only-20261113/LIVE_CAMERA.md",
+      "path": "providers/robot-vision/LIVE_CAMERA.md",
+      "sha256": "0eaa87f8355eab20d53cedc616aa3af271119209ffa31816feacb4135f7b6578"
+    },
+    {
+      "bytes": 8798,
+      "origin": "native-vision/ftm-only-20261113/MAPPING_PREPARATION.md",
+      "path": "providers/robot-vision/MAPPING_PREPARATION.md",
+      "sha256": "083e80aac4260d564d991e275fa38c4cdf3c5406dba88335e5b7784f0a825c9d"
+    },
+    {
+      "bytes": 2691,
+      "origin": "native-vision/ftm-only-20261113/MOTION_EVENTS.md",
+      "path": "providers/robot-vision/MOTION_EVENTS.md",
+      "sha256": "803742b2aef9565382e03d08b7d2eaf50a7d578ac5b69ef81ec0360c6d2c5ea4"
+    },
+    {
+      "bytes": 5969,
+      "origin": "native-vision/ftm-only-20261113/MULTISENSOR_MAPPING.md",
+      "path": "providers/robot-vision/MULTISENSOR_MAPPING.md",
+      "sha256": "e9649bfdcaad9bb92cc2c266e12fded9c439e9049228a2bc6cdb0ff6fd7750f4"
+    },
+    {
+      "bytes": 7264,
+      "origin": "native-vision/ftm-only-20261113/NAVIGATION_FRAMES.md",
+      "path": "providers/robot-vision/NAVIGATION_FRAMES.md",
+      "sha256": "74f7253b9c24978653e77d11ceb332debb9dceee2d42a2edf939de605ff09d75"
+    },
+    {
+      "bytes": 59076,
+      "origin": "native-vision/ftm-only-20261113/README.md",
+      "path": "providers/robot-vision/README.md",
+      "sha256": "a9adf50b8d012e70528c1f0909f194114014f0448f4ac20f643b03a034ccf9c5"
+    },
+    {
+      "bytes": 4778,
+      "origin": "native-vision/ftm-only-20261113/WORLD_MAPPING.md",
+      "path": "providers/robot-vision/WORLD_MAPPING.md",
+      "sha256": "f7c59e59b84278dd021b9b1e5bfbdba888e08e1c4f839c70b0abc525f849c9aa"
+    },
+    {
+      "bytes": 25541,
+      "origin": "native-vision/ftm-only-20261113/ahrs_source.py",
+      "path": "providers/robot-vision/ahrs_source.py",
+      "sha256": "cd332c98e288a1a89a095d9ca5da3229ed79b106028a5dd401549e48700a96c3"
+    },
+    {
+      "bytes": 25661,
+      "origin": "native-vision/ftm-only-20261113/ahrs_tracking.py",
+      "path": "providers/robot-vision/ahrs_tracking.py",
+      "sha256": "a1d9ce788adaf9d726608ceabbfc039de0c093f932fe8e45dd05772d1d591138"
+    },
+    {
+      "bytes": 2949,
+      "origin": "native-vision/ftm-only-20261113/applied_control_stream.py",
+      "path": "providers/robot-vision/applied_control_stream.py",
+      "sha256": "3b3753f3a18f78826088c9455ed5698bffbcde833289f61b2dfe24cae28434c5"
+    },
+    {
+      "bytes": 3777,
+      "origin": "native-vision/ftm-only-20261113/async_checkpoint.py",
+      "path": "providers/robot-vision/async_checkpoint.py",
+      "sha256": "4ef1446adc47fcac3b8523f4640ef04bbc036db410cae0087e635144b8b42ac9"
+    },
+    {
+      "bytes": 6019,
+      "origin": "native-vision/ftm-only-20261113/auto_gyro_calibration.py",
+      "path": "providers/robot-vision/auto_gyro_calibration.py",
+      "sha256": "ef54b616c5b9eeb35d245452eef3f699f213b0598e586844192040d3878e0e01"
+    },
+    {
+      "bytes": 38258,
+      "origin": "native-vision/ftm-only-20261113/biome_provider.py",
+      "path": "providers/robot-vision/biome_provider.py",
+      "sha256": "f8f2f98577536d0192ab6876b8471ceffd4aac88eef7dd9ed72863ca97fa849c"
+    },
+    {
+      "bytes": 4820,
+      "origin": "native-vision/ftm-only-20261113/calibrate_camera.py",
+      "path": "providers/robot-vision/calibrate_camera.py",
+      "sha256": "8c11e9b4814cdf9be9de74fcd4eafb9bafbb387931d85d05a152b3f8a088fc6e"
+    },
+    {
+      "bytes": 2817,
+      "origin": "native-vision/ftm-only-20261113/camera_push.py",
+      "path": "providers/robot-vision/camera_push.py",
+      "sha256": "14a003f2759156c56e7ecc6bdc6c7db2822e75bf2f717bf782c279780592b346"
+    },
+    {
+      "bytes": 21156,
+      "origin": "native-vision/ftm-only-20261113/camera_rig.py",
+      "path": "providers/robot-vision/camera_rig.py",
+      "sha256": "74fd6564821ee86a8d3211204aea43e10ff8a37dc65f7c710cf51262c8acfb6c"
+    },
+    {
+      "bytes": 12234,
+      "origin": "native-vision/ftm-only-20261113/camera_source.py",
+      "path": "providers/robot-vision/camera_source.py",
+      "sha256": "96354688d8179b9a0c6acf059415ceac95707b3341a056e344a0336d1727e5b0"
+    },
+    {
+      "bytes": 21721,
+      "origin": "native-vision/ftm-only-20261113/camera_telemetry.py",
+      "path": "providers/robot-vision/camera_telemetry.py",
+      "sha256": "c6264bb6b7abdf0de340d2023243008d7ee2624fff9247594b904df6fa732fe9"
+    },
+    {
+      "bytes": 5921,
+      "origin": "native-vision/ftm-only-20261113/capture_packet.py",
+      "path": "providers/robot-vision/capture_packet.py",
+      "sha256": "1e1c7385ac28a72b0c00741cd361f7153f503f5db30aa1017ec70028f68188b8"
+    },
+    {
+      "bytes": 6352,
+      "origin": "native-vision/ftm-only-20261113/detector.py",
+      "path": "providers/robot-vision/detector.py",
+      "sha256": "083573f36503bb236c8272630a0eb4bb37fa465df0e4619ec73f8679ae0d951d"
+    },
+    {
+      "bytes": 5229,
+      "origin": "native-vision/ftm-only-20261113/device_routes.py",
+      "path": "providers/robot-vision/device_routes.py",
+      "sha256": "5339b942a880c10d8e4675b3c36e377f732b0fc9246a9afefa5acac6beaedba6"
+    },
+    {
+      "bytes": 19433,
+      "origin": "native-vision/ftm-only-20261113/drive_response.py",
+      "path": "providers/robot-vision/drive_response.py",
+      "sha256": "e3c8b8f2d1a10aca32d636fef6c756b4aa78a4f049280c5cb3339be3493d752c"
+    },
+    {
+      "bytes": 2518,
+      "origin": "native-vision/ftm-only-20261113/dual_camera_feed.py",
+      "path": "providers/robot-vision/dual_camera_feed.py",
+      "sha256": "6247881c52e8550df7fa624bfb8f148b4c0128d8bdf13320dea5f5ded77074dd"
+    },
+    {
+      "bytes": 5419,
+      "origin": "native-vision/ftm-only-20261113/ground_projection.py",
+      "path": "providers/robot-vision/ground_projection.py",
+      "sha256": "71c99709fe89cdd413075d70a4e9069f7e61fcd6c3431de46032537e378f13f5"
+    },
+    {
+      "bytes": 2446,
+      "origin": "native-vision/ftm-only-20261113/image_preprocessing.py",
+      "path": "providers/robot-vision/image_preprocessing.py",
+      "sha256": "f87030b54b4c821563ae49fa30797d0539ba62979b16f52a787575dc92729ce3"
+    },
+    {
+      "bytes": 9606,
+      "origin": "native-vision/ftm-only-20261113/install_provider.py",
+      "path": "providers/robot-vision/install_provider.py",
+      "sha256": "96c8256a1a7004caabac5f93f1ce23bc13a56d3c7c123261f9ffaead584ab22c"
+    },
+    {
+      "bytes": 3117,
+      "origin": "native-vision/ftm-only-20261113/leased_maps.py",
+      "path": "providers/robot-vision/leased_maps.py",
+      "sha256": "da356340a9d973434a83b757292b5138db2df22f0c2acb36572e21ca58f88aa6"
+    },
+    {
+      "bytes": 1455,
+      "origin": "native-vision/ftm-only-20261113/leased_publish.py",
+      "path": "providers/robot-vision/leased_publish.py",
+      "sha256": "c87388b010059ccef2df1b0cd0c8f77d2831d3667ae5b92e5f00ae81c24344bd"
+    },
+    {
+      "bytes": 7388,
+      "origin": "native-vision/ftm-only-20261113/leased_streams.py",
+      "path": "providers/robot-vision/leased_streams.py",
+      "sha256": "6be02542e1c0f393cceac1acfd57279c0acf86f8c414c2598d5738337f349889"
+    },
+    {
+      "bytes": 23167,
+      "origin": "native-vision/ftm-only-20261113/lidar_fusion.py",
+      "path": "providers/robot-vision/lidar_fusion.py",
+      "sha256": "94c95522302d3fbc5e382ea0ef2f7fd86c16bc356f0011257ebb2825e3f86bb6"
+    },
+    {
+      "bytes": 4304,
+      "origin": "native-vision/ftm-only-20261113/live_camera.py",
+      "path": "providers/robot-vision/live_camera.py",
+      "sha256": "d07eb6d70415b434f0d938a62142d5619ec3e1f7f620e065a5be3b54c508934b"
+    },
+    {
+      "bytes": 10490,
+      "origin": "native-vision/ftm-only-20261113/local_lidar_slam.py",
+      "path": "providers/robot-vision/local_lidar_slam.py",
+      "sha256": "fd567c1ea40b6e741f49f035b97e93f9d0c933874688a526bdc2fe804d1bbc4d"
+    },
+    {
+      "bytes": 2090,
+      "origin": "native-vision/ftm-only-20261113/mapper_checkpoint.py",
+      "path": "providers/robot-vision/mapper_checkpoint.py",
+      "sha256": "49334b8f89cb1eacb87f73e949e349e778547b908790bdd9b2bd984ec123830d"
+    },
+    {
+      "bytes": 10784,
+      "origin": "native-vision/ftm-only-20261113/mapping_preflight.py",
+      "path": "providers/robot-vision/mapping_preflight.py",
+      "sha256": "6eded0852937e9044572a41ecd525874a8d36e58625482736f52a2a8d5105b48"
+    },
+    {
+      "bytes": 3719,
+      "origin": "native-vision/ftm-only-20261113/measure_rover_mounts.py",
+      "path": "providers/robot-vision/measure_rover_mounts.py",
+      "sha256": "2018c14bc636a9aeea3855c8ba58e48b9dcf9c4cea3b3ddf65379c0be20580d8"
+    },
+    {
+      "bytes": 32791,
+      "origin": "native-vision/ftm-only-20261113/metric_scale.py",
+      "path": "providers/robot-vision/metric_scale.py",
+      "sha256": "4b21f0e48785f3f71666a57e5cc167de33ca8295dff2348b024d850416710329"
+    },
+    {
+      "bytes": 5850,
+      "origin": "native-vision/ftm-only-20261113/metric_sensor_worker.py",
+      "path": "providers/robot-vision/metric_sensor_worker.py",
+      "sha256": "c0cb82b2fae8b0bee92d4357745972596b13ba1930aa1f226c7c4c22535a4921"
+    },
+    {
+      "bytes": 37951,
+      "origin": "native-vision/ftm-only-20261113/metric_sessions.py",
+      "path": "providers/robot-vision/metric_sessions.py",
+      "sha256": "c9f92de38ef55c5699edaa50c6fdd2e155ae176277b367c4b43c36cda15372fc"
+    },
+    {
+      "bytes": 19139,
+      "origin": "native-vision/ftm-only-20261113/metric_store.py",
+      "path": "providers/robot-vision/metric_store.py",
+      "sha256": "6098a26b2dfa5839e54f4e50943041789ec55799d446d16fafd311344582f5de"
+    },
+    {
+      "bytes": 44460,
+      "origin": "native-vision/ftm-only-20261113/multisensor_mapping.py",
+      "path": "providers/robot-vision/multisensor_mapping.py",
+      "sha256": "2ceb9ad643a3abb2589eb2de0a18fa43b69e7f6a8cb3b028d86e65b38ec1b5ae"
+    },
+    {
+      "bytes": 9027,
+      "origin": "native-vision/ftm-only-20261113/native_lidar_depth.py",
+      "path": "providers/robot-vision/native_lidar_depth.py",
+      "sha256": "1c4eecce32438df0f168fd8d5ffe95d5804fe88d62285cb30b05ef09a4008a0b"
+    },
+    {
+      "bytes": 10906,
+      "origin": "native-vision/ftm-only-20261113/navigation_frames.py",
+      "path": "providers/robot-vision/navigation_frames.py",
+      "sha256": "0cacc7837671b8a51cd98c2a5fb0e09c64ea67e7aa09e95afecc910111c54047"
+    },
+    {
+      "bytes": 11579,
+      "origin": "native-vision/ftm-only-20261113/portable_rover.py",
+      "path": "providers/robot-vision/portable_rover.py",
+      "sha256": "f7756827f1646dcaaa4e8c0e15c715e61a56ab5c9f5ff17d4b3021453ef483f5"
+    },
+    {
+      "bytes": 2319,
+      "origin": "native-vision/ftm-only-20261113/processing_performance.py",
+      "path": "providers/robot-vision/processing_performance.py",
+      "sha256": "8637876e2cf93a80bbfb3300b8440c8b962f541151efb87520ab31f4dc015c84"
+    },
+    {
+      "bytes": 3948,
+      "origin": "native-vision/ftm-only-20261113/pyslam-patches.json",
+      "path": "providers/robot-vision/pyslam-patches.json",
+      "sha256": "95f4dd651b12c1088a1e0d8a6054de909410b46288ea5e7c11a53a3e299719de"
+    },
+    {
+      "bytes": 5743,
+      "origin": "native-vision/ftm-only-20261113/qualify_world_map.py",
+      "path": "providers/robot-vision/qualify_world_map.py",
+      "sha256": "cd6cb0bbd251e174efdf94f5d3d5bbee4ff526c35387539846ddb268c85b1e93"
+    },
+    {
+      "bytes": 55093,
+      "origin": "native-vision/ftm-only-20261113/radio_map.py",
+      "path": "providers/robot-vision/radio_map.py",
+      "sha256": "4b9eefa6551ed2d6edcd112aba9b22e4a024fd7be8f5c8bc81c26dcd9f2cae6d"
+    },
+    {
+      "bytes": 24449,
+      "origin": "native-vision/ftm-only-20261113/radio_tracking.py",
+      "path": "providers/robot-vision/radio_tracking.py",
+      "sha256": "3b37045c5e864c1ac8924a94cb05f0963bf753664e459682bd22594ca1a456b3"
+    },
+    {
+      "bytes": 19857,
+      "origin": "native-vision/ftm-only-20261113/rear_sensor_push.py",
+      "path": "providers/robot-vision/rear_sensor_push.py",
+      "sha256": "743a7225628e8002331c3bf3ebaafecd147888d7fdcf728966d2d119753bc4fa"
+    },
+    {
+      "bytes": 2782,
+      "origin": "native-vision/ftm-only-20261113/rear_transport_preview.py",
+      "path": "providers/robot-vision/rear_transport_preview.py",
+      "sha256": "e5f17241d93b4efd241d44a9a1876475ce093e910ed4d421ec4df2f0d810cc61"
+    },
+    {
+      "bytes": 317,
+      "origin": "native-vision/ftm-only-20261113/requirements-slam.txt",
+      "path": "providers/robot-vision/requirements-slam.txt",
+      "sha256": "623a79f78d2137e44ce4c85853413c0a96422f09b8f8be1deb76b6de1f69dff3"
+    },
+    {
+      "bytes": 102,
+      "origin": "native-vision/ftm-only-20261113/requirements-streaming.txt",
+      "path": "providers/robot-vision/requirements-streaming.txt",
+      "sha256": "ed7e9add1435767c7fc0452caa253c5a6cefa151d4cfbc71cdf30ba804023f10"
+    },
+    {
+      "bytes": 11521,
+      "origin": "native-vision/ftm-only-20261113/rig_native_map.py",
+      "path": "providers/robot-vision/rig_native_map.py",
+      "sha256": "522754bc150dd7ecf85b61b21c70392df91c2dc3c91cef54f1995017ca2bd1af"
+    },
+    {
+      "bytes": 9917,
+      "origin": "native-vision/ftm-only-20261113/rover-body-model.json",
+      "path": "providers/robot-vision/rover-body-model.json",
+      "sha256": "dc8ccaf801c647d1e9de7222b75afbf2d58086264414a046844e2a16fc2490bf"
+    },
+    {
+      "bytes": 6619,
+      "origin": "native-vision/ftm-only-20261113/rover-motion-observer.py",
+      "path": "providers/robot-vision/rover-motion-observer.py",
+      "sha256": "7730e832d349a1750f2638645fd85c394a004267e3fe048310603193f3b892e1"
+    },
+    {
+      "bytes": 3421,
+      "origin": "native-vision/ftm-only-20261113/rover-mount-measurements.json",
+      "path": "providers/robot-vision/rover-mount-measurements.json",
+      "sha256": "d9c04fc16293bc216f944d8443c73f09d39e4e2d825aec816aaf148372dfee16"
+    },
+    {
+      "bytes": 3363,
+      "origin": "native-vision/ftm-only-20261113/rover-relay-contracts.json",
+      "path": "providers/robot-vision/rover-relay-contracts.json",
+      "sha256": "260f011e95a6c75a958c0cfaf89603ae013bf9779f5487356748856538984375"
+    },
+    {
+      "bytes": 326161,
+      "origin": "native-vision/ftm-only-20261113/rover-stream-schemas.json",
+      "path": "providers/robot-vision/rover-stream-schemas.json",
+      "sha256": "85945b5a1d9b0bd4ca2537f313d2008ba88152a8e4fa290390f0a3138fb5d8bc"
+    },
+    {
+      "bytes": 18014,
+      "origin": "native-vision/ftm-only-20261113/rover_events.py",
+      "path": "providers/robot-vision/rover_events.py",
+      "sha256": "964374303b1fd866742d5710b5ad3771bf9380bb44ec363bdc002eac7f2908f4"
+    },
+    {
+      "bytes": 1038,
+      "origin": "native-vision/ftm-only-20261113/rover_motion_evidence.py",
+      "path": "providers/robot-vision/rover_motion_evidence.py",
+      "sha256": "fd619c3bdfb1b2bc5426751305bbbae72735ad5a4d2332112738cb427ec91e86"
+    },
+    {
+      "bytes": 3544,
+      "origin": "native-vision/ftm-only-20261113/rover_wire.py",
+      "path": "providers/robot-vision/rover_wire.py",
+      "sha256": "f621d411567de3d6affa425edf230e449fd8dfafc9010015828eeaeb641e6643"
+    },
+    {
+      "bytes": 1589,
+      "origin": "native-vision/ftm-only-20261113/sensor_delivery.py",
+      "path": "providers/robot-vision/sensor_delivery.py",
+      "sha256": "a52d362965ac43ff544ab6422577b5aa94d203d47304bf794d856886c94612a2"
+    },
+    {
+      "bytes": 4511,
+      "origin": "native-vision/ftm-only-20261113/sensor_inventory.py",
+      "path": "providers/robot-vision/sensor_inventory.py",
+      "sha256": "97b02c8c594aad4de62826bf9383831ddcef01536916a1ad012132a36bda8e6f"
+    },
+    {
+      "bytes": 9291,
+      "origin": "native-vision/ftm-only-20261113/sensor_push.py",
+      "path": "providers/robot-vision/sensor_push.py",
+      "sha256": "d89944a722242ebd2c232be747c44fe156b0e5118050389b28f89560c93382e7"
+    },
+    {
+      "bytes": 4727,
+      "origin": "native-vision/ftm-only-20261113/sensor_push_process.py",
+      "path": "providers/robot-vision/sensor_push_process.py",
+      "sha256": "888a68757b8ae74ba5944d3439253f3749f49701a15b0bbe6860112e58cb09a0"
+    },
+    {
+      "bytes": 7599,
+      "origin": "native-vision/ftm-only-20261113/sensor_rig_registry.py",
+      "path": "providers/robot-vision/sensor_rig_registry.py",
+      "sha256": "a2d60241e035ca90e55af2272a482fcfe0c043aa6df0e80bd5b0da45d5dfd72b"
+    },
+    {
+      "bytes": 6297,
+      "origin": "native-vision/ftm-only-20261113/sensor_tick_stream.py",
+      "path": "providers/robot-vision/sensor_tick_stream.py",
+      "sha256": "5f34645050ea132ea42f8a9ade840677c263fa2be552049f48a3630eda117e74"
+    },
+    {
+      "bytes": 3084,
+      "origin": "native-vision/ftm-only-20261113/setup_detector.py",
+      "path": "providers/robot-vision/setup_detector.py",
+      "sha256": "8a2a5449bfc513d6b2364070bb0a1b4f91d467c913426982f737a892fdefac88"
+    },
+    {
+      "bytes": 26487,
+      "origin": "native-vision/ftm-only-20261113/setup_macos_app.py",
+      "path": "providers/robot-vision/setup_macos_app.py",
+      "sha256": "672dad5a532a66f664800bdcddada5afa1b9bd3607888af3bf75160fb2ad11e2"
+    },
+    {
+      "bytes": 42272,
+      "origin": "native-vision/ftm-only-20261113/setup_slam.py",
+      "path": "providers/robot-vision/setup_slam.py",
+      "sha256": "76afc265b99fc0e7a692513cec3a2512feb41b92eaea02879f15c5807f05e895"
+    },
+    {
+      "bytes": 43192,
+      "origin": "native-vision/ftm-only-20261113/slam_backend.py",
+      "path": "providers/robot-vision/slam_backend.py",
+      "sha256": "8cd762f1ab4c674f67ffa401881e4d60d39e4565f85292f0ec9ed54bf509805c"
+    },
+    {
+      "bytes": 22404,
+      "origin": "native-vision/ftm-only-20261113/stream_derivations.py",
+      "path": "providers/robot-vision/stream_derivations.py",
+      "sha256": "9ec89d7783c236ca57482c263e8d496512855f147d8a8f572084e4fc6ed327dd"
+    },
+    {
+      "bytes": 3003,
+      "origin": "native-vision/ftm-only-20261113/stream_sequences.py",
+      "path": "providers/robot-vision/stream_sequences.py",
+      "sha256": "cddb4180999abec89dd3eafefc8e1ff66ecdc664ef0ce0ca5fbd2d4c69c42134"
+    },
+    {
+      "bytes": 3598,
+      "origin": "native-vision/ftm-only-20261113/stream_telemetry.py",
+      "path": "providers/robot-vision/stream_telemetry.py",
+      "sha256": "be1741f8c42adf31d2fe1c43d40639f77d66d025e2157222e3ec323b8770b607"
+    },
+    {
+      "bytes": 4806,
+      "origin": "native-vision/ftm-only-20261113/survey_grid_geometry.py",
+      "path": "providers/robot-vision/survey_grid_geometry.py",
+      "sha256": "6dd361deafd508717744a02dbe80748289a10eac34daa40550496f6e128d02f1"
+    },
+    {
+      "bytes": 6247,
+      "origin": "native-vision/ftm-only-20261113/survey_grid_matcher.py",
+      "path": "providers/robot-vision/survey_grid_matcher.py",
+      "sha256": "a2157c3ec36f5f62e1d629d1d868846a3478275d1f9075aef526ab1fc9d87c5c"
+    },
+    {
+      "bytes": 10221,
+      "origin": "native-vision/ftm-only-20261113/survey_lidar_landmarks.py",
+      "path": "providers/robot-vision/survey_lidar_landmarks.py",
+      "sha256": "a8e809a1fe462c9978b48ad8ed8ceac48880b9dac78fc1e91b6c418231e914fa"
+    },
+    {
+      "bytes": 8291,
+      "origin": "native-vision/ftm-only-20261113/survey_world.py",
+      "path": "providers/robot-vision/survey_world.py",
+      "sha256": "dce8879cbf45503f1b6905bee0b3ee2891e7ddda4b53fb99a746c8a31ab1735e"
+    },
+    {
+      "bytes": 7671,
+      "origin": "native-vision/ftm-only-20261113/test_sensor_push.py",
+      "path": "providers/robot-vision/test_sensor_push.py",
+      "sha256": "ab4736b387356a3388513ba6bb282528f4f1aa2efa3db63eec29ec097e3cdb6e"
+    },
+    {
+      "bytes": 2339,
+      "origin": "native-vision/ftm-only-20261113/tests/qualify_async_checkpoint.py",
+      "path": "providers/robot-vision/tests/qualify_async_checkpoint.py",
+      "sha256": "08533e5a4205f480af9ccb03196ee9ef7cfd1e2e4a5ce463ec9fa68b4cd03cff"
+    },
+    {
+      "bytes": 16559,
+      "origin": "native-vision/ftm-only-20261113/tests/qualify_slam.py",
+      "path": "providers/robot-vision/tests/qualify_slam.py",
+      "sha256": "fc2ac287e0d1043e87192a7731c1058fc8a830259bea9bda149e61f7dc99a41d"
+    },
+    {
+      "bytes": 16120,
+      "origin": "native-vision/ftm-only-20261113/tests/test_ahrs_integration.py",
+      "path": "providers/robot-vision/tests/test_ahrs_integration.py",
+      "sha256": "f3b9cc3dd5f36c56140f5358251e1dd3777ef27c094169026b0d78bc9214170a"
+    },
+    {
+      "bytes": 28578,
+      "origin": "native-vision/ftm-only-20261113/tests/test_ahrs_source.py",
+      "path": "providers/robot-vision/tests/test_ahrs_source.py",
+      "sha256": "4051196ebee54758c1dd7fb8b948916ae1b5195fac1894ab94d80b5d9bd561fc"
+    },
+    {
+      "bytes": 26776,
+      "origin": "native-vision/ftm-only-20261113/tests/test_ahrs_tracking.py",
+      "path": "providers/robot-vision/tests/test_ahrs_tracking.py",
+      "sha256": "72b36714be43ffe14a633c1b55c244173d40155d6a048e682aa661eeb283aae7"
+    },
+    {
+      "bytes": 6497,
+      "origin": "native-vision/ftm-only-20261113/tests/test_async_checkpoint.py",
+      "path": "providers/robot-vision/tests/test_async_checkpoint.py",
+      "sha256": "adb8cc3349f66341ffbdd24d4b4092902d449cc9253dcf2155208b86ff29f546"
+    },
+    {
+      "bytes": 2679,
+      "origin": "native-vision/ftm-only-20261113/tests/test_async_native_capture.py",
+      "path": "providers/robot-vision/tests/test_async_native_capture.py",
+      "sha256": "35dc9c8ba2f97ee2d15ef789ecacd99bb88b1fab6393b8adfe159a7dc3975389"
+    },
+    {
+      "bytes": 3810,
+      "origin": "native-vision/ftm-only-20261113/tests/test_auto_gyro_calibration.py",
+      "path": "providers/robot-vision/tests/test_auto_gyro_calibration.py",
+      "sha256": "52fe5254027eceabafab15b06f01cda53584875aa8f731f1ec7c0fdc93f62deb"
+    },
+    {
+      "bytes": 27393,
+      "origin": "native-vision/ftm-only-20261113/tests/test_biome_provider.py",
+      "path": "providers/robot-vision/tests/test_biome_provider.py",
+      "sha256": "d614450311f844dc3f57004a47c293ecdc8633bb8d0c507333e683a506d213f9"
+    },
+    {
+      "bytes": 4507,
+      "origin": "native-vision/ftm-only-20261113/tests/test_camera_rig.py",
+      "path": "providers/robot-vision/tests/test_camera_rig.py",
+      "sha256": "139c76af6324d62443a36344ce144afa27dd43247962618259f65f9466fc414a"
+    },
+    {
+      "bytes": 20006,
+      "origin": "native-vision/ftm-only-20261113/tests/test_camera_telemetry.py",
+      "path": "providers/robot-vision/tests/test_camera_telemetry.py",
+      "sha256": "e5f87e570f3974189fd40146b4ab60a0cc99c45b55137e03a1691e767345c1de"
+    },
+    {
+      "bytes": 5109,
+      "origin": "native-vision/ftm-only-20261113/tests/test_capture_packet.py",
+      "path": "providers/robot-vision/tests/test_capture_packet.py",
+      "sha256": "b272e8b495a1f7ddde6babc1c1e6090bafcb3d2e49d637d67399d891d2494011"
+    },
+    {
+      "bytes": 3223,
+      "origin": "native-vision/ftm-only-20261113/tests/test_ground_projection.py",
+      "path": "providers/robot-vision/tests/test_ground_projection.py",
+      "sha256": "8cfe71d9ee378840a96386d0ceef6cd5af6e977882d3f5c06c5fe60590f5d81b"
+    },
+    {
+      "bytes": 3320,
+      "origin": "native-vision/ftm-only-20261113/tests/test_health_evidence.py",
+      "path": "providers/robot-vision/tests/test_health_evidence.py",
+      "sha256": "9bd8229e5a78649a5ce1d9192fc8abf6876be1e9a70a93b3bcdf5ddf082a12a9"
+    },
+    {
+      "bytes": 2601,
+      "origin": "native-vision/ftm-only-20261113/tests/test_idle_stream_feed.py",
+      "path": "providers/robot-vision/tests/test_idle_stream_feed.py",
+      "sha256": "fd12f6f59804dd013c81a021c5c429d21c5683fc46e6914ff3396988622d5361"
+    },
+    {
+      "bytes": 2834,
+      "origin": "native-vision/ftm-only-20261113/tests/test_image_preprocessing.py",
+      "path": "providers/robot-vision/tests/test_image_preprocessing.py",
+      "sha256": "a1801b647122a412fb3db485e4c27bc6e25cbb2430b8267685dd71436de01cca"
+    },
+    {
+      "bytes": 2797,
+      "origin": "native-vision/ftm-only-20261113/tests/test_leased_publish.py",
+      "path": "providers/robot-vision/tests/test_leased_publish.py",
+      "sha256": "c1d159601f3080325967be3669d6ffcb0afdbb59a008e0f8f4aab7b823f6c3c6"
+    },
+    {
+      "bytes": 13186,
+      "origin": "native-vision/ftm-only-20261113/tests/test_live_camera.py",
+      "path": "providers/robot-vision/tests/test_live_camera.py",
+      "sha256": "42399ee20123ad8e6c4ca2181de95264433642850db47c06f6a66f5d7d24e15e"
+    },
+    {
+      "bytes": 7788,
+      "origin": "native-vision/ftm-only-20261113/tests/test_mapping_preflight.py",
+      "path": "providers/robot-vision/tests/test_mapping_preflight.py",
+      "sha256": "733b05fb372849d962877b9bddf4960af9a16fedb28e7ce5093bfae2e961d754"
+    },
+    {
+      "bytes": 15971,
+      "origin": "native-vision/ftm-only-20261113/tests/test_metric_scale.py",
+      "path": "providers/robot-vision/tests/test_metric_scale.py",
+      "sha256": "628ad7f5ded248c1ae151f08ead5dc762da96eed588523e09dbdcba761d594a5"
+    },
+    {
+      "bytes": 7415,
+      "origin": "native-vision/ftm-only-20261113/tests/test_metric_sensor_worker.py",
+      "path": "providers/robot-vision/tests/test_metric_sensor_worker.py",
+      "sha256": "b4e9201586dca282a4723ec41ca7c0c3cadc42612a184e31ea33a0eb59a7dbd6"
+    },
+    {
+      "bytes": 27570,
+      "origin": "native-vision/ftm-only-20261113/tests/test_metric_sessions.py",
+      "path": "providers/robot-vision/tests/test_metric_sessions.py",
+      "sha256": "07132d4e0f59afad4650060f3575d9b9c2ce0e79b09f7bfe3f8641527953d60b"
+    },
+    {
+      "bytes": 21650,
+      "origin": "native-vision/ftm-only-20261113/tests/test_multisensor_mapping.py",
+      "path": "providers/robot-vision/tests/test_multisensor_mapping.py",
+      "sha256": "a557dc001e57fad85a0136f8c500a6c5dfa91945abdd24290e70b6c01003cc64"
+    },
+    {
+      "bytes": 1048,
+      "origin": "native-vision/ftm-only-20261113/tests/test_native_feature_count.py",
+      "path": "providers/robot-vision/tests/test_native_feature_count.py",
+      "sha256": "97aa0b6c168564a7fa0ec11f45d05b0ebae0eb26c11623c94e1adf65ec097eb0"
+    },
+    {
+      "bytes": 1904,
+      "origin": "native-vision/ftm-only-20261113/tests/test_native_frame_sequence.py",
+      "path": "providers/robot-vision/tests/test_native_frame_sequence.py",
+      "sha256": "cc2213467d2ab939e92e33ea22d8998eeb3184f520017b691528efb06c3dd396"
+    },
+    {
+      "bytes": 9092,
+      "origin": "native-vision/ftm-only-20261113/tests/test_navigation_frames.py",
+      "path": "providers/robot-vision/tests/test_navigation_frames.py",
+      "sha256": "472fd28fc9ad26bc1b99c82e7dc92f594565f5d2bdd90d3d3b8aa011b6f5e02a"
+    },
+    {
+      "bytes": 15574,
+      "origin": "native-vision/ftm-only-20261113/tests/test_navigation_service.py",
+      "path": "providers/robot-vision/tests/test_navigation_service.py",
+      "sha256": "394620c7ad44ef5932978c455dcc046f565e3227ccc07565d14bd094520985a8"
+    },
+    {
+      "bytes": 3639,
+      "origin": "native-vision/ftm-only-20261113/tests/test_portable_rover.py",
+      "path": "providers/robot-vision/tests/test_portable_rover.py",
+      "sha256": "52edfcc30d408778e06a424d5e4411e7e56cbd4ae7ce5b22dcc22aa6981a51a5"
+    },
+    {
+      "bytes": 29753,
+      "origin": "native-vision/ftm-only-20261113/tests/test_radio_map.py",
+      "path": "providers/robot-vision/tests/test_radio_map.py",
+      "sha256": "df527871cd52603a67cb93924b00ddc89c571f3d0a4a8b499b36c7da3688eb32"
+    },
+    {
+      "bytes": 19861,
+      "origin": "native-vision/ftm-only-20261113/tests/test_radio_relocalization_prior.py",
+      "path": "providers/robot-vision/tests/test_radio_relocalization_prior.py",
+      "sha256": "2f8b9518c4565f937a795b764b589e2bb5c1cc76886f968fe529d3590b772674"
+    },
+    {
+      "bytes": 27461,
+      "origin": "native-vision/ftm-only-20261113/tests/test_radio_tracking.py",
+      "path": "providers/robot-vision/tests/test_radio_tracking.py",
+      "sha256": "7f5eacdee244542d9f0435b14f8267f613cd41e6edd749739dbea0c4b9c9a228"
+    },
+    {
+      "bytes": 2208,
+      "origin": "native-vision/ftm-only-20261113/tests/test_rear_live_isolation.py",
+      "path": "providers/robot-vision/tests/test_rear_live_isolation.py",
+      "sha256": "74fa66f40a2924c941bc7ad3ec3891e7af004500b049f357d0769f186d9fbd5e"
+    },
+    {
+      "bytes": 6735,
+      "origin": "native-vision/ftm-only-20261113/tests/test_rear_sensor_push.py",
+      "path": "providers/robot-vision/tests/test_rear_sensor_push.py",
+      "sha256": "48b1e2f17eea561f6120d042faddf8dd7fd7fca38b02f9372c3d566bee53f97e"
+    },
+    {
+      "bytes": 2472,
+      "origin": "native-vision/ftm-only-20261113/tests/test_registration_isolation.py",
+      "path": "providers/robot-vision/tests/test_registration_isolation.py",
+      "sha256": "389530cd6418ae261691252b4ecfbdc27d95c30fff19baea64a843c124fd2fd1"
+    },
+    {
+      "bytes": 15005,
+      "origin": "native-vision/ftm-only-20261113/tests/test_relocalization_candidates.py",
+      "path": "providers/robot-vision/tests/test_relocalization_candidates.py",
+      "sha256": "b79226dc3802f70b67c1c9efe0abacb1389e769b4d4f400a4ecce157a8979fce"
+    },
+    {
+      "bytes": 992,
+      "origin": "native-vision/ftm-only-20261113/tests/test_runtime_configuration.py",
+      "path": "providers/robot-vision/tests/test_runtime_configuration.py",
+      "sha256": "5dc3a555f56b71a3128d50d026bc2100c1d5ff21a3e251e93b72be3e7b290be7"
+    },
+    {
+      "bytes": 5328,
+      "origin": "native-vision/ftm-only-20261113/tests/test_service_lifecycle.py",
+      "path": "providers/robot-vision/tests/test_service_lifecycle.py",
+      "sha256": "aadba645b53cdb3c7f284ad02fe4d3d4904e9183a2e6b49b493ef8c354b2cf98"
+    },
+    {
+      "bytes": 17866,
+      "origin": "native-vision/ftm-only-20261113/tests/test_setup_macos_app.py",
+      "path": "providers/robot-vision/tests/test_setup_macos_app.py",
+      "sha256": "73d9a429e3084f69cbbf4fda45e55ab23980ed8a2166b28b90db0e142ae69b93"
+    },
+    {
+      "bytes": 3598,
+      "origin": "native-vision/ftm-only-20261113/tests/test_shared_rig_native.py",
+      "path": "providers/robot-vision/tests/test_shared_rig_native.py",
+      "sha256": "061bbb08cb42877bc88de04dbdb953bec25614fae2ca29c533830fdc39622d2e"
+    },
+    {
+      "bytes": 18899,
+      "origin": "native-vision/ftm-only-20261113/tests/test_slam_backend.py",
+      "path": "providers/robot-vision/tests/test_slam_backend.py",
+      "sha256": "ebaec99fdaf51e2c57d2d4bac29ef63a6771360877a0866d0127817213a46bea"
+    },
+    {
+      "bytes": 8766,
+      "origin": "native-vision/ftm-only-20261113/tests/test_stream_sequence_recovery.py",
+      "path": "providers/robot-vision/tests/test_stream_sequence_recovery.py",
+      "sha256": "b44439a3e402d896a69eb3fd53e9b02f07dadf12ddeea15262a7deeb703e469b"
+    },
+    {
+      "bytes": 2738,
+      "origin": "native-vision/ftm-only-20261113/tests/test_stream_telemetry.py",
+      "path": "providers/robot-vision/tests/test_stream_telemetry.py",
+      "sha256": "53f2c3994cf43d556d3bf8db63d820f8684c7991729d9d28303a13a0977adcf5"
+    },
+    {
+      "bytes": 2290,
+      "origin": "native-vision/ftm-only-20261113/tests/test_stream_telemetry_budget.py",
+      "path": "providers/robot-vision/tests/test_stream_telemetry_budget.py",
+      "sha256": "8e05f0c0ee27d665fa942fee665dd6a6d74b3e3597eae200a120f17e7e9a7941"
+    },
+    {
+      "bytes": 48030,
+      "origin": "native-vision/ftm-only-20261113/tests/test_vision_service.py",
+      "path": "providers/robot-vision/tests/test_vision_service.py",
+      "sha256": "26069625325abe309f98824c4f1561c8809fc83d32508da5616a4b9b2a7c90ff"
+    },
+    {
+      "bytes": 26644,
+      "origin": "native-vision/ftm-only-20261113/tests/test_vision_store.py",
+      "path": "providers/robot-vision/tests/test_vision_store.py",
+      "sha256": "966cddfa2ad2068ad58dc55a037adb36437559930bc3e000b6426a05954abe69"
+    },
+    {
+      "bytes": 8438,
+      "origin": "native-vision/ftm-only-20261113/tests/test_world_atlas.py",
+      "path": "providers/robot-vision/tests/test_world_atlas.py",
+      "sha256": "f36b139ee96f726802933623612c18d86ac9c4d7b1e9ee9634320c0822d4001c"
+    },
+    {
+      "bytes": 2971,
+      "origin": "native-vision/ftm-only-20261113/tests/test_world_handoff.py",
+      "path": "providers/robot-vision/tests/test_world_handoff.py",
+      "sha256": "c681661519698697e47b8087d7340e8c44f99d376ead54c34d740d921fd5a8ca"
+    },
+    {
+      "bytes": 2146,
+      "origin": "native-vision/ftm-only-20261113/tests/test_world_import.py",
+      "path": "providers/robot-vision/tests/test_world_import.py",
+      "sha256": "9b54b386e5343b00aa8e8ede5cf0c241853cf97bf751dfc27a15f4dfb2e03d76"
+    },
+    {
+      "bytes": 28803,
+      "origin": "native-vision/ftm-only-20261113/tof_registration.py",
+      "path": "providers/robot-vision/tof_registration.py",
+      "sha256": "c27ca96ed5b3390d901842a12047b6652c0c94e2485c75f2f1ff61a102a15eca"
+    },
+    {
+      "bytes": 1471,
+      "origin": "native-vision/ftm-only-20261113/tof_source.py",
+      "path": "providers/robot-vision/tof_source.py",
+      "sha256": "1d3a1eb07d0b5656405d63dbe55085e7c169d14f8984b26b3201ef63db1fefb6"
+    },
+    {
+      "bytes": 3379,
+      "origin": "native-vision/ftm-only-20261113/ultrasonic_source.py",
+      "path": "providers/robot-vision/ultrasonic_source.py",
+      "sha256": "33bb02a8dacb07ebfc930a2c86bd82ec31b75ed432e4bffed3ab2734724ae5e4"
+    },
+    {
+      "bytes": 11805,
+      "origin": "native-vision/ftm-only-20261113/video_jobs.py",
+      "path": "providers/robot-vision/video_jobs.py",
+      "sha256": "21268069b8c07a1b08372af08783a6f45a9dad9febc9af42dc9dce779c2cd7d8"
+    },
+    {
+      "bytes": 7030,
+      "origin": "native-vision/ftm-only-20261113/video_source.py",
+      "path": "providers/robot-vision/video_source.py",
+      "sha256": "c68d90858eb90d2e570bec12c07eef6641c5f5a82440247ca3b088c3f65fd539"
+    },
+    {
+      "bytes": 8637,
+      "origin": "native-vision/ftm-only-20261113/video_worker.py",
+      "path": "providers/robot-vision/video_worker.py",
+      "sha256": "a60f1641c1e0cde6828c9490bfb221cb3bf6430950552a41c5a287688bed2e33"
+    },
+    {
+      "bytes": 2965,
+      "origin": "native-vision/ftm-only-20261113/vision_config.py",
+      "path": "providers/robot-vision/vision_config.py",
+      "sha256": "d1b00ad22a2371a6329820c0859e15d83dbc4cfc9453d281239047d26abdfd32"
+    },
+    {
+      "bytes": 104189,
+      "origin": "native-vision/ftm-only-20261113/vision_service.py",
+      "path": "providers/robot-vision/vision_service.py",
+      "sha256": "48909e4b5fc533ff7d1fad2e0000062d048efafaa62f06ff035272a3bd0908cc"
+    },
+    {
+      "bytes": 78006,
+      "origin": "native-vision/ftm-only-20261113/vision_store.py",
+      "path": "providers/robot-vision/vision_store.py",
+      "sha256": "d9269e87e0baebba198c197a790f6cc0b51a615e4e46c9f6e7b2336cc431e82f"
+    },
+    {
+      "bytes": 23536,
+      "origin": "native-vision/ftm-only-20261113/world_atlas.py",
+      "path": "providers/robot-vision/world_atlas.py",
+      "sha256": "a93b90505a620f1348850a606c11b094a2d4b0a54c3c29c448ff69e8ea5db681"
+    },
+    {
+      "bytes": 4107,
+      "origin": "native-vision/ftm-only-20261113/world_import.py",
+      "path": "providers/robot-vision/world_import.py",
+      "sha256": "daf30e54d9c321af3bb66206726e7af56f5fd00acb82f0a38992342234c1448b"
+    },
+    {
+      "bytes": 3415,
+      "origin": "native-vision/ftm-only-20261113/world_snapshot_stream.py",
+      "path": "providers/robot-vision/world_snapshot_stream.py",
+      "sha256": "3868356d34e2cc6c8ec07e5ef93033bce0c5820f0b2c5f82b8f3377761b5f23e"
+    },
+    {
+      "bytes": 12195,
+      "origin": "native-motion/provider-c4606f5a41bf7fa3/motion_model.py",
+      "path": "biomerte/motion_model.py",
+      "sha256": "d72de0bf3d0a599b9ade00d35289af3e97d1c631d3d8710e98deeeb77b53ca8b"
+    },
+    {
+      "bytes": 6651,
+      "origin": "native-motion/provider-c4606f5a41bf7fa3/motion_planning.py",
+      "path": "biomerte/motion_planning.py",
+      "sha256": "0450f33d74d0fdf5111abfbce6411a25d446cdcff84acb7974d3e7e999937557"
+    },
+    {
+      "bytes": 8963,
+      "origin": "native-motion/provider-c4606f5a41bf7fa3/motion_training.py",
+      "path": "biomerte/motion_training.py",
+      "sha256": "ac421d31aca10a0b3b2c3c805143a42dccd19c5f3f054c0a063504a1590676f3"
+    },
+    {
+      "bytes": 19803,
+      "origin": "native-motion/observer-motion-events-94c150d03b74/motion_tracking.py",
+      "path": "biomerte/motion_tracking.py",
+      "sha256": "0fe29118e7a88b8f988b03c72d82425302f9f1454ab041700b5207cee06c2901"
+    },
+    {
+      "bytes": 13822,
+      "origin": "native-motion/provider-c4606f5a41bf7fa3/biome_provider.py",
+      "path": "providers/rover-motion/biome_provider.py",
+      "sha256": "6c7ec5747d25dbee465cbbaf370165cc5a6e21c41f8db6fc8bda4c0a1aec7765"
+    },
+    {
+      "bytes": 6619,
+      "origin": "native-motion/observer-motion-events-94c150d03b74/rover-motion-observer.py",
+      "path": "providers/rover-motion/observer.py",
+      "sha256": "7730e832d349a1750f2638645fd85c394a004267e3fe048310603193f3b892e1"
+    },
+    {
+      "bytes": 8276,
+      "origin": "native-motion/training-stage-final/tests/test_motion_model.py",
+      "path": "tests/test_motion_model.py",
+      "sha256": "4e62859aa25e422271bc9a8143263e2da47064d92c190fb0f8a2e96912c0811a"
+    },
+    {
+      "bytes": 3498,
+      "origin": "native-motion/training-stage-final/tests/test_motion_planning.py",
+      "path": "tests/test_motion_planning.py",
+      "sha256": "85a56cf5779875208bb7325c3e0314a8e328dcf7a7e92118a1288f9048c4aeac"
+    },
+    {
+      "bytes": 6853,
+      "origin": "native-motion/training-stage-final/tests/test_motion_training.py",
+      "path": "tests/test_motion_training.py",
+      "sha256": "75cf84ddfea56bcc5f194e10035ab99a1042997637218fb3322f8498dc91f8fa"
+    },
+    {
+      "bytes": 7794,
+      "origin": "native-motion/training-stage-final/tests/test_motion_capabilities.py",
+      "path": "tests/test_motion_capabilities.py",
+      "sha256": "76445c024b1614e797bf58eac673ca3ee4fba46c5c311c68c66e5fe66e7728ac"
+    }
+  ],
+  "hash_scope": "Original installed source bytes before portability adaptations.",
+  "schema": "biomerte.worker-source-import/1",
+  "source": "installed-live-worker-implementations",
+  "upstream_base": "c76d819629fd388d9a60cefc8bb0f1d6e801b467"
+}

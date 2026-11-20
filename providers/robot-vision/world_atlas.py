@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -154,10 +155,12 @@ class WorldAtlas:
         self.db.commit()
         self.cursor_key = self.db.execute("SELECT value FROM atlas_meta WHERE key=\'cursor_key\'").fetchone()[0].encode()
         self._landmarks = {}
+        self._pair_fits = {}
         self._stop = threading.Event()
         self.thread = None
         self.error = None
         self.service = None
+        self.registration_status = None
 
     def register(self, map_id):
         with self.lock:
@@ -167,7 +170,7 @@ class WorldAtlas:
                 self.db.execute("UPDATE world SET revision=revision+1")
             self.db.commit()
 
-    def update(self, checkpoint):
+    def update(self, checkpoint, *, align=True):
         mid, revision = checkpoint["map_id"],checkpoint["map_revision"]
         self.register(mid)
         with self.lock:
@@ -177,6 +180,7 @@ class WorldAtlas:
         landmarks = checkpoint_landmarks(checkpoint)
         with self.lock:
             self._landmarks[mid] = landmarks
+            self._pair_fits = {pair: fit for pair, fit in self._pair_fits.items() if mid not in pair}
             root = self.db.execute("SELECT root FROM world").fetchone()[0]
             if root is None and len(landmarks)>=3:
                 self.db.execute("UPDATE world SET root=?",(mid,))
@@ -187,7 +191,8 @@ class WorldAtlas:
                             (revision,checkpoint["checkpoint_id"],mid))
             self.db.execute("UPDATE world SET revision=revision+1")
             self.db.commit()
-        self.align_pending()
+        if align:
+            self.align_pending()
 
     def align_pending(self):
         # Native optimization can revise local coordinates after a link was fitted.
@@ -196,6 +201,12 @@ class WorldAtlas:
             root = self.db.execute("SELECT root FROM world").fetchone()[0]
             if root is None:
                 return
+            registrations = {}
+            def registration(mid):
+                if mid not in registrations:
+                    registrations[mid] = self.registration_status(mid, self._revision(mid))
+                return registrations[mid]
+
             connected = {root:np.eye(4)}
             evidence = {}
             pending = set(self._landmarks)-{root}
@@ -204,7 +215,26 @@ class WorldAtlas:
                 for mid in sorted(pending):
                     candidates = []
                     for reference,world_reference in connected.items():
-                        fit = fit_submap(self._landmarks[mid],self._landmarks[reference])
+                        source_registration = registration(mid) if self.registration_status else None
+                        reference_registration = registration(reference) if self.registration_status else None
+                        if (source_registration and reference_registration and
+                                source_registration.get("valid") and reference_registration.get("valid") and
+                                source_registration.get("frame_id") == reference_registration.get("frame_id") and
+                                source_registration.get("baseline_epoch") == reference_registration.get("baseline_epoch") and
+                                source_registration.get("baseline_revision") == reference_registration.get("baseline_revision")):
+                            native_transform = (np.linalg.inv(np.asarray(reference_registration["T_anchor_map"])) @
+                                                np.asarray(source_registration["T_anchor_map"]))
+                            t = world_reference @ native_transform
+                            candidates.append((source_registration.get("training_count", 30), t, reference,
+                                {"method": "motion_compensated_FTM_registration",
+                                 "inliers": source_registration.get("training_count", 30),
+                                 "tolerance": source_registration.get("acceptance_m", 1.),
+                                 "frame_id": source_registration["frame_id"],
+                                 "baseline_epoch": source_registration["baseline_epoch"]}))
+                        pair = (mid, reference)
+                        if pair not in self._pair_fits:
+                            self._pair_fits[pair] = fit_submap(self._landmarks[mid], self._landmarks[reference])
+                        fit = self._pair_fits[pair]
                         if fit:
                             t = world_reference @ np.asarray(fit["T_target_source"])
                             candidates.append((fit["inliers"],t,reference,fit))
@@ -231,12 +261,51 @@ class WorldAtlas:
                      json.dumps(evidence.get(mid,{"method":"world_origin"})) if t is not None else None,mid))
             self.db.commit()
 
+    def _revision(self, map_id):
+        row = self.db.execute("SELECT revision FROM submaps WHERE id=?", (map_id,)).fetchone()
+        return None if row is None else row[0]
+
+    def _world_registration(self, root, rows):
+        if self.registration_status is None:
+            return {"valid": False, "status": "awaiting_motion_registration"}
+        survey = None
+        baseline_identity = {}
+        ordered = sorted(rows, key=lambda row: row[0] != root)
+        for mid, revision, raw, _, _ in ordered:
+            if raw is None or revision is None:
+                continue
+            registration = self.registration_status(mid, revision)
+            if survey is None:
+                survey = registration.get("surveyed_world")
+                baseline_identity = {key:registration.get(key) for key in
+                                     ("frame_id", "baseline_epoch", "baseline_revision")}
+            if not registration.get("valid"):
+                continue
+            try:
+                t = np.asarray(registration["T_anchor_map"]) @ np.linalg.inv(np.asarray(json.loads(raw)))
+            except (ValueError, KeyError, np.linalg.LinAlgError):
+                continue
+            return dict(registration, T_anchor_map=t.tolist(), map_id=self.world_id,
+                        reference_map_id=mid, reference_map_revision=revision)
+        result = dict(baseline_identity, valid=False, status="awaiting_world_reference_registration")
+        if survey is None and getattr(self, "survey_status", None):
+            survey = self.survey_status()
+        if survey:
+            result.update(surveyed_world=survey, floor=survey["ground_plane"])
+        return result
+
     def status(self):
         with self.lock:
             root, revision = self.db.execute("SELECT root,revision FROM world").fetchone()
             rows = list(self.db.execute("SELECT id,revision,transform,evidence,checkpoint_id FROM submaps ORDER BY rowid"))
+        registration = self._world_registration(root, rows)
+        registration["map_revision"] = revision
         return {"world_id":self.world_id,"revision":revision,"root_map_id":root,
-                "units":"arbitrary","scale_status":"unobserved","floor_alignment":"unmeasured",
+                "tof_registration":registration,
+                "units":"arbitrary","scale_status":"unobserved",
+                "floor_alignment":("surveyed_enu_registered" if registration.get("valid") else "surveyed_enu_unregistered")
+                    if registration.get("surveyed_world") else "unmeasured",
+                "surveyed_world":registration.get("surveyed_world"),
                 "submaps":[{"map_id":m,"revision":r,"alignment":"unlocalized" if t is None else "aligned",
                             "T_world_map":None if t is None else json.loads(t),
                             "evidence":None if e is None else json.loads(e),"checkpoint_id":c}
@@ -250,14 +319,24 @@ class WorldAtlas:
             encoded, signature = cursor.rsplit(".",1)
             if not hmac.compare_digest(signature,hmac.new(self.cursor_key,encoded.encode(),hashlib.sha256).hexdigest()):
                 raise ValueError("invalid_world_cursor")
-            state = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
+            if encoded.startswith("z1."):
+                payload = zlib.decompress(base64.urlsafe_b64decode(encoded[3:]))
+            else:
+                payload = base64.urlsafe_b64decode(encoded)
+            state = json.loads(payload)
             if state["world_id"] != self.world_id:
                 raise ValueError("wrong_world_cursor")
         else:
             status=self.status()
             state={"world_id":self.world_id,"revision":status["revision"],"submaps":status["submaps"],
-                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None,"sonar_offset":0}
+                   "root_map_id":status["root_map_id"],"index":0,"local_cursor":None,"sonar_offset":0,"survey_after":"",
+                   "tof_registration":status.get("tof_registration")}
         entities=[]
+        seed=getattr(self,'survey_lidar',None)
+        if seed is None:state['survey_after']=None
+        if seed is not None and 'survey_after' in state and state['survey_after'] is not None:
+            entities,more=seed.page(state['revision'],state['survey_after'],limit)
+            state['survey_after']=entities[-1]['entity_id'] if more else None
         while state["index"] < len(state["submaps"]) and len(entities)<limit:
             item=state["submaps"][state["index"]]
             if item["T_world_map"] is None or item["revision"] is None:
@@ -265,7 +344,7 @@ class WorldAtlas:
                 continue
             page = ({"entities": [], "next_cursor": None} if state["local_cursor"] == "sonar_only" else
                 self.store.read_map(item["map_id"],revision=item["revision"],
-                kinds=["keyframe","sparse_point"],cursor=state["local_cursor"],limit=limit-len(entities)))
+                kinds=["keyframe","sparse_point","landmark"],cursor=state["local_cursor"],limit=limit-len(entities)))
             t=np.asarray(item["T_world_map"])
             local_entities = list(page["entities"])
             if not page.get("next_cursor") and getattr(self, "sonar_entities", None):
@@ -283,6 +362,10 @@ class WorldAtlas:
                 data["source_map_id"]=item["map_id"]
                 if entity["kind"]=="sparse_point":
                     data["xyz"]=transform_points(t,[data["xyz"]])[0].tolist()
+                elif entity["kind"] == "landmark":
+                    for name in ("xyz", "position"):
+                        if data.get(name) is not None:
+                            data[name] = transform_points(t,[data[name]])[0].tolist()
                 elif "T_map_camera" in data:
                     pose=np.asarray(data["T_map_camera"])
                     world_pose=np.eye(4)
@@ -299,12 +382,15 @@ class WorldAtlas:
                 state["index"]+=1
                 state["sonar_offset"] = 0
         next_cursor=None
-        if state["index"]<len(state["submaps"]):
-            encoded=base64.urlsafe_b64encode(json.dumps(state,separators=(",",":")).encode()).decode()
+        if state["index"]<len(state["submaps"]) or state.get("survey_after") is not None:
+            payload = json.dumps(state, separators=(",", ":")).encode()
+            encoded = "z1." + base64.urlsafe_b64encode(zlib.compress(payload)).decode()
             next_cursor=encoded+"."+hmac.new(self.cursor_key,encoded.encode(),hashlib.sha256).hexdigest()
         return {"map":{"map_id":self.world_id,"revision":state["revision"],
                        "metadata":{"kind":"continuous_world_atlas","units":"arbitrary",
-                                   "scale_status":"unobserved","root_map_id":state["root_map_id"]}},
+                                   "scale_status":"unobserved","root_map_id":state["root_map_id"],
+                                   "tof_registration":state.get("tof_registration"),
+                                   "surveyed_world":(state.get("tof_registration") or {}).get("surveyed_world")}},
                 "entities":entities,"next_cursor":next_cursor,"submaps":state["submaps"],
                 "unlocalized_submaps":[x for x in state["submaps"] if x["T_world_map"] is None]}
 
@@ -320,15 +406,26 @@ class WorldAtlas:
                     try:
                         cp=self.store.latest_backend_checkpoint(info["map_id"])
                         if cp.get("availability")=="available":
-                            self.update(cp)
+                            self.update(cp, align=False)
                     except Exception:
                         LOG.exception("World import unavailable for %s; preserving its stored map",info["map_id"])
+                self.align_pending()
                 while not self._stop.wait(1):
                     try:
                         cp=self.store.latest_backend_checkpoint(service.map_id)
                         if cp.get("availability")=="available":
                             self.update(cp)
                         self.imports.drain_one(self.store, self, service.map_id)
+                        # Registration can qualify between backend checkpoints.
+                        signature = None
+                        if self.registration_status:
+                            r = self.registration_status(service.map_id, service.revision)
+                            signature = (r.get("valid"), r.get("frame_id"), r.get("baseline_epoch"),
+                                         r.get("baseline_revision"), json.dumps(r.get("T_anchor_map")),
+                                         json.dumps(r.get("floor", {}).get("T_floor_anchor")), r.get("status"))
+                        if signature != getattr(self, "_registration_signature", None):
+                            self._registration_signature = signature
+                            self.align_pending()
                         service._recover_world_submap()
                         self.error=None
                     except Exception as exc:
