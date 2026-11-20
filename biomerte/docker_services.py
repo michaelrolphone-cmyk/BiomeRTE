@@ -7,6 +7,7 @@ capability leases and explicit ownership transfer are never changed here.
 """
 from __future__ import print_function
 import argparse
+import base64
 import hashlib
 import http.client
 import json
@@ -19,6 +20,7 @@ import socket
 import signal
 import sqlite3
 import ssl
+import stat
 import threading
 import time
 import uuid
@@ -112,13 +114,21 @@ class UnixConnection(http.client.HTTPConnection):
 
 class DockerEngine:
     """Docker Engine API 1.24 works with the existing 17.06 and 24.x engines."""
-    def __init__(self, socket_path="/var/run/docker.sock", timeout=4, operation_timeout=30):
+    def __init__(self, socket_path="/var/run/docker.sock", timeout=4, operation_timeout=30,
+                 registry_auth_file=None):
+        if registry_auth_file is not None and (not isinstance(registry_auth_file, str) or not os.path.isabs(registry_auth_file)):
+            raise ValueError("registry_auth_file must be an absolute private file path")
         self.socket_path, self.timeout = socket_path, timeout
         self.operation_timeout = operation_timeout
+        self.registry_auth_file = registry_auth_file
 
-    def request(self, method, path, value=None, timeout="default", stream=False):
+    def request(self, method, path, value=None, timeout="default", stream=False, registry_auth=None):
         conn = UnixConnection(self.socket_path, self.timeout if timeout == "default" else timeout)
         headers = {"Content-Type": "application/json"}
+        if registry_auth is not None:
+            if method != "POST" or not path.startswith("/v1.24/images/create?"):
+                raise DockerError("Registry authentication is only valid for image pulls")
+            headers["X-Registry-Auth"] = registry_auth
         data = None if value is None else canonical(value).encode("utf-8")
         try:
             conn.request(method, path, body=data, headers=headers)
@@ -153,11 +163,70 @@ class DockerEngine:
                 return None
             raise
 
+
+    def _registry_auth_header(self, image_ref):
+        path = getattr(self, "registry_auth_file", None)
+        if path is None:
+            return None
+        descriptor = None
+        try:
+            # A directory bind makes atomic host-side file rotation visible.
+            # Refuse symlinks and nonregular files before reading any bytes.
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) not in (0o400, 0o600):
+                raise ValueError("Unsafe credential file")
+            with os.fdopen(descriptor, "r", encoding="utf-8") as source:
+                descriptor = None
+                config = json.load(source)
+            if not isinstance(config, dict) or set(config) != {"auths"} or not isinstance(config["auths"], dict):
+                raise ValueError("Expected a dedicated Docker auth file")
+            auths = config["auths"]
+            if any(not isinstance(key, str) or not re.match(r"^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$", key)
+                   or not isinstance(value, dict) for key, value in auths.items()):
+                raise ValueError("Expected exact registry authority keys")
+            first = image_ref.split("/", 1)[0]
+            registry = first.lower() if "." in first or ":" in first or first == "localhost" else "docker.io"
+            credentials = auths.get(registry)
+            if credentials is None:
+                return None
+            if set(credentials) == {"auth"}:
+                encoded = credentials["auth"]
+                if not isinstance(encoded, str):
+                    raise ValueError("Invalid Docker auth")
+                decoded = base64.b64decode(encoded.encode("ascii"), validate=True).decode("utf-8")
+                username, separator, password = decoded.partition(":")
+                if not separator:
+                    raise ValueError("Invalid Docker auth")
+            elif set(credentials) == {"username", "password"}:
+                username, password = credentials["username"], credentials["password"]
+            else:
+                raise ValueError("Credential helpers and ambiguous auth entries are unsupported")
+            if (not isinstance(username, str) or not isinstance(password, str) or not username or not password or
+                    any(char in username or char in password for char in ("\x00", "\r", "\n"))):
+                raise ValueError("Invalid registry credentials")
+            value = {"username": username, "password": password, "serveraddress": registry}
+            return base64.urlsafe_b64encode(canonical(value).encode("utf-8")).decode("ascii")
+        except Exception:
+            # Neither credential bytes nor parser/OS messages enter runner state.
+            raise DockerError("Registry authentication file is unavailable or invalid") from None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
     def pull(self, image_ref):
         if image_ref.startswith("sha256:"):
             raise DockerError("A local immutable image id must already exist on this host")
-        self.request("POST", "/v1.24/images/create?" + urlencode({"fromImage": image_ref}),
-                     timeout=None, stream=True)
+        header = self._registry_auth_header(image_ref)
+        options = {"timeout": None, "stream": True}
+        if header is not None:
+            options["registry_auth"] = header
+        try:
+            self.request("POST", "/v1.24/images/create?" + urlencode({"fromImage": image_ref}), **options)
+        except Exception:
+            if header is not None:
+                raise DockerError("Authenticated registry image pull failed") from None
+            raise
         if self.image(image_ref) is None:
             raise DockerError("Pull completed without the requested digest image")
 
@@ -362,7 +431,8 @@ class Runner:
             raise ValueError("Invalid worker_id")
         self.incarnation = config.get("test_incarnation") or uuid.uuid4().hex
         self.engine = engine or DockerEngine(config.get("docker_socket", "/var/run/docker.sock"),
-                        operation_timeout=config.get("docker_request_timeout_s", 30))
+                        operation_timeout=config.get("docker_request_timeout_s", 30),
+                        registry_auth_file=config.get("registry_auth_file"))
         self.client = client or CoordinatorClient(config["coordinator_url"], config["coordinator_key_file"],
                         config.get("request_timeout_s", 3), config.get("allow_http_for_testing", False))
         self.clock = clock or time.monotonic
