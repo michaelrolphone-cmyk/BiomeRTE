@@ -14,6 +14,7 @@ The FM adapter intentionally retains its exact Raspberry Pi 3 Model B Rev 1.2 an
 
 - Both daemons can signal readiness through an inherited pipe, so the provider starts only after that daemon has bound its real socket.
 - FM can read an image-generated backend path/hash manifest. Without it the native original backend path and exact hash remain the defaults. The image manifest pins its freshly compiled backend.
+- FM reads the same host device-tree model/ranges through a read-only mount at /run/pi-device-tree, avoiding mounts into the container's proc filesystem. Native defaults remain unchanged.
 - One FM fixture normalizes a macOS temporary-directory symlink; runtime behavior is unchanged.
 - The container launcher reuses the enrolled provider home and rewrites only each offer's adapter argv into an ephemeral manifest. It does not pair, initialize identities, change contracts/resources, or overwrite the native manifest.
 - Shutdown leaves the FM watchdog time to finish its existing clock cleanup before the container init exits.

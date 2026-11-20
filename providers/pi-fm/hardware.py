@@ -7,11 +7,12 @@ import time
 
 class Clock:
     def __init__(self):
-        with open('/proc/device-tree/model', 'rb') as stream:
+        tree = os.environ.get('BIOMERTE_PI_DEVICE_TREE', '/proc/device-tree')
+        with open(os.path.join(tree, 'model'), 'rb') as stream:
             model = stream.read().rstrip(b'\0').decode('ascii')
         if model != 'Raspberry Pi 3 Model B Rev 1.2':
             raise RuntimeError('This hardware adapter is qualified only for ProximityRF Pi 3 Model B Rev 1.2')
-        with open('/proc/device-tree/soc/ranges', 'rb') as stream:
+        with open(os.path.join(tree, 'soc/ranges'), 'rb') as stream:
             ranges = stream.read(12)
         if len(ranges) != 12 or struct.unpack('>III', ranges)[1] != 0x3f000000:
             raise RuntimeError('Unexpected peripheral mapping')

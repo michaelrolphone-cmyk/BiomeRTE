@@ -37,7 +37,7 @@ class PackagingTests(unittest.TestCase):
         args = launch.argv(c)
         self.assertNotIn("--privileged", args)
         self.assertIn("/dev/mem:/dev/mem:rw", args)
-        self.assertIn("/sys/firmware/devicetree/base:/proc/device-tree:ro", args)
+        self.assertIn("/sys/firmware/devicetree/base:/run/pi-device-tree:ro", args)
         self.assertIn("/run/lock/capabilities-fm-transmit.lock:/run/lock/capabilities-fm-transmit.lock:rw", args)
         self.assertNotIn("--security-opt", args)  # sudo worker needs the declared setuid transition.
     def test_sdr_no_unrestricted_device_or_privilege_access(self):

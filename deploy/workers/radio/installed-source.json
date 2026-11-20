@@ -2,7 +2,8 @@
   "adaptations": [
     "optional daemon readiness pipe",
     "image-generated FM backend path/hash manifest with native defaults retained",
-    "macOS fixture temporary-directory normalization"
+    "macOS fixture temporary-directory normalization",
+    "image device-tree metadata mount outside proc with native default retained"
   ],
   "backend_binary_observed": {
     "path": "/home/pi/Downloads/fm/fm_transmitter-master/fm_transmitter",
@@ -115,7 +116,7 @@
     },
     {
       "destination": "providers/pi-fm/hardware.py",
-      "packaged_sha256": "0c4e1064c442176b404c598f925bd033dec144abcb23f6bd3920718740bf6b16",
+      "packaged_sha256": "a5874e380ba6be2c62b03d8e51388ca75e401a700d1fd14ca86b7635faf2290e",
       "sha256": "0c4e1064c442176b404c598f925bd033dec144abcb23f6bd3920718740bf6b16",
       "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/hardware.py"
     },

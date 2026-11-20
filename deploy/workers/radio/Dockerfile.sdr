@@ -12,6 +12,7 @@ COPY providers/pi-sdr /app/providers/pi-sdr
 COPY deploy/workers/radio/entrypoint.py deploy/workers/radio/launch.py /app/deploy/workers/radio/
 COPY deploy/workers/radio/tests /app/deploy/workers/radio/tests
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 BIOMERTE_RADIO_KIND=sdr
+RUN chmod -R a+rX /app
 USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "python3", "/app/deploy/workers/radio/entrypoint.py"]
 CMD ["check"]
