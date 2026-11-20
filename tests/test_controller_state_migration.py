@@ -90,6 +90,24 @@ class ControllerMigration(unittest.TestCase):
         self.assertEqual({"event_floor": 3},
                          records(self.export())[("_meta", "operational_retention")])
 
+    def test_unfinished_source_coordination_blocks_adoption(self):
+        for kind, value in (
+                ("_session_scope", {"session": "pending", "kind": "work", "key": "pi-work"}),
+                ("_ownership_pending", {"phase": "adoption_pending"}),
+                ("_coordination", {"state": "open"}),
+                ("_receipt", {"signature": "x", "external_pending": True})):
+            with self.subTest(kind=kind):
+                self.put(self.pi, kind, "active", value)
+                plan = self.plan()
+                self.assertFalse(plan["ready"])
+                self.assertTrue(any(item["kind"] == kind for item in plan["blocked"]))
+                self.pi["records"] = [row for row in self.pi["records"] if row[:2] != [kind, "active"]]
+
+    def test_settled_ownership_history_is_preserved(self):
+        current = {"owner": PI, "local": PI, "epoch": 7, "aliases": ["worker"]}
+        self.put(self.pi, "_ownership_current", "responsibility", current)
+        self.assertEqual(current, records(self.export())[("_ownership_current", "responsibility")])
+
     def test_event_domain_with_subscription_blocks_retirement(self):
         self.put(self.mac, "subscriptions", "pending", {"id": "pending", "cursor": 1})
         plan = self.plan()

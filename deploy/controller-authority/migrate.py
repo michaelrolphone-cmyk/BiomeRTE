@@ -338,6 +338,14 @@ def _build(snapshots, baseline, target, migration_id, policy):
               "target": target, "policy": copy.deepcopy(policy),
               "sources": [inventory(sources[source][0]) for source in sorted(sources)],
               "collisions": [], "blocked": [], "archive_records": 0}
+    for source, (snapshot, rows) in sorted(sources.items()):
+        for (kind, key), value in sorted(rows.items()):
+            if (kind in ("_session_scope", "_ownership_pending")
+                    or kind == "_coordination" and key in ("active", "pending")
+                    or kind == "_receipt" and isinstance(value, dict)
+                    and value.get("external_pending") is True):
+                report["blocked"].append({"source": source, "kind": kind, "id": key,
+                    "reason": "Unreconciled source coordination protocol must finish before migration"})
     for source in retired:
         report["blocked"].extend({"source": source, "kind": kind, "id": key, "reason": reason}
                                  for kind, key, reason in event_domain_blockers(sources[source][1]))

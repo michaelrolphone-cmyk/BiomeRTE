@@ -129,6 +129,41 @@ marker or marker bound to a different source digest. Its output contains state
 and authorization for CheckpointStore.bootstrap; use the runtime's chunking
 layer for distribution.
 
+## Freeze and verify through independent maintenance
+
+The source-fence installer closes the hash-to-marker race by holding SQLite
+BEGIN IMMEDIATE while streaming the current canonical digest and atomically
+installing the complete marker. Patched native stores recheck their admission
+guard after obtaining that same write lock. No canonical database row changes.
+
+    python3 deploy/controller-authority/deploy.py freeze \
+      --home /private/source-home \
+      --marker /private/migration/source-controller-authority.json \
+      --receipt /private/migration/source-marker-installed.json
+
+An earlier unpatched process must already be stopped; this utility cannot make
+it honor a guard it does not implement. The receipt therefore explicitly says
+runtime_admission_verified=false. Verify actual guarded native calls separately.
+
+On each host, verify the independently observed root reference and every
+content-addressed block/shard before admission or takeover qualification:
+
+    python3 deploy/controller-authority/deploy.py verify-replica \
+      --config /private/helper/service.json \
+      --expected /private/migration/current-checkpoint-reference.json \
+      --receipt /private/migration/replica-verified.json
+
+The expected input is either an exact service_id/sequence/digest reference or
+the initial signed root packet. Verification authenticates scope and signature,
+checks the expected current head, reads all blocks, verifies each shard digest
+and canonical kind/ID/prefix ordering, and reports only counts/hashes. It never
+installs, advances, restores or starts the authority.
+
+Visible unfinished session reservations, ownership handoffs or external
+pending request receipts block migration. Also inspect and back up the source
+coordination sidecar through independent maintenance; a site-only inventory
+does not prove that sidecar has no undelivered packages.
+
 ## Merge rules
 
 - Equal and disjoint records retain their exact identities and values.
