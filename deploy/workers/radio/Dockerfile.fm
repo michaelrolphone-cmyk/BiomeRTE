@@ -22,11 +22,13 @@ COPY deploy/workers/radio/tests /app/deploy/workers/radio/tests
 COPY --from=backend /fm_transmitter /usr/local/lib/biomerte/fm_transmitter
 COPY deploy/workers/radio/fm-backend/LICENSE /usr/share/doc/biomerte-fm-backend/LICENSE
 RUN python3 -c 'import hashlib,json,pathlib; p=pathlib.Path("/usr/local/lib/biomerte/fm_transmitter"); pathlib.Path("/usr/local/lib/biomerte/fm-backend.json").write_text(json.dumps({"path":str(p),"sha256":hashlib.sha256(p.read_bytes()).hexdigest()})+"\n")' \
-    && printf '%s\n' 'Defaults env_keep += "BIOMERTE_FM_BACKEND_MANIFEST"' 'pi ALL=(root) NOPASSWD: /usr/bin/python3 /app/providers/pi-fm/worker.py /home/pi/.local/share/fm-transmitter/job-*' > /etc/sudoers.d/biomerte-fm \
+    && printf '%s\n' 'Defaults env_keep += "BIOMERTE_FM_BACKEND_MANIFEST BIOMERTE_PI_DEVICE_TREE"' 'pi ALL=(root) NOPASSWD: /usr/bin/python3 /app/providers/pi-fm/worker.py /home/pi/.local/share/fm-transmitter/job-*' > /etc/sudoers.d/biomerte-fm \
     && chmod 0440 /etc/sudoers.d/biomerte-fm \
     && visudo -cf /etc/sudoers.d/biomerte-fm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 BIOMERTE_RADIO_KIND=fm \
-    BIOMERTE_FM_BACKEND_MANIFEST=/usr/local/lib/biomerte/fm-backend.json
+    BIOMERTE_FM_BACKEND_MANIFEST=/usr/local/lib/biomerte/fm-backend.json \
+    BIOMERTE_PI_DEVICE_TREE=/run/pi-device-tree
+RUN chmod -R a+rX /app
 USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "python3", "/app/deploy/workers/radio/entrypoint.py"]
 CMD ["check"]

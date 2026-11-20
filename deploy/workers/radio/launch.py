@@ -68,7 +68,7 @@ def argv(config, docker="/usr/bin/docker"):
         for cap in ("SYS_RAWIO", "SETUID", "SETGID", "DAC_OVERRIDE", "AUDIT_WRITE"):
             result += ["--cap-add", cap]
         result += ["--device", "/dev/mem:/dev/mem:rw",
-                   "-v", "/sys/firmware/devicetree/base:/proc/device-tree:ro",
+                   "-v", "/sys/firmware/devicetree/base:/run/pi-device-tree:ro",
                    "-v", "/run/lock/capabilities-fm-transmit.lock:/run/lock/capabilities-fm-transmit.lock:rw"]
         if c.get("audio_directory"):
             result += ["-v", c["audio_directory"] + ":" + c["audio_directory"] + ":ro"]
