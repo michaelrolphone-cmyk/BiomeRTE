@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 from urllib.request import Request, build_opener, HTTPSHandler
 from urllib.parse import urlparse
 
@@ -307,11 +308,25 @@ class Etcd:
         return head
 
 
+_CONNECTIONS_LOCK = threading.RLock()
+_IDLE_CONNECTIONS = []
+
+
+def _close_connections(key):
+    with _CONNECTIONS_LOCK:
+        idle = [db for owner, db in _IDLE_CONNECTIONS if owner is key]
+        _IDLE_CONNECTIONS[:] = [(owner, db) for owner, db in _IDLE_CONNECTIONS if owner is not key]
+    for db in idle:
+        db.close()
+
+
 class Store:
     def __init__(self, directory, realm, remote=None):
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        self._connection_key = object()
+        self._connection_finalizer = weakref.finalize(self, _close_connections, self._connection_key)
         self._writer_diagnostic = None
         self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
@@ -379,9 +394,52 @@ class Store:
             raise
 
     def connect(self):
-        con = sqlite3.connect(self.path, timeout=12, isolation_level=None)
+        con = sqlite3.connect(self.path, timeout=12, isolation_level=None, check_same_thread=False)
         con.execute('PRAGMA synchronous=FULL')
         return con
+
+    @contextlib.contextmanager
+    def connection(self):
+        """Lease one warm connection exclusively, with a fresh transaction.
+
+        Opening a connection and loading the schema for every request contends
+        with SQLite 3.8 WAL I/O on the Pi. Reuse connections, never snapshots.
+        The process-wide idle bound limits handles and page caches even when
+        applications form reference cycles; concurrent requests remain unbounded.
+        """
+        db = None
+        with _CONNECTIONS_LOCK:
+            for index in range(len(_IDLE_CONNECTIONS) - 1, -1, -1):
+                if _IDLE_CONNECTIONS[index][0] is self._connection_key:
+                    unused, db = _IDLE_CONNECTIONS.pop(index)
+                    break
+        if db is None:
+            db = self.connect()
+        try:
+            yield db
+        finally:
+            reusable = False
+            try:
+                db.rollback()
+                db.execute('PRAGMA query_only=OFF')
+                reusable = True
+            except sqlite3.Error:
+                pass
+            evicted = None
+            if reusable:
+                with _CONNECTIONS_LOCK:
+                    _IDLE_CONNECTIONS.append((self._connection_key, db))
+                    if len(_IDLE_CONNECTIONS) > 8:
+                        unused, evicted = _IDLE_CONNECTIONS.pop(0)
+                db = None
+            if db is not None:
+                db.close()
+            if evicted is not None:
+                evicted.close()
+
+    def close(self):
+        """Release idle connections; checked-out operations retain ownership."""
+        _close_connections(self._connection_key)
 
     def _report_writer_timeout(self):
         # Diagnostic only: never emit record values, callback arguments or locals.
@@ -431,7 +489,7 @@ class Store:
 
     def _execute(self, fn, cached=False, read_only=False):
         from .gateway_journal import JournalConflict, JournalReplay
-        with contextlib.closing(self.connect()) as db:
+        with self.connection() as db:
             entries = {}
             checkpoint = None
             if self.remote and not cached:
