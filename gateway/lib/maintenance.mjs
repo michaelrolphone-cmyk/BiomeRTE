@@ -54,10 +54,11 @@ export async function maintenancePhone(env,envelope){
  return JSON.parse((await env.DB.prepare('SELECT body FROM maintenance_audit WHERE id=?').bind(auditId).first()).body);
 }
 async function maintenanceSchema(db){
- await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_hosts(id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,seen REAL,retention_checked REAL,phone_key TEXT NOT NULL,phone_device TEXT NOT NULL,site TEXT NOT NULL)').run();
+ await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_hosts(id TEXT PRIMARY KEY,key_hash TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,seen REAL,retention_checked REAL,phone_key TEXT NOT NULL,phone_device TEXT NOT NULL,site TEXT NOT NULL,agent TEXT,diagnostics TEXT)').run();
  await db.prepare('CREATE TABLE IF NOT EXISTS maintenance_jobs(id TEXT PRIMARY KEY,host TEXT NOT NULL,request TEXT NOT NULL,state TEXT NOT NULL,result TEXT,confirmation TEXT,created REAL NOT NULL,updated REAL NOT NULL,retention_version INTEGER,result_digest TEXT,result_bytes INTEGER,completed REAL,result_retired INTEGER NOT NULL DEFAULT 0,request_digest TEXT,request_bytes INTEGER,approval_digest TEXT,request_retired INTEGER NOT NULL DEFAULT 0,execution_digest TEXT)').run();
  const hostColumns=(await db.prepare('PRAGMA table_info(maintenance_hosts)').all()).results;
  if(!hostColumns.some(c=>c.name==='retention_checked')){try{await db.prepare('ALTER TABLE maintenance_hosts ADD COLUMN retention_checked REAL').run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
+ for(const name of ['agent','diagnostics'])if(!hostColumns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE maintenance_hosts ADD COLUMN '+name+' TEXT').run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
  const columns=(await db.prepare('PRAGMA table_info(maintenance_jobs)').all()).results;
  for(const [name,type] of [['retention_version','INTEGER'],['result_digest','TEXT'],['result_bytes','INTEGER'],['completed','REAL'],['result_retired','INTEGER NOT NULL DEFAULT 0'],['request_digest','TEXT'],['request_bytes','INTEGER'],['approval_digest','TEXT'],['request_retired','INTEGER NOT NULL DEFAULT 0'],['execution_digest','TEXT']]){
   if(!columns.some(c=>c.name===name)){try{await db.prepare('ALTER TABLE maintenance_jobs ADD COLUMN '+name+' '+type).run()}catch(e){if(!String(e.message).includes('duplicate column'))throw e}}
@@ -81,7 +82,7 @@ export async function maintenanceCall(env,op,a,id){
   if(typeof env.maintenanceActor!=='string'||!env.maintenanceActor)throw Error('Authenticated owner required for historical retention');
   return maintenanceHistoryApply(env,a.plan,a.expected_sha256);
  }
- if(op==='maintenance.status')return {hosts:(await db.prepare('SELECT id,enabled,seen FROM maintenance_hosts').all()).results,jobs:(await db.prepare('SELECT id,host,state,created,updated FROM maintenance_jobs ORDER BY created DESC').all()).results};
+ if(op==='maintenance.status')return {hosts:(await db.prepare('SELECT id,enabled,seen,agent,diagnostics FROM maintenance_hosts').all()).results.map(h=>({id:h.id,enabled:h.enabled,seen:h.seen,...(h.agent?{agent:h.agent,diagnostics:h.diagnostics?JSON.parse(h.diagnostics):null}:{})})),jobs:(await db.prepare('SELECT id,host,state,created,updated FROM maintenance_jobs ORDER BY created DESC').all()).results};
  if(op==='maintenance.result'){
   const row=await db.prepare('SELECT id,host,state,result,created,updated FROM maintenance_jobs WHERE id=?').bind(a.id).first();
   return row?{...row,result:row.result?JSON.parse(row.result):null}:null;
@@ -108,15 +109,31 @@ export async function maintenanceCall(env,op,a,id){
   return JSON.parse((await db.prepare('SELECT body FROM maintenance_audit WHERE id=?').bind(auditId).first()).body).response;
  }
  if(op==='maintenance.enroll'){
-  const identity=await runTool(env,'biome_invoke',{operation:'decision.maintenance_identity',arguments:{},request_id:'maintenance-identity-'+id,realm:'site'});
-  if(identity.isError)throw Error('Controller-verified Android identity required for initial enrollment');
-  const verified=identity.structuredContent??JSON.parse(identity.content[0].text);
-  a={...a,phone_key:verified.key,phone_device:verified.device,site:verified.site};
+  if(a.agent!==undefined&&a.agent!=='linux-v1')throw Error('Unknown maintenance agent protocol');
+  if(a.agent==='linux-v1'){
+   if(typeof env.maintenanceActor!=='string'||!env.maintenanceActor)throw Error('Authenticated owner required for Linux enrollment');
+   // New Linux hosts use the owner-authenticated gateway directly. Legacy Mac
+   // enrollment and signed phone settlement retain their original protocol.
+   a={...a,phone_key:'',phone_device:'',site:''};
+  }else{
+   const identity=await runTool(env,'biome_invoke',{operation:'decision.maintenance_identity',arguments:{},request_id:'maintenance-identity-'+id,realm:'site'});
+   if(identity.isError)throw Error('Controller-verified Android identity required for initial enrollment');
+   const verified=identity.structuredContent??JSON.parse(identity.content[0].text);
+   a={...a,phone_key:verified.key,phone_device:verified.device,site:verified.site};
+  }
   if(typeof a.phone_key!=='string'||typeof a.phone_device!=='string'||typeof a.site!=='string')throw Error('Existing Android approval identity required');
   if(typeof a.host!=='string'||!/^[a-zA-Z0-9_.-]+$/.test(a.host)||!/^[0-9a-f]{64}$/.test(a.key_hash))throw Error('Expected host and SHA256 credential verifier');
-  const prior=await db.prepare('SELECT key_hash,phone_key,phone_device,site FROM maintenance_hosts WHERE id=?').bind(a.host).first();
-  if(prior&&(prior.key_hash!==a.key_hash||prior.phone_key!==a.phone_key||prior.phone_device!==a.phone_device||prior.site!==a.site))throw Error('Revoke and use a new host identity for credential replacement');
-  await db.prepare('INSERT OR IGNORE INTO maintenance_hosts(id,key_hash,phone_key,phone_device,site) VALUES(?,?,?,?,?)').bind(a.host,a.key_hash,a.phone_key,a.phone_device,a.site).run();
+  const prior=await db.prepare('SELECT key_hash,phone_key,phone_device,site,agent,enabled FROM maintenance_hosts WHERE id=?').bind(a.host).first();
+  if(prior&&(prior.key_hash!==a.key_hash||prior.phone_key!==a.phone_key||prior.phone_device!==a.phone_device||prior.site!==a.site||(prior.agent??null)!==(a.agent??null)))throw Error('Revoke and use a new host identity for credential replacement');
+  if(a.agent==='linux-v1'){
+   if(prior&&prior.enabled!==1)throw Error('Revoked maintenance identity cannot be re-enabled; enroll a new identity');
+   if(await db.prepare('SELECT id FROM maintenance_hosts WHERE key_hash=? AND id<>?').bind(a.key_hash,a.host).first())throw Error('Device credential already belongs to another host');
+  }
+  if(a.agent==='linux-v1'){
+   await db.prepare('INSERT OR IGNORE INTO maintenance_hosts(id,key_hash,phone_key,phone_device,site,agent) SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM maintenance_hosts WHERE key_hash=? AND id<>?)').bind(a.host,a.key_hash,a.phone_key,a.phone_device,a.site,a.agent,a.key_hash,a.host).run();
+   const saved=await db.prepare('SELECT key_hash,agent,enabled FROM maintenance_hosts WHERE id=?').bind(a.host).first();
+   if(!saved||saved.key_hash!==a.key_hash||saved.agent!==a.agent||saved.enabled!==1)throw Error('Maintenance identity enrollment conflict');
+  }else await db.prepare('INSERT OR IGNORE INTO maintenance_hosts(id,key_hash,phone_key,phone_device,site,agent) VALUES(?,?,?,?,?,?)').bind(a.host,a.key_hash,a.phone_key,a.phone_device,a.site,null).run();
  }else if(op==='maintenance.revoke'){
   await db.prepare('UPDATE maintenance_hosts SET enabled=0 WHERE id=?').bind(a.host).run();
  }else if(op==='maintenance.submit'){
@@ -146,10 +163,17 @@ export async function maintenanceDevice(req,env){
  await maintenanceSchema(env.DB);
  const token=/^Bearer ([0-9a-f]{64})$/.exec(req.headers.get('Authorization')||'')?.[1];
  if(!token)return reply({error:'Unauthorized'},401);
- const host=await env.DB.prepare('SELECT id FROM maintenance_hosts WHERE key_hash=? AND enabled=1').bind(await hexHash(token)).first();
+ const host=await env.DB.prepare('SELECT id,agent FROM maintenance_hosts WHERE key_hash=? AND enabled=1').bind(await hexHash(token)).first();
  if(!host)return reply({error:'Unauthorized'},401);
  const d=await req.json(),now=Date.now()/1000;
  await env.DB.prepare('UPDATE maintenance_hosts SET seen=? WHERE id=?').bind(now,host.id).run();
+ if(d.operation==='heartbeat'){
+  if(host.agent!=='linux-v1')return reply({error:'Linux diagnostics host required'},403);
+  const snapshot=d.diagnostics,fields=new Set(['version','agent','pid','boot_id','uptime','loadavg','memory','block_devices','interfaces','routes','executor_pid','executor_wait','executor','executor_error']);
+  if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot)||snapshot.version!==1||snapshot.agent!=='linux-v1'||Object.keys(snapshot).some(k=>!fields.has(k)))return reply({error:'Invalid Linux diagnostics snapshot'},400);
+  await env.DB.prepare('UPDATE maintenance_hosts SET diagnostics=? WHERE id=?').bind(JSON.stringify(snapshot),host.id).run();
+  return reply({accepted:true,host:host.id});
+ }
  if(d.operation==='retention_history'){
   if(!Array.isArray(d.ids)||d.ids.length>128||d.ids.some(id=>typeof id!=='string'||!id)||new Set(d.ids).size!==d.ids.length)return reply({error:'Expected at most 128 distinct command IDs'},400);
   const records=[],blocked=[],budget={remaining:8*1024*1024};

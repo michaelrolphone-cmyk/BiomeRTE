@@ -1,5 +1,8 @@
 # Independent Mac maintenance
 
+For Raspberry Pi and other Linux hosts, see the additive
+[Linux maintenance channel](linux-maintenance-channel.md).
+
 This temporary channel repairs Biome when the controller, capability registry,
 workflow engine, or normal command queue cannot service requests. It shares the
 hosted OAuth gateway and its database, but uses separate inbox tables and an
