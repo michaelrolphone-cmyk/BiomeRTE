@@ -1,0 +1,79 @@
+{
+  "bridge_active_requests_after_rollback": 0,
+  "current_ledgers_preserved": true,
+  "deployment": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/393ab568450b-20261120",
+  "failure": "Neither worker produced a fresh completed provider poll; both containers became unhealthy.",
+  "hostio_or_model_backends_restarted": false,
+  "identity_preserved": true,
+  "journal": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/393ab568450b-20261120/handoff-events.jsonl",
+  "journal_sha256": "691d1f19a3ef51f3287b893716674915bfa5310a307097214c01f1e25cb2dc38",
+  "maintenance_receipt": "private-workers-live-handoff-20261120-01",
+  "model_generation_initiated": false,
+  "native_admission_after_rollback": [],
+  "next_action": "Resolve gateway/site authority write routing before another live cutover attempt.",
+  "older_snapshot_restored": false,
+  "original_native": {
+    "chat": {
+      "disabled_override": null,
+      "enabled": true,
+      "label": "org.biomerte.private-chat",
+      "loaded": true,
+      "pid": 33201
+    },
+    "image": {
+      "disabled_override": null,
+      "enabled": true,
+      "label": "org.biomerte.private-image",
+      "loaded": true,
+      "pid": 33203
+    }
+  },
+  "physical_android_test_performed": false,
+  "qualified_image_source_commit": "393ab568450b0792a5c0d6c28b37e4620727158a",
+  "recorded_at": 1795192338.822047,
+  "related_upstream_diagnosis": "Parent confirmed direct native site writes rejected during logical authority routing; private adapter already preserves provider context.",
+  "restored_native": {
+    "chat": {
+      "disabled_override": "enabled",
+      "enabled": true,
+      "label": "org.biomerte.private-chat",
+      "loaded": true,
+      "pid": 5570
+    },
+    "image": {
+      "disabled_override": "enabled",
+      "enabled": true,
+      "label": "org.biomerte.private-image",
+      "loaded": true,
+      "pid": 5575
+    }
+  },
+  "schema": "biomerte.private-workers-live-handoff/1",
+  "state": "rolled_back_to_native",
+  "stopped_containers": [
+    {
+      "exit_code": 143,
+      "finished_at": "2026-11-20T16:24:30.534929377Z",
+      "id": "19422f7f8e087fc4b585be27bfa13e82b519f7ecfe25da0413ef7e9af15a3922",
+      "image": "sha256:abc1c24b32ad192a841401b7983fd5fe939e1d6bdd4a712841958eaaf47a3c20",
+      "last_health": "unhealthy",
+      "name": "biome-private-private-chat-1",
+      "started_at": "2026-11-20T16:20:24.804658083Z",
+      "state": "exited"
+    },
+    {
+      "exit_code": 143,
+      "finished_at": "2026-11-20T16:24:30.534776586Z",
+      "id": "8a2259903c117f7edb00a4abeeb93782bb491a68cd440d20a6a59c7ea1cc28a6",
+      "image": "sha256:dab445c894d8568bc681130e770194c741a8103f2f4ec2c931ab73f08bf07b5c",
+      "last_health": "unhealthy",
+      "name": "biome-private-private-image-1",
+      "started_at": "2026-11-20T16:20:24.805954625Z",
+      "state": "exited"
+    }
+  ],
+  "uncertain_actions_after_rollback": {
+    "chat": 0,
+    "image": 0
+  }
+}
