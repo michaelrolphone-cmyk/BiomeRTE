@@ -464,6 +464,10 @@ class HostIO:
                     effects_active=provisioning or device_effects or self.anchors.sock is not None)
 
     def call(self, operation, arguments):
+        if operation == "storage.status":
+            if arguments: raise ValueError("storage status has no arguments")
+            from .storage_host_io import status
+            return status(self.settings)
         methods = {"clock": self.clock, "health": self.health,
                    "routes.list": self.routes.list, "routes.get": self.routes.get,
                    "routes.candidates": self.candidates, "routes.observe_anchor": self.observe_anchor,

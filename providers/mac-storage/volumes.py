@@ -58,10 +58,33 @@ def allocate(path, size):
     if path.stat().st_blocks * 512 < size:
         raise OSError('Backing file is sparse')
 
+def native_status():
+    from biomerte.host_io_client import HostIOClient
+    config = json.loads(Path(os.environ['BIOME_GATEWAY_HOST_IO_CONFIG']).read_text())
+    return HostIOClient(config).call('storage.status', {})
+
+def capacity():
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1' and os.environ.get('BIOME_GATEWAY_HOST_IO_CONFIG'):
+        info = native_status()
+        if not info.get('mounted'):
+            raise RuntimeError('Native workspace is not mounted')
+        return info['usable_bytes'], info['free_bytes']
+    fs = os.statvfs(MOUNT)
+    return fs.f_blocks * fs.f_frsize, fs.f_bavail * fs.f_frsize
+
 def mounted():
     state = BASE / 'volume.json'
-    return (os.path.ismount(MOUNT) and state.is_file() and (MOUNT / MARK).is_file()
-            and (MOUNT / MARK).read_text() == json.loads(state.read_text())['workspace_uuid'])
+    identity = (state.is_file() and (MOUNT / MARK).is_file() and
+                (MOUNT / MARK).read_text() == json.loads(state.read_text())['workspace_uuid'])
+    if not identity:
+        return False
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1' and os.environ.get('BIOME_GATEWAY_HOST_IO_CONFIG'):
+        info = native_status()
+        return (info.get('mounted') is True and info.get('workspace_path') == str(MOUNT) and
+                info.get('workspace_uuid') == (MOUNT / MARK).read_text() and
+                info.get('workspace_allocated_bytes', 0) >= WORKSPACE and
+                info.get('sacred_allocated_bytes', 0) >= SACRED)
+    return os.path.ismount(MOUNT)
 
 def prepare():
     if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1':

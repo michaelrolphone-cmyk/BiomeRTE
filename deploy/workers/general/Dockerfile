@@ -11,6 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 BIOME_CONTAINER_WORKER=1 \
 COPY biomerte /opt/biome/biomerte
 COPY providers/mac-terminal/mac_provider.py providers/mac-terminal/persistent_transport.py /opt/biome/providers/mac-terminal/
 COPY deploy/workers/general/health.py deploy/workers/general/entry.py /opt/
+RUN chmod -R a+rX /opt/biome /opt/entry.py /opt/health.py
 WORKDIR /opt/biome
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s CMD ["python","/opt/health.py"]
 ENTRYPOINT ["python","/opt/entry.py"]
@@ -18,6 +19,7 @@ ENTRYPOINT ["python","/opt/entry.py"]
 FROM base AS gitlab
 COPY deploy/workers/runtime/gitlab/biomerte /opt/biome/biomerte
 COPY providers/gitlab /opt/biome/providers/gitlab
+RUN chmod -R a+rX /opt/biome
 CMD ["gitlab"]
 
 FROM base AS workspaces
@@ -26,6 +28,7 @@ COPY deploy/workers/runtime/workspaces/biomerte /opt/biome/biomerte
 COPY providers/gitlab /opt/biome/providers/gitlab
 COPY integrations/workspaces /opt/biome/integrations/workspaces
 ENV BIOME_GITLAB_CODE=/opt/biome/providers/gitlab
+RUN chmod -R a+rX /opt/biome
 CMD ["workspaces"]
 
 FROM base AS docker-cli
@@ -34,6 +37,7 @@ COPY deploy/workers/runtime/docker/biomerte /opt/biome/biomerte
 COPY providers/mac-docker /opt/biome/providers/mac-docker
 COPY providers/pi-docker/docker_cli.py /opt/biome/providers/pi-docker/docker_cli.py
 COPY providers/pi-terminal /opt/biome/providers/pi-terminal
+RUN chmod -R a+rX /opt/biome
 CMD ["docker-cli"]
 
 FROM base AS storage
@@ -41,9 +45,11 @@ COPY deploy/workers/runtime/terminal/biomerte /opt/biome/biomerte
 COPY providers/mac-storage /opt/biome/providers/mac-storage
 COPY providers/pi-storage /opt/biome/providers/pi-storage
 ENV BIOME_STORAGE_PREMOUNTED=1
+RUN chmod -R a+rX /opt/biome
 CMD ["storage"]
 
 FROM storage AS replica
+RUN chmod -R a+rX /opt/biome
 CMD ["replica"]
 
 FROM base AS private-base
@@ -54,8 +60,10 @@ COPY providers/model-runtime /opt/biome/providers/model-runtime
 ENV PYTHONPATH=/opt/biome:/opt/biome/providers/mac-terminal:/opt/biome/providers/model-runtime
 
 FROM private-base AS private-chat
+RUN chmod -R a+rX /opt/biome
 CMD ["private-chat"]
 
 FROM private-base AS private-image
 COPY providers/private-image /opt/biome/providers/private-image
+RUN chmod -R a+rX /opt/biome
 CMD ["private-image"]

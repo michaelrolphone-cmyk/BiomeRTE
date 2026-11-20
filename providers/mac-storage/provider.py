@@ -16,7 +16,7 @@ import tarfile
 import tempfile
 import time
 from urllib.parse import quote
-from volumes import BASE,MOUNT,IMAGE,VAULT,WORKSPACE,SACRED,prepare,mounted
+from volumes import BASE,MOUNT,IMAGE,VAULT,WORKSPACE,SACRED,prepare,mounted,capacity
 from backup import HEALTH,entries
 
 HERE=Path(__file__).resolve().parent
@@ -37,8 +37,7 @@ def good(value):return {'ok':True,'result':value}
 def bad(code):return {'ok':False,'error':code}
 
 def journal_headroom_low():
-    fs=os.statvfs(MOUNT)
-    return fs.f_bavail*fs.f_frsize < 16*1024**2
+    return capacity()[1] < 16*1024**2
 
 def operation(op,a):
     try:return file_operation(op,a)
@@ -60,8 +59,8 @@ def file_operation(op,a):
                          recovery=str(BASE/'current/providers/mac-storage/backup.py')+' restore NEW_DATABASE [--generation ID]'))
     if not mounted():return bad('WORKSPACE_OFFLINE')
     if op=='capacity':
-        fs=os.statvfs(MOUNT)
-        return good(dict(reserved_bytes=WORKSPACE,usable_bytes=fs.f_blocks*fs.f_frsize,free_bytes=fs.f_bavail*fs.f_frsize,
+        usable,free=capacity()
+        return good(dict(reserved_bytes=WORKSPACE,usable_bytes=usable,free_bytes=free,
                          tier='volatile_workspace',replicated=False,namespace_required=True))
     ns=a.get('namespace')
     if not isinstance(ns,str) or not re.fullmatch('[a-z][a-z0-9-]{0,62}',ns):return bad('INVALID_NAMESPACE')
