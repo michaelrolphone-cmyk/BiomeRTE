@@ -57,6 +57,30 @@ class StreamBoundaryTests(unittest.TestCase):
                 self.assertTrue(closed)
                 self.assertFalse(streams.connections)
 
+    def test_health_deadline_reaches_the_native_query_transport(self):
+        import io
+        import json
+        from biomerte.host_io_client import HostIOClient, PROTOCOL
+        import biome_provider
+        with tempfile.TemporaryDirectory() as directory:
+            token = Path(directory)/"token"
+            token.write_text("fixture-token-with-at-least-32-characters")
+            seen = []
+            def opener(request, timeout):
+                operation = json.loads(request.data)["operation"]
+                seen.append((operation, timeout))
+                result = ({"host_id":"fixture", "clock_id":"boot", "monotonic":100.0,
+                           "wall_time":1000.0} if operation == "clock" else
+                          {"status":200, "body":{"state":"ready"}})
+                return io.BytesIO(json.dumps({"protocol":PROTOCOL, "host_id":"fixture",
+                                              "clock_id":"boot", "result":result}).encode())
+            native = HostIOClient({"url":"https://fixture.invalid", "token_file":str(token)},
+                                  opener=opener, monotonic=lambda:100.0, wall=lambda:1000.0)
+            with patch("biomerte.host_io_client.HostIOClient.from_config", return_value=native):
+                client = biome_provider.VisionClient("/unmounted.sock", 5.0, "/fixture-config")
+                self.assertEqual(client.query("robot.vision.status", {})["state"], "ready")
+            self.assertIn(("vision.query", 5.0), seen)
+
     def test_manifest_render_preserves_identity_and_persistent_state(self):
         spec = importlib.util.spec_from_file_location("vision_config_render", Path(__file__).with_name("render-config.py"))
         module = importlib.util.module_from_spec(spec)
