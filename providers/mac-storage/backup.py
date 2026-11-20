@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -84,7 +85,7 @@ def publish(raw,meta,old,history,tmp):
     stage=tmp/'verified.tar'
     # APFS clones share unchanged reserved blocks across the atomic replacement.
     # On a filesystem without cloning, a separately allocated stage preserves the old copy.
-    if subprocess.run(['/bin/cp','-c',str(VAULT),str(stage)],stdout=subprocess.DEVNULL,
+    if subprocess.run(['/bin/cp', '-c' if sys.platform == 'darwin' else '--reflink=always',str(VAULT),str(stage)],stdout=subprocess.DEVNULL,
                       stderr=subprocess.DEVNULL).returncode:
         stage.unlink(missing_ok=True)
         allocate(stage,SACRED)

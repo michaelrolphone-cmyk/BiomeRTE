@@ -10,8 +10,9 @@ import subprocess
 import tarfile
 import tempfile
 import uuid
+import sys
 
-BASE = Path.home() / '.local/share/biome-mac-storage'
+BASE = Path(os.environ.get('BIOME_STORAGE_HOME', Path.home() / '.local/share/biome-mac-storage'))
 MOUNT = BASE / 'workspace.mount'
 IMAGE = BASE / 'workspace.dmg'
 VAULT = BASE / 'sacred-backups.tar'
@@ -39,10 +40,19 @@ def write_json(p, data):
 def allocate(path, size):
     """F_PREALLOCATE followed by ftruncate makes APFS commit real blocks."""
     with path.open('xb') as f:
-        result = fcntl.fcntl(f, 42, struct.pack('=Iiqqq', 4, 3, 0, size, 0))
-        if struct.unpack('=Iiqqq', result)[-1] < size:
-            raise OSError('Incomplete disk reservation')
-        f.truncate(size)
+        if sys.platform == 'darwin':
+            result = fcntl.fcntl(f, 42, struct.pack('=Iiqqq', 4, 3, 0, size, 0))
+            if struct.unpack('=Iiqqq', result)[-1] < size:
+                raise OSError('Incomplete disk reservation')
+            f.truncate(size)
+        else:
+            # A host-shared filesystem may not implement fallocate/reflink.
+            # Writing every byte is portable and is checked for real allocation.
+            block = bytes(min(size, 4 * 1024 * 1024))
+            left = size
+            while left:
+                count = f.write(block[:min(left, len(block))])
+                left -= count
         f.flush()
         os.fsync(f.fileno())
     if path.stat().st_blocks * 512 < size:
@@ -54,6 +64,17 @@ def mounted():
             and (MOUNT / MARK).read_text() == json.loads(state.read_text())['workspace_uuid'])
 
 def prepare():
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1':
+        # A container never formats, reserves, mounts or replaces native media.
+        if not mounted():
+            raise RuntimeError('The enrolled workspace mount is unavailable')
+        if not IMAGE.is_file() or not VAULT.is_file():
+            raise RuntimeError('Enrolled backing file missing')
+        if IMAGE.stat().st_blocks * 512 < WORKSPACE or VAULT.stat().st_blocks * 512 < SACRED:
+            raise RuntimeError('Physical reservation below provisioned capacity')
+        return
+    if sys.platform != 'darwin':
+        raise RuntimeError('Native storage preparation requires macOS; use a verified existing mount')
     os.umask(0o077)
     BASE.mkdir(parents=True, exist_ok=True)
     MOUNT.mkdir(mode=0o700, exist_ok=True)

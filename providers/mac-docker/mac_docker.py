@@ -14,7 +14,7 @@ import time
 HERE = Path(__file__).resolve().parent
 HOME = Path.home()
 STATE = HOME / '.local/share/biome-mac-docker'
-TERMINAL = HOME / '.local/share/biome-mac-terminal'
+TERMINAL = Path(os.environ.get('BIOME_GATEWAY_CODE', HOME / '.local/share/biome-mac-terminal'))
 LABEL = 'org.biomerte.mac-docker'
 sys.path[:0] = [str(HERE.parents[1]), str(HERE.parent / 'pi-docker'), str(TERMINAL)]
 import mac_provider as gateway
@@ -169,6 +169,8 @@ if __name__ == '__main__':
         install()
     else:
         cfg = json.loads((STATE / 'manifest.json').read_text())
+        if os.environ.get('BIOME_CONTAINER_WORKER') == '1':
+            cfg = dict(cfg, executable='/usr/local/bin/docker', socket='/var/run/docker.sock', desktop=False)
         if sys.argv[1] == 'execute':
             request = json.load(sys.stdin)
             json.dump(execute(cfg, request['inputs'], Remote(cfg), request.get('progress_path')), sys.stdout)

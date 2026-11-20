@@ -1,0 +1,761 @@
+{
+  "captured_utc": "2026-11-20",
+  "reason": "Preserve installed worker behavior and custody while packaging actual implementations; no runtime credentials copied.",
+  "files": [
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/mac_provider.py",
+      "path": "providers/mac-terminal/mac_provider.py",
+      "sha256": "4888e7c1ee92dc780086a9933e2400aae113de3fa53b0e52db08d89a6adc6498"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/persistent_transport.py",
+      "path": "providers/mac-terminal/persistent_transport.py",
+      "sha256": "5f0d89523422ac0db0e0055794aa9b690c55d778b97e7183883ff3bb9e49d1e9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/proxy.py",
+      "path": "providers/gitlab/proxy.py",
+      "sha256": "b1acb058b7e7b212176f4d88304c09c80e1efc368517f42916dd809645c87756"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/credential_helper.sh",
+      "path": "providers/gitlab/credential_helper.sh",
+      "sha256": "2c6fd4186d813feb5a5ac67281a82b1333e6690c0e609f3312aacc543d196034"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/manager.py",
+      "path": "integrations/workspaces/manager.py",
+      "sha256": "71c9e551a750d9d7129fc557a93db4633b65af3293cc0cbf082e28390ab7ef68"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/provider.py",
+      "path": "integrations/workspaces/provider.py",
+      "sha256": "11d97ea0e74767e5b4efc9168486816127f9e63d9e5c0ae5999ad61f787d519d"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/test_crypto.py",
+      "path": "providers/private-chat/test_crypto.py",
+      "sha256": "51db13b011e4bf4f510463c097e463f5b2852025eaf370fe76b7f705c3eedd2f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/crypto_wire.py",
+      "path": "providers/private-chat/crypto_wire.py",
+      "sha256": "8d5933654ee3372f02f18c223f4567138d8eefa6e4e072763e4f68bfd378de25"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/test_worker_privacy.py",
+      "path": "providers/private-chat/test_worker_privacy.py",
+      "sha256": "f749f46a23466fa20a07952c4a47be7675b9dec59d24083291b920a7a5b965e3"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/qualify_transport.py",
+      "path": "providers/private-chat/qualify_transport.py",
+      "sha256": "4fc8d22f10dcde037cac4549ab251dbb639c10ed9b2f195b0ab133d120f8fbf3"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/test_sessions.py",
+      "path": "providers/private-chat/test_sessions.py",
+      "sha256": "13634ef5c27713cff42d4f87d5a67a06ad27df09c36c65687fecf8cc40ce4564"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/session_client.py",
+      "path": "providers/private-chat/session_client.py",
+      "sha256": "fd12a3587018433f1499431bb5cfc12d6c6ab60312c49c0dfc09dc0fce029ee9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/model_service.py",
+      "path": "providers/private-chat/model_service.py",
+      "sha256": "d0a584896756263b256bb05cb60504924dfdf248caee91f3705d6da6212e18a2"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/private_chat.py",
+      "path": "providers/private-chat/private_chat.py",
+      "sha256": "7d3ba903842a488d743b0f840c889c070ee61304efd00fd492b80d7454634bd8"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/session_protocol.py",
+      "path": "providers/private-chat/session_protocol.py",
+      "sha256": "17a30cd858e07642940e1e38f43a7a5c6f6b2b20ec76736750a1028d9979a4e8"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/test_model_selection.py",
+      "path": "providers/private-chat/test_model_selection.py",
+      "sha256": "16cc04948a3a765038ebc9146ab425215daf7c94ca2e23349501e41465c0b374"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-chat/make_vectors.py",
+      "path": "providers/private-chat/make_vectors.py",
+      "sha256": "62302e99fe723934266f4e6caecc068e4ab9d7685dfc48408b2fc8f7acc5f40e"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/image_protocol.py",
+      "path": "providers/private-image/image_protocol.py",
+      "sha256": "8d93fee43f93b6d7521a577e3c4c5b7962790b02edaaad89c1e0763f219b1a01"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/qualify_all.py",
+      "path": "providers/private-image/qualify_all.py",
+      "sha256": "30c0865b0fe5bd2f214caea22394c271e623fcbfef77c296a0cc4a7834bdd347"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/memory_node.py",
+      "path": "providers/private-image/memory_node.py",
+      "sha256": "569053ed7d1378d4664596ba3509299c3bcb83cf821a3fece815248efd72a913"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/image_client.py",
+      "path": "providers/private-image/image_client.py",
+      "sha256": "96dea0861c980ec5b38f30eccb301231b74ea646288e6f546a5ab33a2ff938a1"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/comfy_backend.py",
+      "path": "providers/private-image/comfy_backend.py",
+      "sha256": "da5e40b027e8f04859f63b11ea6ec4b3c58b4c7643700354929e534e73f0aa17"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/private_image.py",
+      "path": "providers/private-image/private_image.py",
+      "sha256": "a998247400f920449f159452d7c58d758fd5babec13987020d939b4656a50b0a"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/test_private_image.py",
+      "path": "providers/private-image/test_private_image.py",
+      "sha256": "cfad5610459615b74a2746b810476fd480ebb87cca4183644a80dfbda5d36bd9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/qualify.py",
+      "path": "providers/private-image/qualify.py",
+      "sha256": "4896ba1f2c8663a145a4e0554f2c4ff600e48c351ac01fa31d2921d8ed594f36"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-lowlat-build/providers/private-image/make_vectors.py",
+      "path": "providers/private-image/make_vectors.py",
+      "sha256": "20f087fb7bbd46eb27589f0cfd1280d2bdc462388254f91dcff0de83c96c79ce"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-model-runtime/model_runtime.py",
+      "path": "providers/model-runtime/model_runtime.py",
+      "sha256": "646e3ee0d20e33ff49a166e3b522c3546d33ca9c08b153e99a33be356ece911b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/releases/5751e951039c7d2598350ec47fda96d6ca6c6783543811a688e79b5a191f35ec/providers/mac-storage/provider.py",
+      "path": "providers/mac-storage/provider.py",
+      "sha256": "aa6fd20c2aff3bc63d750da01da2e0faacb55bb26e6e60e17746c497e8e6cb49"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/releases/5751e951039c7d2598350ec47fda96d6ca6c6783543811a688e79b5a191f35ec/providers/mac-storage/volumes.py",
+      "path": "providers/mac-storage/volumes.py",
+      "sha256": "2ccab566347b1dfa596eb6cc00d52c287d71e01980939ccdfdb5a675ec0af6f4"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/releases/5751e951039c7d2598350ec47fda96d6ca6c6783543811a688e79b5a191f35ec/providers/mac-storage/backup.py",
+      "path": "providers/mac-storage/backup.py",
+      "sha256": "93a7351074af697329e67a76fadd1f6a42eae28e08de6eee53809c8ff6bd1cea"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/releases/5751e951039c7d2598350ec47fda96d6ca6c6783543811a688e79b5a191f35ec/providers/mac-storage/source.py",
+      "path": "providers/mac-storage/source.py",
+      "sha256": "35c646eb0529719c51e0f729727cdc7a9cf6941a9f874ac1c1aa06bb0736aef1"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/providers/mac-docker/mac_docker.py",
+      "path": "providers/mac-docker/mac_docker.py",
+      "sha256": "928c70def705818c2bb80a28b79dfdef43a14368205d3a26881954bab12e7afe"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/providers/pi-docker/docker_cli.py",
+      "path": "providers/pi-docker/docker_cli.py",
+      "sha256": "dee8bd065895b486c8c44c3d40ec6da43e9dd3e999bb634b9579f3ac3bbc5512"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/worker.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/worker.py",
+      "sha256": "acdc1e715c3c2757540c287cb53d407b179db6811fa168cb5916678df8821dde"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/store.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/store.py",
+      "sha256": "4a4e9d907fc44cd5ed294bfe175f87a59c530c1c8674be8f3c8b9aa60fd0d08a"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/worker_expiry.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/worker_expiry.py",
+      "sha256": "adfc261372189e33b645e445f417c0f1a9d9222e069691597f59dcf7a1e5dc09"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/supervised_commands.before-cleanup-custody-20261113.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/supervised_commands.before-cleanup-custody-20261113.py",
+      "sha256": "1992e93d17bd9fffdad89f541ffd4ab948dbf7599a534d1e5ac0f2871a35807d"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/command_watch.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/command_watch.py",
+      "sha256": "70d1f1ca93c8b228194a258bfd1af09bf8e95bab9a5bbd07aa8f4fa87aed6d55"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/command_runner.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/command_runner.py",
+      "sha256": "116334c1320a306350ec4f13077aa2ffcbf3d22794d1427c1475ac2e32768fc5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/__init__.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/api.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/api.py",
+      "sha256": "349c6957ab3f0d4badbe73aab2ca87637c16a21f7646c84b393ccc13444dac49"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/providers.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/providers.py",
+      "sha256": "b5ad0c4dc69ad347aeff22c3e12a2a8a06e2b926fb600c3dd847f59df8dae867"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/resource_recovery.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/resource_recovery.py",
+      "sha256": "020929cb88648b38c36db010c64b559e12a8d5919111857524fee1b4363ad004"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/lifecycle.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/lifecycle.py",
+      "sha256": "58bad0685aa125626dcef198b2d6f0a9cedd75ac3323d6a610afe0a862cc2ec5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/supervised_commands.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/supervised_commands.py",
+      "sha256": "f20e3bd8179c159fb8ead2004098fc3371872ddcb1a698b58012c2961f396422"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-mac-terminal/runtime/biomerte/identity.py",
+      "path": "deploy/workers/runtime/terminal/biomerte/identity.py",
+      "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/package_install.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/package_install.py",
+      "sha256": "1a710fda7a0822c4678305de6435555f9e063bd7e6fc207c6e9cc3878969861f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/worker.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/worker.py",
+      "sha256": "572c29ca3d4ab9da4e803d533966036173d60873afc1a1dd08de6974b36922f2"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/store.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/store.py",
+      "sha256": "5daa95842dd09b9edfb4be8dae5c5e2296510eb5457c6812caa397fd26efc5f1"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/backup.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/backup.py",
+      "sha256": "9878d7434ada2925a43fc0d4841ae9cc2d221182b48047400d59b03adb989a0f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/web.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/web.py",
+      "sha256": "8437e23ee6298d643b1d8724c42d80093a927904b29705ca4be8275cc310eb0c"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/decisions.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/decisions.py",
+      "sha256": "c4e86e1897f226e27306d5fab76c5e415ba4f58ffdcafe11436183cfd6140532"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/gateway_journal.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/gateway_journal.py",
+      "sha256": "f0127f4b142bc0c512a644b1c36f8ca8c40bab9f623a7163b88911a32da9136b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/xmlprofile.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/xmlprofile.py",
+      "sha256": "4234b2c44b66868808ae86ac6b7b4b196f5a451e9dc497faf145b99f1ce90598"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/exchange.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/exchange.py",
+      "sha256": "ab054b151f562f0a6a76fac666b85758cc36aa44d7a76906475b8f3a82030c08"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/__init__.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/continuation.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/continuation.py",
+      "sha256": "797aab98bfac9e26220d9766891730632a9288f8f091dcf892fc76b6eb81002b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/api.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/api.py",
+      "sha256": "349c6957ab3f0d4badbe73aab2ca87637c16a21f7646c84b393ccc13444dac49"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/extensions.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/extensions.py",
+      "sha256": "25a5349dd5f4adfaf3f3eb017f6566287f20dce640f6bbbd564ce2c14fb138ea"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/providers.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/providers.py",
+      "sha256": "c93c23301d2dd11987e97fa0c63bd439a20b502670791f402eeb7b52aee1b633"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/work.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/work.py",
+      "sha256": "4f60f47d55323db4c28981fbf18ec93eeb78a87ecd94b7d81a5426eab1593306"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/authorization.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/authorization.py",
+      "sha256": "8b705c272efe9b2d7ff49fc2e8771920ddc3851e9dab464181393fa0b9c83994"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/mcp.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/mcp.py",
+      "sha256": "18c86d3a7f26a3a198f053515789a30b8088ee59658d7582d3267c1f69b93c31"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/network.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/network.py",
+      "sha256": "c37180e45ff5b72dde971f83ccf55d9ee8cf5308f16a743f31ccbbb50bade084"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/app.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/app.py",
+      "sha256": "cc9544107025a373f90e6f64521e211d760cbcea3ec88b99da8d713ddbd40837"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/process.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/process.py",
+      "sha256": "188ee201fa447449ff84eb9bd5035c3044c3ed8dfee3a8b7823c7bc05645ea85"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/identity.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/identity.py",
+      "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/knowledge.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/knowledge.py",
+      "sha256": "d72375417a56331610990e3fa44974416c0ded86df19b88b2b2ab16c99c7f0fa"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/__main__.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/__main__.py",
+      "sha256": "362e5e148b4fc83f1daceb1453ab18aa123965026281cb2cce85a7deef4db1b9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/runtime/biomerte/capability_usage.py",
+      "path": "deploy/workers/runtime/gitlab/biomerte/capability_usage.py",
+      "sha256": "1503c2b7d53f1b7170404b7dc5f74a0351b87969bbbf94e418eaa2343f80f8f4"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/package_install.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/package_install.py",
+      "sha256": "1a710fda7a0822c4678305de6435555f9e063bd7e6fc207c6e9cc3878969861f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/worker.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/worker.py",
+      "sha256": "572c29ca3d4ab9da4e803d533966036173d60873afc1a1dd08de6974b36922f2"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/store.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/store.py",
+      "sha256": "5daa95842dd09b9edfb4be8dae5c5e2296510eb5457c6812caa397fd26efc5f1"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/backup.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/backup.py",
+      "sha256": "9878d7434ada2925a43fc0d4841ae9cc2d221182b48047400d59b03adb989a0f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/web.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/web.py",
+      "sha256": "8437e23ee6298d643b1d8724c42d80093a927904b29705ca4be8275cc310eb0c"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/decisions.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/decisions.py",
+      "sha256": "c4e86e1897f226e27306d5fab76c5e415ba4f58ffdcafe11436183cfd6140532"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/gateway_journal.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/gateway_journal.py",
+      "sha256": "f0127f4b142bc0c512a644b1c36f8ca8c40bab9f623a7163b88911a32da9136b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/xmlprofile.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/xmlprofile.py",
+      "sha256": "4234b2c44b66868808ae86ac6b7b4b196f5a451e9dc497faf145b99f1ce90598"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/exchange.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/exchange.py",
+      "sha256": "ab054b151f562f0a6a76fac666b85758cc36aa44d7a76906475b8f3a82030c08"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/__init__.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/continuation.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/continuation.py",
+      "sha256": "797aab98bfac9e26220d9766891730632a9288f8f091dcf892fc76b6eb81002b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/api.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/api.py",
+      "sha256": "349c6957ab3f0d4badbe73aab2ca87637c16a21f7646c84b393ccc13444dac49"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/extensions.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/extensions.py",
+      "sha256": "25a5349dd5f4adfaf3f3eb017f6566287f20dce640f6bbbd564ce2c14fb138ea"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/providers.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/providers.py",
+      "sha256": "c93c23301d2dd11987e97fa0c63bd439a20b502670791f402eeb7b52aee1b633"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/work.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/work.py",
+      "sha256": "4f60f47d55323db4c28981fbf18ec93eeb78a87ecd94b7d81a5426eab1593306"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/authorization.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/authorization.py",
+      "sha256": "8b705c272efe9b2d7ff49fc2e8771920ddc3851e9dab464181393fa0b9c83994"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/mcp.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/mcp.py",
+      "sha256": "18c86d3a7f26a3a198f053515789a30b8088ee59658d7582d3267c1f69b93c31"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/network.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/network.py",
+      "sha256": "c37180e45ff5b72dde971f83ccf55d9ee8cf5308f16a743f31ccbbb50bade084"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/app.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/app.py",
+      "sha256": "cc9544107025a373f90e6f64521e211d760cbcea3ec88b99da8d713ddbd40837"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/process.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/process.py",
+      "sha256": "188ee201fa447449ff84eb9bd5035c3044c3ed8dfee3a8b7823c7bc05645ea85"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/identity.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/identity.py",
+      "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/knowledge.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/knowledge.py",
+      "sha256": "d72375417a56331610990e3fa44974416c0ded86df19b88b2b2ab16c99c7f0fa"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/__main__.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/__main__.py",
+      "sha256": "362e5e148b4fc83f1daceb1453ab18aa123965026281cb2cce85a7deef4db1b9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/runtime/biomerte/capability_usage.py",
+      "path": "deploy/workers/runtime/workspaces/biomerte/capability_usage.py",
+      "sha256": "1503c2b7d53f1b7170404b7dc5f74a0351b87969bbbf94e418eaa2343f80f8f4"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/history_authority.py",
+      "path": "deploy/workers/runtime/docker/biomerte/history_authority.py",
+      "sha256": "c4855ecb9d04b34bec476be628bf19a624241685e201389114525016c938141c"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/package_install.py",
+      "path": "deploy/workers/runtime/docker/biomerte/package_install.py",
+      "sha256": "1a710fda7a0822c4678305de6435555f9e063bd7e6fc207c6e9cc3878969861f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/worker.py",
+      "path": "deploy/workers/runtime/docker/biomerte/worker.py",
+      "sha256": "acdc1e715c3c2757540c287cb53d407b179db6811fa168cb5916678df8821dde"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/ownership.py",
+      "path": "deploy/workers/runtime/docker/biomerte/ownership.py",
+      "sha256": "9d472b34269199a59e150a13a685b9cb934509d3446697560d57d40ec02972ed"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention_selection.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention_selection.py",
+      "sha256": "add2eb8deef69094a2b895166563566d9377f0dd0a7269451f8f51b8b696a4b4"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/store.py",
+      "path": "deploy/workers/runtime/docker/biomerte/store.py",
+      "sha256": "78ac723d35a535003aac587ed3c63869d64f27aea4657017117dc5d507a2f50a"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/backup.py",
+      "path": "deploy/workers/runtime/docker/biomerte/backup.py",
+      "sha256": "9878d7434ada2925a43fc0d4841ae9cc2d221182b48047400d59b03adb989a0f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/web.py",
+      "path": "deploy/workers/runtime/docker/biomerte/web.py",
+      "sha256": "66974678e548b7848723b720149b698338b58a791a5d49400f22d1466b852c4f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/streams.py",
+      "path": "deploy/workers/runtime/docker/biomerte/streams.py",
+      "sha256": "1605c33e81d1cab1ba724d50d20a936b7567ff3ea6f5647429d706d9b7515683"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention_index.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention_index.py",
+      "sha256": "c2a473923680b5f5a9ea91256bc3485c64f719f7597bacf36965646026dff7ad"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/worker_expiry.py",
+      "path": "deploy/workers/runtime/docker/biomerte/worker_expiry.py",
+      "sha256": "bfc914039c935570d4be2fb3ad28069864eb791d372ffa42eb368948cfc4f539"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention_repairs.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention_repairs.py",
+      "sha256": "37bd69a93a1d594300a198fd9ffc6c7fbf55b15cc421b8fb69ed7b7da772e2a5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention_provenance.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention_provenance.py",
+      "sha256": "574c7877ebe7ddc35503d2975a06f30c4ae11db72dd275b6f4e17a115989c33e"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/command_watch.py",
+      "path": "deploy/workers/runtime/docker/biomerte/command_watch.py",
+      "sha256": "70d1f1ca93c8b228194a258bfd1af09bf8e95bab9a5bbd07aa8f4fa87aed6d55"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/discovery.py",
+      "path": "deploy/workers/runtime/docker/biomerte/discovery.py",
+      "sha256": "fea4b1da4739d8183f9dbd6d7cbd855583737d506222b5bbdb667e4e4c03d400"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/stream_router.py",
+      "path": "deploy/workers/runtime/docker/biomerte/stream_router.py",
+      "sha256": "bb1ffd69c436e8c1d89fbd8ae0260f3311d83151fedc221b99d9dd4c912a7680"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/decisions.py",
+      "path": "deploy/workers/runtime/docker/biomerte/decisions.py",
+      "sha256": "c4e86e1897f226e27306d5fab76c5e415ba4f58ffdcafe11436183cfd6140532"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/gateway_journal.py",
+      "path": "deploy/workers/runtime/docker/biomerte/gateway_journal.py",
+      "sha256": "135c092ea349210e45cac9794375dbc718383cf2f3fb5c03df95c9783b734de7"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/xmlprofile.py",
+      "path": "deploy/workers/runtime/docker/biomerte/xmlprofile.py",
+      "sha256": "4234b2c44b66868808ae86ac6b7b4b196f5a451e9dc497faf145b99f1ce90598"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/lease_retention.py",
+      "path": "deploy/workers/runtime/docker/biomerte/lease_retention.py",
+      "sha256": "b08b07bc48dadb3bc9a2bd9dac4fc2cc536de3683c6b0c989b40a9967c82ec3b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/exchange.py",
+      "path": "deploy/workers/runtime/docker/biomerte/exchange.py",
+      "sha256": "ab054b151f562f0a6a76fac666b85758cc36aa44d7a76906475b8f3a82030c08"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/command_runner.py",
+      "path": "deploy/workers/runtime/docker/biomerte/command_runner.py",
+      "sha256": "116334c1320a306350ec4f13077aa2ffcbf3d22794d1427c1475ac2e32768fc5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/__init__.py",
+      "path": "deploy/workers/runtime/docker/biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/session_api.py",
+      "path": "deploy/workers/runtime/docker/biomerte/session_api.py",
+      "sha256": "e1173a9dfd21387d0b15b8f8c57f65682a674505407d2db2aeae4b998cc59474"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/session_packets.py",
+      "path": "deploy/workers/runtime/docker/biomerte/session_packets.py",
+      "sha256": "f696bcd72d10e0f6499c943d523a624db358d04ea110f4e03f5449ecaa995989"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/assistant_routing.py",
+      "path": "deploy/workers/runtime/docker/biomerte/assistant_routing.py",
+      "sha256": "454ca7742d38f440f51670e1b607bd91a15168638f9715ffb222f96f8778ed70"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/history_migration.py",
+      "path": "deploy/workers/runtime/docker/biomerte/history_migration.py",
+      "sha256": "89364a14e06c5b206b4cd6f7e1e4c2693ffc17c738d3c5c50d765a3cc6141d0c"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention_history.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention_history.py",
+      "sha256": "778f1fbc6036e247d9da87fae3558ce3e12a6fdd867f75f5da89549d737a5fdf"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/continuation.py",
+      "path": "deploy/workers/runtime/docker/biomerte/continuation.py",
+      "sha256": "797aab98bfac9e26220d9766891730632a9288f8f091dcf892fc76b6eb81002b"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/gateway_transport.py",
+      "path": "deploy/workers/runtime/docker/biomerte/gateway_transport.py",
+      "sha256": "bb9993077343958f6373d01db5b45a56687254f784b46d7dfaf8891e821f5250"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/api.py",
+      "path": "deploy/workers/runtime/docker/biomerte/api.py",
+      "sha256": "732a472158c48194b6fa665b25628cfc4df86ca3168299605fbd24fdaa3ff29d"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/extensions.py",
+      "path": "deploy/workers/runtime/docker/biomerte/extensions.py",
+      "sha256": "300e0862f9f762e92324e1ca22abaa88b09c3872af0e607d8047aa9e562de4ea"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/providers.py",
+      "path": "deploy/workers/runtime/docker/biomerte/providers.py",
+      "sha256": "b5ad0c4dc69ad347aeff22c3e12a2a8a06e2b926fb600c3dd847f59df8dae867"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/work.py",
+      "path": "deploy/workers/runtime/docker/biomerte/work.py",
+      "sha256": "4f60f47d55323db4c28981fbf18ec93eeb78a87ecd94b7d81a5426eab1593306"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/resource_recovery.py",
+      "path": "deploy/workers/runtime/docker/biomerte/resource_recovery.py",
+      "sha256": "020929cb88648b38c36db010c64b559e12a8d5919111857524fee1b4363ad004"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/authorization.py",
+      "path": "deploy/workers/runtime/docker/biomerte/authorization.py",
+      "sha256": "8b705c272efe9b2d7ff49fc2e8771920ddc3851e9dab464181393fa0b9c83994"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/assistant_workspaces.py",
+      "path": "deploy/workers/runtime/docker/biomerte/assistant_workspaces.py",
+      "sha256": "a5bac163117298fe06b1c05f27dde60e55f86ab5a276cfef41a70b7795ad7542"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/session_service.py",
+      "path": "deploy/workers/runtime/docker/biomerte/session_service.py",
+      "sha256": "0fa6327ed35455e2019e55366b0d3796dcf9f1f0ef9711addb80879fd4e9a149"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/mcp.py",
+      "path": "deploy/workers/runtime/docker/biomerte/mcp.py",
+      "sha256": "18c86d3a7f26a3a198f053515789a30b8088ee59658d7582d3267c1f69b93c31"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/worker_history.py",
+      "path": "deploy/workers/runtime/docker/biomerte/worker_history.py",
+      "sha256": "6a7b43657b6d8e977ca94845fbb8053dd7a12b7f03355e20f9607a1ecdb68fc9"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/lifecycle.py",
+      "path": "deploy/workers/runtime/docker/biomerte/lifecycle.py",
+      "sha256": "58bad0685aa125626dcef198b2d6f0a9cedd75ac3323d6a610afe0a862cc2ec5"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/retention.py",
+      "path": "deploy/workers/runtime/docker/biomerte/retention.py",
+      "sha256": "2f1c756d4f6fcd32f8d717d89911c6dbdd77dedd0ae70de783f5608eac795e80"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/network.py",
+      "path": "deploy/workers/runtime/docker/biomerte/network.py",
+      "sha256": "c37180e45ff5b72dde971f83ccf55d9ee8cf5308f16a743f31ccbbb50bade084"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/app.py",
+      "path": "deploy/workers/runtime/docker/biomerte/app.py",
+      "sha256": "d77a9085c4a1d56483a68cfdc44bced52209c2fa756b82dbfeb32e8c6dd051ba"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/process.py",
+      "path": "deploy/workers/runtime/docker/biomerte/process.py",
+      "sha256": "10ed63dfc148af931837c5356e4d88f52342a6b8e4ae2a55ad68e3ad77174c86"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/supervised_commands.py",
+      "path": "deploy/workers/runtime/docker/biomerte/supervised_commands.py",
+      "sha256": "1992e93d17bd9fffdad89f541ffd4ab948dbf7599a534d1e5ac0f2871a35807d"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/terminal_history.py",
+      "path": "deploy/workers/runtime/docker/biomerte/terminal_history.py",
+      "sha256": "8d9b53d0dba9e215bfa39635c025d7522272703193ac370e873d90a027f646a0"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/session_exchange.py",
+      "path": "deploy/workers/runtime/docker/biomerte/session_exchange.py",
+      "sha256": "87ae06411e193245f98b5c10f8855a46f2d9c522efe6fede8856da7d328d58cb"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/identity.py",
+      "path": "deploy/workers/runtime/docker/biomerte/identity.py",
+      "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/rover.py",
+      "path": "deploy/workers/runtime/docker/biomerte/rover.py",
+      "sha256": "668999126e899b9faabfe78025b960110651ddb35827af8bae2b969b1175c783"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/knowledge.py",
+      "path": "deploy/workers/runtime/docker/biomerte/knowledge.py",
+      "sha256": "0774a04861e079da05ef690127574e99405dc94b63e4009ae5c113f4de52a311"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/__main__.py",
+      "path": "deploy/workers/runtime/docker/biomerte/__main__.py",
+      "sha256": "58f62e977265afbad1079579645551636a251518a6b83f11552ca76fe8471a46"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/assistant_impact.py",
+      "path": "deploy/workers/runtime/docker/biomerte/assistant_impact.py",
+      "sha256": "3b45d47387a2ecc6dd74b3bd9651dd84b8d26837a40bbab16f70b41738fcf1b7"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/session_runtime.py",
+      "path": "deploy/workers/runtime/docker/biomerte/session_runtime.py",
+      "sha256": "c1c4e88dfe4eb1f1037fbc88aa89c89795d115eeb425f70a47d3e48cc25a0304"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/assistant_support.py",
+      "path": "deploy/workers/runtime/docker/biomerte/assistant_support.py",
+      "sha256": "61f3dc47d94ba986f5dd432c1745b89ba3b278514a34c53ae132e125f88fd031"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/capability_usage.py",
+      "path": "deploy/workers/runtime/docker/biomerte/capability_usage.py",
+      "sha256": "1503c2b7d53f1b7170404b7dc5f74a0351b87969bbbf94e418eaa2343f80f8f4"
+    },
+    {
+      "source": "/Users/micahelbyrns/.local/share/biomerte-releases/supervised-recovery-e2be98db/biomerte/assistant_workspace_runner.py",
+      "path": "deploy/workers/runtime/docker/biomerte/assistant_workspace_runner.py",
+      "sha256": "87491919c5111d9bfe0ba8307d35eea3d6f35c6243bc8e533e9377d58bee2190"
+    }
+  ]
+}

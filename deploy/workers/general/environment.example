@@ -1,0 +1,8 @@
+BIOME_MAC_HOME=/Users/micahelbyrns
+BIOME_UID=501
+BIOME_GID=20
+BIOME_WORKER_PLATFORM=linux/arm64
+BIOME_WORKER_VERSION=replace-with-source-commit
+BIOME_PROVIDER_HOST=replace-with-existing-native-hostname
+BIOME_GITLAB_HOST=replace-with-existing-gitlab-hostname
+BIOME_HOST_IO_CLIENT_DIR=replace-with-qualified-client-directory

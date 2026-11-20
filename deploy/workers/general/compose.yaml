@@ -1,0 +1,91 @@
+name: biomerte-workers
+x-worker: &worker
+  platform: ${BIOME_WORKER_PLATFORM:-linux/arm64}
+  user: "${BIOME_UID:-501}:${BIOME_GID:-20}"
+  restart: unless-stopped
+  init: true
+  read_only: true
+  stop_grace_period: 5m
+  environment: &environment
+    HOME: ${BIOME_MAC_HOME:?Set BIOME_MAC_HOME}
+    BIOME_PROVIDER_HOST: ${BIOME_PROVIDER_HOST:?Set the existing native hostname}
+    BIOME_GATEWAY_HOST_IO_CONFIG: /run/biome/host-io.json
+  tmpfs:
+    - /tmp:mode=1777
+    - /run/biome-health:mode=0777
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: local
+    options: {max-size: 5m, max-file: "2"}
+services:
+  gitlab:
+    <<: *worker
+    profiles: [gitlab]
+    image: biomerte-worker-gitlab:${BIOME_WORKER_VERSION:?Set source version}
+    build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: gitlab}
+    volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR:?Set qualified client directory}:/run/biome:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "${BIOME_GITLAB_HOST:?Set hostname from existing GitLab config}:host-gateway"
+  workspaces:
+    <<: *worker
+    profiles: [workspaces]
+    image: biomerte-worker-workspaces:${BIOME_WORKER_VERSION}
+    build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: workspaces}
+    group_add: ["0"]
+    volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BIOME_MAC_HOME}/.local/share/biome-workspaces:${BIOME_MAC_HOME}/.local/share/biome-workspaces
+      - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+  workspace-monitor:
+    <<: *worker
+    profiles: [workspaces]
+    image: biomerte-worker-workspaces:${BIOME_WORKER_VERSION}
+    command: [workspace-monitor]
+    group_add: ["0"]
+    healthcheck: {disable: true}
+    volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BIOME_MAC_HOME}/.local/share/biome-workspaces:${BIOME_MAC_HOME}/.local/share/biome-workspaces
+      - ${BIOME_MAC_HOME}/.local/share/biome-gitlab:${BIOME_MAC_HOME}/.local/share/biome-gitlab
+  docker-cli:
+    <<: *worker
+    profiles: [docker-cli]
+    image: biomerte-worker-docker-cli:${BIOME_WORKER_VERSION}
+    build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: docker-cli}
+    group_add: ["0"]
+    volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-docker:${BIOME_MAC_HOME}/.local/share/biome-mac-docker
+      - ${BIOME_MAC_HOME}/.local/share/biomerte-workspaces:${BIOME_MAC_HOME}/.local/share/biomerte-workspaces
+      - ${BIOME_MAC_HOME}/Developer:${BIOME_MAC_HOME}/Developer
+  storage:
+    <<: *worker
+    profiles: [storage]
+    image: biomerte-worker-storage:${BIOME_WORKER_VERSION}
+    build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: storage}
+    volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage:${BIOME_MAC_HOME}/.local/share/biome-mac-storage
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount:${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity:${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/identity:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/terminal-manifest.json:${BIOME_MAC_HOME}/.local/share/biome-mac-terminal/terminal-manifest.json:ro
+  replica:
+    <<: *worker
+    profiles: [replica]
+    image: biomerte-worker-replica:${BIOME_WORKER_VERSION}
+    build: {context: ../../.., dockerfile: deploy/workers/general/Dockerfile, target: replica}
+    healthcheck:
+      test: ["CMD","python","-c","import json,time,pathlib,os; s=json.loads((pathlib.Path.home()/'.local/share/biome-mac-storage/replica-health.json').read_text()); assert s.get('last_success',s.get('verified_at',0))>time.time()-900"]
+      interval: 60s
+      start_period: 10m
+    volumes:
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage:${BIOME_MAC_HOME}/.local/share/biome-mac-storage
