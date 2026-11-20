@@ -59,7 +59,9 @@ RUN chmod -R a+rX /opt/biome
 CMD ["replica"]
 
 FROM base AS private-base
-RUN pip install --no-cache-dir cryptography==44.0.2
+COPY providers/private-chat/requirements.txt /tmp/private-requirements.txt
+RUN pip install --no-cache-dir --only-binary=:all: -r /tmp/private-requirements.txt \
+    && rm /tmp/private-requirements.txt
 COPY deploy/workers/runtime/terminal/biomerte /opt/biome/biomerte
 COPY providers/private-chat /opt/biome/providers/private-chat
 COPY deploy/workers/private/health.py /opt/private-health.py
