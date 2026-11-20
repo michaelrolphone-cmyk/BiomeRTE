@@ -90,5 +90,12 @@ services:
       test: ["CMD","python","-c","import json,time,pathlib,os; s=json.loads(pathlib.Path(os.environ['BIOME_WORKER_HEALTH']).read_text()); assert s.get('state')=='online' and 0<=time.time()-s['last_poll']<900"]
       interval: 60s
       start_period: 10m
+    environment:
+      <<: *environment
+      BIOME_REPLICA_HOST: ${BIOME_REPLICA_HOST:-}
     volumes:
+      - ${BIOME_HOST_IO_CLIENT_DIR}:/run/biome:ro
       - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage:${BIOME_MAC_HOME}/.local/share/biome-mac-storage
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount:${BIOME_MAC_HOME}/.local/share/biome-mac-storage/workspace.mount:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage/replica-key:${BIOME_MAC_HOME}/.local/share/biome-mac-storage/replica-key:ro
+      - ${BIOME_MAC_HOME}/.local/share/biome-mac-storage/known_hosts:${BIOME_MAC_HOME}/.local/share/biome-mac-storage/known_hosts:ro

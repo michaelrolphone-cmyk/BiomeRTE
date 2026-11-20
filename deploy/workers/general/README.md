@@ -38,6 +38,33 @@ the bridge and selected controller must answer before any native owner is
 stopped. Replica checks bridge availability but does not require a capability
 controller for its independent SSH replication.
 
+## Replica endpoint and native storage checks
+
+Replica preparation additionally requires `--replica-host CURRENT_PI_IP`. Obtain
+that current address from the existing controller's gateway self-report. The
+frozen environment supplies `BIOME_REPLICA_HOST`; the source volume UUID still
+comes from the installed `replica.json`. This leaves that native configuration
+unchanged and does not silently fall back to its old address. A later address
+change requires a new prepared plan.
+
+The replica service mounts the supplied HostIO client directory read-only,
+including its CA and token, and the existing workspace submount read-only at
+its original absolute path. Before taking the replica lock or changing backup
+state, the container uses the existing native `storage.status` observation and
+volume identity/reservation checks. It never formats or mounts native media.
+
+The existing storage state is writable for the archive, health and staging
+files. The exact existing `replica-key` and `known_hosts` files are overlaid
+read-only. SSH retains user `pi`, host-key alias `biome-sacred-pi`, BatchMode,
+IdentitiesOnly and StrictHostKeyChecking. Global host-key lookup and automatic
+host-key updates are disabled; no new key is accepted.
+
+A read-only SSH qualification uses the existing key/known-hosts options with
+`-N` and no remote command. It must reach public-key authentication before a
+source is considered reachable for replication. That check does not run the
+remote `snapshot` command, transfer backup data or prove a complete backup.
+The offline tests and container volume attestation likewise do not start sync.
+
 ## Apply and recover
 
 ```sh

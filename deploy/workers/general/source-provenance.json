@@ -214,7 +214,7 @@
     },
     {
       "modified_for_container": true,
-      "packaged_sha256": "5c4289689d6ae6ef823c7974ea5c5ade746afcb6e57de727728d79dacd9e7ab5",
+      "packaged_sha256": "9a52b77414802a5b0dde6f6fb429181e4d54fe74ebbff0ab2e44132243b747d0",
       "path": "providers/mac-storage/backup.py",
       "source": "/Users/micahelbyrns/.local/share/biome-mac-storage/releases/5751e951039c7d2598350ec47fda96d6ca6c6783543811a688e79b5a191f35ec/providers/mac-storage/backup.py",
       "source_sha256": "93a7351074af697329e67a76fadd1f6a42eae28e08de6eee53809c8ff6bd1cea"

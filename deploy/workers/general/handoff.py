@@ -8,6 +8,7 @@ import argparse
 import datetime
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -198,6 +199,11 @@ def fresh_health(plan,objects):
     return True
 def ready_seconds(component):return READY_SECONDS.get(component,180)
 def prepare(args):
+    replica_host=getattr(args,"replica_host",None)
+    if args.component=="replica":
+        if not replica_host:raise ValueError("Replica preparation requires a verified current --replica-host IP address")
+        replica_host=str(ipaddress.ip_address(replica_host))
+    elif replica_host:raise ValueError("--replica-host applies only to replica")
     home=Path(args.home).resolve();out=Path(args.output).resolve()
     out.mkdir(mode=0o700,parents=True,exist_ok=True)
     if (out/"plan.json").exists():raise ValueError("Use a new output directory; preserve the prior handoff plan")
@@ -224,6 +230,7 @@ def prepare(args):
        "BIOME_GITLAB_HOST":urlsplit(cfg["url"]).hostname,
        "BIOME_GIT_WORKSPACES":cfg.get("workspace_root",str(home/".local/share/biome-gitlab/workspaces")),
        "BIOME_HOST_IO_CLIENT_DIR":str(Path(args.client_dir).resolve())}
+    if replica_host:environment["BIOME_REPLICA_HOST"]=replica_host
     envpath=out/"environment"
     if any(not isinstance(v,str) or "\n" in v or "\r" in v for v in environment.values()):raise ValueError("Invalid environment value")
     envpath.write_text("".join(k+"="+json.dumps(v)+"\n" for k,v in environment.items()));envpath.chmod(0o600)
@@ -241,6 +248,9 @@ def prepare(args):
           "compose":str(prepared),"environment":str(envpath),"prepared_files":files,
           "client_dir":environment["BIOME_HOST_IO_CLIENT_DIR"],"image":info["Id"],"version":args.version,
           "directory":str(out),"status":"prepared","containers":[],"transitions":[],"native_transition_started":False}
+    if replica_host:
+        plan["replica_source"]={"host":replica_host,"volume":json.loads((state/"replica.json").read_text())["volume"],
+                                "host_key_alias":"biome-sacred-pi"}
     persist(plan);compose(plan,"config","--quiet")
     print(json.dumps({"prepared":str(out/"plan.json"),"native_pids":active_processes(plan["native_paths"]),
                       "unsettled":unsettled(state),"image":plan["image"]}))
@@ -346,6 +356,7 @@ def main():
     q=sub.add_parser("prepare");q.add_argument("component",choices=COMPONENTS);q.add_argument("--home",default=str(Path.home()))
     q.add_argument("--version",required=True);q.add_argument("--client-dir",required=True);q.add_argument("--output",required=True)
     q.add_argument("--docker-bind-proof",help="Existing successful native bind-owner fixture receipt")
+    q.add_argument("--replica-host",help="Current Pi IP verified against its gateway registration; replica only")
     for mode in ("apply","rollback"):
         q=sub.add_parser(mode);q.add_argument("plan")
     args=p.parse_args()
