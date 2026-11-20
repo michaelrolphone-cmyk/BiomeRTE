@@ -62,10 +62,22 @@ does not activate or replace any workload.
 The workflow uses the built-in GITHUB_TOKEN with packages:write. It supplies
 that token only to the publication checks/login step, does not persist checkout
 credentials, and logs out afterward. No account PAT or repository secret is
-needed to publish. Existing destinations must be verified private; new GHCR
-packages are private by default. A second check verifies all packages are
-private after publication. An unreadable or public destination fails the run
-rather than changing visibility.
+needed to publish to existing private packages that grant this workflow access.
+Existing destinations must be verified private. An absent package is allowed
+only after the actual publishing repository is verified private through the
+GitHub API. The workflow repository comes from GITHUB_REPOSITORY; an explicit
+--repository cannot override that identity. Missing publishing context and
+public, internal, or unknown repository visibility fail before any push.
+
+GitHub Actions creation using GITHUB_TOKEN inherits the publishing repository's
+visibility and permissions. It must not rely on the generic Container registry
+default-private statement. First creation therefore belongs in a verified
+private publishing repository, or the package must already have verified private
+visibility and grant this workflow access. A second check verifies all packages
+are private after publication. An unreadable or nonprivate destination fails
+the run rather than changing visibility; errors report the actual visibility.
+See GitHub's Actions-specific defaults:
+https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows
 
 The repositories are:
 
