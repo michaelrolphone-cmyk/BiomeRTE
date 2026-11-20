@@ -368,3 +368,48 @@ python3 -m unittest tests.test_docker_services tests.test_service_adapters tests
 These tests qualify the generic protocol and lifecycle. Actual checkpoint
 replication, sink fencing, authority startup, and Pi/Mac network failover still
 require service-specific integration and hardware qualification.
+
+## Private registry pulls
+
+The supervisor talks directly to the Docker Engine socket. A login in the Mac
+Docker CLI/keychain does not supply credentials to this Linux process. Configure
+an optional absolute path in its private runner.json:
+
+    "registry_auth_file": "/registry-auth/config.json"
+
+Bind a dedicated host credential DIRECTORY read-only at /registry-auth.
+Use directory mode 0700 and a regular config.json file with mode 0600 (0400 is
+also accepted). A directory bind lets an atomic host-side replacement become
+visible on the next pull; a single-file bind can retain the old inode.
+
+The file uses a minimal Docker auth-file structure:
+
+    {
+      "auths": {
+        "ghcr.io": {
+          "auth": "<base64 of username:read-only-package-token>"
+        }
+      }
+    }
+
+An entry with exactly username and password is also accepted. Base64 is
+encoding, not encryption. Keep the file in private host configuration, outside
+repositories, images, release receipts, manifests and service mounts. The
+registry key is an exact lowercase hostname with an optional explicit port.
+A ghcr.io credential is never sent to ghcr.io.evil, ghcr.io:443 or another
+registry. Mac keychain helpers and Docker credsStore/credHelpers are not
+executed by the supervisor; do not mount the Mac's general Docker config.
+
+The runner reads and validates the file at each pull, refuses symlinks,
+nonregular files and group/world-accessible permissions, and sends the
+URL-safe X-Registry-Auth header only to the Engine image-pull request. Missing
+or malformed configured credentials fail closed before any pull. Registries
+absent from a valid auths map continue to use anonymous pulls. With no
+registry_auth_file configured, existing anonymous/local-image behavior is
+unchanged. Cached current/previous images remain available without a new pull.
+
+For GHCR, persistent hosts need a classic PAT with read:packages and access to
+the intended private packages. Do not copy a short-lived Actions GITHUB_TOKEN
+onto a host. Adding registry credentials does not replace the active supervisor,
+change a service manifest or activate another workload; use the reviewed
+ownership-draining rollout procedure when installing a new supervisor image.

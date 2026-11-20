@@ -41,3 +41,60 @@ Render without --local after publication to select registry digests. Deploy usin
 Keep the controller, independent maintenance route, updater, host terminal, Docker host adapter and native accelerator adapters available during application replacement. Images contain code; private configuration and authoritative state use existing private bindings and qualified state adapters.
 
 Docker's Linux VM has less free disk than the native host. Use shared lightweight layers, sequential builds and guest-space observations. This utility never prunes data, changes the storage mode or restarts the daemon.
+
+## Private GHCR publication from qualified main
+
+The Publish private container images workflow runs after BiomeRTE qualification
+succeeds on main. Manual dispatch is accepted only on main and still requires
+the latest qualification run for that exact commit to have succeeded. The
+workflow checks out the qualified commit explicitly and rejects fork/PR runs.
+It builds and smoke-tests service-runner, service-authority and portable-services
+for linux/arm64 and linux/arm/v7 through the common tool above.
+
+The build and publish steps share a temporary GitHub-hosted runner. This
+repository is public, so image archives are deliberately not uploaded to
+Actions artifacts. Only nonsecret source/qualification/visibility/digest
+receipts are retained as the ghcr-release-RUN-ATTEMPT artifact for 90 days.
+Copy these receipts into the deployment's retained release records. A partial
+push preserves every confirmed digest in images.lock.json; publication alone
+does not activate or replace any workload.
+
+The workflow uses the built-in GITHUB_TOKEN with packages:write. It supplies
+that token only to the publication checks/login step, does not persist checkout
+credentials, and logs out afterward. No account PAT or repository secret is
+needed to publish. Existing destinations must be verified private; new GHCR
+packages are private by default. A second check verifies all packages are
+private after publication. An unreadable or public destination fails the run
+rather than changing visibility.
+
+The repositories are:
+
+    ghcr.io/michaelrolphone-cmyk/service-runner
+    ghcr.io/michaelrolphone-cmyk/service-authority
+    ghcr.io/michaelrolphone-cmyk/portable-services
+
+Tags retain the source commit prefix and platform; deployment references use
+the full confirmed registry digest. The same private-visibility guard is
+available to dependent image workflows:
+
+    python3 deploy/docker-services/ghcr.py private --owner OWNER --image IMAGE \
+      --output private-before.json
+    python3 deploy/docker-services/ghcr.py private --owner OWNER --image IMAGE \
+      --require-existing --output private-after.json
+
+GH_TOKEN authorizes these read-only GitHub checks. It never enters a receipt.
+For platform builds qualified separately, combine exact-source releases with:
+
+    python3 deploy/docker-services/images.py combine \
+      --lock /path/to/arm64/images.lock.json \
+      --lock /path/to/amd64/images.lock.json \
+      --output-dir /path/to/combined
+
+Combine validates every input archive and matching source/top-level provenance,
+rejects duplicate targets, preserves per-image metadata, and rechecks copied
+archives before completing the combined lock. It neither rebuilds nor publishes.
+
+Private deployment pulls need separate read:packages credentials. The Actions
+publication token is job-scoped and must not be copied to a persistent host.
+A registry release does not establish physical Pi compatibility or state/effect
+handoff for Rover and ToF.
