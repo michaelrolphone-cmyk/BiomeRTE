@@ -24,7 +24,10 @@ A lost container connection only loses delivery. The native call continues throu
 cleanup under the same admission slot, and the next request stays queued.
 Model calls never retry automatically. The existing worker ledger records only
 hashes/fences/status and fails an interrupted operation instead of replaying it.
-Results awaiting gateway acknowledgment remain ciphertext in RAM.
+Results awaiting gateway acknowledgment remain ciphertext in RAM. Pre-cutover
+hello/session keys are also RAM-only; a half-completed handshake needs a fresh
+signed exchange after the paired restart. Signing identity and phone pairing
+persist; ephemeral session continuation is not claimed.
 
 Model payloads require TLS, the existing HostIO bearer credential, and a pinned
 registered host identity. The existing HTTP listener can continue to serve
@@ -110,7 +113,10 @@ python3 deploy/workers/private/prepare.py --output /absolute/deployment   --clie
 The command writes compose.json, a container client config and separate native
 client config, a **models-only** bridge patch with exact source hashes, native
 LaunchAgent rollback copies, and plan.json. It validates the actual image
-architecture and Docker Compose specification. It does not start a container,
+architecture and Docker Compose specification. It sets separate native and
+container TLS origins, verifies the immutable native model source hashes, and
+imports the actual image health module and signing identity as the deployment
+UID with read-only state mounts and no network. It does not start a container,
 stop a native worker, mutate gateway definitions, enroll a phone or change HostIO.
 
 Merge config/bridge.models.patch.json into the latest HostIO config, preserving
