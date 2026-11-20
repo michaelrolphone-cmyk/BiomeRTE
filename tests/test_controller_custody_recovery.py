@@ -203,6 +203,35 @@ class CustodyRecoveryTests(unittest.TestCase):
                 with self.assertRaises(custody.CustodyError):
                     custody.require_release(dict(self.config, controller_argv=command), self.new)
 
+    def test_only_the_qualified_selected_trace_wrapper_keeps_native_diagnostics(self):
+        self.freeze()
+        self.select(self.new)
+        path = os.path.join(self.new, 'deploy', 'controller_trace.py')
+        with open(path, 'w') as stream:
+            stream.write('CUSTODY_PROTOCOL = 1\n')
+        log = os.path.join(self.home, 'request-diagnostics.log')
+        command = [sys.executable, '-S', 'deploy/controller_trace.py',
+                   '--diagnostic-log', log, '--home', self.home, 'serve']
+        config = dict(self.config, controller_argv=command)
+        with mock.patch.object(launcher.os, 'execvpe') as execute, mock.patch.object(launcher.os, 'chdir'):
+            launcher.launch(config)
+        self.assertEqual(execute.call_args.args[1], command)
+        old = list(command)
+        old[2] = os.path.join(self.old, 'controller_trace.py')
+        with self.assertRaises(custody.CustodyError):
+            custody.require_release(dict(config, controller_argv=old), self.new)
+        for offset, replacement in ((3, '--diagnostic-l'), (4, 'relative.log'),
+                                    (5, '--hom'), (6, self.temporary)):
+            bad = list(command)
+            bad[offset] = replacement
+            with self.subTest(offset=offset):
+                with self.assertRaises(custody.CustodyError):
+                    custody.require_release(dict(config, controller_argv=bad), self.new)
+        with open(path, 'w') as stream:
+            stream.write("raise AssertionError('legacy trace must never execute')\n")
+        with self.assertRaises(custody.CustodyError):
+            custody.require_release(config, self.new)
+
     def test_relative_interpreter_is_not_a_pinned_execution_boundary(self):
         self.freeze()
         command = ['python', '-S', '-m', 'biomerte', '--home', self.home, 'serve']

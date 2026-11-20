@@ -111,11 +111,17 @@ def command_entry(config, release):
             raise CustodyError('custody_command_unverified')
     else:
         entry = os.path.realpath(os.path.join(release, command[index]))
+        trace = os.path.join(release, 'deploy', 'controller_trace.py')
         allowed = [os.path.join(release, 'deploy', 'gateway-agent.py'),
-                   os.path.join(release, 'gateway', 'deploy', 'gateway-agent.py')]
+                   os.path.join(release, 'gateway', 'deploy', 'gateway-agent.py'), trace]
         if entry not in allowed:
             raise CustodyError('custody_command_unverified')
         arguments = command[index + 1:]
+        if entry == trace:
+            if (len(arguments) != 5 or arguments[0] != '--diagnostic-log'
+                    or not os.path.isabs(arguments[1])
+                    or arguments[2] != '--home' or arguments[4] != 'serve'):
+                raise CustodyError('custody_command_unverified')
     # argparse accepts unique long-option abbreviations. A second --hom or
     # --ho could otherwise override the exact --home that we just inspected.
     if any(argument.split('=', 1)[0] in ('--h', '--ho', '--hom')
@@ -155,8 +161,11 @@ def require_release(config, release=None):
     entry = command_entry(config, release)
     if entry is not None:
         directory = os.path.dirname(os.path.relpath(entry, release))
-        require_protocol(release, os.path.join(directory, 'gateway-agent.py'))
-        require_protocol(release, os.path.join(directory, 'mcp_events.py'))
+        if os.path.basename(entry) == 'controller_trace.py':
+            require_protocol(release, os.path.join(directory, 'controller_trace.py'))
+        else:
+            require_protocol(release, os.path.join(directory, 'gateway-agent.py'))
+            require_protocol(release, os.path.join(directory, 'mcp_events.py'))
     # A native candidate may also restart a paired gateway. Reject incompatible
     # bundled gateway code before switching the pointer, not after that restart.
     for directory in ('deploy', os.path.join('gateway', 'deploy')):

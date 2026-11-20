@@ -108,6 +108,40 @@ an active domain simply to make a plan pass.
       --policy /private/migration/policy.json \
       --output /private/migration/plan.json
 
+A newly provisioned Site operator proxy must also be declared in the reviewed
+policy. The target remains the four-field logical identity declaration above.
+Add an explicit fresh destination enrollment:
+
+    {
+      "retire_event_sources": [],
+      "resolutions": [],
+      "operator_enrollments": [{
+        "actor": "<public-key fingerprint>",
+        "public_key": "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----\\n",
+        "label": "Site controller operator proxy",
+        "actor_alias": "admin"
+      }]
+    }
+
+The planner verifies the RSA public-key fingerprint, accepts exactly one public
+PEM, and rejects private/trailing key material, duplicate actors, unknown
+fields, or any matching peer ID in either source, including a revoked peer.
+A collision cannot be hidden by choosing another source or retiring an event
+domain. The deterministic destination peer has `scopes: []` and
+`enabled: true`; only the separately configured managed operator role gives
+it site administration authority. Source rows and backup bytes remain
+unchanged. The declaration, exact admin alias and peer digest are part of the
+reviewed plan and retained migration provenance.
+
+Before creating checkpoint files, bootstrap verifies the exported state digest,
+the enrollment declaration against provenance and the exact new peer row.
+The helper configuration's `operator_actors` and `operator_actor_aliases`
+must exactly match the reviewed declarations. Extra inherited peers cannot be
+silently elevated. Keep the operator private key in its existing private
+provisioning files; only the public PEM belongs in this policy. Create a new
+reviewed plan after adding or changing an enrollment. Do not edit exported
+records or a signed bootstrap packet to insert a peer afterwards.
+
 The plan includes complete source inventories and hashes, deterministic
 collision decisions and unresolved blockers. It contains no record payloads.
 Recreate a new plan artifact after reviewing new explicit resolutions.

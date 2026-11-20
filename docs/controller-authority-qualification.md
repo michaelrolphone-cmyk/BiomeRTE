@@ -360,3 +360,21 @@ An incompatible rollback must leave the current pointer unchanged and durable
 `rollback_failed` evidence while permitting a subsequent compatible repair.
 These gates supplement the authority/replica/witness qualification above;
 they do not prove live failover or authorize an unobserved cutover.
+
+### Operator enrollment and preserved native diagnostics
+
+A fresh logical operator proxy cannot authenticate until its public key is an
+enabled peer in the migrated site. Declare the exact public key, fingerprint,
+label and admin alias through `policy.operator_enrollments` before reviewing
+the final plan. The planner creates this destination-only row without changing
+a captured source. Bootstrap must reject any state/peer/provenance mismatch or
+operator configuration drift before creating checkpoint files. Never insert
+the key by editing exported state or a signed checkpoint after review.
+
+If a native service uses the resident diagnostic wrapper, qualify its captured
+bytes against the tracked wrapper and select the new release's
+`deploy/controller_trace.py` through the stable launcher. Preserve its stable
+absolute Python interpreter, `-S`, existing absolute diagnostic log path,
+native home and `serve` command. The old absolute wrapper is not an eligible
+launch target. The selected wrapper must forward the same guarded Application
+and Store methods; verify frozen write/tick rejection with diagnostics active.

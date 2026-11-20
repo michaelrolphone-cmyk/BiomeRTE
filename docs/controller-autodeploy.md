@@ -382,9 +382,12 @@ opening controller databases. Missing, malformed or incompatible sources are
 rejected. A marked managed-authority home is never a native source target.
 
 For a marked home, the launcher accepts a pinned Python command with `-S`
-and either `-m biomerte --home /absolute/home serve`, or the selected release's
-`deploy/gateway-agent.py` or `gateway/deploy/gateway-agent.py` with the matching
-explicit `--home`. Unreviewed wrappers, isolated/import-ignoring interpreter
+and either `-m biomerte --home /absolute/home serve`, the selected release's
+`deploy/controller_trace.py --diagnostic-log /absolute/existing.log --home /absolute/home serve`,
+or `deploy/gateway-agent.py` / `gateway/deploy/gateway-agent.py` with the matching
+explicit `--home`. The diagnostic wrapper has its own protocol declaration and
+forwards the original guarded Application/Store methods; preserve the existing
+absolute diagnostic log path when moving an old wrapper into the new release. Unreviewed wrappers, isolated/import-ignoring interpreter
 options, an entrypoint in an older release, or a different home fail closed.
 Unmarked installations retain their existing command behavior.
 

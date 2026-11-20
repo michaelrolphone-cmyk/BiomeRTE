@@ -1,4 +1,9 @@
 """Opt-in bounded resident diagnostics; never records request values (Python 3.4+)."""
+
+# The stable launcher checks this literal before loading a marked source.
+# This wrapper forwards the original Application and Store custody guards.
+CUSTODY_PROTOCOL = 1
+
 import argparse
 import contextlib
 import json

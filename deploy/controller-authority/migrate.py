@@ -407,10 +407,96 @@ def _artifact_merge(key, values):
     return result
 
 
+
+def operator_enrollments(value):
+    """Validate explicit fresh destination identities, never source edits."""
+    if not isinstance(value, list):
+        raise MigrationError("Explicit operator enrollment list required")
+    result, actors = [], set()
+    for entry in value:
+        if (not isinstance(entry, dict)
+                or set(entry) != {"actor", "public_key", "label", "actor_alias"}
+                or entry.get("actor_alias") != "admin"
+                or not isinstance(entry.get("label"), str) or not entry["label"]
+                or len(entry["label"]) > 128
+                or any(ord(char) < 32 for char in entry["label"])):
+            raise MigrationError("Exact public operator declaration and admin alias required")
+        actor = node_id(entry["actor"])
+        public = entry["public_key"]
+        if (not isinstance(public, str) or len(public) > 8192
+                or not re.fullmatch(
+                    r"-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PUBLIC KEY-----\s*",
+                    public)):
+            raise MigrationError("One public-only RSA PEM required for operator enrollment")
+        import sys
+        root = str(pathlib.Path(__file__).resolve().parents[2])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from biomerte.identity import fingerprint
+        try:
+            actual = fingerprint(public)
+        except Exception:
+            raise MigrationError("Invalid operator public key") from None
+        if actual != actor or actor in actors:
+            raise MigrationError("Operator fingerprint mismatch or duplicate enrollment")
+        actors.add(actor)
+        result.append(copy.deepcopy(entry))
+    return sorted(result, key=lambda entry: entry["actor"])
+
+
+def operator_peer(entry):
+    return {"id": entry["actor"], "key": entry["public_key"],
+            "label": entry["label"], "scopes": [], "enabled": True}
+
+
+def validate_bootstrap_operators(exported, config):
+    """Bind reviewed destination grants before creating any checkpoint files."""
+    state = exported["state"]
+    receipt = exported.get("authorization", {}).get("source_receipt")
+    if (not isinstance(receipt, dict)
+            or receipt.get("state_digest") != digest(state)):
+        raise MigrationError("Exported state differs from the reviewed receipt")
+    declarations = receipt.get("operator_enrollments", [])
+    enrolled = operator_enrollments(declarations)
+    expected = [entry["actor"] for entry in enrolled]
+    actors = config.get("operator_actors", [])
+    aliases = config.get("operator_actor_aliases", {})
+    if (not isinstance(actors, list)
+            or not all(isinstance(actor, str) for actor in actors)
+            or len(set(actors)) != len(actors) or sorted(actors) != expected
+            or aliases != {entry["actor"]: entry["actor_alias"] for entry in enrolled}):
+        raise MigrationError("Bootstrap operator grant differs from the reviewed plan")
+    rows = state.get("records")
+    if not isinstance(rows, list):
+        raise MigrationError("Canonical controller records required")
+    previous, found, provenance = None, {}, None
+    for row in rows:
+        if (not isinstance(row, list) or len(row) != 3
+                or not all(isinstance(part, str) for part in row[:2])):
+            raise MigrationError("Canonical controller row required")
+        pair = tuple(row[:2])
+        if previous is not None and pair <= previous:
+            raise MigrationError("Canonical controller rows must be strictly sorted")
+        previous = pair
+        if pair[0] == "peers" and pair[1] in expected:
+            found[pair[1]] = row[2]
+        if pair == ("_controller_migrations", receipt.get("migration_id")):
+            provenance = row[2]
+    if (not isinstance(provenance, dict)
+            or provenance.get("plan_digest") != receipt.get("plan_digest")
+            or provenance.get("target") != receipt.get("target")
+            or not isinstance(provenance.get("policy"), dict)
+            or provenance["policy"].get("operator_enrollments", []) != declarations):
+        raise MigrationError("Operator enrollment does not match migration provenance")
+    for entry in enrolled:
+        if digest(found.get(entry["actor"])) != digest(operator_peer(entry)):
+            raise MigrationError("Reviewed operator peer is missing or changed")
+
+
 def _build(snapshots, baseline, target, migration_id, policy):
     if not isinstance(migration_id, str) or not re.fullmatch("[A-Za-z0-9_.:-]{1,128}", migration_id):
         raise MigrationError("Stable migration ID required")
-    if not isinstance(policy, dict) or set(policy) - {"retire_event_sources", "resolutions"}:
+    if not isinstance(policy, dict) or set(policy) - {"retire_event_sources", "resolutions", "operator_enrollments"}:
         raise MigrationError("Unknown migration policy field")
     sources = {}
     for snapshot in snapshots:
@@ -421,6 +507,13 @@ def _build(snapshots, baseline, target, migration_id, policy):
     if len(sources) < 2 or baseline not in sources:
         raise MigrationError("At least two source controllers and an exact baseline required")
     target = target_spec(target, sources)
+    enrolled = operator_enrollments(policy.get("operator_enrollments", []))
+    for entry in enrolled:
+        actor = entry["actor"]
+        if actor == target["authority_id"] or actor in sources:
+            raise MigrationError("Operator identity must be distinct from source and logical controllers")
+        if any(("peers", actor) in rows for unused, rows in sources.values()):
+            raise MigrationError("Fresh operator enrollment collides with a source peer")
     if any(snapshot["site"] != target["site"] for snapshot, unused in sources.values()):
         raise MigrationError("Sources and target must belong to the same site")
     retired = policy.get("retire_event_sources", [])
@@ -634,6 +727,18 @@ def _build(snapshots, baseline, target, migration_id, policy):
             adopt(("_gateway_event_failures", digest([source, row["sub"], row["event"]])),
                   {"source_controller": source, "record": row})
 
+    # Enrollment belongs only to the reviewed destination. Rejecting source
+    # collisions above prevents resolution/retirement from resurrecting a key.
+    if enrolled:
+        report["operator_enrollments"] = []
+        for entry in enrolled:
+            peer = operator_peer(entry)
+            merged[("peers", entry["actor"])] = peer
+            report["operator_enrollments"].append({
+                "actor": entry["actor"], "actor_alias": entry["actor_alias"],
+                "realm": "site", "grant": "controller_operator",
+                "peer_digest": digest(peer)})
+
     # Preserve every source row exactly either in canonical state or provenance.
     for source, (snapshot, rows) in sources.items():
         for pair, value in rows.items():
@@ -694,6 +799,7 @@ def export_state(snapshots, plan, markers):
         "format": FORMAT, "migration_id": plan["migration_id"],
         "plan_digest": plan["plan_digest"], "state_digest": digest(state),
         "target": plan["target"],
+        "operator_enrollments": copy.deepcopy(plan["policy"].get("operator_enrollments", [])),
         "source_digests": {item["source_node"]: item["digest"] for item in plan["sources"]},
         "source_fence_digests": {source: digest(marker) for source, marker in sorted(by_source.items())},
         "physical_effect_outcomes_inferred": False}}
@@ -734,6 +840,7 @@ def bootstrap_controller(exported, config):
     if (not isinstance(target, dict) or config.get("service_id") != target.get("service_id")
             or sorted(config.get("controller_aliases", [])) != target.get("controller_aliases")):
         raise MigrationError("Bootstrap service scope differs from reviewed migration target")
+    validate_bootstrap_operators(exported, config)
     path = pathlib.Path(config["checkpoint_db"])
     if os.path.lexists(str(path)):
         raise MigrationError("Use a new staging checkpoint path, never replace live helper state")
