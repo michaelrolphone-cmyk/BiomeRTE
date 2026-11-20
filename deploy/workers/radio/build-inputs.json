@@ -1,0 +1,17 @@
+{
+  "base_image": "debian@sha256:50b15ac0f2b79ba71bad6a3c7606e992c4cc3213aa9b47700efebe7e8678931f",
+  "base_tag_observed": "debian:bookworm-slim",
+  "manifest": {
+    "digest": "sha256:50b15ac0f2b79ba71bad6a3c7606e992c4cc3213aa9b47700efebe7e8678931f",
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "platform": {
+      "architecture": "arm",
+      "os": "linux",
+      "variant": "v7"
+    },
+    "size": 1041
+  },
+  "observed_at": "2026-11-20T15:01:08.891183+00:00",
+  "platform": "linux/arm/v7",
+  "schema": "biomerte-radio-build-inputs/1"
+}

@@ -1,0 +1,228 @@
+{
+  "adaptations": [
+    "optional daemon readiness pipe",
+    "image-generated FM backend path/hash manifest with native defaults retained",
+    "macOS fixture temporary-directory normalization"
+  ],
+  "backend_binary_observed": {
+    "path": "/home/pi/Downloads/fm/fm_transmitter-master/fm_transmitter",
+    "sha256": "8739363fd1e0cd557947015c11d90c7b8c4de0fbabdde8471e63697ce54edb53",
+    "size": 37336
+  },
+  "bundle_sha256": "067016f42f1f41e58bc40d76ca53ca63466bdec527d8b36ac4e9927b7742a247",
+  "files": [
+    {
+      "destination": "providers/pi-sdr/esp_capture.py",
+      "packaged_sha256": "81149eb7442ca7a596acc990173fec1da83cc6420d3cba2fd2f591ff512d506b",
+      "sha256": "81149eb7442ca7a596acc990173fec1da83cc6420d3cba2fd2f591ff512d506b",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/esp_capture.py"
+    },
+    {
+      "destination": "providers/pi-sdr/routing.py",
+      "packaged_sha256": "fa36f99ab5a16e9b65cdca26f3815b46b29222aed7374ad29c903bc6247e2eff",
+      "sha256": "fa36f99ab5a16e9b65cdca26f3815b46b29222aed7374ad29c903bc6247e2eff",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/routing.py"
+    },
+    {
+      "destination": "providers/pi-sdr/test_routing.py",
+      "packaged_sha256": "8c03d29c3967199d97669a9111347b9ca87c08e771be8aab53f6aed0fe3b913d",
+      "sha256": "8c03d29c3967199d97669a9111347b9ca87c08e771be8aab53f6aed0fe3b913d",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/test_routing.py"
+    },
+    {
+      "destination": "providers/pi-sdr/server.py",
+      "packaged_sha256": "77e8f40e75b6b7c8de5d9550a82ad89993403cd33a1834db31accf0e0d2a7a25",
+      "sha256": "97f26315c53279974fc87a3369d671ae1a459be361cba08120ca428507a078cf",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/server.py"
+    },
+    {
+      "destination": "providers/pi-sdr/test_esp_capture.py",
+      "packaged_sha256": "2cb7d616b4f9824f5f05f3de70529565bf6ff980dc1666570fa52090d6e1ceb3",
+      "sha256": "2cb7d616b4f9824f5f05f3de70529565bf6ff980dc1666570fa52090d6e1ceb3",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/test_esp_capture.py"
+    },
+    {
+      "destination": "providers/pi-sdr/main.py",
+      "packaged_sha256": "73b054c8a2241dbb201aa79802b7f764e0d2372b5813dfd661c78692051a8bf5",
+      "sha256": "73b054c8a2241dbb201aa79802b7f764e0d2372b5813dfd661c78692051a8bf5",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/main.py"
+    },
+    {
+      "destination": "providers/pi-sdr/README.md",
+      "packaged_sha256": "83f5ee833dbd2893c6c846cf2d45b179bed5b5d0c4640d71d7739a8f2fc9fbc7",
+      "sha256": "83f5ee833dbd2893c6c846cf2d45b179bed5b5d0c4640d71d7739a8f2fc9fbc7",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/README.md"
+    },
+    {
+      "destination": "providers/pi-sdr/install.py",
+      "packaged_sha256": "4ee723e71d574d91a418b0797b19ea6cef677670abd6cec331986c437a9a8dda",
+      "sha256": "4ee723e71d574d91a418b0797b19ea6cef677670abd6cec331986c437a9a8dda",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/install.py"
+    },
+    {
+      "destination": "providers/pi-sdr/test_adapter.py",
+      "packaged_sha256": "1b981db4227a5803d9691f96cc9e46c205277e7de747c1633707163dab351e3d",
+      "sha256": "1b981db4227a5803d9691f96cc9e46c205277e7de747c1633707163dab351e3d",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/test_adapter.py"
+    },
+    {
+      "destination": "providers/pi-sdr/capture.py",
+      "packaged_sha256": "de58797fbcb63ea4cae73283068277c7039e05cfbfe2fadbd22eda3ad5b4f958",
+      "sha256": "de58797fbcb63ea4cae73283068277c7039e05cfbfe2fadbd22eda3ad5b4f958",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/capture.py"
+    },
+    {
+      "destination": "providers/pi-fm/install.py",
+      "packaged_sha256": "958ff608bd56d0c7229abb8fc1b4205f9a1a0d27303dac2aff4a57c5182ba164",
+      "sha256": "958ff608bd56d0c7229abb8fc1b4205f9a1a0d27303dac2aff4a57c5182ba164",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/install.py"
+    },
+    {
+      "destination": "providers/pi-fm/server.py",
+      "packaged_sha256": "3912ace2e306a02329ff48088418ab0efd7651143835b66c957616914d7ba6c3",
+      "sha256": "6735fcd53ce43007c156d3d609b8aa53d1834f0e291891763dec0a8d325d280d",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/server.py"
+    },
+    {
+      "destination": "providers/pi-fm/common.py",
+      "packaged_sha256": "13713dfca81aafa1c875638dce303e10f91fb95a905d9583adb4805252291a03",
+      "sha256": "a4b7d59cc12c3a9a7775ed70f577d55b9293522c6320f3e604819d0ec0cafac3",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/common.py"
+    },
+    {
+      "destination": "providers/pi-fm/worker.py",
+      "packaged_sha256": "df48d5d6f9ab8bbf1a693584bb6bfb9400e692fc6836fef1de0fe9b35c93fd65",
+      "sha256": "df48d5d6f9ab8bbf1a693584bb6bfb9400e692fc6836fef1de0fe9b35c93fd65",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/worker.py"
+    },
+    {
+      "destination": "providers/pi-fm/main.py",
+      "packaged_sha256": "75a7814c669fd000574ef93ea67c70c9dedd7fdf3cd600e9ac392bb71f58162c",
+      "sha256": "75a7814c669fd000574ef93ea67c70c9dedd7fdf3cd600e9ac392bb71f58162c",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/main.py"
+    },
+    {
+      "destination": "providers/pi-fm/README.md",
+      "packaged_sha256": "e14e9943d84080fb6e1228b728df0c66d380d95c49d76b72c4bac958882992ba",
+      "sha256": "e14e9943d84080fb6e1228b728df0c66d380d95c49d76b72c4bac958882992ba",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/README.md"
+    },
+    {
+      "destination": "providers/pi-fm/test_watch.py",
+      "packaged_sha256": "dd0421b193621c3a0c62645f6c091517456f5162273814ba44320c5c315f15dc",
+      "sha256": "dd0421b193621c3a0c62645f6c091517456f5162273814ba44320c5c315f15dc",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/test_watch.py"
+    },
+    {
+      "destination": "providers/pi-fm/hardware.py",
+      "packaged_sha256": "0c4e1064c442176b404c598f925bd033dec144abcb23f6bd3920718740bf6b16",
+      "sha256": "0c4e1064c442176b404c598f925bd033dec144abcb23f6bd3920718740bf6b16",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/hardware.py"
+    },
+    {
+      "destination": "providers/pi-fm/test_adapter.py",
+      "packaged_sha256": "d24347243736457d943c8f7af6332acf6ae7c4a4bcd5b868f9993636aa438656",
+      "sha256": "d24347243736457d943c8f7af6332acf6ae7c4a4bcd5b868f9993636aa438656",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/test_adapter.py"
+    },
+    {
+      "destination": "providers/pi-fm/test_wav.py",
+      "packaged_sha256": "ae6c2bd514f7097109c6951552b06f6de8016f15199e9303e58a534071270139",
+      "sha256": "be697c1a1f4f14c79000279a55391273ba731a93e43a3370e531061669a5f71f",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/test_wav.py"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/transmitter.h",
+      "packaged_sha256": "9228a5300181068ffe97ecf58c0ea2f576e5d5507eb408a1a2335d06f0b99611",
+      "sha256": "9228a5300181068ffe97ecf58c0ea2f576e5d5507eb408a1a2335d06f0b99611",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/transmitter.h"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/audio_format.h",
+      "packaged_sha256": "4fcdb23e1590e8d02e6d369245b621955cbcca18bae87cc813ffae5b2c6afbef",
+      "sha256": "4fcdb23e1590e8d02e6d369245b621955cbcca18bae87cc813ffae5b2c6afbef",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/audio_format.h"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/error_reporter.cpp",
+      "packaged_sha256": "88036fab65242d7b69969c7f2cd63c067d9c008391d2bf2c21134c03efe7da51",
+      "sha256": "88036fab65242d7b69969c7f2cd63c067d9c008391d2bf2c21134c03efe7da51",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/error_reporter.cpp"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/README.md",
+      "packaged_sha256": "58e3a4597157001d69ce5871b8c5dfd142015de43ad8f92c6fcf1a9918ae2029",
+      "sha256": "58e3a4597157001d69ce5871b8c5dfd142015de43ad8f92c6fcf1a9918ae2029",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/README.md"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/transmitter.cpp",
+      "packaged_sha256": "469e179f8608ce84d7207cceb3b1c7c084d3b57cec7d13f5fad5e987537c8b38",
+      "sha256": "469e179f8608ce84d7207cceb3b1c7c084d3b57cec7d13f5fad5e987537c8b38",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/transmitter.cpp"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/main.cpp",
+      "packaged_sha256": "e4a21f19ba3ba524038f759380f27e99e220fcddd097994e89680fe91cebc031",
+      "sha256": "e4a21f19ba3ba524038f759380f27e99e220fcddd097994e89680fe91cebc031",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/main.cpp"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/error_reporter.h",
+      "packaged_sha256": "7c09595ece82be5773725343744861f244ea7490103444ad4705139dd81b0389",
+      "sha256": "7c09595ece82be5773725343744861f244ea7490103444ad4705139dd81b0389",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/error_reporter.h"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/wave_reader.h",
+      "packaged_sha256": "525236a7171f38a99aafbea1a9c710d2e2f6032d75b0ceb865ced7ddb59de41e",
+      "sha256": "525236a7171f38a99aafbea1a9c710d2e2f6032d75b0ceb865ced7ddb59de41e",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/wave_reader.h"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/pcm_wave_header.h",
+      "packaged_sha256": "3bfe16c170ec48bb9937c2ff3bbf668174d477035453633f2f94f8e70361fbae",
+      "sha256": "3bfe16c170ec48bb9937c2ff3bbf668174d477035453633f2f94f8e70361fbae",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/pcm_wave_header.h"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/wave_reader.cpp",
+      "packaged_sha256": "68ea0be0019bd24ab8b022dee8c8fc96cded4a3c9587ad1f17449b47a6e97cc2",
+      "sha256": "68ea0be0019bd24ab8b022dee8c8fc96cded4a3c9587ad1f17449b47a6e97cc2",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/wave_reader.cpp"
+    },
+    {
+      "destination": "providers/pi-fm/contract.json",
+      "packaged_sha256": "a3756d0fffd748c22f8d0ae5eb0cbb40b87257da46558944d5ab60a5bdffbff7",
+      "sha256": "a3756d0fffd748c22f8d0ae5eb0cbb40b87257da46558944d5ab60a5bdffbff7",
+      "source_path": "/home/pi/biomerte-fm-migration-20261113/providers/pi-fm/contract.json"
+    },
+    {
+      "destination": "providers/pi-sdr/contract-v1.json",
+      "packaged_sha256": "eb1928c18292c8e3192420fdb619da30e5bf3c7f0d721dfbea690b097d11f4de",
+      "sha256": "eb1928c18292c8e3192420fdb619da30e5bf3c7f0d721dfbea690b097d11f4de",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/contract-v1.json"
+    },
+    {
+      "destination": "providers/pi-sdr/contract.json",
+      "packaged_sha256": "96d3bcfd4f63d1804f4adeaafc52718ad6dfedaececaf33e5fa76c1d965f6824",
+      "sha256": "96d3bcfd4f63d1804f4adeaafc52718ad6dfedaececaf33e5fa76c1d965f6824",
+      "source_path": "/home/pi/biomerte-sdr-routing-20261113/pi-sdr/contract.json"
+    },
+    {
+      "destination": "deploy/workers/radio/fm-backend/makefile",
+      "packaged_sha256": "0dd620191127fbc527c0e2b7cf02d05012bc1bc2307054d259f8cd9c80985efe",
+      "sha256": "0dd620191127fbc527c0e2b7cf02d05012bc1bc2307054d259f8cd9c80985efe",
+      "source_path": "/home/pi/Downloads/fm/fm_transmitter-master/makefile"
+    }
+  ],
+  "host": "ProximityRF",
+  "platform": [
+    "Linux",
+    "ProximityRF",
+    "4.4.48-v7+",
+    "#964 SMP Mon Feb 13 16:57:51 GMT 2017",
+    "armv7l"
+  ],
+  "schema": "biomerte-worker-installed-source/1"
+}
