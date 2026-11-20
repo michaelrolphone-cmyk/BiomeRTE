@@ -48,9 +48,17 @@ def custody(tx, ctx, provider, operation, generation, observation):
     state = observation.get('state')
     if state not in ('starting','launching','running','finished','interrupted','uncertain','not_started'):
         raise Fault('Invalid custody state')
-    now = time.time()
     allowed = ('state','runner_pid','adapter_pid','recovery_path','local_observed_at')
-    action['custody'] = dict((k,observation[k]) for k in allowed if k in observation)
+    reported = dict((k,observation[k]) for k in allowed if k in observation)
+    previous = action.get('custody', {})
+    if (state in ('finished','interrupted','uncertain','not_started')
+            and previous.get('observed_at') is not None
+            and reported == dict((k,previous[k]) for k in allowed if k in previous)):
+        # Repeating frozen executor evidence cannot prove a fresh live custodian.
+        # Starting/launching/running observations retain their heartbeat behavior.
+        return {'operation':operation,'observed_at':previous['observed_at'],'state':action['state']}
+    now = time.time()
+    action['custody'] = reported
     action['custody']['observed_at'] = now
     if action['state'] in ('claimed','uncertain') and state in ('launching','running'):
         try:
