@@ -31,8 +31,8 @@ class PublicationFixture(unittest.TestCase):
         self.identity = digest([self.action[k] for k in
                                 ('contract','inputs','resource','generation','lease')])
 
-    def call(self, operation, **args):
-        return self.app.call(operation, args, uid(), 'site')
+    def call(self, op, **args):
+        return self.app.call(op, args, uid(), 'site')
 
     def read(self, fn):
         return self.app.stores['site'].execute(fn, read_only=True)
