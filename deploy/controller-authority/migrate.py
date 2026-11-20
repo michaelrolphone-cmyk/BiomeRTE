@@ -1,0 +1,597 @@
+"""Offline, provenance-preserving controller-state migration.
+
+This utility never starts an authority or edits a source database. Sources must
+be stopped or running the freeze guard before the final snapshot. A marker is
+an admission fence, not evidence that an old, unpatched process has stopped.
+Snapshot/export payloads contain private application data: keep them on the
+authorized hosts, and print only inventories/collision reports.
+"""
+import argparse
+import base64
+import copy
+import hashlib
+import json
+import os
+import pathlib
+import re
+import sqlite3
+from urllib.parse import quote
+
+FORMAT = "biomerte-controller-migration/1"
+ARCHIVE = "_controller_migration_archive"
+RECEIPT_CONFLICTS = "_controller_receipt_conflicts"
+STREAM_CONFLICTS = "_controller_receipt_stream_conflicts"
+EVENT_KINDS = frozenset(("events", "delegation_events"))
+EVENT_META = frozenset(("events", "delegation_sequence", "last_run",
+                         "operational_retention", "operational_retention/history"))
+TERMINAL_RUNS = frozenset(("completed", "cancelled", "failed"))
+
+class MigrationError(ValueError):
+    pass
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def json_chunks(value):
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False, allow_nan=False)
+    return (part.encode("utf-8") for part in encoder.iterencode(value))
+
+
+def digest(value):
+    hasher = hashlib.sha256()
+    for chunk in json_chunks(value):
+        hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def encoded_size(value):
+    return sum(len(chunk) for chunk in json_chunks(value))
+
+
+def node_id(value):
+    if not isinstance(value, str) or not re.fullmatch("[a-f0-9]{64}", value):
+        raise MigrationError("Exact controller fingerprint required")
+    return value
+
+
+def rows_of(snapshot):
+    if not isinstance(snapshot, dict) or snapshot.get("format") != FORMAT:
+        raise MigrationError("Controller snapshot format required")
+    node_id(snapshot.get("source_node"))
+    if not isinstance(snapshot.get("site"), str) or not snapshot["site"]:
+        raise MigrationError("Source site required")
+    rows = snapshot.get("records")
+    if not isinstance(rows, list):
+        raise MigrationError("Canonical source records required")
+    result = {}
+    for row in rows:
+        if (not isinstance(row, list) or len(row) != 3
+                or not all(isinstance(v, str) and v for v in row[:2])):
+            raise MigrationError("Invalid canonical source row")
+        key = tuple(row[:2])
+        if key in result:
+            raise MigrationError("Duplicate source record identity")
+        canonical(row[2])
+        result[key] = row[2]
+    return result
+
+
+def summarize_rows(rows, source_node, site):
+    """Bound memory by one canonical row, including on the small Pi."""
+    kinds, count, size = {}, 0, 2
+    hasher = hashlib.sha256(b"[")
+    previous = None
+    for kind, key, value in rows:
+        pair = (kind, key)
+        if previous is not None and pair <= previous:
+            raise MigrationError("Canonical rows must be strictly sorted")
+        previous = pair
+        raw = canonical([kind, key, value])
+        if count:
+            hasher.update(b",")
+            size += 1
+        hasher.update(raw)
+        size += len(raw)
+        count += 1
+        entry = kinds.setdefault(kind, {"count": 0, "value_bytes": 0, "states": {}})
+        entry["count"] += 1
+        entry["value_bytes"] += encoded_size(value)
+        if isinstance(value, dict) and isinstance(value.get("state"), str):
+            state = value["state"]
+            entry["states"][state] = entry["states"].get(state, 0) + 1
+    hasher.update(b"]")
+    return {"source_node": node_id(source_node), "site": site,
+            "records": count, "canonical_bytes": size,
+            "digest": hasher.hexdigest(), "kinds": kinds}
+
+
+def inventory(snapshot):
+    rows = rows_of(snapshot)
+    return summarize_rows(([kind, key, value] for (kind, key), value in sorted(rows.items())),
+                          snapshot["source_node"], snapshot["site"])
+
+
+def database_inventory(database, source_node, site):
+    path = pathlib.Path(database).resolve()
+    if not path.is_file():
+        raise MigrationError("Source SQLite file is missing")
+    connection = sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise MigrationError("Source SQLite integrity check failed")
+        return summarize_rows(([kind, key, json.loads(raw)]
+            for kind, key, raw in connection.execute(
+                "SELECT kind,id,value FROM records ORDER BY kind,id")), source_node, site)
+    finally:
+        connection.close()
+
+
+def snapshot_file(database, source_node, site, output):
+    """Stream a consistent snapshot to a new private file without retaining it."""
+    path = pathlib.Path(database).resolve()
+    if not path.is_file():
+        raise MigrationError("Source SQLite file is missing")
+    target = pathlib.Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    connection = sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise MigrationError("Source SQLite integrity check failed")
+        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(b'{"format":' + canonical(FORMAT) + b',"records":[')
+            first = True
+            def records():
+                nonlocal first
+                for kind, key, raw in connection.execute(
+                        "SELECT kind,id,value FROM records ORDER BY kind,id"):
+                    row = [kind, key, json.loads(raw)]
+                    if not first:
+                        stream.write(b",")
+                    stream.write(canonical(row))
+                    first = False
+                    yield row
+            summary = summarize_rows(records(), source_node, site)
+            stream.write(b'],"site":' + canonical(site) + b',"source_node":' +
+                         canonical(node_id(source_node)) + b"}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        return summary
+    finally:
+        connection.close()
+
+
+def read_snapshot(database, source_node, site):
+    path = pathlib.Path(database).resolve()
+    if not path.is_file():
+        raise MigrationError("Source SQLite file is missing")
+    connection = sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+            raise MigrationError("Source SQLite integrity check failed")
+        rows = [[kind, key, json.loads(raw)] for kind, key, raw in connection.execute(
+            "SELECT kind,id,value FROM records ORDER BY kind,id")]
+        value = {"format": FORMAT, "source_node": node_id(source_node),
+                 "site": site, "records": rows}
+        inventory(value)
+        return value
+    finally:
+        connection.close()
+
+
+def private_json(path, value):
+    path = pathlib.Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            for chunk in json_chunks(value):
+                stream.write(chunk)
+            stream.write(b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        # Leave any partial file visible for operator inspection; never replace
+        # an earlier migration artifact or claim the partial file is valid.
+        raise
+
+
+def backup(database, output, source_node, site):
+    """SQLite's backup API captures WAL content too; never copy the main file alone."""
+    source = pathlib.Path(database).resolve()
+    target = pathlib.Path(output).resolve()
+    if not source.is_file():
+        raise MigrationError("Source SQLite file is missing")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    src = sqlite3.connect("file:" + quote(str(source), safe="/") + "?mode=ro", uri=True)
+    if not hasattr(src, "backup"):
+        src.close()
+        raise MigrationError("SQLite backup API requires Python 3.7+; use the pinned runtime container")
+    dst = sqlite3.connect(str(target))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    with target.open("rb") as stream:
+        sha = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            sha.update(chunk)
+    result = database_inventory(target, source_node, site)
+    result.update(backup_sha256=sha.hexdigest(), backup_bytes=target.stat().st_size,
+                  backup_file=target.name)
+    return result
+
+
+def target_spec(target, sources):
+    if not isinstance(target, dict):
+        raise MigrationError("Explicit logical authority target required")
+    result = {key: target.get(key) for key in (
+        "service_id", "authority_id", "site", "controller_aliases")}
+    if not isinstance(result["service_id"], str) or not result["service_id"]:
+        raise MigrationError("Logical service ID required")
+    node_id(result["authority_id"])
+    aliases = result["controller_aliases"]
+    if (not isinstance(aliases, list) or len(set(aliases)) != len(aliases)
+            or set(aliases) != set(sources)):
+        raise MigrationError("Target aliases must exactly cover all source controllers")
+    for alias in aliases:
+        node_id(alias)
+    if result["authority_id"] in sources:
+        raise MigrationError("Logical authority must not clone a physical controller identity")
+    if not isinstance(result["site"], str) or not result["site"]:
+        raise MigrationError("Target site required")
+    result["controller_aliases"] = sorted(aliases)
+    return result
+
+
+def event_domain_blockers(rows):
+    blockers = []
+    for (kind, key), value in sorted(rows.items()):
+        if kind == "subscriptions":
+            blockers.append([kind, key, "subscription cursor requires explicit migration"])
+        elif kind == "runs" and value.get("state") not in TERMINAL_RUNS:
+            blockers.append([kind, key, "nonterminal run may own event cursors"])
+        elif kind == "waits":
+            blockers.append([kind, key, "wait requires explicit migration"])
+        elif kind.startswith("assistant_") and kind not in ("assistant_config",):
+            blockers.append([kind, key, "assistant event domain requires explicit migration"])
+    return blockers
+
+
+def _event_local(kind, key, value):
+    return (kind in EVENT_KINDS or kind == "_meta" and key in EVENT_META
+            or kind == "_retention" and isinstance(value, dict)
+            and value.get("kind") in EVENT_KINDS)
+
+
+def _equivalent_receipts(values):
+    ignored = {"created_at", "expires_at"}
+    return len({digest({k: v for k, v in value.items() if k not in ignored})
+                for value in values}) == 1
+
+
+def _artifact_merge(key, values):
+    for value in values:
+        if not isinstance(value, dict) or value.get("id") != key:
+            raise MigrationError("Artifact identity mismatch")
+        try:
+            raw = base64.b64decode(value["data"], validate=True)
+        except (KeyError, ValueError, TypeError) as exc:
+            raise MigrationError("Invalid artifact bytes") from exc
+        if hashlib.sha256(raw).hexdigest() != key:
+            raise MigrationError("Artifact content digest mismatch")
+    same = [{k: v for k, v in value.items() if k != "expires_at"} for value in values]
+    if len({digest(value) for value in same}) != 1:
+        return None
+    result = copy.deepcopy(values[0])
+    if any(value.get("expires_at") is None for value in values):
+        result.pop("expires_at", None)
+    else:
+        result["expires_at"] = max(value["expires_at"] for value in values)
+    return result
+
+
+def _build(snapshots, baseline, target, migration_id, policy):
+    if not isinstance(migration_id, str) or not re.fullmatch("[A-Za-z0-9_.:-]{1,128}", migration_id):
+        raise MigrationError("Stable migration ID required")
+    if not isinstance(policy, dict) or set(policy) - {"retire_event_sources", "resolutions"}:
+        raise MigrationError("Unknown migration policy field")
+    sources = {}
+    for snapshot in snapshots:
+        source = snapshot.get("source_node")
+        if source in sources:
+            raise MigrationError("Duplicate controller source")
+        sources[source] = (snapshot, rows_of(snapshot))
+    if len(sources) < 2 or baseline not in sources:
+        raise MigrationError("At least two source controllers and an exact baseline required")
+    target = target_spec(target, sources)
+    if any(snapshot["site"] != target["site"] for snapshot, unused in sources.values()):
+        raise MigrationError("Sources and target must belong to the same site")
+    retired = policy.get("retire_event_sources", [])
+    if (not isinstance(retired, list) or len(set(retired)) != len(retired)
+            or baseline in retired or set(retired) - set(sources)):
+        raise MigrationError("Only explicit secondary event domains can be retired")
+    decisions = policy.get("resolutions", [])
+    if not isinstance(decisions, list):
+        raise MigrationError("Explicit collision resolution list required")
+    selectors, used = {}, set()
+    for entry in decisions:
+        if (not isinstance(entry, dict) or set(entry) != {"kind", "id", "source"}
+                or not isinstance(entry["kind"], str) or not isinstance(entry["id"], str)
+                or entry["source"] not in sources):
+            raise MigrationError("Resolution must bind exact kind, ID and observed source")
+        key = (entry["kind"], entry["id"])
+        if key in selectors:
+            raise MigrationError("Duplicate collision resolution")
+        selectors[key] = entry["source"]
+    report = {"format": FORMAT, "migration_id": migration_id, "baseline": baseline,
+              "target": target, "policy": copy.deepcopy(policy),
+              "sources": [inventory(sources[source][0]) for source in sorted(sources)],
+              "collisions": [], "blocked": [], "archive_records": 0}
+    for source in retired:
+        report["blocked"].extend({"source": source, "kind": kind, "id": key, "reason": reason}
+                                 for kind, key, reason in event_domain_blockers(sources[source][1]))
+    candidates = {}
+    archived = {}
+    def preserve(source, pair, value, reason):
+        archive_id = digest([migration_id, source, pair[0], pair[1], digest(value)])
+        archived.setdefault((ARCHIVE, archive_id), {
+            "id": archive_id, "migration_id": migration_id, "source_controller": source,
+            "kind": pair[0], "key": pair[1], "record": value,
+            "value_digest": digest(value), "disposition": reason})
+    for source, (snapshot, rows) in sorted(sources.items()):
+        for pair, value in sorted(rows.items()):
+            if source in retired and _event_local(*pair, value):
+                preserve(source, pair, value, "retired_secondary_event_domain")
+            else:
+                candidates.setdefault(pair, []).append((source, value))
+    merged = {}
+    for pair, entries in sorted(candidates.items()):
+        kind, key = pair
+        entries.sort(key=lambda entry: (entry[0] != baseline, entry[0]))
+        values = [value for unused, value in entries]
+        fingerprints = {digest(value) for value in values}
+        if len(fingerprints) == 1:
+            merged[pair] = values[0]
+            continue
+        detail = {"kind": kind, "id": key,
+                  "sources": [{"source": source, "digest": digest(value)}
+                              for source, value in entries]}
+        chosen, method = None, None
+        if kind in ("_writers", "_fence_generations") and all(type(value) is int and value >= 0 for value in values):
+            chosen, method = max(values), "monotonic_floor"
+        elif kind == "artifacts":
+            chosen = _artifact_merge(key, values)
+            if chosen is not None:
+                method = "identical_content_durable_lifetime"
+        elif kind == "documents":
+            # Heads are rebuilt after all immutable revisions have been merged.
+            chosen, method = {"id": key, "heads": sorted(set(
+                head for value in values for head in value["heads"]))}, "revision_dag_heads"
+        elif kind == "_receipt" and all(isinstance(value, dict) for value in values):
+            if _equivalent_receipts(values):
+                chosen, method = copy.deepcopy(values[0]), "equivalent_receipt"
+            else:
+                chosen = {field: copy.deepcopy(values[0][field])
+                          for field in ("signature", "operation", "format", "created_at")
+                          if field in values[0]}
+                chosen.update(result_expired=True, migration_conflict=migration_id)
+                merged[(RECEIPT_CONFLICTS, key)] = {
+                    "id": key, "migration_id": migration_id, "replay_allowed": False,
+                    "sources": detail["sources"]}
+                method = "ambiguous_receipt_blocked"
+        elif kind == "_receipt_stream" and all(
+                isinstance(value, dict) and type(value.get("sequence")) is int for value in values):
+            floor = max(value["sequence"] for value in values)
+            latest = [value for value in values if value["sequence"] == floor]
+            chosen = copy.deepcopy(latest[0])
+            if len({digest(value) for value in latest}) != 1:
+                chosen.pop("result", None)
+                chosen["migration_conflict"] = migration_id
+                merged[(STREAM_CONFLICTS, key)] = {
+                    "id": key, "migration_id": migration_id, "floor": floor,
+                    "replay_allowed": False, "sources": detail["sources"]}
+                method = "ambiguous_ordered_receipt_blocked"
+            else:
+                method = "ordered_receipt_floor"
+        elif pair in selectors:
+            selected = [(source, value) for source, value in entries if source == selectors[pair]]
+            if not selected:
+                raise MigrationError("Resolution source does not own the collision")
+            chosen, method = copy.deepcopy(selected[0][1]), "explicit_source"
+            detail["selected_source"] = selected[0][0]
+            used.add(pair)
+        if method is None:
+            detail["resolution"] = "required"
+            report["blocked"].append({"kind": kind, "id": key,
+                                     "reason": "Ambiguous canonical record requires explicit source resolution"})
+        else:
+            merged[pair] = chosen
+            detail["resolution"] = method
+        report["collisions"].append(detail)
+        for source, value in entries:
+            if chosen is None or digest(value) != digest(chosen):
+                preserve(source, pair, value, method or "unresolved_collision")
+    for pair in selectors.keys() - used:
+        raise MigrationError("Resolution does not select an unresolved mutable collision: " + repr(pair))
+    # Reject missing DAG dependencies; never invent a knowledge revision.
+    revisions = {key: value for (kind, key), value in merged.items() if kind == "revisions"}
+    for pair, value in list(merged.items()):
+        if pair[0] != "documents":
+            continue
+        if not isinstance(value, dict) or not isinstance(value.get("heads"), list):
+            report["blocked"].append({"kind": pair[0], "id": pair[1], "reason": "Malformed document heads"})
+            continue
+        heads = set(value["heads"])
+        if any(head not in revisions or revisions[head].get("key") != pair[1] for head in heads):
+            report["blocked"].append({"kind": pair[0], "id": pair[1], "reason": "Document head revision missing or mismatched"})
+            continue
+        parents = {parent for revision in revisions.values() if revision.get("key") == pair[1]
+                   for parent in revision.get("parents", [])}
+        heads.difference_update(parents)
+        merged[pair] = dict(value, heads=sorted(heads), conflict=len(heads) > 1)
+        for source, original in candidates[pair]:
+            if digest(original) != digest(merged[pair]):
+                preserve(source, pair, original, "revision_dag_heads")
+    # Preserve every source row exactly either in canonical state or provenance.
+    for source, (snapshot, rows) in sources.items():
+        for pair, value in rows.items():
+            if pair not in merged or digest(merged[pair]) != digest(value):
+                preserve(source, pair, value, "source_original")
+    merged.update(archived)
+    report["archive_records"] = len(archived)
+    report["state_records"] = len(merged)
+    report["ready"] = not report["blocked"]
+    report["plan_digest"] = digest(report)
+    return report, merged
+
+
+def make_plan(snapshots, baseline, target, migration_id, policy=None):
+    return _build(snapshots, baseline, target, migration_id, policy or {})[0]
+
+
+def freeze_marker(snapshot, target, migration_id):
+    sources = target.get("controller_aliases", [])
+    target = target_spec(target, sources)
+    summary = inventory(snapshot)
+    if summary["source_node"] not in sources or summary["site"] != target["site"]:
+        raise MigrationError("Freeze source differs from logical target")
+    return dict(format=1, mode="frozen-source", source_node=summary["source_node"],
+                site=summary["site"], service_id=target["service_id"],
+                authority_id=target["authority_id"],
+                controller_aliases=target["controller_aliases"],
+                migration_id=migration_id, source_digest=summary["digest"])
+
+
+def export_state(snapshots, plan, markers):
+    expected, rows = _build(snapshots, plan["baseline"], plan["target"],
+                            plan["migration_id"], plan["policy"])
+    if expected != plan:
+        raise MigrationError("Source or reviewed plan changed")
+    if not plan["ready"]:
+        raise MigrationError("Unresolved migration collisions or event-domain consumers")
+    by_source = {}
+    for marker in markers:
+        if not isinstance(marker, dict) or marker.get("source_node") in by_source:
+            raise MigrationError("Exactly one freeze marker per source required")
+        by_source[marker.get("source_node")] = marker
+    if set(by_source) != {snapshot["source_node"] for snapshot in snapshots}:
+        raise MigrationError("All source admission fences required")
+    for snapshot in snapshots:
+        expected_marker = freeze_marker(snapshot, plan["target"], plan["migration_id"])
+        if by_source[snapshot["source_node"]] != expected_marker:
+            raise MigrationError("Freeze marker does not bind this exact source and migration")
+    provenance = {"id": plan["migration_id"], "plan_digest": plan["plan_digest"],
+                  "sources": plan["sources"], "policy": plan["policy"],
+                  "collisions": plan["collisions"], "source_fences": [by_source[source] for source in sorted(by_source)],
+                  "replay_allowed_for_archived_records": False}
+    rows[("_controller_migrations", plan["migration_id"])] = provenance
+    state = {"authority": plan["target"]["authority_id"], "site": plan["target"]["site"],
+             "records": [[kind, key, value] for (kind, key), value in sorted(rows.items())]}
+    authorization = {"source_receipt": {
+        "format": FORMAT, "migration_id": plan["migration_id"],
+        "plan_digest": plan["plan_digest"], "state_digest": digest(state),
+        "source_digests": {item["source_node"]: item["digest"] for item in plan["sources"]},
+        "source_fence_digests": {source: digest(marker) for source, marker in sorted(by_source.items())},
+        "physical_effect_outcomes_inferred": False}}
+    return {"state": state, "authorization": authorization}
+
+
+def load_json(path):
+    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+
+
+def load_source(path):
+    """Accept a snapshot or a copied backup manifest beside its SQLite payload."""
+    path = pathlib.Path(path)
+    value = load_json(path)
+    if isinstance(value, dict) and "records" in value:
+        return value
+    filename = value.get("backup_file") if isinstance(value, dict) else None
+    if not isinstance(filename, str) or not filename or pathlib.Path(filename).name != filename:
+        raise MigrationError("Snapshot or private backup manifest required")
+    database = path.parent / filename
+    hasher = hashlib.sha256()
+    with database.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    if hasher.hexdigest() != value.get("backup_sha256"):
+        raise MigrationError("Backup file bytes differ from the retained manifest")
+    snapshot = read_snapshot(database, value["source_node"], value["site"])
+    if inventory(snapshot)["digest"] != value.get("digest"):
+        raise MigrationError("Backup canonical records differ from the retained manifest")
+    return snapshot
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("snapshot", "backup"):
+        command = sub.add_parser(name)
+        command.add_argument("--home", required=True)
+        command.add_argument("--database")
+        command.add_argument("--output", required=True)
+        if name == "backup":
+            command.add_argument("--manifest", required=True)
+    command = sub.add_parser("plan")
+    command.add_argument("--source", action="append", required=True)
+    command.add_argument("--baseline", required=True)
+    command.add_argument("--target", required=True)
+    command.add_argument("--migration-id", required=True)
+    command.add_argument("--policy")
+    command.add_argument("--output", required=True)
+    command = sub.add_parser("marker")
+    command.add_argument("--source", required=True)
+    command.add_argument("--target", required=True)
+    command.add_argument("--migration-id", required=True)
+    command.add_argument("--output", required=True)
+    command = sub.add_parser("export")
+    command.add_argument("--source", action="append", required=True)
+    command.add_argument("--plan", required=True)
+    command.add_argument("--marker", action="append", required=True)
+    command.add_argument("--output", required=True)
+    args = parser.parse_args()
+    if args.command in ("snapshot", "backup"):
+        config = load_json(pathlib.Path(args.home) / "node.json")
+        database = args.database or str(pathlib.Path(args.home) / "site.sqlite")
+        if args.command == "snapshot":
+            value = snapshot_file(database, config["node"], config["site"], args.output)
+            print(json.dumps(value, sort_keys=True))
+        else:
+            value = backup(database, args.output, config["node"], config["site"])
+            private_json(args.manifest, value)
+            print(json.dumps(value, sort_keys=True))
+    elif args.command == "plan":
+        value = make_plan([load_source(p) for p in args.source], args.baseline,
+                          load_json(args.target), args.migration_id,
+                          load_json(args.policy) if args.policy else {})
+        private_json(args.output, value)
+        print(json.dumps({"ready": value["ready"], "plan_digest": value["plan_digest"],
+                          "collisions": len(value["collisions"]), "blocked": value["blocked"],
+                          "archive_records": value["archive_records"]}, sort_keys=True))
+    elif args.command == "marker":
+        value = freeze_marker(load_source(args.source), load_json(args.target), args.migration_id)
+        private_json(args.output, value)
+        print(json.dumps({"source_node": value["source_node"],
+                          "source_digest": value["source_digest"]}, sort_keys=True))
+    else:
+        value = export_state([load_source(p) for p in args.source], load_json(args.plan),
+                             [load_json(p) for p in args.marker])
+        private_json(args.output, value)
+        print(json.dumps({"state_digest": digest(value["state"]),
+                          "records": len(value["state"]["records"]),
+                          "canonical_bytes": encoded_size(value["state"])}, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
