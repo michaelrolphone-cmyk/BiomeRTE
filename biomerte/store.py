@@ -4,6 +4,11 @@ All domain updates, receipts and pending operations for a command commit togethe
 The SQLite mirror is disposable in shared mode. A failed CAS never becomes local
 authority. Offline work uses its own database and explicit scopes.
 """
+
+# Native recovery checks this literal before executing a marked source home.
+# Keep version 1 only while the source/site and event custody guards remain.
+CUSTODY_PROTOCOL = 1
+
 import base64
 import contextlib
 import hashlib

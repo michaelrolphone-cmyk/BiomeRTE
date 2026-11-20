@@ -331,3 +331,32 @@ Inspect an existing stream grant under its original native authority alias. Requ
 Retain a concise report with source/image/config revisions; migration and source-freeze receipts; both replica verifications; original responsibility and operation digests; normal-route results; before/after binding and reference values; acknowledged/degraded replication status; measured failover and witness restart timing; callback/stream evidence where applicable; and explicit unobserved physical boundaries.
 
 Do not mark two-host durability or automatic takeover complete while the Pi is inaccessible or its production bootstrap/current reference has not been independently verified. Preserve the original paused state unless a later authorized workflow explicitly resumes it.
+
+### Native recovery boundary before source fencing
+
+The original source guard is insufficient if an independent watchdog or
+branch watcher can subsequently execute an old unpatched release. Before
+installing a source marker, qualify the stable `controller_custody.py`,
+`controller_autodeploy.py`, `controller_autodeploy_exec.py`,
+`controller_autodeploy_service.py` and `controller_watchdog.py` copies on
+each actual applicable service path. Copy the shared helper beside every
+installed recovery program, including the watchdog's private directory.
+Configure the watchdog's `service_configs` for the exact native and link
+launcher configurations. A Pi that does not run autodeploy must still enter
+the guarded stable exec boundary from its actual native and gateway units.
+
+Hold the existing shared recovery lock while the old writers/recovery actors
+are quiesced and verify the stable installation, current physical release,
+actual running source and marker installation. The independent exec child must
+not reacquire its parent watcher's lock. The raw source backup and final
+canonical digest still require all unpatched site/event writers stopped.
+
+A compatible native source reports exact `cluster.status` frozen-source
+identity. A healthy source is not required or allowed to run
+`system.discovery`. Prove that site writes remain rejected and that an old
+LKG cannot be imported, selected or executed by candidate, interrupted
+rollback, watchdog, native restart helper, or direct stable-launcher paths.
+An incompatible rollback must leave the current pointer unchanged and durable
+`rollback_failed` evidence while permitting a subsequent compatible repair.
+These gates supplement the authority/replica/witness qualification above;
+they do not prove live failover or authorize an unobserved cutover.

@@ -10,6 +10,10 @@ import json
 import os
 import sys
 
+# Resolve the trusted helper beside this stable launcher, never in a release.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from controller_custody import CustodyError, require_release
+
 
 def launch(config):
     root = os.path.abspath(os.path.expanduser(config['root']))
@@ -30,6 +34,9 @@ def launch(config):
     if not isinstance(extra, list) or not all(isinstance(path, str) and os.path.isabs(path)
                                               for path in extra):
         raise ValueError('extra_pythonpaths_must_be_absolute')
+    # This is the final outside-release boundary, including launchd/systemd
+    # automatic restarts and old LKGs selected without the current watcher.
+    require_release(config, release)
     environment = dict(os.environ)
     environment['PYTHONPATH'] = os.pathsep.join([release] + [
         os.path.realpath(path) for path in extra])
@@ -56,6 +63,7 @@ if __name__ == '__main__':
         known = ('existing_node_required', 'current_symlink_required',
                  'controller_package_missing', 'controller_argv_required',
                  'extra_pythonpaths_must_be_absolute')
-        message = str(error) if str(error) in known else type(error).__name__
+        message = error.code if isinstance(error, CustodyError) else (
+            str(error) if str(error) in known else type(error).__name__)
         sys.stderr.write(message + '\n')
         sys.exit(1)

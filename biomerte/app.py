@@ -1,4 +1,9 @@
 """Site initialization, service context, enrollment and signed calls."""
+
+# Native recovery checks this literal before executing a marked source home.
+# Keep version 1 only while the source/site and event custody guards remain.
+CUSTODY_PROTOCOL = 1
+
 import contextlib
 import hmac
 import json
