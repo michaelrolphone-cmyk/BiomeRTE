@@ -76,6 +76,11 @@ private publishing repository, or the package must already have verified private
 visibility and grant this workflow access. A second check verifies all packages
 are private after publication. An unreadable or nonprivate destination fails
 the run rather than changing visibility; errors report the actual visibility.
+Private publishing-repository metadata is a first-creation precondition, not
+proof of the created package's visibility. The combination of a private publishing
+workflow and an OCI source label linking a different public repository still
+needs operational verification. Retain postflight and verify anonymous access
+is denied before treating that release as private.
 See GitHub's Actions-specific defaults:
 https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows
 

@@ -72,7 +72,8 @@ def private_packages(owner, images, require_existing=False, repository=None):
             if creation_repository is None:
                 creation_repository = publishing_repository(repository, owner)
             packages.append({"name": name, "state": "absent",
-                             "new_package_visibility": "private",
+                             "expected_new_package_visibility": "private",
+                             "visibility_verified": False,
                              "creation_repository": creation_repository})
             continue
         if package.get("visibility") != "private":
