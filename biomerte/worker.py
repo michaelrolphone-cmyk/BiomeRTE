@@ -662,7 +662,12 @@ class ActionPool:
             if guard not in self.running:
                 self.items[guard] = (kind, action['id'], action.get('generation'))
                 self.running[guard] = self.executor.submit(self.perform, action, kind == 'fence')
-                started += 1
+                # Retrying the same failed work is still necessary, but it does
+                # not request the poller's fast follow-up reserved for new work.
+                previous = self.failures.get(guard)
+                if previous is None or (previous['kind'], previous['id'], previous.get('generation')) != (
+                        kind, action['id'], action.get('generation')):
+                    started += 1
         return started
 
 
