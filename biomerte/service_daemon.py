@@ -544,6 +544,44 @@ class AuthorityDaemon:
                 LOG.warning("Service lifecycle retry: %s",type(error).__name__)
             await asyncio.sleep(interval)
 
+    async def serve_requests(self, ws):
+        """Keep reading WebSocket control frames while one RPC publishes state."""
+        inbox=asyncio.Queue()
+
+        async def dispatch_requests():
+            try:
+                while True:
+                    message=await inbox.get()
+                    if message is None:
+                        return
+                    reply=await self.dispatch(message)
+                    if not ws.closed:
+                        await ws.send_json(reply)
+            except Exception:
+                await ws.close()
+                raise
+
+        task=asyncio.create_task(dispatch_requests())
+        try:
+            async for event in ws:
+                if event.type!=WSMsgType.TEXT:
+                    if event.type in (WSMsgType.CLOSE,WSMsgType.CLOSED,WSMsgType.ERROR):
+                        break
+                    continue
+                message=json.loads(event.data)
+                if message.get("type")=="registered":
+                    self.connected=True
+                else:
+                    inbox.put_nowait(message)
+        finally:
+            self.connected=False
+            # Nothing queued has started. Finish the one claimed RPC so a
+            # disconnect cannot interrupt its durable receipt publication.
+            while not inbox.empty():
+                inbox.get_nowait()
+            inbox.put_nowait(None)
+            await task
+
     async def authority_loop(self):
         while True:
             try:
@@ -560,16 +598,7 @@ class AuthorityDaemon:
                     headers={"Authorization":"Bearer "+self.transport.key},
                     heartbeat=15,max_msg_size=MAX_BODY) as ws:
                     await ws.send_json({"type":"register","binding":self.binding})
-                    async for event in ws:
-                        if event.type!=WSMsgType.TEXT:
-                            if event.type in (WSMsgType.CLOSE,WSMsgType.CLOSED,WSMsgType.ERROR):
-                                break
-                            continue
-                        message=json.loads(event.data)
-                        if message.get("type")=="registered":
-                            self.connected=True
-                            continue
-                        await ws.send_json(await self.dispatch(message))
+                    await self.serve_requests(ws)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
