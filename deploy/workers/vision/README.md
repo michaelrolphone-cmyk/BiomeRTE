@@ -2,8 +2,8 @@
 
 ## Mac migration profile
 
-The small `Dockerfile` packages the actual capability implementation, all 47 declared
-vision/video/map/rig contracts, leased front/rear/map streaming, and the deployed
+The small `Dockerfile` packages the actual capability implementation, all 47 versioned
+vision/video/map/rig contract entries (43 unique operation names), leased front/rear/map streaming, and the deployed
 vision source modules. Its running provider delegates native compute and map state
 to the existing authenticated HostIO boundary. The Mac's detector remains on its
 configured Metal/MPS backend; the native SLAM, maps, dual camera, sensor fusion and
@@ -41,7 +41,8 @@ python deploy/workers/vision/native-policy.py --native-python /path/to/vision/en
 ```
 
 The second command renders the value for existing HostIO `vision_queries`:
-an exact `operations` allowlist, `mutations` list, explicit native
+an exact `operations` allowlist (43 unique names shared by 47 versioned contracts),
+`mutations` list, explicit native
 `python` and optional `module_directory` for the installed VideoJobs implementation.
 It does not update an active bridge configuration. The separate route helper
 `device_routes_module_directory` remains unchanged; `vision_directory` points to
