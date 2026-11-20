@@ -1,108 +1,41 @@
-name: Publish private container images
+name: Inspect GHCR package visibility
 on:
-  workflow_run:
-    workflows: ["BiomeRTE qualification"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: ghcr-main-publication
-  cancel-in-progress: false
-
-env:
-  SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
-  REGISTRY_OWNER: michaelrolphone-cmyk
-
+  packages: read
 jobs:
-  qualify:
-    if: >-
-      github.repository == 'michaelrolphone-cmyk/BiomeRTE' &&
-      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+  inspect:
+    if: github.repository == 'michaelrolphone-cmyk/BiomeRTE'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      actions: read
-      packages: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_COMMIT }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify exact main qualification and private destinations
+      - name: Read exact package metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main
-          python3 deploy/docker-services/ghcr.py qualified \
-            --repository "$GITHUB_REPOSITORY" --workflow ci.yml \
-            --revision "$SOURCE_COMMIT" --output receipts/qualification.json
-          python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
-            --output receipts/private-before.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
-        with:
-          name: ghcr-qualification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: receipts/
-          if-no-files-found: error
-          retention-days: 90
-
-
-  publish:
-    needs: qualify
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      actions: read
-      packages: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_COMMIT }}
-          persist-credentials: false
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # docker/setup-qemu-action@v4
-        with:
-          platforms: arm64,arm
-      - name: Build and smoke-test exact source for Mac and Pi architectures
-        run: |
-          python3 deploy/docker-services/images.py build --revision "$SOURCE_COMMIT" \
-            --image service-runner --image service-authority --image portable-services \
-            --platform linux/arm64 --platform linux/arm/v7 --output-dir release
-          python3 deploy/docker-services/images.py verify --lock release/images.lock.json
-      - name: Publish private images through the common release tool
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 deploy/docker-services/ghcr.py qualified \
-            --repository "$GITHUB_REPOSITORY" --workflow ci.yml \
-            --revision "$SOURCE_COMMIT" --output receipts/qualification-at-publish.json
-          python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
-            --output receipts/private-at-publish.json
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          python3 deploy/docker-services/images.py publish --lock release/images.lock.json \
-            --registry ghcr.io --namespace "$REGISTRY_OWNER"
-          python3 deploy/docker-services/ghcr.py private --owner "$REGISTRY_OWNER" \
-            --image service-runner --image service-authority --image portable-services \
-            --require-existing --output receipts/private-after.json
-      - name: Preserve confirmed digest receipts even after a partial push
-        if: always()
-        run: |
-          mkdir -p receipts
-          if [ -f release/images.lock.json ]; then cp release/images.lock.json receipts/images.lock.json; fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ghcr-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: receipts/
-          if-no-files-found: error
-          retention-days: 90
-      - name: Remove job-local registry login
-        if: always()
-        run: docker logout ghcr.io
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error
+          owner = "michaelrolphone-cmyk"
+          names = ("service-runner", "service-authority", "portable-services")
+          for name in names:
+              request = urllib.request.Request(
+                  "https://api.github.com/users/" + owner + "/packages/container/" + name,
+                  headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                           "Accept": "application/vnd.github+json",
+                           "X-GitHub-Api-Version": "2022-11-28",
+                           "User-Agent": "biomerte-ghcr-private-diagnostic"})
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      value = json.load(response)
+                      source = value.get("repository") or {}
+                      print(json.dumps({
+                          "requested_name": name, "http_status": response.status,
+                          "name": value.get("name"), "type": value.get("package_type"),
+                          "visibility": value.get("visibility"), "id": value.get("id"),
+                          "url": value.get("html_url"),
+                          "source_repository": source.get("full_name"),
+                          "source_repository_visibility": source.get("visibility"),
+                          "source_repository_private": source.get("private")}, sort_keys=True))
+              except urllib.error.HTTPError as error:
+                  print(json.dumps({"requested_name": name, "http_status": error.code}, sort_keys=True))
+          PY
