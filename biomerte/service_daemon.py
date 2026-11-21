@@ -813,7 +813,11 @@ class AuthorityDaemon:
         try:
             if message.get("binding")!=self.binding:
                 raise Fault("RPC belongs to another service grant",409)
-            await self.transport.validate(self.binding)
+            controller = self.config.get("authority_kind") == "controller"
+            # The controller phase RPC already validates this exact binding
+            # against the coordinator through the private helper.
+            if not controller:
+                await self.transport.validate(self.binding)
             phase=await self.phase()
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
             async with self.lock:
@@ -841,6 +845,11 @@ class AuthorityDaemon:
                 else:
                     raise Fault("Service effect admission is unavailable",503)
                 await self.publish()
+                if not controller:
+                    await self.transport.validate(self.binding,preparing=preparing)
+            if controller:
+                # The result is already witnessed. The final check still
+                # fences the reply, without holding the application lock.
                 await self.transport.validate(self.binding,preparing=preparing)
         except (Fault,CheckpointError,KeyError,TypeError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error))
@@ -933,7 +942,13 @@ class AuthorityDaemon:
                         if message.get("type")=="registered":
                             self.connected=True
                             continue
-                        await ws.send_json(await self.dispatch(message))
+                        started = time.monotonic()
+                        result = await self.dispatch(message)
+                        await ws.send_json(result)
+                        elapsed = time.monotonic() - started
+                        if self.config.get("authority_kind") == "controller" and elapsed >= 3:
+                            LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
+                                result["type"], result["status"], elapsed)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
