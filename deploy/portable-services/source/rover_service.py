@@ -56,6 +56,7 @@ class RoutedRemote(ControllerRoutes):
         self.gateway_url = gateway_url or GATEWAY
         self.app, self.home = app, home
         self.identity = read_json(str(home/'node.json'))
+        self.vision_route = None
         self.service_resolver = resolver if resolver is not None else ServiceOwnerResolver(
             PUBLIC, declarations=lambda: read_json(str(home/'node.json')).get(
                 'service_authority_declarations', []))
@@ -65,11 +66,50 @@ class RoutedRemote(ControllerRoutes):
         owner = self.service_resolver(resource)
         return owner if owner is not None else super().resolve_new(contract, resource)
 
+    def vision_controller_path(self, controller):
+        request = urllib.request.Request(PUBLIC + '/api/service-authorities/resolve',
+            data=json.dumps({'controller': controller}).encode(),
+            headers={'Content-Type': 'application/json',
+                     'User-Agent': 'BiomeRTE-Rover-Server/1'})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            scope = json.load(response)
+        authority = scope.get('authority')
+        if (scope.get('authority_kind') != 'controller' or scope.get('effect_ready') is not True
+                or not isinstance(authority, str) or len(authority) != 64
+                or any(value not in '0123456789abcdef' for value in authority)
+                or controller not in (authority, *scope.get('controller_aliases', ()))):
+            raise ConnectionError('Existing vision lease authority is unavailable')
+        path = '/api/controller-runtimes/' + authority + '/call'
+        if scope.get('call_path') != path:
+            raise ConnectionError('Vision authority returned an invalid controller path')
+        return path
+
+    def resume_from_bootstrap(self, owner, path, contract, resource, task):
+        try:
+            prior = read_json(str(self.home / 'vision-stream-resume.json'))
+        except (OSError, ValueError):
+            return None
+        if (not isinstance(prior, dict)
+                or (prior.get('contract'), prior.get('resource'), prior.get('task')) != (contract, resource, task)
+                or not all(isinstance(prior.get(key), str) and prior[key] for key in ('session', 'lease'))):
+            return None
+        try:
+            descriptor = self.signed_request(owner, 'stream.attach',
+                {'session': prior['session'], 'role': 'server', 'lease': prior['lease']}, managed_path=path)
+        except HTTPError as error:
+            if error.code in (403, 404, 409, 410):
+                return None
+            raise
+        return dict(descriptor, subscription_lease=prior['lease'])
+
     def resume_vision(self, contract, resource, task):
         owner = self.app.node
         try:
-            descriptor = self.signed_request(owner, 'stream.resume',
-                {'contract': contract, 'resource': resource, 'task': task})
+            path = self.vision_controller_path(owner)
+            descriptor = self.resume_from_bootstrap(owner, path, contract, resource, task)
+            if descriptor is None:
+                descriptor = self.signed_request(owner, 'stream.resume',
+                    {'contract': contract, 'resource': resource, 'task': task}, managed_path=path)
         except HTTPError as error:
             if error.code == 404:
                 return None
@@ -79,15 +119,20 @@ class RoutedRemote(ControllerRoutes):
         self.lease_resources[lease] = (contract, resource)
         self.sessions[descriptor['id']] = owner
         self.session_resources[descriptor['id']] = (contract, resource)
+        self.vision_route = (lease, descriptor['id'], path)
         return {'id': lease}, descriptor
 
-    def signed_request(self, controller, operation, arguments):
+    def signed_request(self, controller, operation, arguments, *, managed_path=None):
+        if managed_path is None and self.vision_route is not None:
+            lease, session, path = self.vision_route
+            if arguments.get('lease') == lease or arguments.get('session') == session:
+                managed_path = path
         request_id = uuid.uuid4().hex
         envelope = dict(site=self.app.config['site'], realm='site', operation=operation,
                         arguments=arguments, id=request_id, controller=controller)
         auth = dict(actor=self.identity['node'],
                     signature=sign(str(self.home/'node.key'), envelope))
-        managed = controller in self.controllers
+        managed = managed_path is not None or controller in self.controllers
         lifecycle = operation in ('cap.discover', 'cap.acquire', 'cap.lease',
                                   'stream.open', 'stream.attach', 'stream.resume')
         # A busy managed controller must not make a transient reply failure
@@ -95,11 +140,12 @@ class RoutedRemote(ControllerRoutes):
         delays = iter((.5, 1., 2.5, 4.) if managed and lifecycle else ())
         while True:
             try:
-                if controller == self.app.node:
+                if managed_path is None and controller == self.app.node:
                     return self.app.call(operation, arguments, request_id, auth=auth,
                                          realm='site', controller=controller)
                 envelope['auth'] = auth
-                request = urllib.request.Request(self.gateway_url+'/v1/call',
+                endpoint = PUBLIC + managed_path if managed_path else self.gateway_url + '/v1/call'
+                request = urllib.request.Request(endpoint,
                     data=json.dumps(envelope).encode(), headers={
                     'Content-Type':'application/json','User-Agent':'BiomeRTE-Rover-Server/1'})
                 with urllib.request.urlopen(request, timeout=20) as response:
