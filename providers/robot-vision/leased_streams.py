@@ -88,6 +88,7 @@ class VisionStreams:
 
     async def run(self,grant,stop):
         from websockets.asyncio.client import connect
+        from biomerte.host_io_client import MAX_FRAME
         from biomerte.stream_router import decode,frame
         key=grant['id']+':'+grant['lane']
         while not stop.is_set():
@@ -124,9 +125,9 @@ class VisionStreams:
                         else:
                             header=await asyncio.to_thread(exact,response,4)
                             size=struct.unpack('!I',header)[0]
-                            if size<4:raise ValueError('live_frame_size')
+                            if not 4 <= size <= MAX_FRAME:raise ValueError('live_frame_size')
                             value=await asyncio.to_thread(exact,response,size)
-                            metadata,image=decode(value)
+                            metadata,image=decode(value,MAX_FRAME)
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
                         control = metadata.get('type') == 'sensor_manifest'
