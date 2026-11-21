@@ -168,14 +168,17 @@ class Rover:
                         self.map_head = None
                         self.bootstrap.clear()
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
-                if descriptor is not None:
+                # This native identity keeps its vision reservation across
+                # transient router errors and replacement stream epochs.
+                keep_vision = contract == 'robot.vision.stream:1' and resume is not None
+                if descriptor is not None and not keep_vision:
                     try:
                         await self.call('stream.close', session=descriptor['id'], lease=lease['id'])
                     except Exception:
                         pass
                 # Also release queued/fencing leases on shutdown or failed startup.
                 # A retry must not queue behind capacity retained by this owner.
-                if lease is not None:
+                if lease is not None and not keep_vision:
                     try:
                         await self.call('cap.release', lease=lease['id'])
                     except Exception:

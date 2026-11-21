@@ -57,12 +57,15 @@ class RoutedRemote(ControllerRoutes):
         self.app, self.home = app, home
         self.identity = read_json(str(home/'node.json'))
         self.vision_route = None
+        self.vision_scope = None
         self.service_resolver = resolver if resolver is not None else ServiceOwnerResolver(
             PUBLIC, declarations=lambda: read_json(str(home/'node.json')).get(
                 'service_authority_declarations', []))
         super().__init__(app.node, state_home or home, self.signed_request)
 
     def resolve_new(self, contract, resource):
+        if self.vision_scope is not None and (contract, resource) == self.vision_scope[:2]:
+            return self.app.node
         owner = self.service_resolver(resource)
         return owner if owner is not None else super().resolve_new(contract, resource)
 
@@ -106,6 +109,7 @@ class RoutedRemote(ControllerRoutes):
         owner = self.app.node
         try:
             path = self.vision_controller_path(owner)
+            self.vision_scope = (contract, resource, path)
             descriptor = self.resume_from_bootstrap(owner, path, contract, resource, task)
             if descriptor is None:
                 descriptor = self.signed_request(owner, 'stream.resume',
@@ -123,6 +127,13 @@ class RoutedRemote(ControllerRoutes):
         return {'id': lease}, descriptor
 
     def signed_request(self, controller, operation, arguments, *, managed_path=None):
+        if managed_path is None and self.vision_scope is not None:
+            lease_id, session_id = arguments.get('lease'), arguments.get('session')
+            binding = self.session_resources.get(session_id) or self.lease_resources.get(lease_id)
+            if operation == 'cap.acquire':
+                binding = (arguments.get('contract'), arguments.get('resource'))
+            if binding == self.vision_scope[:2]:
+                managed_path = self.vision_scope[2]
         if managed_path is None and self.vision_route is not None:
             lease, session, path = self.vision_route
             if arguments.get('lease') == lease or arguments.get('session') == session:
