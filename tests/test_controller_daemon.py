@@ -171,6 +171,35 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.fail_validate = self.validated+2
         self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
 
+    async def test_witnessed_vision_attach_checks_signed_call_without_caching_credential(self):
+        authority = self.config["authority_id"]
+        grant = dict(id="vision", authority=authority, contract="robot.vision.stream:1",
+                     state="open", generation=2, consumers=["viewer"])
+        descriptor = dict(grant, role="provider", url="wss://example.test/vision",
+                          attachment_credential="fresh-credential")
+        message = self.message()
+        envelope = message["envelope"]
+        envelope["operation"] = "stream.attach"
+        envelope["arguments"] = {"session": "vision", "role": "provider"}
+        self.daemon.remember_vision_inspection(
+            dict(message, envelope=dict(envelope, operation="stream.open")),
+            dict(status=200, result=descriptor))
+        self.assertEqual(self.daemon.witnessed_vision_inspections[(authority, "vision")], grant)
+        def attach(received, preparing):
+            self.assertIs(received, envelope)
+            self.assertFalse(preparing)
+            return descriptor
+        self.authority.call = attach
+        reply = await self.daemon.recheck_witnessed_vision_inspection(message)
+        self.assertEqual(reply["result"], descriptor)
+        self.assertEqual(self.published, 0)
+        descriptor["generation"] += 1
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        def reject(received, preparing):
+            raise Fault("Revoked credential",403)
+        self.authority.call = reject
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
         processed, replies = [], []

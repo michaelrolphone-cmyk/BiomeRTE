@@ -924,20 +924,44 @@ class AuthorityDaemon:
                 LOG.warning("Service lifecycle retry: %s",type(error).__name__)
             await asyncio.sleep(interval)
 
+    @staticmethod
+    def vision_grant_metadata(descriptor):
+        return {key: value for key, value in descriptor.items()
+                if key not in ("url", "role", "attachment_credential")}
+
     def remember_vision_inspection(self, message, reply):
-        grant = reply.get("grant") or {}
-        if (message.get("type") != "inspect" or reply["status"] != 200
-                or grant.get("contract") != "robot.vision.stream:1"):
+        if reply["status"] != 200:
             return
-        key = (message["authority"], message["session"])
+        if message.get("type") == "inspect":
+            grant = reply.get("grant") or {}
+        elif (message.get("envelope") or {}).get("operation") in ("stream.attach", "stream.open"):
+            grant = self.vision_grant_metadata(reply.get("result") or {})
+        else:
+            return
+        if grant.get("contract") != "robot.vision.stream:1":
+            return
+        key = (grant["authority"], grant["id"])
         cache = self.witnessed_vision_inspections
         if key not in cache and len(cache) >= 32:
             cache.pop(next(iter(cache)))
         cache[key] = grant
 
+    def witnessed_vision_key(self, message):
+        if message.get("type") == "inspect":
+            key = (message.get("authority"), message.get("session"))
+            if all(isinstance(part, str) for part in key):
+                return key
+        envelope = message.get("envelope") or {}
+        arguments = envelope.get("arguments")
+        if (message.get("type") == "call" and envelope.get("operation") == "stream.attach"
+                and isinstance(arguments, dict) and isinstance(arguments.get("session"), str)):
+            return next((key for key in self.witnessed_vision_inspections
+                         if key[1] == arguments["session"]), None)
+        return None
+
     async def recheck_witnessed_vision_inspection(self, message):
         cache = self.witnessed_vision_inspections
-        key = (message.get("authority"), message.get("session"))
+        key = self.witnessed_vision_key(message)
         witnessed = cache.get(key)
         if (witnessed is None or message.get("binding") != self.binding
                 or message.get("preparation")):
@@ -946,16 +970,24 @@ class AuthorityDaemon:
             if (await self.phase())["phase"] != "active":
                 return None
             await self.transport.validate(self.binding, preparing=False)
-            # Read the exact grant through the native read-only operation.
-            # An unchanged result has already passed the replication barrier.
-            # Newly visible consumers or any other change require a new witness.
-            current = await asyncio.to_thread(self.authority.inspect, key[1], key[0])
+            # Both operations read current canonical state. Signed attach also
+            # verifies the caller and issues a fresh credential for its role.
+            if message["type"] == "inspect":
+                field = "grant"
+                value = await asyncio.to_thread(self.authority.inspect, key[1], key[0])
+                current = value
+            else:
+                field = "result"
+                value = await asyncio.to_thread(self.authority.call, message["envelope"], False)
+                current = self.vision_grant_metadata(value)
         except (Fault, CheckpointError, KeyError, TypeError, OSError, asyncio.TimeoutError):
             return None
+        # Compare every grant field and consumer against the witnessed value.
+        # Newly visible state follows the full publication path.
         if current != witnessed or cache.get(key) is not witnessed:
             return None
         reply = self.authority_response(message, self.binding)
-        reply["grant"] = current
+        reply[field] = value
         return reply
 
     async def reply_to_authority_request(self, ws, message):
@@ -1118,9 +1150,8 @@ class AuthorityDaemon:
                 if message.get("type") == "registered":
                     self.connected = True
                     continue
-                key = (message.get("authority"), message.get("session"))
-                if (message.get("type") == "inspect" and all(isinstance(part, str) for part in key)
-                        and key in self.witnessed_vision_inspections
+                key = self.witnessed_vision_key(message)
+                if (key in self.witnessed_vision_inspections
                         and len(fast_inspections) < capacity["inspection"]):
                     task = asyncio.create_task(inspect_or_enqueue(message))
                     fast_inspections.add(task)
