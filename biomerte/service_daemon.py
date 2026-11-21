@@ -154,18 +154,77 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
             # ordinary command's change accumulator would duplicate the entire
             # history in RAM and would apply new-write lifecycle defaults.
             with contextlib.closing(store.connect()) as db:
-                db.execute("PRAGMA synchronous=FULL")
+                # Store has already performed normal SQLite journal recovery.
+                # An initialized but empty target from a failed first attempt
+                # must retain the fresh-load path on retry.
+                empty = db.execute("SELECT 1 FROM records LIMIT 1").fetchone() is None
+                if empty:
+                    if db.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+                        raise CheckpointError("Controller restore requires rollback journaling")
+                    db.execute("PRAGMA synchronous=EXTRA")
+                    if db.execute("PRAGMA synchronous").fetchone()[0] != 3:
+                        raise CheckpointError("Controller restore requires EXTRA durability")
+                else:
+                    db.execute("PRAGMA synchronous=FULL")
+                    if db.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+                        raise CheckpointError("Existing controller restore requires WAL")
+                    # Keep only record identities, with a bounded page cache.
+                    # A build that forces temporary data into RAM cannot provide
+                    # this restore's disk-backed key-set guarantee.
+                    options = {row[0] for row in db.execute("PRAGMA compile_options")}
+                    if "TEMP_STORE=3" in options:
+                        raise CheckpointError("Disk-backed controller restore keys required")
+                    db.execute("PRAGMA temp_store=FILE")
+                    db.execute("PRAGMA temp.cache_size=-2048")
+                    db.execute("CREATE TEMP TABLE controller_restore_seen("
+                               "kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(kind,id)) WITHOUT ROWID")
                 db.execute("BEGIN IMMEDIATE")
                 try:
-                    db.execute("DELETE FROM records")
+                    if empty and db.execute("SELECT 1 FROM records LIMIT 1").fetchone() is not None:
+                        raise CheckpointError("Controller restore target changed before transaction")
                     for kind,key,value in rows:
                         if len(key) > 512:
                             raise CheckpointError("Invalid canonical controller record ID")
-                        db.execute("INSERT INTO records VALUES(?,?,?)",
-                                   (kind,key,canonical(value).decode("utf-8")))
+                        raw_value = canonical(value).decode("utf-8")
+                        if empty:
+                            db.execute("INSERT INTO records VALUES(?,?,?)", (kind,key,raw_value))
+                        else:
+                            # A delta must not conceal a duplicate input identity.
+                            db.execute("INSERT INTO temp.controller_restore_seen VALUES(?,?)", (kind,key))
+                            # Ordinary statements preserve conflict policies in
+                            # the dirty-index triggers; UPSERT's DO UPDATE does not.
+                            same = db.execute("SELECT value IS ? FROM records WHERE kind=? AND id=?",
+                                              (raw_value,kind,key)).fetchone()
+                            if same is None:
+                                db.execute("INSERT INTO records VALUES(?,?,?)", (kind,key,raw_value))
+                            elif not same[0]:
+                                db.execute("UPDATE records SET value=? WHERE kind=? AND id=?",
+                                           (raw_value,kind,key))
+                    if not empty:
+                        # Missing records may be removed only after every signed
+                        # block/shard/record has passed the input iterator.
+                        db.execute("DELETE FROM records WHERE NOT EXISTS("
+                                   "SELECT 1 FROM temp.controller_restore_seen AS seen "
+                                   "WHERE seen.kind=records.kind AND seen.id=records.id)")
+                        # Full replacement previously dirtied all lifecycle
+                        # metadata. Preserve its fallback-expiry/default behavior
+                        # without rewriting unchanged canonical record bodies.
+                        db.execute("UPDATE record_lifecycle SET state='@dirty',lease='',expires_at=NULL,delivery=0 "
+                                   "WHERE (state IS NOT '@dirty' OR lease IS NOT '' OR expires_at IS NOT NULL "
+                                   "OR delivery IS NOT 0) AND EXISTS("
+                                   "SELECT 1 FROM records WHERE records.kind=record_lifecycle.kind "
+                                   "AND records.id=record_lifecycle.id)")
                     db.execute("UPDATE position SET seq=0,hash='' WHERE id=1")
                     db.commit()
-                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    if empty:
+                        # Bulk data is now durable in the main database. Return
+                        # the target to ordinary Store mode before its marker or
+                        # any preparation receipt can be published.
+                        if db.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
+                            raise CheckpointError("Controller restore could not return to WAL")
+                        db.execute("PRAGMA synchronous=FULL")
+                    if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
+                        raise CheckpointError("Controller restore checkpoint is still busy")
                 except BaseException:
                     if db.in_transaction:
                         db.rollback()
