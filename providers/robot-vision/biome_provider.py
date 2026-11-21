@@ -514,18 +514,26 @@ def serve(cfg):
         worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
                         cfg.get("worker_timeout_seconds"))
         worker.stream_handler = live_streams.update
-        # Seed only the provider's own current stream. The publisher still
-        # obtains its normal signed attachment and the router validates it.
-        try:
-            grant = json.loads((worker_state / "vision-stream-resume.json").read_text())
-        except (OSError, ValueError):
-            grant = None
-        if (isinstance(grant, dict) and grant.get("provider") == cfg["provider"]
-                and grant.get("contract") == "robot.vision.stream:1"
-                and grant.get("resource") == cfg["resource"]
-                and all(isinstance(grant.get(key), str) and grant[key] for key in ("id", "authority", "epoch"))
-                and type(grant.get("generation")) is int):
-            live_streams.update([grant])
+        resume_path = worker_state / "vision-stream-resume.json"
+        resumed_session = None
+
+        def resume_live_stream():
+            nonlocal resumed_session
+            # The hint carries identity only. The normal publisher still asks
+            # the authority for its signed attachment before any payload.
+            try:
+                grant = json.loads(resume_path.read_text())
+            except (OSError, ValueError):
+                return
+            if (isinstance(grant, dict) and grant.get("provider") == cfg["provider"]
+                    and grant.get("contract") == "robot.vision.stream:1"
+                    and grant.get("resource") == cfg["resource"]
+                    and all(isinstance(grant.get(key), str) and grant[key] for key in ("id", "authority", "epoch"))
+                    and type(grant.get("generation")) is int and grant["id"] != resumed_session):
+                live_streams.update([grant])
+                resumed_session = grant["id"]
+
+        resume_live_stream()
         pool = ActionPool(worker, cfg["slots"])
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
@@ -601,6 +609,7 @@ def serve(cfg):
         try:
             while not stopping.is_set():
                 try:
+                    resume_live_stream()
                     worker.once(pool, reconcile_receipts=False)
                     stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
