@@ -189,6 +189,29 @@ class ControllerAuthority:
                 raise Fault("Stream grant belongs to another authority",403)
             return grant
 
+    def capability_demand(self, scope):
+        """Snapshot one exclusive capability slot without refreshing its lease."""
+        if (not isinstance(scope, dict) or set(scope) != {"provider", "resource", "contract"} or
+                not all(isinstance(value, str) and 0 < len(value) <= 192 for value in scope.values())):
+            raise Fault("Exact capability lease scope required")
+        from .providers import admitted, capacity_of
+
+        def read(tx):
+            guard = tx.get("guards", scope["resource"], {})
+            lease = tx.get("leases", guard.get("holder", ""), {})
+            if (lease.get("state") not in ("fencing", "bound") or lease.get("shared_parent") or
+                    lease.get("guard") != scope["resource"] or
+                    lease.get("generation") != guard.get("generation") or
+                    any(lease.get(field) != value for field, value in scope.items())):
+                return {"lease": None}
+            offer = tx.get("offers", lease["offer"])
+            if not offer or capacity_of(tx, offer) != 1 or not admitted(tx, offer):
+                return {"lease": None}
+            return {"lease": {"id": lease["id"], "generation": lease["generation"]}}
+
+        with self.lock:
+            return self.app.stores["site"].execute(read, read_only=True)
+
     def prepare_fences(self, prepared_checkpoint, retained_floors=None):
         # This is logical write ownership, not a physical resource-generation
         # fence. Existing action/lease/stream and assistant epoch rows are intact.
