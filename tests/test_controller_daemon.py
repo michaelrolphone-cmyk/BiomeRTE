@@ -266,6 +266,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 yield call("lease-poll", "cap.lease")
                 yield call("attachment", "stream.open")
                 yield call("inspection", "stream.inspect")
+                yield call("resume", "stream.resume")
                 release.set()
                 await completed.wait()
                 self.closed = True
@@ -277,7 +278,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.dispatch = dispatch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
         self.assertEqual(processed, ["running", "attachment", "lifecycle", "inspection",
-                                     "lease-poll", "registration"])
+                                     "lease-poll", "resume", "registration"])
 
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1

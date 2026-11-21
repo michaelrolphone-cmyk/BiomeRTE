@@ -1020,7 +1020,9 @@ class AuthorityDaemon:
             return "inspection"
         if operation in ("cap.discover", "cap.status", "provider.poll"):
             return "read"
-        if operation in ("stream.open", "stream.attach", "stream.resume"):
+        if operation == "stream.open":
+            return "stream_open"
+        if operation in ("stream.attach", "stream.resume"):
             return "attachment"
         if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
                 "cap.acquire", "cap.fenced", "cap.lease")):
@@ -1054,7 +1056,7 @@ class AuthorityDaemon:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
-                                "read", "inspection"):
+                                "read", "inspection", "attachment"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1085,8 +1087,9 @@ class AuthorityDaemon:
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
         bands = ("read", "lifecycle", "general")
-        stream_bands = ("attachment", "inspection")
-        capacity = {"attachment": 1, "inspection": 4, "read": 8, "lifecycle": 1, "general": 1}
+        stream_bands = ("stream_open", "inspection", "attachment")
+        capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
+                    "read": 8, "lifecycle": 1, "general": 1}
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
