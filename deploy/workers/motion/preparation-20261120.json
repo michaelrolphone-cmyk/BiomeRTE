@@ -1,0 +1,200 @@
+{
+  "activation": "Root-controlled: stop and disable native owners before either container starts",
+  "bundle_directory": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/motion-90cc2f6-20261120",
+  "custody_snapshot": {
+    "captured_utc": "2026-11-20T16:10:32.452106+00:00",
+    "files": [
+      {
+        "bytes": 229376,
+        "path": "/Users/micahelbyrns/.local/share/biome-rover-motion/provider/worker.sqlite"
+      },
+      {
+        "bytes": 728076288,
+        "path": "/Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite"
+      },
+      {
+        "bytes": 5302472,
+        "path": "/Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite-wal"
+      },
+      {
+        "bytes": 32768,
+        "path": "/Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite-shm"
+      }
+    ],
+    "native_open_files": [
+      "COMMAND     PID         USER   FD   TYPE DEVICE  SIZE/OFF     NODE NAME",
+      "python3.1 25935 micahelbyrns    4u   REG   1,15    229376 38955029 /Users/micahelbyrns/.local/share/biome-rover-motion/provider/worker.sqlite",
+      "python3.1 55083 micahelbyrns  txt    REG   1,15     32768 40833347 /Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite-shm",
+      "python3.1 55083 micahelbyrns    6u   REG   1,15 728076288 38876505 /Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite",
+      "python3.1 55083 micahelbyrns    7u   REG   1,15   5302472 40833346 /Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite-wal",
+      "python3.1 55083 micahelbyrns    8u   REG   1,15     32768 40833347 /Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite-shm"
+    ],
+    "native_phase_only": true,
+    "observations": {
+      "active_training_sessions": 0,
+      "draining_training_sessions": 0,
+      "last_event": [
+        3278491,
+        "sonar",
+        1795191032.290389
+      ],
+      "model_updated_utc": [
+        1795191032.292284
+      ],
+      "training_sessions": [
+        {
+          "closed_observed": 1794507664.3430688,
+          "id": "recorder-qualification-20261112",
+          "observed": 1794507664.182775,
+          "started": 1794507499.719401,
+          "stopped": 1794507664.2261918
+        },
+        {
+          "closed_observed": 1794508008.460124,
+          "id": "recorder-qualification-ahrs-20261112",
+          "observed": 1794508008.412789,
+          "started": 1794508007.783097,
+          "stopped": 1794508008.459635
+        }
+      ]
+    },
+    "recheck_required_before_handoff": true,
+    "worker": {
+      "actions_by_state": {
+        "succeeded": 11
+      },
+      "pending_counts": {
+        "reconciliations": 0,
+        "result_cleanup": 0,
+        "supervised_expiry": 0,
+        "supervised_pending": 0
+      },
+      "recovery_results": [
+        {
+          "acknowledged": false,
+          "has_result": true,
+          "id": "native-motion-qualification-model",
+          "state": "succeeded"
+        },
+        {
+          "acknowledged": false,
+          "has_result": true,
+          "id": "native-motion-qualification-predict",
+          "state": "succeeded"
+        }
+      ]
+    }
+  },
+  "host_io": {
+    "client_directory": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/client",
+    "credentials": "existing client files referenced; never embedded",
+    "url": "https://host.docker.internal:8766"
+  },
+  "identity": {
+    "provider": "6643cd2e57594fb94f4e58bb5ec80818c411bf320d8459d05cadc2f2241b5a25",
+    "resource": "robot.motion.rover-30eda0d95f24",
+    "site": "f45540bf9910412680734d0613e84460",
+    "slots": 16
+  },
+  "image": {
+    "Architecture": "arm64",
+    "Id": "sha256:3bb07e94f55d8ddaf1ff2457d727df79050618b1e9e3d6ebc09761324acd335c",
+    "Os": "linux",
+    "Size": 183746931
+  },
+  "image_source_revision": "90cc2f6f6a29f16b2241f65a8e8b243b92545379",
+  "images_built": false,
+  "native_consumer_review": {
+    "finding": "Inspected active resolved sources contain no motion observation/training SQLite access; rover_routes uses its own pending-routes.sqlite.",
+    "limitation": "Open-file/process observations must be repeated at the exclusive handoff barrier.",
+    "resolved_modules": [
+      "biomerte.rover",
+      "site_bridge",
+      "rover_transport",
+      "rover_routes"
+    ],
+    "rover_source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover",
+    "vision_finding": "Motion evidence uses passed metadata; ToF source reads JSON, not motion SQLite.",
+    "vision_sources": [
+      "rover_motion_evidence.py",
+      "tof_source.py"
+    ]
+  },
+  "native_manifest": {
+    "path": "/Users/micahelbyrns/.local/share/biome-rover-motion/provider/provider.json",
+    "sha256": "172eee6f8ce0e68d3447bc658df66a04d14f4bc068800d8ea999bd46fb89b6d2"
+  },
+  "native_services_changed": false,
+  "network_preflight": {
+    "blockers": [
+      "Coherent snapshot is retained from 2026-11-15; it does not establish current motion observations.",
+      "Rover control subscription reports ready=false.",
+      "Native motion-model advertisement was absent; native provider log repeats RuntimeError and result acknowledgment recovery warnings."
+    ],
+    "captured_utc": "2026-11-20T16:16:52.467638+00:00",
+    "coherent_snapshot_frame_id": "cf06a67de673ab20:18858108618",
+    "coherent_snapshot_processed_utc": "2026-11-15T15:23:46.721083+00:00",
+    "control_messages_sent": 0,
+    "control_ready": false,
+    "gate": "prepared_no_live_handoff",
+    "gateway_discovery": "passed",
+    "host_io_tls_clock": "passed",
+    "motion_model_offer_count": 0,
+    "note": "First preflight gate checked transport only. Fresh raw JPEG/telemetry does not replace a current coherent motion snapshot.",
+    "raw_stream_jpeg_bytes": 20038,
+    "raw_stream_messages": 6,
+    "sonar_all_fresh": true,
+    "sonar_receive_age_s": 0.3841228170786053,
+    "transport_reachable": true,
+    "vision_snapshot_query": "passed"
+  },
+  "offline_validation": {
+    "compose_config": "passed",
+    "image_inspect": "passed"
+  },
+  "placement": {
+    "gid": 20,
+    "home": "/Users/micahelbyrns",
+    "provider_host": "Micahels-Mac-mini.local",
+    "uid": 501
+  },
+  "prepared_utc": "2026-11-20T16:10:32.536240+00:00",
+  "preserved_in_place": {
+    "observations": "/Users/micahelbyrns/.local/share/biome-rover-motion/motion/observations.sqlite",
+    "provider_state": "/Users/micahelbyrns/.local/share/biome-rover-motion/provider",
+    "worker_ledger": "/Users/micahelbyrns/.local/share/biome-rover-motion/provider/worker.sqlite"
+  },
+  "rollback": "Stop both containers before restoring native ownership; retain current state/WAL",
+  "rollback_plists": [
+    {
+      "backup": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/motion-90cc2f6-20261120/rollback/org.biomerte.rover-motion.plist",
+      "label": "org.biomerte.rover-motion",
+      "original": "/Users/micahelbyrns/Library/LaunchAgents/org.biomerte.rover-motion.plist",
+      "program_arguments": [
+        "/Users/micahelbyrns/.local/share/biome-robot-vision/env/bin/python",
+        "/Users/micahelbyrns/.local/share/biome-rover-motion/observer-releases/motion-events-94c150d03b74/rover-motion-observer.py"
+      ],
+      "sha256": "9aff239b4cf4aec563f126f6a3388344cd4cce97adcfc6bb1a1892cdd18572ae",
+      "working_directory": "/Users/micahelbyrns/.local/share/biome-rover-motion/observer-releases/motion-events-94c150d03b74"
+    },
+    {
+      "backup": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/motion-90cc2f6-20261120/rollback/org.biomerte.rover-motion-provider.plist",
+      "label": "org.biomerte.rover-motion-provider",
+      "original": "/Users/micahelbyrns/Library/LaunchAgents/org.biomerte.rover-motion-provider.plist",
+      "program_arguments": [
+        "/Users/micahelbyrns/.local/share/biome-robot-vision/env/bin/python",
+        "/Users/micahelbyrns/.local/share/biome-rover-motion/provider-releases/c4606f5a41bf7fa3/biome_provider.py",
+        "serve",
+        "--state",
+        "/Users/micahelbyrns/.local/share/biome-rover-motion/provider"
+      ],
+      "sha256": "ffb857be08f0f9fbb77e43eb495eca3654234dffdc117b7b04e9f39e732fe905",
+      "working_directory": "/Users/micahelbyrns/.local/share/biome-rover-motion/provider-releases/c4606f5a41bf7fa3"
+    }
+  ],
+  "rover": {
+    "origin": "http://host.docker.internal:8093",
+    "token": "private HMAC derivation from existing stream_router_secret"
+  },
+  "status": "prepared_no_live_handoff"
+}

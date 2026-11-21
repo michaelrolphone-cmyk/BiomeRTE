@@ -40,25 +40,39 @@ def exact(source,size):
 
 
 class VisionStreams:
-    def __init__(self,remote,socket_path,local_router_url=None,sequence_path=None):
+    def __init__(self,remote,socket_path,local_router_url=None,sequence_path=None,rear_resource=None,host_io_config=None):
         from biomerte.stream_inspection import loopback_url
         self.local_router_url=loopback_url(local_router_url)
         from stream_sequences import StreamSequences
         self.sequences=StreamSequences(sequence_path)
+        self.rear_resource=rear_resource
         self.remote=remote
         self.socket_path=socket_path
+        self.host_io_config=host_io_config
         self.running={}
         self.reported={}
         self.connections={}
+        self.lane_tasks={}
+
+    def stop_lane(self, key, stop):
+        stop.set()
+        connection = self.connections.get(key)
+        if connection:
+            connection.abort()
+        running = self.lane_tasks.get(key)
+        if running:
+            loop, task = running
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # The worker already closed its event loop.
 
     def update(self,grants):
         wanted={g['id']:g for g in grants if g['contract']=='robot.vision.stream:1'}
         wanted = {id+':'+lane:dict(grant, lane=lane) for id,grant in wanted.items() for lane in ('vision','map')}
         for id,(stop,thread) in list(self.running.items()):
             if id not in wanted:
-                stop.set()
-                connection=self.connections.get(id)
-                if connection:connection.abort()
+                self.stop_lane(id, stop)
                 if not thread.is_alive():self.running.pop(id,None)
         for id,grant in wanted.items():
             if id in self.running and self.running[id][1].is_alive():continue
@@ -67,8 +81,14 @@ class VisionStreams:
             self.running[id]=(stop,thread)
             thread.start()
 
+    def native_stream(self,grant):
+        if grant['lane']=='map':
+            return 'map'
+        return 'rear' if self.rear_resource and grant['resource']==self.rear_resource else 'live'
+
     async def run(self,grant,stop):
         from websockets.asyncio.client import connect
+        from biomerte.host_io_client import MAX_FRAME
         from biomerte.stream_router import decode,frame
         key=grant['id']+':'+grant['lane']
         while not stop.is_set():
@@ -80,33 +100,58 @@ class VisionStreams:
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
-                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_queue=1,write_limit=65536) as wire:
+                async with connect(url+'/'+grant['lane'],additional_headers=headers,max_size=None,max_queue=1,write_limit=65536) as wire:
+                    self.lane_tasks[key] = (asyncio.get_running_loop(), asyncio.current_task())
                     stage='local_feed'
                     if stop.is_set():return
-                    local=LocalConnection(self.socket_path)
-                    self.connections[key]=local
-                    if stop.is_set():return
-                    await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))
-                    response=await asyncio.to_thread(local.getresponse)
-                    if response.status!=200:raise RuntimeError('live_feed_unavailable')
+                    if self.host_io_config:
+                        from biomerte.host_io_client import HostIOClient
+                        client=HostIOClient.from_config(self.host_io_config)
+                        local=client.open_vision_stream(self.native_stream(grant))
+                        self.connections[key]=local
+                        if stop.is_set():return
+                        await asyncio.to_thread(local.open)
+                    else:
+                        local=LocalConnection(self.socket_path)
+                        self.connections[key]=local
+                        if stop.is_set():return
+                        await asyncio.to_thread(local.request,'GET',{'live':'/v1/live','rear':'/v1/live/rear','map':'/v1/live/map'}[self.native_stream(grant)])
+                        response=await asyncio.to_thread(local.getresponse)
+                        if response.status!=200:raise RuntimeError('live_feed_unavailable')
                     while not stop.is_set():
                         stage='local_read'
-                        header=await asyncio.to_thread(exact,response,4)
-                        size=struct.unpack('!I',header)[0]
-                        if not 4<=size<=4194304:raise ValueError('live_frame_size')
-                        value=await asyncio.to_thread(exact,response,size)
-                        metadata,image=decode(value,4194304)
+                        if self.host_io_config:
+                            metadata,image=await asyncio.to_thread(local.read_frame)
+                        else:
+                            header=await asyncio.to_thread(exact,response,4)
+                            size=struct.unpack('!I',header)[0]
+                            if not 4 <= size <= MAX_FRAME:raise ValueError('live_frame_size')
+                            value=await asyncio.to_thread(exact,response,size)
+                            metadata,image=decode(value,MAX_FRAME)
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
-                        if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
+                        control = metadata.get('type') == 'sensor_manifest'
+                        live = grant['lane'] == 'vision' and not control
+                        if live and time.monotonic()-metadata['processed_monotonic']>1:continue
                         sequence=self.sequences.next(grant)
                         # Reserving a new range may wait for durable storage.
-                        if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
+                        if live and time.monotonic()-metadata['processed_monotonic']>1:continue
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
                                         epoch=grant['epoch'],sequence=sequence)
-                        if grant['lane']=='vision':metadata['type']='frame'
+                        if live:
+                            metadata['type']=('sensor_tick' if metadata.get('sensor_tick') is True
+                                              and metadata.get('image_available') is False else 'frame')
+                        from rover_wire import envelope
+                        resource = grant['resource']
+                        if self.rear_resource and resource == self.rear_resource and resource.endswith('.rear'):
+                            resource = resource[:-5]
+                        metadata = envelope(metadata, resource)
                         stage='publish'
-                        await asyncio.wait_for(wire.send(frame(metadata,image)),1)
+                        await wire.send(frame(metadata,image))
+            except asyncio.CancelledError:
+                if stop.is_set():
+                    return
+                raise
             except Exception as error:
                 report_key=grant['lane']
                 now=time.monotonic()
@@ -117,12 +162,12 @@ class VisionStreams:
                     logging.warning('Vision live lane %s stage=%s failed: %s status=%s',grant['lane'],stage,type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
+                self.lane_tasks.pop(key, None)
                 if response is not None:response.close()
                 if local:local.abort()
                 if self.connections.get(key) is local:self.connections.pop(key,None)
 
     def close(self):
-        for stop,thread in self.running.values():stop.set()
-        for connection in list(self.connections.values()):connection.abort()
+        for key, (stop, thread) in list(self.running.items()):self.stop_lane(key, stop)
         for stop,thread in self.running.values():thread.join()
         self.running.clear()

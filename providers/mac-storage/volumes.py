@@ -10,8 +10,9 @@ import subprocess
 import tarfile
 import tempfile
 import uuid
+import sys
 
-BASE = Path.home() / '.local/share/biome-mac-storage'
+BASE = Path(os.environ.get('BIOME_STORAGE_HOME', Path.home() / '.local/share/biome-mac-storage'))
 MOUNT = BASE / 'workspace.mount'
 IMAGE = BASE / 'workspace.dmg'
 VAULT = BASE / 'sacred-backups.tar'
@@ -39,21 +40,64 @@ def write_json(p, data):
 def allocate(path, size):
     """F_PREALLOCATE followed by ftruncate makes APFS commit real blocks."""
     with path.open('xb') as f:
-        result = fcntl.fcntl(f, 42, struct.pack('=Iiqqq', 4, 3, 0, size, 0))
-        if struct.unpack('=Iiqqq', result)[-1] < size:
-            raise OSError('Incomplete disk reservation')
-        f.truncate(size)
+        if sys.platform == 'darwin':
+            result = fcntl.fcntl(f, 42, struct.pack('=Iiqqq', 4, 3, 0, size, 0))
+            if struct.unpack('=Iiqqq', result)[-1] < size:
+                raise OSError('Incomplete disk reservation')
+            f.truncate(size)
+        else:
+            # A host-shared filesystem may not implement fallocate/reflink.
+            # Writing every byte is portable and is checked for real allocation.
+            block = bytes(min(size, 4 * 1024 * 1024))
+            left = size
+            while left:
+                count = f.write(block[:min(left, len(block))])
+                left -= count
         f.flush()
         os.fsync(f.fileno())
     if path.stat().st_blocks * 512 < size:
         raise OSError('Backing file is sparse')
 
+def native_status():
+    from biomerte.host_io_client import HostIOClient
+    config = json.loads(Path(os.environ['BIOME_GATEWAY_HOST_IO_CONFIG']).read_text())
+    return HostIOClient(config).call('storage.status', {})
+
+def capacity():
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1' and os.environ.get('BIOME_GATEWAY_HOST_IO_CONFIG'):
+        info = native_status()
+        if not info.get('mounted'):
+            raise RuntimeError('Native workspace is not mounted')
+        return info['usable_bytes'], info['free_bytes']
+    fs = os.statvfs(MOUNT)
+    return fs.f_blocks * fs.f_frsize, fs.f_bavail * fs.f_frsize
+
 def mounted():
     state = BASE / 'volume.json'
-    return (os.path.ismount(MOUNT) and state.is_file() and (MOUNT / MARK).is_file()
-            and (MOUNT / MARK).read_text() == json.loads(state.read_text())['workspace_uuid'])
+    identity = (state.is_file() and (MOUNT / MARK).is_file() and
+                (MOUNT / MARK).read_text() == json.loads(state.read_text())['workspace_uuid'])
+    if not identity:
+        return False
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1' and os.environ.get('BIOME_GATEWAY_HOST_IO_CONFIG'):
+        info = native_status()
+        return (info.get('mounted') is True and info.get('workspace_path') == str(MOUNT) and
+                info.get('workspace_uuid') == (MOUNT / MARK).read_text() and
+                info.get('workspace_allocated_bytes', 0) >= WORKSPACE and
+                info.get('sacred_allocated_bytes', 0) >= SACRED)
+    return os.path.ismount(MOUNT)
 
 def prepare():
+    if os.environ.get('BIOME_STORAGE_PREMOUNTED') == '1':
+        # A container never formats, reserves, mounts or replaces native media.
+        if not mounted():
+            raise RuntimeError('The enrolled workspace mount is unavailable')
+        if not IMAGE.is_file() or not VAULT.is_file():
+            raise RuntimeError('Enrolled backing file missing')
+        if IMAGE.stat().st_blocks * 512 < WORKSPACE or VAULT.stat().st_blocks * 512 < SACRED:
+            raise RuntimeError('Physical reservation below provisioned capacity')
+        return
+    if sys.platform != 'darwin':
+        raise RuntimeError('Native storage preparation requires macOS; use a verified existing mount')
     os.umask(0o077)
     BASE.mkdir(parents=True, exist_ok=True)
     MOUNT.mkdir(mode=0o700, exist_ok=True)

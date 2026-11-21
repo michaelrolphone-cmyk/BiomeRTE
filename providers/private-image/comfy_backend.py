@@ -5,7 +5,18 @@ import json
 import secrets
 import time
 import uuid
+import threading
+import asyncio
 from pathlib import Path
+import sys
+def native_runtime():
+    if sys.platform != "darwin":
+        raise RuntimeError("Native Mac model admission is required")
+    directory = str(Path.home()/".local/share/biome-model-runtime")
+    if directory not in sys.path:
+        sys.path.insert(0,directory)
+    from model_runtime import ModelRuntime
+    return ModelRuntime()
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 
 class NoRedirect(HTTPRedirectHandler):
@@ -13,10 +24,11 @@ class NoRedirect(HTTPRedirectHandler):
         raise RuntimeError("Local redirect refused")
 
 class ComfyBackend:
-    def __init__(self, url="http://127.0.0.1:8188", model="fluxedUpFluxNSFW_71Q8GGUF.gguf"):
+    def __init__(self, url="http://127.0.0.1:8188", model="fluxedUpFluxNSFW_71Q8GGUF.gguf", *, runtime_factory=None):
         if url != "http://127.0.0.1:8188":
             raise ValueError("ComfyUI must stay on loopback")
         self.url, self.model = url, model
+        self.runtime_factory = runtime_factory or native_runtime
         self.http = build_opener(ProxyHandler({}), NoRedirect())
 
     def api(self, path, data=None, method=None):
@@ -25,6 +37,15 @@ class ComfyBackend:
         with self.http.open(req) as response:
             body = response.read()
             return json.loads(body) if body.strip() else {}
+
+    def ready(self):
+        nodes = self.api("/object_info")
+        if "BiomeMemoryImage" not in nodes:
+            raise RuntimeError("Memory output node unavailable")
+        models = nodes["UnetLoaderGGUF"]["input"]["required"]["unet_name"][0]
+        if self.model not in models:
+            raise RuntimeError("Model unavailable")
+        return {"ready":True, "model":self.model, "output":"memory"}
 
     def specification(self, messages):
         text = next(m["content"] for m in reversed(messages) if m["role"] == "user")
@@ -37,6 +58,9 @@ class ComfyBackend:
             raise ValueError("Invalid image parameters")
         if not isinstance(spec.get("prompt"), str) or not spec["prompt"].strip():
             raise ValueError("Prompt required")
+        instructions = '\n\n'.join(m['content'].strip() for m in messages if m['role'] == 'system' and m['content'].strip())
+        if instructions:
+            spec['prompt'] = instructions + '\n\n' + spec['prompt']
         for name, default in (("width",512),("height",512),("steps",28),("batch_size",1)):
             value = spec.setdefault(name, default)
             if type(value) is not int or value < 1 or (name in ("width","height") and value % 8):
@@ -69,13 +93,61 @@ class ComfyBackend:
             "10":{"class_type":"BiomeMemoryImage","inputs":{"images":["9",0],"token":token}},
         }
 
-    def generate(self, messages):
+    @staticmethod
+    def progress_update(kind, data):
+        if kind == 'progress':
+            step, total = data.get('value'), data.get('max')
+            if type(step) is int and type(total) is int and 0 <= step <= total and total > 0:
+                return {'stage':'sampling','step':step,'total':total}
+        if kind == 'executing':
+            stages={'1':'loading_model','2':'loading_text_encoders','3':'encoding_prompt','6':'encoding_prompt','7':'sampling','8':'loading_decoder','9':'decoding','10':'delivery'}
+            if data.get('node') in stages:
+                return {'stage':stages[data['node']]}
+        return None
+
+    def watch_progress(self, client, prompt_id, stopped, publish):
+        async def watch():
+            import aiohttp
+            async with aiohttp.ClientSession() as http:
+                async with http.ws_connect(self.url.replace('http:', 'ws:')+'/ws',params={'clientId':client}) as socket:
+                    while not stopped.is_set():
+                        try:
+                            message=await asyncio.wait_for(socket.receive(),.5)
+                        except asyncio.TimeoutError:
+                            continue
+                        if message.type != aiohttp.WSMsgType.TEXT:
+                            if message.type in (aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.ERROR):break
+                            continue
+                        frame=json.loads(message.data);data=frame.get('data',{})
+                        if data.get('prompt_id') not in (None,prompt_id):continue
+                        update=self.progress_update(frame.get('type'),data)
+                        if update:publish(update)
+        try:asyncio.run(watch())
+        except Exception:pass  # Progress transport never changes generation outcome.
+
+    def generate(self, messages, progress=None):
+        # Validation precedes admission; no prompt or image bytes enter the queue.
+        self.specification(messages)
+        with self.runtime_factory().slot('image',progress=progress):
+            return self._generate(messages,progress)
+
+    def _generate(self, messages, progress=None):
         spec = self.specification(messages)
         token = str(uuid.uuid4())
         prompt_id = None
+        stopped=threading.Event();monitor=None
+        def publish(update):
+            if progress:
+                try:progress(update)
+                except Exception:pass
         try:
-            queued = self.api("/prompt", {"prompt":self.graph(spec,token),"client_id":str(uuid.uuid4())})
+            publish({'stage':'preparing'})
+            client=str(uuid.uuid4())
+            queued = self.api("/prompt", {"prompt":self.graph(spec,token),"client_id":client})
             prompt_id = queued["prompt_id"]
+            publish({'stage':'queued'})
+            if progress:
+                monitor=threading.Thread(target=self.watch_progress,args=(client,prompt_id,stopped,publish),daemon=True);monitor.start()
             while True:
                 history = self.api("/history/" + prompt_id)
                 if prompt_id in history:
@@ -85,6 +157,7 @@ class ComfyBackend:
                     if status.get("completed"):
                         break
                 time.sleep(1)
+            publish({'stage':'delivery'})
             images = self.api("/biome/private-image/" + token)["images"]
             if not images:
                 raise RuntimeError("No image returned")
@@ -96,8 +169,11 @@ class ComfyBackend:
                 result.append({"mime":"image/png","data":image,"sha256":hashlib.sha256(data).hexdigest()})
             return {"images":result,"seed":spec["seed"],"width":spec["width"],"height":spec["height"],"model":self.model}
         finally:
+            stopped.set()
+            if monitor:monitor.join(2)
             if prompt_id:
                 self.api("/history", {"delete":[prompt_id]})
             self.api("/biome/private-image/" + token, method="DELETE")
             # Drop model/latent caches between requests, releasing shared Mac GPU memory.
             self.api("/free", {"unload_models":True,"free_memory":True})
+

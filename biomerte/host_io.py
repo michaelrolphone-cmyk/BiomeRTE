@@ -192,6 +192,11 @@ class HostIO:
         self.route_lock = threading.Lock()
         self.stop = threading.Event()
         self.refresh_thread = None
+        self._model = None
+        self._model_lock = threading.Lock()
+        self._gateway = None
+        self._gitlab = None
+        self._gateway_lock = threading.Lock()
         self.route_health = dict(state="disabled")
         self.anchors = AnchorHub(self.settings.get("anchors", {}), self.clock_id)
 
@@ -220,6 +225,10 @@ class HostIO:
 
     def close(self):
         self.stop.set()
+        with self._model_lock:
+            model = self._model
+        if model is not None:
+            model.close()
         self.anchors.close()
         if self.refresh_thread:
             self.refresh_thread.join(timeout=4)
@@ -330,6 +339,125 @@ class HostIO:
             raise ValueError("invalid survey control response")
         return json.loads(raw)
 
+    def gateway_invoke(self, operation, arguments, request_id=None, realm="site", provider_context=None):
+        """Use the native OAuth owner; preserve the caller's operation identity."""
+        config = self.settings.get("gateway", {})
+        module_path = config.get("module")
+        if config.get("enabled") is not True:
+            raise PermissionError("native gateway forwarding is not active")
+        if (not isinstance(operation, str) or not operation
+                or not isinstance(arguments, dict) or realm not in ("site", "local")
+                or (request_id is not None and not isinstance(request_id, str))):
+            raise ValueError("invalid gateway request")
+        if provider_context is not None:
+            if (not isinstance(provider_context, dict)
+                    or set(provider_context) - {"provider", "host", "addresses"}
+                    or not isinstance(provider_context.get("provider"), str)
+                    or not isinstance(provider_context.get("host"), str)):
+                raise ValueError("invalid provider context")
+            if "addresses" in provider_context and (
+                    not isinstance(provider_context["addresses"], list)
+                    or any(not isinstance(value, str) for value in provider_context["addresses"])):
+                raise ValueError("invalid provider addresses")
+        path = Path(module_path) if isinstance(module_path, str) else None
+        if path is None or not path.is_absolute() or not path.is_file():
+            raise ValueError("configured native gateway module is unavailable")
+        with self._gateway_lock:
+            if self._gateway is None:
+                import sys
+                if str(path.parent) not in sys.path:
+                    sys.path.insert(0, str(path.parent))
+                spec = importlib.util.spec_from_file_location("biomerte_host_gateway", path)
+                gateway = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(gateway)
+                self._gateway = gateway
+        return self._gateway.invoke(operation, arguments, request_id, realm,
+                                    provider_context=provider_context)
+
+    def gitlab_token(self):
+        """Refresh through the native GitLab credential owner, never a VM copy."""
+        config = self.settings.get("gitlab", {})
+        module_path = config.get("module")
+        if config.get("enabled") is not True:
+            raise PermissionError("native GitLab credential forwarding is not active")
+        path = Path(module_path) if isinstance(module_path, str) else None
+        if path is None or not path.is_absolute() or not path.is_file():
+            raise ValueError("configured native GitLab module is unavailable")
+        with self._gateway_lock:
+            if self._gitlab is None:
+                import sys
+                if str(path.parent) not in sys.path:
+                    sys.path.insert(0, str(path.parent))
+                spec = importlib.util.spec_from_file_location("biomerte_host_gitlab", path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self._gitlab = module
+        return self._gitlab.token()
+
+    def vision_query(self, query, inputs):
+        """Call only the configured existing vision contract on its native socket."""
+        policy = self.settings.get("vision_queries", {})
+        allowed = policy.get("operations", [])
+        mutations = policy.get("mutations", [])
+        if (not isinstance(query, str) or query not in allowed
+                or not isinstance(inputs, dict)):
+            raise ValueError("vision query is not in the configured contract set")
+        if query in mutations and self.settings.get("enable_effects") is not True:
+            raise PermissionError("host effects are not active")
+        if query in ("robot.video.import.read", "robot.video.import.write"):
+            # Video processing keeps its native compute dependencies and existing
+            # job ledger. The provider has always dispatched these operations
+            # through VideoJobs rather than the vision Unix query handler.
+            directory = str(Path(policy.get("module_directory") or self.settings["device_routes_module_directory"]).resolve())
+            request = inputs.get("request")
+            actions = ({"list", "status"} if query.endswith(".read") else
+                       {"create", "chunk", "finish", "start", "cancel"})
+            if not isinstance(request, dict) or request.get("action") not in actions:
+                raise ValueError("invalid video job action")
+            interpreter = Path(policy.get("python", ""))
+            if not interpreter.is_absolute() or not interpreter.is_file():
+                raise ValueError("native vision interpreter must be explicitly configured")
+            # VideoJobs.start launches video_worker with sys.executable. Invoke
+            # it in the actual vision environment, not this small bridge's Python.
+            program = (
+                "import json,sys; sys.path.insert(0,sys.argv[1]); "
+                "from video_jobs import VideoJobs; request=json.load(sys.stdin)\n"
+                "try: result=VideoJobs(sys.argv[2]).handle(request)\n"
+                "except (ValueError,KeyError,FileNotFoundError) as error:\n"
+                " result={'ok':False,'error':{'code':'VIDEO_INPUT','message':str(error)[:500]}}\n"
+                "json.dump(result,sys.stdout,allow_nan=False)\n")
+            completed = subprocess.run(
+                [str(interpreter), "-c", program, directory, self.settings["vision_directory"]],
+                input=json.dumps(request, allow_nan=False), text=True, capture_output=True)
+            if completed.returncode:
+                raise RuntimeError("native video request did not complete")
+            body = json.loads(completed.stdout)
+            if not isinstance(body, dict):
+                raise ValueError("native video response must be an object")
+            return {"status": 200, "body": body}
+        raw = json.dumps({"operation": query, "inputs": inputs},
+                         allow_nan=False, separators=(",", ":")).encode()
+        if len(raw) > 64 * 1024:
+            raise ValueError("native vision request exceeds its contract limit")
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(policy.get("timeout_s"))
+            sock.connect(str(Path(self.settings["vision_directory"]) / "vision.sock"))
+            connection = http.client.HTTPConnection("localhost")
+            connection.sock = sock
+            try:
+                connection.request("POST", "/v1/query", raw,
+                                   {"Content-Type": "application/json"})
+                with connection.getresponse() as response:
+                    body = response.read(MAX_FRAME + 1)
+                    if len(body) > MAX_FRAME:
+                        raise ValueError("native vision response exceeds its contract limit")
+                    value = json.loads(body)
+                    if not isinstance(value, dict):
+                        raise ValueError("native vision response must be an object")
+                    return {"status": response.status, "body": value}
+            finally:
+                connection.close()
+
     def health(self):
         vision = Path(self.settings["vision_directory"]) / "vision.sock"
         provisioning = bool(self.settings.get("device_provisioning") and
@@ -341,12 +469,28 @@ class HostIO:
                     provisioning_active=provisioning, device_commands_active=device_effects,
                     effects_active=provisioning or device_effects or self.anchors.sock is not None)
 
+    def model_bridge(self):
+        with self._model_lock:
+            if self._model is None:
+                from .model_host_io import NativeModelBridge
+                self._model = NativeModelBridge(self.settings)
+            return self._model
+
     def call(self, operation, arguments):
+        if operation == "model.status":
+            if arguments: raise ValueError("model status has no arguments")
+            return self.model_bridge().status()
+        if operation == "storage.status":
+            if arguments: raise ValueError("storage status has no arguments")
+            from .storage_host_io import status
+            return status(self.settings)
         methods = {"clock": self.clock, "health": self.health,
                    "routes.list": self.routes.list, "routes.get": self.routes.get,
                    "routes.candidates": self.candidates, "routes.observe_anchor": self.observe_anchor,
                    "routes.refresh": self.refresh, "survey.zero": self.survey_zero,
-                   "device.request": self.device_request, "anchors.send": self.anchors.send}
+                   "device.request": self.device_request, "anchors.send": self.anchors.send,
+                   "vision.query": self.vision_query, "gateway.invoke": self.gateway_invoke,
+                   "gitlab.token": self.gitlab_token}
         if operation not in methods:
             raise ValueError("unsupported host operation")
         if operation == "routes.refresh" and self.settings.get("route_refresh_interval_s", 0) < 1:
@@ -399,16 +543,21 @@ def make_server(settings, backend):
         def do_POST(self):
             if not self.auth():
                 return
+            if self.path == "/v1/host-io/model":
+                return self.model()
             if self.path != "/v1/host-io/call":
                 return self.reply(404, {"error": "not_found"})
             try:
                 size = int(self.headers.get("Content-Length", "0"))
-                if not 0 < size <= MAX_JSON:
+                if size <= 0 or (size > MAX_JSON and settings.get("gateway", {}).get("enabled") is not True):
                     raise ValueError("invalid request length")
                 self.connection.settimeout(5)
                 body = json.loads(read_exact(self.rfile, size))
                 if body.get("protocol") != PROTOCOL or not isinstance(body.get("arguments"), dict):
                     raise ValueError("invalid protocol")
+                if (settings.get("tls_listener") and body["operation"] in ("gateway.invoke", "gitlab.token")
+                        and not isinstance(self.connection, ssl.SSLSocket)):
+                    return self.reply(403, {"error":"credential_transport_requires_tls"})
                 result = backend.call(body["operation"], body["arguments"])
                 self.reply(200, dict(protocol=PROTOCOL, host_id=backend.host_id,
                                      clock_id=backend.clock_id, result=result))
@@ -418,6 +567,69 @@ def make_server(settings, backend):
                 self.reply(400, {"error": "invalid_host_request"})
             except (OSError, RuntimeError):
                 self.reply(503, {"error": "native_dependency_unavailable"})
+        def model(self):
+            # Model payloads require TLS even when other existing HostIO routes
+            # explicitly permit local HTTP. Auth and host binding precede work.
+            self.close_connection = True
+            if not isinstance(self.connection, ssl.SSLSocket):
+                return self.reply(403, {"error":"model_tls_required"})
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= MAX_JSON:
+                    raise ValueError("invalid model request length")
+                self.connection.settimeout(5)
+                body = json.loads(read_exact(self.rfile, size))
+                if (body.get("protocol") != PROTOCOL or
+                        body.get("host_id") != backend.host_id):
+                    raise ValueError("invalid model host binding")
+                request_id = body.get("request_id")
+                if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
+                    raise ValueError("invalid model request identity")
+                bridge = backend.model_bridge()
+                bridge.validate(body["operation"], body["arguments"])
+            except PermissionError:
+                return self.reply(403, {"error":"operation_not_active"})
+            except (ValueError, TypeError, KeyError):
+                return self.reply(400, {"error":"invalid_model_request"})
+            except Exception:
+                return self.reply(503, {"error":"native_dependency_unavailable"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            connected = True
+            writing = threading.Lock()
+            def emit(value):
+                nonlocal connected
+                with writing:
+                    if not connected:
+                        return
+                    try:
+                        raw = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
+                        if len(raw) > MAX_JSON:
+                            raise ValueError("model frame exceeds limit")
+                        self.wfile.write(raw + b"\n")
+                        self.wfile.flush()
+                    except (OSError, ValueError, TypeError):
+                        # Delivery failure cannot release native model custody.
+                        connected = False
+            emit(dict(type="start", protocol=PROTOCOL, host_id=backend.host_id,
+                      clock_id=backend.clock_id, operation=body["operation"], request_id=request_id))
+            try:
+                result = bridge.call(body["operation"], body["arguments"],
+                                     lambda value: emit(dict(type="progress", value=value)), request_id=request_id)
+                # Large image results use bounded frames. All data stays in RAM;
+                # the worker's existing encrypted artifact protocol is unchanged.
+                encoded = json.dumps(result, allow_nan=False, separators=(",", ":")).encode()
+                for offset in range(0, len(encoded), 48*1024):
+                    emit(dict(type="data", data=base64.b64encode(encoded[offset:offset+48*1024]).decode()))
+                import hashlib
+                emit(dict(type="end", size=len(encoded), sha256=hashlib.sha256(encoded).hexdigest()))
+            except Exception as error:
+                from .model_host_io import PUBLIC_ERRORS
+                code = getattr(error, "public_code", "")
+                emit(dict(type="error", code=code if code in PUBLIC_ERRORS else "private_inference_unavailable"))
         def do_GET(self):
             if not self.auth():
                 return
@@ -476,19 +688,58 @@ def make_server(settings, backend):
         server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
 
+def make_servers(settings, backend):
+    """Optional TLS listener shares the exact same backend and native owners."""
+    servers = []
+    try:
+        servers.append(make_server(settings, backend))
+        listener = settings.get("tls_listener")
+        if listener is not None:
+            if (not isinstance(listener, dict) or set(listener) != {"listen", "port", "tls"}
+                    or not isinstance(listener["tls"], dict)
+                    or not {"cert_file", "key_file"} <= set(listener["tls"])):
+                raise ValueError("invalid additional HostIO TLS listener")
+            servers.append(make_server(dict(settings, **listener), backend))
+        return servers
+    except BaseException:
+        for server in servers:
+            server.server_close()
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
+    import resource
+    import signal
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     settings = json.loads(Path(args.config).read_text())
     backend = HostIO(settings)
-    server = make_server(settings, backend)
+    servers = make_servers(settings, backend)
+    stopping = threading.Event()
+    def shutdown(signum, frame):
+        stopping.set()
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    serving = []
     try:
         backend.start()
-        server.serve_forever(poll_interval=.5)
+        for server in servers:
+            thread = threading.Thread(target=server.serve_forever,
+                                      kwargs={"poll_interval":.5}, daemon=True)
+            thread.start()
+            serving.append(thread)
+        stopping.wait()
     finally:
+        # Stop new requests on both listeners before waiting for native model
+        # custody. Do not abandon an admitted call because its client departed.
+        for server, thread in zip(servers, serving):
+            server.shutdown()
+            thread.join()
         backend.close()
-        server.server_close()
+        for server in servers:
+            server.server_close()
 
 if __name__ == "__main__":
     main()

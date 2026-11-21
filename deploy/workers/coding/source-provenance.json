@@ -1,0 +1,88 @@
+{
+  "base_image": "node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5",
+  "captured_utc": "2026-11-20",
+  "changes": [
+    "Separate source directories from existing absolute durable state paths.",
+    "Use image Python for the real Node-to-Python MCP bridge; retain target terminal PATH through explicit configuration.",
+    "Use supplied HTTPS HostIO gateway owner with local CA and registered host ID.",
+    "Preserve external localhost MCP port, Host/origin and bearer-token rules while allowing container-internal bind.",
+    "No LMS, MLX, model-memory controller or native inference backend included."
+  ],
+  "files": [
+    {
+      "destination": "deploy/workers/coding/source/coding_http.mjs",
+      "packaged_sha256": "e5ec8104b5680ab25e8420e54632c4ca3dfd2eda9f0745348f12ae007e42ea45",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding_http.mjs",
+      "source_sha256": "c5ffa97d13b118876e2128f2214bed40202114b9aea6e56d0c049e94892ff187"
+    },
+    {
+      "destination": "deploy/workers/coding/source/coding_mcp.py",
+      "packaged_sha256": "163133ad4adea2784cb4638a17829c3242cf2adaa31e64416fec1c45cd0e8b37",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding_mcp.py",
+      "source_sha256": "f16347409ddee2d986a511f2c0e8f1f3dbf046f51f01ad2101a01e73efb07af3"
+    },
+    {
+      "destination": "deploy/workers/coding/source/container_runner.py",
+      "packaged_sha256": "feb3c8e431602b6273b135f7bb9363818759009b91b9d0f516da165a09310052",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-lmstudio/container_runner.py",
+      "source_sha256": "d8ec66da414959d8c2cba5df8e8a6753b5be7227e2b2b429da1c5d190b21a951"
+    },
+    {
+      "destination": "deploy/workers/coding/source/coding-deps/package.json",
+      "packaged_sha256": "639377afed910fd0fe9c22639419db33d501f31bc2b2f89728fab0d719671e83",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding-deps/package.json",
+      "source_sha256": "639377afed910fd0fe9c22639419db33d501f31bc2b2f89728fab0d719671e83"
+    },
+    {
+      "destination": "deploy/workers/coding/source/coding-deps/package-lock.json",
+      "packaged_sha256": "ea6fd70edb2649bcaf085bdf5b1c7a8ddee5a76c156e7810d59108f7f0629076",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding-deps/package-lock.json",
+      "source_sha256": "ea6fd70edb2649bcaf085bdf5b1c7a8ddee5a76c156e7810d59108f7f0629076"
+    },
+    {
+      "destination": "deploy/workers/coding/source/agent_tools.py",
+      "packaged_sha256": "77c2f96defbdb75ba6ee3209da8911ad5ba69d92f4ae7de0a5b0b54403071da2",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-gitlab/agent_tools.py",
+      "source_sha256": "29d3e65db98dc1f8422442e91ce8966fff97369e7d7a8aa956bde37187a1550c"
+    },
+    {
+      "destination": "deploy/workers/coding/source/workspace_agent_tools.py",
+      "packaged_sha256": "903617000f7d5c8c7c7f28e4768c2b29df2e05b2c24686641ef593c3fe57f2e1",
+      "source_path": "/Users/micahelbyrns/.local/share/biome-workspaces/workspace_agent_tools.py",
+      "source_sha256": "b82cfe4c82bc3a10fe66db34744287140b83049c720abbb0099be64e84382f7f"
+    }
+  ],
+  "schema": "biomerte.coding-worker-source/1",
+  "shared_files": [
+    {
+      "image_path": "gateway/mac_provider.py",
+      "repository_path": "providers/mac-terminal/mac_provider.py",
+      "sha256": "afbc77cca90d058128c91c99f32bffec2ef556770e458a50bfe273528d946a0e"
+    },
+    {
+      "image_path": "gateway/persistent_transport.py",
+      "repository_path": "providers/mac-terminal/persistent_transport.py",
+      "sha256": "5f0d89523422ac0db0e0055794aa9b690c55d778b97e7183883ff3bb9e49d1e9"
+    },
+    {
+      "image_path": "biomerte/__init__.py",
+      "repository_path": "biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "image_path": "biomerte/host_io_client.py",
+      "repository_path": "biomerte/host_io_client.py",
+      "sha256": "41d272fc31903eff9ab4510969d53a5900fa9d09a54fb0b350ab103f05050b9d"
+    },
+    {
+      "image_path": "workspaces/manager.py",
+      "repository_path": "integrations/workspaces/manager.py",
+      "sha256": "4c2a78e3ada30e39e4ee57286fe2556eab18529a3f455c154368ea1856c643ac"
+    },
+    {
+      "image_path": "workspaces/provider.py",
+      "repository_path": "integrations/workspaces/provider.py",
+      "sha256": "5a091157d6b934c9f56e35808f9620a44c2699a0f224243604bc0251a7b99feb"
+    }
+  ]
+}

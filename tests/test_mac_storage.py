@@ -56,7 +56,9 @@ class MacStorage(unittest.TestCase):
     def test_namespace_bound_paths_and_handles(self):
         with mock.patch.dict(sys.modules,{'mac_provider':types.ModuleType('mac_provider')}):
             p=importlib.import_module('provider')
-        with mock.patch.multiple(p,BASE=self.root,MOUNT=self.root,mounted=lambda:True):
+        # Namespace-path fixtures own their qualified capacity observation.
+        with mock.patch.multiple(p,BASE=self.root,MOUNT=self.root,mounted=lambda:True), \
+                mock.patch.object(p,'capacity',return_value=(64*1024**2,32*1024**2)):
             for ns in ('one','two'):self.assertTrue(p.operation('create',{'namespace':ns})['ok'])
             self.assertEqual(p.operation('list',{'path':'/'})['error'],'INVALID_NAMESPACE')
             self.assertEqual(p.operation('open',{'namespace':'one','path':'../two/x','mode':'w'})['error'],'INVALID_PATH')

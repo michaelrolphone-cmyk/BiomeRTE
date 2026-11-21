@@ -1,0 +1,164 @@
+{
+  "activation_gates": [
+    "Parent reports gateway worker polling503 and freezes authority writes.",
+    "Stop new MCP admissions and settle or retain original IDs of in-flight requests before stopping native frontend.",
+    "Keep all existing absolute command/workspace paths; reconcile archive-stage jobs under their existing IDs.",
+    "Do not overlap native/container writers; mounted-image/live read-only MCP checks remain handoff steps."
+  ],
+  "all_bind_mounts_exist_except_gated_rover_state": true,
+  "bundle": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/coding-56f4ae8-20261120",
+  "durable_coding_records": {
+    "all_records_preserved_in_place": true,
+    "path": "/Users/micahelbyrns/.local/share/biome-lmstudio/commands",
+    "records_requiring_reconciliation": [
+      {
+        "operation": "lmc-964ddca358ab4700af665a901abefb8a",
+        "pending_present": false,
+        "stage": "archive"
+      },
+      {
+        "operation": "lmc-586dfc5c500542b3a5540711f16fe3cf",
+        "pending_present": false,
+        "stage": "archive"
+      },
+      {
+        "operation": "lmc-3df21e9fe4af4f79a8a246d45fe939f8",
+        "pending_present": false,
+        "stage": "archive"
+      }
+    ],
+    "stage_counts": {
+      "archive": 3,
+      "done": 15,
+      "released": 4
+    }
+  },
+  "durable_git_records": {
+    "all_records_preserved_in_place": true,
+    "path": "/Users/micahelbyrns/.local/share/biome-gitlab/agent-commands",
+    "records_requiring_reconciliation": [],
+    "stage_counts": {
+      "released": 10
+    }
+  },
+  "family": "coding",
+  "image": {
+    "Architecture": "arm64",
+    "Id": "sha256:5200624d0701995628bde40b0321643668234f5cfc0cb18149755b73a9bb4a49",
+    "Os": "linux",
+    "Size": 289739171
+  },
+  "image_source": "56f4ae8ee2d08edfc1d29e0d96d87981c3eee25c",
+  "live_service_changed": false,
+  "mounts": [
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding-config.json",
+      "target": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding-config.json",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-lmstudio/mcp-token",
+      "target": "/Users/micahelbyrns/.local/share/biome-lmstudio/mcp-token",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "source": "/Users/micahelbyrns/.local/share/biome-lmstudio/commands",
+      "target": "/Users/micahelbyrns/.local/share/biome-lmstudio/commands",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "source": "/Users/micahelbyrns/Developer/biome-lmstudio",
+      "target": "/Users/micahelbyrns/Developer/biome-lmstudio",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/catalog.json",
+      "target": "/Users/micahelbyrns/.local/share/biome-gitlab/catalog.json",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "source": "/Users/micahelbyrns/.local/share/biome-gitlab/agent-commands",
+      "target": "/Users/micahelbyrns/.local/share/biome-gitlab/agent-commands",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/schemas.json",
+      "target": "/Users/micahelbyrns/.local/share/biome-workspaces/schemas.json",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biome-workspaces/provider.json",
+      "target": "/Users/micahelbyrns/.local/share/biome-workspaces/provider.json",
+      "type": "bind"
+    },
+    {
+      "bind": {},
+      "read_only": true,
+      "source": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/client",
+      "target": "/run/biome",
+      "type": "bind"
+    }
+  ],
+  "native_dependencies": [
+    "LM Studio/native model agent remains the client of the same MCP endpoint.",
+    "Terminal, Docker, Git and workspace execution remains with their actual existing capability providers."
+  ],
+  "network_probe_performed": false,
+  "prepared_utc": "2026-11-20T16:29:44.049453+00:00",
+  "preserved_configuration": {
+    "credentials": "Existing token mounted read-only; not copied into source/image or rotated.",
+    "job_image": "python:3.11-bookworm",
+    "mcp_endpoint": "http://127.0.0.1:48731/mcp",
+    "mcp_token_file": "/Users/micahelbyrns/.local/share/biome-lmstudio/mcp-token",
+    "path": "/Users/micahelbyrns/.local/share/biome-lmstudio/coding-config.json",
+    "sha256": "f1841c868b39c7862dfc9229a73969e88e084e7df9c40a6562e1422bfe483115",
+    "terminal_resource": "terminal.mac.ae3c74c06d1909a1ccdc",
+    "workspace": "/Users/micahelbyrns/Developer/biome-lmstudio"
+  },
+  "rollback": {
+    "backup": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/coding-56f4ae8-20261120/rollback/org.biomerte.lmstudio-coding-mcp.plist",
+    "label": "org.biomerte.lmstudio-coding-mcp",
+    "original": "/Users/micahelbyrns/Library/LaunchAgents/org.biomerte.lmstudio-coding-mcp.plist",
+    "program_arguments": [
+      "/opt/homebrew/bin/node",
+      "/Users/micahelbyrns/.local/share/biome-lmstudio/coding_http.mjs"
+    ],
+    "sha256": "dbc3f79e938b530d17e8e1513e1288960f368bc80a54910fb37321b525ee5eff",
+    "working_directory": "/Users/micahelbyrns/.local/share/biome-lmstudio"
+  },
+  "rollback_plist_byte_equality": true,
+  "rollback_rule": "Stop container, retain CURRENT commands/workspace directories, restore original native frontend plist/config.",
+  "runtime_uid_gid": "501:20",
+  "schema": "biomerte.prepared-worker/1",
+  "static_configuration_validation": {
+    "container_paths": "Prepared Compose source/target mappings separately validated.",
+    "mode": "Native invocation of pure configuration validator; no service start or network call.",
+    "native_host_io_client_for_validation_only": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/client/host-io.native.json",
+    "result": {
+      "mcp_port": 48731,
+      "state_paths_preserved": true,
+      "workspace": "/Users/micahelbyrns/Developer/biome-lmstudio"
+    }
+  },
+  "status": "prepared_activation_gated",
+  "template": {
+    "compose_config": "passed",
+    "environment_file": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/coding-56f4ae8-20261120/deployment.env",
+    "network": "biomerte-services",
+    "template_path": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-rover-coding-preparation-20261120/deploy/workers/coding/compose.yaml",
+    "template_sha256": "4482a0b2cb35b9b80e5a2d1b0bc9f29bdf94720bc07dc91ae5878ac18ed84fdf"
+  }
+}

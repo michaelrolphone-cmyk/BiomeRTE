@@ -1,0 +1,38 @@
+{
+  "actual_dispatch_fixture_calls": 2,
+  "component": "vision",
+  "deployment_gate": "Confirm the native vision backend and controller are healthy before live provider handoff.",
+  "fixture_tests_passed": 3,
+  "image": {
+    "architecture": "arm64",
+    "build_exit": 0,
+    "id": "sha256:9b63e576e57a1d768f82e19f0ae482647aa916a0e14ec3c7cc10347b6f214b1c",
+    "qualification_exit": 0,
+    "runtime_user": "501:20",
+    "size_bytes": 189526703,
+    "source_commit": "90cc2f6f6a29f16b2241f65a8e8b243b92545379",
+    "tag": "biomerte-worker-vision-provider:90cc2f6f6a29",
+    "transport_commit": "0269750b1a7516befab1ec5b23083a5e73f2fce3"
+  },
+  "live_cutover_performed_by_qualification": false,
+  "live_read_only_evidence": {
+    "native_status_error_preserved": "processing_failed:ValueError",
+    "native_video_module_list": "passed directly with installed source/interpreter",
+    "new_video_module_directory_binding": "covered by host I/O fixture; live bridge config adoption is deployment-owned",
+    "tls_host_io_status_and_snapshot_forwarding": "passed with preceding provider revision"
+  },
+  "network": "disabled during isolated qualification",
+  "preserved_native_compute": "MPS backend stays on the Mac; no automatic CPU substitution.",
+  "qualified_platform": "linux/arm64",
+  "recorded_utc": "2026-11-20",
+  "role": "Actual vision capability dispatch and front/rear/map stream implementation; native Metal/MPS compute boundary.",
+  "root_filesystem": "read-only",
+  "runtime_user": "501:20",
+  "schema": "biomerte.worker-qualification/1",
+  "source_permissions": "Only packaged /app source permissions adjusted; native files and runtime secrets unchanged.",
+  "superseded_reason": "Initial qualification used root; deployment-UID qualification exposed native maintenance file creation permissions.",
+  "supersedes_image": "biomerte-worker-vision-provider:ab1795f9c5ed",
+  "temporary_filesystem": "tmpfs /tmp",
+  "unique_operation_names": 43,
+  "versioned_contract_entries": 47
+}

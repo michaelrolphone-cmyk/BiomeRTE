@@ -1,0 +1,17 @@
+**
+!biomerte/
+!biomerte/**
+!providers/
+!providers/rover-motion/
+!providers/rover-motion/**
+!providers/mac-terminal/
+!providers/mac-terminal/mac_provider.py
+!providers/mac-terminal/persistent_transport.py
+!deploy/
+!deploy/workers/
+!deploy/workers/motion/
+!deploy/workers/motion/**
+!tests/
+!tests/test_motion_*.py
+**/__pycache__
+**/*.pyc

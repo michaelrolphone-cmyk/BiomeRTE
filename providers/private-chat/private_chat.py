@@ -12,13 +12,13 @@ import subprocess
 import sys
 import time
 from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
-from session_protocol import SessionServer, b64, raw, public
+from session_protocol import SessionServer, b64, raw, public, conversation_messages
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
 HOME = Path.home()
-STATE = HOME / '.local/share/biome-private-chat'
-TERMINAL = HOME / '.local/share/biome-mac-terminal'
+STATE = Path(os.environ.get('BIOME_PRIVATE_CHAT_STATE', HOME / '.local/share/biome-private-chat'))
+TERMINAL = Path(os.environ.get('BIOME_GATEWAY_CODE', HOME / '.local/share/biome-mac-terminal'))
 LM = HOME / '.local/share/biome-lmstudio'
 sys.path[:0] = [str(TERMINAL), str(TERMINAL / 'runtime')]
 import mac_provider as gateway
@@ -40,57 +40,62 @@ def identity_key():
     if len(value) != 32:
         raise RuntimeError('Invalid identity')
     return Ed25519PrivateKey.from_private_bytes(value)
+from model_service import ModelError, NativeChatBackend, model_catalog, selected_model
+_BACKEND = None
+
+def model_backend():
+    global _BACKEND
+    if _BACKEND is None:
+        config = os.environ.get('BIOME_MODEL_HOST_IO_CONFIG')
+        if config:
+            from biomerte.host_io_client import HostIOClient
+            from biomerte.model_host_io import ModelHostClient
+            _BACKEND = ModelHostClient(HostIOClient.from_config(config))
+        else:
+            if sys.platform != 'darwin':
+                raise RuntimeError('Private workers require the native Mac model bridge')
+            _BACKEND = NativeChatBackend(state=STATE, lm=LM)
+    return _BACKEND
+
 def privacy_ready():
-    """An operator must validate LM Studio logging before enabling private inference."""
-    cfg = json.loads((STATE / 'privacy.json').read_text())
-    if cfg != {'lmstudio_request_logging_disabled': True, 'qualification': 'verified'}:
-        raise RuntimeError('LM Studio privacy qualification required')
-    server = json.loads((HOME / '.lmstudio/.internal/http-server-config.json').read_text())
-    if server.get('logSensitiveData') is not False or server.get('logIncomingTokens') is not False:
-        raise RuntimeError('LM Studio sensitive logging must be disabled')
-from model_service import model_catalog, selected_model
+    return model_backend().privacy_ready()
 
 def handle_request(data):
     privacy_ready()
     if data.get('action') == 'models':
-        return {'models': model_catalog(LOCAL, LM)}
+        return model_backend().catalog()
     if data.get('action') not in (None, ''):
         raise ValueError('Invalid private action')
     return inference(data['messages'], data.get('model'))
 
 def inference(messages, model=None):
-    privacy_ready()
-    if not isinstance(messages, list) or not messages:
-        raise ValueError('Invalid conversation')
-    if any(not isinstance(m, dict) or set(m) != {'role', 'content'} or m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str) for m in messages):
-        raise ValueError('Invalid message')
-    # Stateless OpenAI-compatible API; no response IDs or coding integrations.
-    model = selected_model(model, LOCAL, LM)
-    body = dict(model=model, messages=messages, stream=False, store=False)
-    headers = {'Content-Type': 'application/json'}
-    token_file = LM / 'api-token'
-    if token_file.exists():
-        headers['Authorization'] = 'Bearer ' + token_file.read_text().strip()
-    req = Request('http://127.0.0.1:1234/v1/chat/completions', json.dumps(body).encode(), headers)
-    with LOCAL.open(req) as response:
-        result = json.load(response)
-    if 'response_id' in result:
-        raise RuntimeError('Unexpected retained response')
-    choice = result['choices'][0]
-    if choice.get('finish_reason') not in ('stop', None):
-        raise RuntimeError('Incomplete completion')
-    text = choice['message']['content']
-    if not isinstance(text, str) or not text:
-        raise RuntimeError('Empty completion')
-    return {'text': text, 'model': model}
+    return model_backend().inference(messages, model)
+
 class Remote:
     realm = 'site'
     def __init__(self, cfg):
         self.node, self.site = cfg['provider'], cfg['site']
     def call(self, name, args, rid=None):
-        return gateway.invoke(name, args, rid, self.realm)
+        result = gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        health = os.environ.get('BIOME_WORKER_HEALTH')
+        if health:
+            try:
+                # Successful encrypted progress/artifact delivery also proves
+                # this worker is making progress between provider polls.
+                gateway.save_json(Path(health), {'last_contact':time.time(), 'state':'online'})
+            except OSError:
+                pass
+        return result
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
+    def advertise(self):
+        # The generic legacy worker forwards only capacity/usage. Preserve the
+        # private service's explicitly configured reservation lifecycle too.
+        for offer in self.offers:
+            args = {key: offer[key] for key in ('contract', 'resource', 'capacity', 'service', 'configuration', 'usage') if key in offer}
+            args.update(provider=self.remote.node, state=offer.get('state', 'ready'))
+            self.remote.call('cap.offer', args)
+
     def __init__(self, *args, handler=None):
         super().__init__(*args)
         self.pending = {}
@@ -152,7 +157,9 @@ def serve():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     cfg = json.loads((STATE / 'manifest.json').read_text())
     remote = Remote(cfg)
-    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat')
+    offer = dict(contract=CONTRACT, resource=cfg['resource'], capacity=1, service='private-chat',
+        configuration={'reservation_policy': cfg.get('reservation_policy',
+            {'idle_seconds': 120, 'release_after_result': True})})
     def enrolled(phone):
         cfg['phone_identity'] = b64(phone)
         cfg.pop('enrollment_hash', None)

@@ -1,0 +1,73 @@
+services:
+  coding:
+    image: "${BIOME_CODING_IMAGE:?Set the qualified immutable image digest}"
+    pull_policy: never
+    container_name: biomerte-worker-coding
+    user: "${BIOME_WORKER_UID:-501}:${BIOME_WORKER_GID:-20}"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: ["serve"]
+    environment:
+      BIOME_CODING_HOME: "${BIOME_CODING_HOME:?Set the original coding state directory}"
+      BIOME_GITLAB_HOME: "${BIOME_GITLAB_HOME:?Set the original GitLab state directory}"
+      BIOME_WORKSPACE_HOME: "${BIOME_WORKSPACE_HOME:?Set the original workspace metadata directory}"
+      BIOME_TERMINAL_TOOL_PATH: "${BIOME_TERMINAL_TOOL_PATH:-}"
+    ports:
+      - "127.0.0.1:${BIOME_CODING_PORT:?Set the existing mcp_port}:${BIOME_CODING_PORT:?Set the existing mcp_port}"
+    volumes:
+      - type: bind
+        source: "${BIOME_CODING_HOME}/coding-config.json"
+        target: "${BIOME_CODING_HOME}/coding-config.json"
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_CODING_HOME}/mcp-token"
+        target: "${BIOME_CODING_HOME}/mcp-token"
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_CODING_HOME}/commands"
+        target: "${BIOME_CODING_HOME}/commands"
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_CODING_WORKSPACE:?Set the canonical workspace from coding-config.json}"
+        target: "${BIOME_CODING_WORKSPACE}"
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_GITLAB_HOME}/catalog.json"
+        target: "${BIOME_GITLAB_HOME}/catalog.json"
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_GITLAB_HOME}/agent-commands"
+        target: "${BIOME_GITLAB_HOME}/agent-commands"
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_WORKSPACE_HOME}/schemas.json"
+        target: "${BIOME_WORKSPACE_HOME}/schemas.json"
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_WORKSPACE_HOME}/provider.json"
+        target: "${BIOME_WORKSPACE_HOME}/provider.json"
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${BIOME_HOST_IO_CLIENT:?Set the supplied HTTPS HostIO client directory}"
+        target: /run/biome
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=32m,mode=1777
+    networks: [biome]
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "1m", max-file: "3"}
+networks:
+  biome:
+    external: true
+    name: "${BIOME_DOCKER_NETWORK:?Set the existing private worker network}"

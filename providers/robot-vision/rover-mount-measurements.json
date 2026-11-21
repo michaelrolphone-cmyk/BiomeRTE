@@ -193,17 +193,18 @@
     ],
     [
       0,
-      0,
-      -1
+      1,
+      0
     ],
     [
       0,
-      -1,
-      0
+      0,
+      -1
     ]
   ],
   "rear_tire_plane_camera_z_mm": -145.95858739136904,
   "rear_protrusion_user_mm": 6.35,
   "rear_origin_from_tire_envelope_mm": -152.30858739136903,
-  "rear_model_method": "photo-measured tire envelope rounded to1mm, plus owner-reported6.35mm protrusion"
+  "rear_model_method": "photo-measured tire envelope rounded to1mm, plus owner-reported6.35mm protrusion",
+  "axis_model_evidence": "IMU board vertical behind camera, live roll near-90deg; Euler yaw is world-up rotation; tests use vertical baseline"
 }

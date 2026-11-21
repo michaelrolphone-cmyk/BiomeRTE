@@ -1,0 +1,7 @@
+{
+  "kind": "fm",
+  "image": "REPLACE_WITH_QUALIFIED_SHA256_IMAGE_ID",
+  "hostname": "ProximityRF",
+  "home": "/home/pi/.local/share/biomerte-fm",
+  "state": "/home/pi/.local/share/fm-transmitter"
+}

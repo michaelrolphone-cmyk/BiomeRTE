@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from multisensor_mapping import (AttitudePoseEstimator, PoseTimeline, SonarObstacleMap,
-    attitude_sample, sonar_observations, estimated_rover_mounts, SonarMetricOdometry, sonar_image_constraint)
+    attitude_sample, sonar_observations, estimated_rover_mounts, SonarMetricOdometry, sonar_image_constraint, ROVER_R_CAMERA_IMU, quaternion_rotation)
 from world_atlas import WorldAtlas
 
 
@@ -34,6 +34,34 @@ def frame(t, angle=0, boot='boot', valid=True):
 
 
 class AttitudeTests(unittest.TestCase):
+    def test_owner_observed_yaw_roll_and_pitch_axis_mapping(self):
+        mount=np.asarray(ROVER_R_CAMERA_IMU)
+        # AHRS world has Z up; the camera has Y down and optical Z forward.
+        world_camera=np.array([[0.,0.,1.],[-1.,0.,0.],[0.,-1.,0.]])
+        rest=world_camera@mount
+        def euler(r):
+            return np.degrees([math.atan2(r[2,1],r[2,2]),math.asin(-r[2,0]),math.atan2(r[1,0],r[0,0])])
+        def moved(axis,angle):
+            q=[math.cos(angle/2),0,0,0];q[axis+1]=math.sin(angle/2)
+            camera=quaternion_rotation(q)
+            reading=world_camera@camera@mount
+            recovered=mount@rest.T@reading@mount.T
+            np.testing.assert_allclose(recovered,camera,atol=1e-8)
+            return reading,recovered
+        np.testing.assert_allclose(euler(rest)[:2],[-90,0],atol=1e-8)
+        # Positive Euler yaw represents a left turn from the vertical IMU pose.
+        left,camera=moved(1,math.radians(-45))
+        self.assertAlmostEqual(euler(left)[2]-euler(rest)[2],45.)
+        self.assertLess((camera@np.array([0,0,1.]))[0],0)
+        front_up,camera=moved(0,math.radians(30))
+        self.assertAlmostEqual(euler(front_up)[0]-euler(rest)[0],-30.)
+        self.assertLess((camera@np.array([0,0,1.]))[1],0)
+        right_up,camera=moved(2,math.radians(-30))
+        self.assertAlmostEqual(euler(right_up)[1]-euler(rest)[1],30.)
+        self.assertLess((camera@np.array([1.,0,0]))[1],0)
+        np.testing.assert_allclose(mount.T@mount,np.eye(3))
+        self.assertAlmostEqual(np.linalg.det(mount),1.)
+
     def test_prior_tracks_rotation_and_fusion_uses_it(self):
         estimator = AttitudePoseEstimator({'R_camera_imu': np.eye(3).tolist(), 'visual_orientation_weight': .5})
         self.assertIsNone(estimator.prior(frame(1), 'map'))
@@ -173,7 +201,7 @@ class SonarTests(unittest.TestCase):
             store.resolve_pending('map',lambda *args:pose(1))
             result = store.read('map',scale_m_per_map_unit=1)
             self.assertEqual(len(result['rays']),1)
-            self.assertEqual(result['rays'][0]['mount']['qualification'],'chassis_estimate')
+            self.assertEqual(result['rays'][0]['mount']['qualification'],'photo_measured_mount')
             store.close()
 
 
@@ -193,13 +221,34 @@ class MetricMappingTests(unittest.TestCase):
                          'time_s':t,'age_s':.05,'boot_id':'boot','receiver_id':'camera'})
         return rows
 
+    def test_measured_sensor_heights_and_separate_rays_are_used(self):
+        mounts=estimated_rover_mounts()
+        self.assertEqual(set(mounts),{'front','left','right','rear'})
+        for name in ('front','left','right'):
+            self.assertAlmostEqual(mounts[name]['origin_camera_m'][1],.0381)
+            self.assertAlmostEqual(mounts[name]['height_above_floor_m'],.0254)
+        self.assertAlmostEqual(mounts['rear']['origin_camera_m'][1],.0127)
+        self.assertAlmostEqual(mounts['rear']['height_above_floor_m'],.0508)
+        self.assertAlmostEqual(mounts['rear']['rear_tire_protrusion_m'],.00635)
+        with tempfile.TemporaryDirectory() as directory:
+            ledger=SonarObstacleMap(Path(directory)/'rays',mounts)
+            rows=self.room_scan(1.)
+            ledger.record('map','frame',rows,lambda *args:np.eye(4))
+            result=ledger.read('map',scale_m_per_map_unit=1.)
+            for ray in result['rays']:
+                name=ray['sensor_id']
+                np.testing.assert_allclose(ray['origin_m'],mounts[name]['origin_camera_m'])
+                np.testing.assert_allclose(np.asarray(ray['endpoint_m'])-ray['origin_m'],
+                    np.asarray(mounts[name]['direction_camera'])*ray['distance_m'])
+            ledger.close()
+
     def test_front_sonar_height_projects_below_optical_center(self):
         mount=estimated_rover_mounts()['front']
         self.assertAlmostEqual(mount['origin_camera_m'][1],.0381)
         result=sonar_image_constraint({'sensor_id':'front','distance_m':1.,'time_s':1.},mount,
             {'validated':True,'fx':1000.,'fy':1000.,'cx':640.,'cy':360.,'distortion':[0,0,0,0,0]})
-        self.assertAlmostEqual(result['beam_center_px'][0],640.)
-        self.assertAlmostEqual(result['beam_center_px'][1],360+1000*.0381/1.04445)
+        self.assertAlmostEqual(result['beam_center_px'][0],640+1000*.005/1.044)
+        self.assertAlmostEqual(result['beam_center_px'][1],360+1000*.0381/1.044)
         self.assertEqual(len(result['beam_boundary_px']),16)
 
     def test_metric_room_mapping_moves_origins_without_visual_scale(self):
@@ -242,6 +291,18 @@ class MetricMappingTests(unittest.TestCase):
             self.assertAlmostEqual(alignment['scale_m_per_map_unit'],3)
             np.testing.assert_allclose(np.asarray(alignment['T_local_metric_map'])[:3,3],[2,0,0],atol=1e-8)
             ledger.close()
+
+    def test_stationary_gyro_reference_reset_preserves_metric_map_and_motion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model=SonarMetricOdometry(Path(directory)/'state',estimated_rover_mounts())
+            for t in [.9,1.,1.3]:
+                model.update(self.room_scan(t-.05,(t-.05-.95)*.4),np.eye(3),('ahrs',1),t)
+            identity=model.local_frame_id
+            model.update(self.room_scan(1.35,.16),np.eye(3),('ahrs',2),1.4,stationary_reference_reset=True)
+            result=model.update(self.room_scan(1.65,.28),np.eye(3),('ahrs',2),1.7,stationary_reference_reset=True)
+            self.assertEqual(model.local_frame_id,identity)
+            self.assertTrue(result['valid'])
+            self.assertAlmostEqual(result['T_local_metric_camera'][2][3],.28,places=6)
 
     def test_inconsistent_ranges_do_not_publish_a_stationary_pose(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -304,7 +365,7 @@ class ServiceFusionTests(unittest.TestCase):
                 self.assertEqual(len(obstacles['rays']),4)
                 self.assertEqual(len(service._sonar_entities(service.map_id,service.revision)),4)
                 front = next(r for r in obstacles['rays'] if r['sensor_id']=='front')
-                expected = pose(.1,.05)[:3,:3] @ np.array([0,.0381,.04445]) + [.1,0,0]
+                expected = pose(.1,.05)[:3,:3] @ np.array([.005,.0381,.044]) + [.1,0,0]
                 np.testing.assert_allclose(front['origin_m'],expected,atol=1e-7)
             service.close()
             reopened = fixture.make_service(config)

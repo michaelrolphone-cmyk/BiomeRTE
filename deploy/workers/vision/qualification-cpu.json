@@ -1,0 +1,127 @@
+{
+  "base_index": "condaforge/miniforge3@sha256:0a788afa8b54165d855d08552ce6d86e1e2553be2a9a18d542c69cfb02a6deaa",
+  "component": "vision-cpu",
+  "deployment_status": "native-mps-production-unchanged",
+  "latest_attempt": {
+    "build_exit": 1,
+    "conda_environment_completed": true,
+    "detector_install_completed": true,
+    "detector_versions_installed": {
+      "av": "18.1.0",
+      "torch": "2.15.0+cpu",
+      "torchvision": "0.29.2+cpu",
+      "ultralytics": "8.4.208"
+    },
+    "engine_compilation_started": false,
+    "failed_phase": "pinned-upstream-source-checkout",
+    "full_engine_or_detector_fixture_run_in_linux_image": false,
+    "image_created": false,
+    "log_sha256": "2ae0bc579a144e923bb7a390d1e11d0cfc9c0353aca62bec53dfa710fcda5a07",
+    "observed_error": "fatal: cannot create directory at 'thirdparty/monogs/scripts': No space left on device",
+    "reason": "Docker VM storage exhausted before native engine compilation.",
+    "requested_image_tag": "biomerte-worker-vision-cpu:48a6227c861a",
+    "source_commit": "48a6227c861a6ae7c74f0cc9b96541d1fc96c83a",
+    "torch_opencv_both_import_orders_passed": true
+  },
+  "platform_attempted": "linux/arm64",
+  "previous_resolved_failure": {
+    "reason": "The native Mac boost-cpp 1.84 package conflicts with Linux aarch64 GTSAM 4.2 packages.",
+    "resolution": "Linux profile selects split libboost-devel 1.86; native Mac pins remain unchanged.",
+    "source_commit": "faa23ea5588c549485842b7779645096bc8eb973"
+  },
+  "qualified_other_profile": {
+    "health_deadline_fix_included": true,
+    "image": "biomerte-worker-vision-provider:90cc2f6f6a29",
+    "image_id": "sha256:9b63e576e57a1d768f82e19f0ae482647aa916a0e14ec3c7cc10347b6f214b1c",
+    "role": "Actual vision capability and stream implementation with native MPS compute boundary.",
+    "runtime_user": "501:20",
+    "source_commit": "90cc2f6f6a29f16b2241f65a8e8b243b92545379"
+  },
+  "recipe_after_failure": {
+    "changes": [
+      "Select only the complete deployed core and its ORB2/g2o/DBoW3 dependency trees during new Linux vendor checkout.",
+      "Remove Conda download/cache data before committing the environment layer.",
+      "Disable pip download caches in detector and native SLAM dependency build layers."
+    ],
+    "generated_aliases": {
+      "thirdparty/gtsam_factors/include/gtsam_factors": "Existing factor source",
+      "thirdparty/gtsam_factors/pybind11": "Pinned cpp/pybind11",
+      "thirdparty/gtsam_local/install": "Dedicated Conda prefix"
+    },
+    "rebuilt": false,
+    "root_upstream_files": "Cone sparse checkout retains root files, including config and licensing.",
+    "selected_upstream_directories": {
+      "cpp": "Pinned pybind11, native solvers and utility extensions; source and ABI are rebuilt for the image architecture.",
+      "data": "Vocabulary/data location; ORB vocabulary is separately downloaded and checked against the installed SHA256.",
+      "pyslam": "Complete core package, including SLAM, mapping, relocalization, camera models and selected feature/loop configuration.",
+      "settings": "Camera/dataset settings read by the existing Config constructor; explicit live calibration remains external state.",
+      "thirdparty/g2opy": "Actual deployed optimizer binding and native optimizer source.",
+      "thirdparty/gtsam_factors": "Existing optional native factor binding retained; its pybind11 and include aliases are created by the installer.",
+      "thirdparty/orbslam2_features": "Actual deployed ORB2 feature implementation.",
+      "thirdparty/pydbow3": "Selected loop detector wrapper and its nested DBoW3 source."
+    }
+  },
+  "recorded_utc": "2026-11-20",
+  "required_before_cpu_deployment": [
+    "Successful architecture-specific full image build.",
+    "Real CPU detector, g2o and SLAM fixture execution.",
+    "Camera/route/state access qualification for the target host.",
+    "Checkpoint/relocalization and required throughput qualification."
+  ],
+  "schema": "biomerte.worker-qualification/1",
+  "source_provenance": {
+    "all_installed_vendor_patches_match": true,
+    "patches": [
+      {
+        "installed_patched_sha256": "26a3700e0294aee2ee8223913358a10e9bab5e54bae8dadae6421cff6bf38b71",
+        "path": "pyslam/slam/keyframe.py"
+      },
+      {
+        "installed_patched_sha256": "a3864e366cd789cba1490e99150f316d702de1f280fafbd2de46eeabe65cff4d",
+        "path": "pyslam/slam/tracking.py"
+      },
+      {
+        "installed_patched_sha256": "c5de00b3c349e8c83d0b6d85d3baf481de01e24806737dc6003c215b6cb25fbc",
+        "path": "pyslam/slam/frame.py"
+      },
+      {
+        "installed_patched_sha256": "53716a8736c554ce4020dc376f5e1ca3337e597f98662446cc65c3a32488fa3c",
+        "path": "pyslam/slam/optimizer_gtsam.py"
+      },
+      {
+        "installed_patched_sha256": "ec6833169a0ec86f02b6d32e48070279138bb3192d95114df01055b51fa8b256",
+        "path": "thirdparty/g2opy/python/CMakeLists.txt"
+      },
+      {
+        "installed_patched_sha256": "3007e9d94b10c78ee9c55a791be4cac90368a975e146b364a36cbe97d9258001",
+        "path": "pyslam/slam/slam.py"
+      },
+      {
+        "installed_patched_sha256": "6489a331c6a7c20234506a6bc6b4929bb11db727bb21b6ff78b7a433a0208183",
+        "path": "pyslam/loop_closing/loop_detector_configs.py"
+      },
+      {
+        "installed_patched_sha256": "f587e1bb89ecbaed2dd0455f00d918703524d52d6a04ad6ff821898b6ba09a49",
+        "path": "pyslam/loop_closing/loop_closing.py"
+      },
+      {
+        "installed_patched_sha256": "af7e19fe9f4793c930ddae2f7a02fd1df7397fd81e829444ceaba8cdef5e440b",
+        "path": "pyslam/loop_closing/loop_detector_base.py"
+      },
+      {
+        "installed_patched_sha256": "e0827d2ed9d6d97f0df8a2d3d401eebad9c9f53e5466d353322852be666404af",
+        "path": "pyslam/loop_closing/loop_detector_dbow3.py"
+      },
+      {
+        "installed_patched_sha256": "8e321a024c7dd42b30593e24ce909d4d24e7e9ced703f216f1c9074560558005",
+        "path": "pyslam/slam/relocalizer.py"
+      },
+      {
+        "installed_patched_sha256": "9874f49e15b5e0ccd55dc1bd8835213b959f2bc01f87e89fe2e01840f6eb8905",
+        "path": "cpp/modules/solvers/MLPnPsolver.cpp"
+      }
+    ],
+    "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
+  },
+  "status": "not-built"
+}

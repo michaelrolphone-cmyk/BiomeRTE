@@ -1,0 +1,101 @@
+{
+  "activation_gates": [
+    "Parent reports gateway worker polling503 and freezes authority writes.",
+    "Native Rover control currently reports ready=false.",
+    "Stop/disable native owner and recheck pending routes; transfer current DB using SQLite backup.",
+    "Run mounted-image configuration/readiness checks only after upstream recovery and authorized handoff."
+  ],
+  "all_bind_mounts_exist_except_gated_rover_state": true,
+  "bundle": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/rover-eee5c5f-20261120",
+  "channels": {
+    "forward": 1,
+    "left": 3,
+    "reverse": 2,
+    "right": 4
+  },
+  "configuration_sources": {
+    "camera_device_id": "/Users/micahelbyrns/.local/share/biome-robot-vision/config.json",
+    "camera_light_default": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/camera_light.py",
+    "controller_inventory": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/controllers.json",
+    "host_io_client": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/client",
+    "native_controller_config": "/Users/micahelbyrns/.local/share/biomerte-controller/node.json",
+    "native_identity": "/Users/micahelbyrns/.local/share/biome-rover-server/node.json",
+    "native_program": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py",
+    "native_signing_key": "/Users/micahelbyrns/.local/share/biome-rover-server/node.key"
+  },
+  "durable_state": {
+    "native_database": "/Users/micahelbyrns/.local/share/biome-rover-server/pending-routes.sqlite",
+    "pending_operations_observed": 0,
+    "reason": "No empty recovery-state replacement is created before handoff.",
+    "target_database": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/rover-eee5c5f-20261120/state/pending-routes.sqlite",
+    "target_directory": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/rover-eee5c5f-20261120/state",
+    "target_directory_exists": false,
+    "transfer": "Not performed. Stop native owner, then SQLite backup into target under exclusive custody."
+  },
+  "family": "rover",
+  "identity_preservation": "Existing node metadata/signing key and stream secret retained privately; unrelated admin tokens omitted from container copies.",
+  "image": {
+    "Architecture": "arm64",
+    "Id": "sha256:632f4c5e47b396b13fb1f302c52425b4b528f4aae10162053f387825a8ab97a5",
+    "Os": "linux",
+    "Size": 79226198
+  },
+  "image_source": "eee5c5f34029a86037fc29eedea79d3b6a3a5de4",
+  "live_service_changed": false,
+  "native_controller": {
+    "node": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+    "site": "f45540bf9910412680734d0613e84460"
+  },
+  "native_identity": {
+    "node": "45f172035e6d27e9017cc116f8c32c546d603945942eca6bf39933a04151661b",
+    "site": "d70fb4bad4b247739138624a6e3fa187"
+  },
+  "network_probe_performed": false,
+  "prepared_utc": "2026-11-20T16:29:44.049453+00:00",
+  "resources": {
+    "device.outputs.stream:1": "relay6ch.30eda0d95f24",
+    "robot.vision.stream:1": "robotvision.mac.ae3c74c06d1909a1ccdc"
+  },
+  "rollback": {
+    "backup": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/rover-eee5c5f-20261120/rollback/org.biomerte.rover-server.plist",
+    "label": "org.biomerte.rover-server",
+    "original": "/Users/micahelbyrns/Library/LaunchAgents/org.biomerte.rover-server.plist",
+    "program_arguments": [
+      "/Users/micahelbyrns/.local/share/biome-robot-vision/env/bin/python",
+      "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py"
+    ],
+    "sha256": "958124d08c716832951752b9f42b2050d5f110000e60792e444e84fcd4306aa3",
+    "working_directory": "/Users/micahelbyrns/.local/share/biome-rover-server/releases/controller-api-20261112"
+  },
+  "rollback_plist_byte_equality": true,
+  "rollback_rule": "Stop container and transfer its CURRENT route DB back with SQLite backup before restoring the saved native plist.",
+  "runtime_endpoints": {
+    "container_listen": "0.0.0.0:8093",
+    "controller_api": "http://host.docker.internal:8740/v1/call",
+    "host_io": "https://host.docker.internal:8766",
+    "host_loopback": "127.0.0.1:8093",
+    "public_stream_gateway": "https://biomerte-stream-gateway-e0322b2b60c9.herokuapp.com",
+    "router": "ws://host.docker.internal:8751"
+  },
+  "runtime_uid_gid": "501:20",
+  "schema": "biomerte.prepared-worker/1",
+  "static_configuration_validation": {
+    "container_paths": "Prepared Compose source/target mappings separately validated.",
+    "mode": "Native invocation of pure configuration validator; no service start or network call.",
+    "native_host_io_client_for_validation_only": null,
+    "result": {
+      "configuration_valid": true,
+      "listen_host": "0.0.0.0",
+      "network_requests": 0,
+      "port": 8093
+    }
+  },
+  "status": "prepared_activation_gated",
+  "template": {
+    "compose_config": "passed",
+    "environment_file": "/Users/micahelbyrns/.local/share/biomerte-worker-containers/rover-eee5c5f-20261120/deployment.env",
+    "network": "biomerte-services",
+    "template_path": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-rover-coding-preparation-20261120/deploy/workers/rover/compose.yaml",
+    "template_sha256": "97b9a1aab30392a3f35a863925db655512de317e8956bd151bfe64e53bfefc01"
+  }
+}
