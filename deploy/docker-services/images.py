@@ -103,6 +103,14 @@ def load_plan(path):
             raise ValueError("Image has unsupported or missing platforms")
         if item.get("base_argument") not in (None, "PYTHON_IMAGE", "NODE_IMAGE"):
             raise ValueError("Only public base-image build arguments are accepted")
+        target = item.get("target")
+        if target is not None and (not isinstance(target, str) or not ID.fullmatch(target)):
+            raise ValueError("Docker build target must be a safe stage name")
+        smoke_entrypoint = item.get("smoke_entrypoint")
+        if smoke_entrypoint is not None and (
+                not isinstance(smoke_entrypoint, str) or not smoke_entrypoint.startswith("/")
+                or ".." in Path(smoke_entrypoint).parts or not item.get("smoke")):
+            raise ValueError("Smoke entrypoint requires an absolute container executable and arguments")
         images[name] = item
     if not images:
         raise ValueError("No image targets")
@@ -213,6 +221,8 @@ def build(args):
                         "--label", "org.opencontainers.image.revision=" + revision,
                         "--label", "io.biomerte.image=" + name,
                         "--label", "io.biomerte.platform=" + platform, "--file", dockerfile]
+                if spec.get("target"):
+                    argv += ["--target", spec["target"]]
                 base = None
                 if spec.get("base_image"):
                     if "ARG " + spec["base_argument"] not in dockerfile.read_text():
@@ -225,7 +235,10 @@ def build(args):
                 data = inspect_image(args.docker, image, platform)
                 check_provenance(data, expected_labels(revision, origin, name, platform))
                 if spec.get("smoke"):
-                    call([args.docker, "run", "--rm", "--network", "none", image] + spec["smoke"])
+                    smoke = [args.docker, "run", "--rm", "--network", "none"]
+                    if spec.get("smoke_entrypoint"):
+                        smoke += ["--entrypoint", spec["smoke_entrypoint"]]
+                    call(smoke + [image] + spec["smoke"])
                 artifact = output / (name + "-" + suffix + ".tar")
                 call([args.docker, "save", "--output", artifact, image])
                 lock["images"].append({"id": name, "platform": platform, "image_id": image,

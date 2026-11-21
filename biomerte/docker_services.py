@@ -73,8 +73,17 @@ def validate_manifest(value):
     effect = value.get("effect_policy")
     if effect not in ("stateless", "externally_fenced", "gateway_fenced"):
         raise ValueError("Explicit effect_policy is required")
-    if value.get("state_policy") not in ("stateless", "externally_managed"):
+    state = value.get("state_policy")
+    if state not in ("stateless", "externally_managed", "lease_scoped"):
         raise ValueError("Local-only authoritative state cannot automatically fail over")
+    demand = value.get("capability_lease")
+    if (demand is not None) != (state == "lease_scoped"):
+        raise ValueError("Capability demand requires the lease_scoped state policy")
+    if demand is not None and (not isinstance(demand, dict) or
+            set(demand) != {"controller", "provider", "resource", "contract"} or
+            not isinstance(value.get("health"), dict) or not value["health"].get("command") or
+            value.get("activation") is not None or value.get("authority") is not None):
+        raise ValueError("Lease-scoped workers require exact capability scope and a health command")
     if effect != "stateless" and not isinstance(value.get("fence_hook"), dict):
         raise ValueError("Effectful services require an actual fence hook")
     if value.get("fence_hook") and not value["fence_hook"].get("url"):
@@ -931,6 +940,12 @@ class Runner:
                 not isinstance(grant.get("grant_token"), str) or not grant.get("grant_token") or
                 not isinstance(grant.get("boot_epoch"), str) or not grant.get("boot_epoch")):
                 continue
+            if manifest.get("state_policy") == "lease_scoped":
+                lease = grant.get("capability_demand")
+                if (not isinstance(lease, dict) or not isinstance(lease.get("id"), str) or
+                        not adapters.DIGEST.fullmatch(lease["id"]) or
+                        type(lease.get("generation")) is not int or lease["generation"] < 1):
+                    continue
             ttl = grant.get("lease_ttl_s", 0)
             if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or not math.isfinite(ttl) or ttl <= 0:
                 continue
@@ -983,7 +998,8 @@ class Runner:
         advertisements = self.advertisements()
         request_started = self.clock()
         response = self.client.call("heartbeat", {"worker_id": self.worker_id,
-                   "worker_incarnation": self.incarnation, "services": advertisements})
+                   "worker_incarnation": self.incarnation, "services": advertisements,
+                   "lease_scoped": True})
         self.adopt_manifests(response)
         self.accept(response, request_started)
         return response

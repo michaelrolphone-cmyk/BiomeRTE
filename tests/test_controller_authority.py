@@ -121,6 +121,24 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(Fault):
             self.call("system.info")
 
+    def test_capability_demand_tracks_exact_exclusive_lease_without_touching_it(self):
+        self.call("cap.define", dict(name="workspace.fixture", inputs={}, outputs={}), "demand-define")
+        scope = dict(provider="fixture-worker", resource="fixture-slot", contract="workspace.fixture:1")
+        self.call("cap.offer", dict(scope, capacity=1), "demand-offer")
+        self.assertEqual({"lease": None}, self.authority.capability_demand(scope))
+        lease = self.call("cap.acquire", dict(task="demand-test", resource=scope["resource"],
+                                              contract=scope["contract"]), "demand-acquire")
+        expected = {"lease": {"id": lease["id"], "generation": lease["generation"]}}
+        before = self.records()
+        self.assertEqual(expected, self.authority.capability_demand(scope))
+        self.assertEqual({"lease": None}, self.authority.capability_demand(dict(scope, provider="different")))
+        self.assertEqual(before, self.records())
+        self.call("cap.fenced", dict(provider=scope["provider"], lease=lease["id"],
+                                     generation=lease["generation"]), "demand-fenced")
+        self.assertEqual(expected, self.authority.capability_demand(scope))
+        self.call("cap.release", dict(lease=lease["id"]), "demand-release")
+        self.assertEqual({"lease": None}, self.authority.capability_demand(scope))
+
     def test_pending_preparation_and_external_sessions_are_not_execution_paths(self):
         with self.assertRaises(Fault) as raised:
             self.authority.call(self.envelope("system.info"), True)
