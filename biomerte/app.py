@@ -96,7 +96,8 @@ class Application:
             remote = GatewayJournal(self.config['gateway_journal'], self.site)
             realm_file = 'gateway-' + self.site
         self.stores = {'local': Store(directory, 'local'),
-                       'site': Store(directory, realm_file, remote)}
+                       'site': Store(directory, realm_file, remote,
+                           rollback_journal=self.controller_runtime.get("site_rollback_journal") is True)}
         self.stores['site'].write_guard = self._site_write_allowed
         self.timer_anchors = {}
         self.retention_next = {}

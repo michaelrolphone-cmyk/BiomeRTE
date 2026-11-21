@@ -91,6 +91,31 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     def document(self,key="boundary"):
         return self.app.stores["site"].execute(lambda tx: tx.get("documents",key),read_only=True)
 
+    def test_managed_store_can_use_unmapped_full_durability_rollback_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = initialize(directory, "controller-rollback-journal")
+            config = dict(self.config, authority_id=identity["node"],
+                          site=identity["site"], site_rollback_journal=True)
+            app = Application(directory, controller_runtime=config)
+            try:
+                site = app.stores["site"]
+                local = app.stores["local"]
+                with site.connection() as db:
+                    self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+                    self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 2)
+                    self.assertEqual(db.execute("PRAGMA mmap_size").fetchone()[0], 0)
+                with local.connection() as db:
+                    self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+                authority = ControllerAuthority(app,config,B)
+                site.execute(lambda tx:tx.put("documents","persistent",{"id":"persistent"}))
+                snapshot = authority.snapshot()
+                for shard in snapshot["shards"]:
+                    self.assertIsInstance(authority.snapshot_chunk(shard["digest"]), bytes)
+                self.assertFalse(os.path.exists(site.path+"-shm"))
+            finally:
+                for store in app.stores.values():
+                    store.close()
+
     async def test_managed_health_requires_exact_active_phase_and_registered_link(self):
         self.daemon.connected = True
         self.current_phase = "prepared"

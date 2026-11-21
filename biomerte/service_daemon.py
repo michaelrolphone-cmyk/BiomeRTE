@@ -756,8 +756,9 @@ class AuthorityDaemon:
         self.token=secret(config["helper_key_file"])
         self.url=os.environ.get("BIOME_SERVICE_ADAPTER_URL") or config["adapter_url"]
         controller=config.get("authority_kind")=="controller"
-        self.app=Application(config["authority_home"],
-                             controller_runtime=config if controller else None)
+        runtime = dict(config, site_rollback_journal=
+            os.environ.get("BIOME_SITE_ROLLBACK_JOURNAL") == "1") if controller else None
+        self.app=Application(config["authority_home"],controller_runtime=runtime)
         authority_type=ControllerAuthority if controller else ScopedAuthority
         self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()

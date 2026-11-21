@@ -349,10 +349,11 @@ def _close_connections(key):
 
 
 class Store:
-    def __init__(self, directory, realm, remote=None):
+    def __init__(self, directory, realm, remote=None, *, rollback_journal=False):
         mkdir(directory)
         self.path = os.path.join(directory, realm + '.sqlite')
         self.remote = remote
+        self.rollback_journal = rollback_journal
         # Opt-in controller custody check; derived indexes remain local.
         self.write_guard = None
         self._connection_key = object()
@@ -360,7 +361,11 @@ class Store:
         self._writer_diagnostic = None
         self._writer_diagnostic_lock = threading.Lock()
         with contextlib.closing(self.connect()) as db:
-            db.execute('PRAGMA journal_mode=WAL')
+            if self.rollback_journal:
+                if db.execute('PRAGMA journal_mode=DELETE').fetchone()[0] != 'delete':
+                    raise Fault('Local controller rollback journal unavailable', 503)
+            else:
+                db.execute('PRAGMA journal_mode=WAL')
             db.executescript('CREATE TABLE IF NOT EXISTS records(kind TEXT,id TEXT,value TEXT,'
                              ' PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS position('
                              'id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER,hash TEXT);'
@@ -430,6 +435,10 @@ class Store:
     def connect(self):
         con = sqlite3.connect(self.path, timeout=12, isolation_level=None, check_same_thread=False)
         con.execute('PRAGMA synchronous=FULL')
+        if self.rollback_journal:
+            # Do not expose a host-shared file to SQLite mmap, including
+            # SQLite builds with a nonzero default for ordinary pages.
+            con.execute('PRAGMA mmap_size=0')
         return con
 
 
