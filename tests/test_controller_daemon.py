@@ -11,6 +11,8 @@ try:
 except ModuleNotFoundError as error:
     raise unittest.SkipTest("Controller daemon boundary tests require aiohttp") from error
 
+from aiohttp import WSMsgType
+
 from biomerte.app import Application, initialize
 from biomerte.controller_authority import ControllerAuthority
 from biomerte.identity import generate, fingerprint, sign
@@ -88,6 +90,46 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
     def document(self,key="boundary"):
         return self.app.stores["site"].execute(lambda tx: tx.get("documents",key),read_only=True)
+
+    async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
+        started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        processed, replies = [], []
+
+        async def dispatch(message):
+            processed.append(message["id"])
+            started.set()
+            await release.wait()
+            return {"id": message["id"], "type": "call_result", "status": 200}
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                for message in ({"type": "registered"}, {"type": "call", "id": "first"}):
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                await started.wait()
+                for name in ("waiting", "excess"):
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
+                        {"type": "inspect", "id": name}))
+                await rejected.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies.append(response)
+                rejected.set()
+
+        self.daemon.dispatch = dispatch
+        socket = Socket()
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(socket))
+        try:
+            await asyncio.wait_for(rejected.wait(), 1)
+            self.assertFalse(connection.done())
+            self.assertEqual(replies, [{"id": "excess", "type": "inspect_result",
+                "binding": B, "status": 429, "error": "Managed controller is busy"}])
+        finally:
+            release.set()
+            await connection
+        self.assertEqual(processed, ["first"])
 
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1

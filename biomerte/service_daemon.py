@@ -917,6 +917,53 @@ class AuthorityDaemon:
                 LOG.warning("Service lifecycle retry: %s",type(error).__name__)
             await asyncio.sleep(interval)
 
+    async def reply_to_authority_request(self, ws, message):
+        started = time.monotonic()
+        result = await self.dispatch(message)
+        if not ws.closed:
+            await ws.send_json(result)
+        elapsed = time.monotonic() - started
+        if self.config.get("authority_kind") == "controller" and elapsed >= 3:
+            LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
+                result["type"], result["status"], elapsed)
+
+    async def serve_controller_socket(self, ws):
+        # A caller's gateway timeout does not remove its already sent frame.
+        # Keep the socket reader responsive and accept one waiting request
+        # while the single dispatcher completes its fenced transaction.
+        pending = asyncio.Queue(maxsize=1)
+
+        async def dispatch_queue():
+            try:
+                while (message := await pending.get()) is not None:
+                    await self.reply_to_authority_request(ws, message)
+            finally:
+                if not ws.closed:
+                    await ws.close()
+
+        dispatcher = asyncio.create_task(dispatch_queue())
+        try:
+            async for event in ws:
+                if event.type != WSMsgType.TEXT:
+                    continue
+                message = json.loads(event.data)
+                if message.get("type") == "registered":
+                    self.connected = True
+                    continue
+                if pending.full():
+                    typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
+                        message.get("type"), "call_result")
+                    await ws.send_json(dict(type=typ, id=message.get("id"),
+                        binding=self.binding, status=429, error="Managed controller is busy"))
+                    continue
+                pending.put_nowait(message)
+        finally:
+            if not pending.empty():
+                pending.get_nowait()
+            pending.put_nowait(None)
+            # A running to_thread transaction must settle before reconnecting.
+            await dispatcher
+
     async def authority_loop(self):
         while True:
             try:
@@ -933,22 +980,17 @@ class AuthorityDaemon:
                     headers={"Authorization":"Bearer "+self.transport.key},
                     heartbeat=15,max_msg_size=MAX_BODY) as ws:
                     await ws.send_json({"type":"register","binding":self.binding})
-                    async for event in ws:
-                        if event.type!=WSMsgType.TEXT:
-                            if event.type in (WSMsgType.CLOSE,WSMsgType.CLOSED,WSMsgType.ERROR):
-                                break
-                            continue
-                        message=json.loads(event.data)
-                        if message.get("type")=="registered":
-                            self.connected=True
-                            continue
-                        started = time.monotonic()
-                        result = await self.dispatch(message)
-                        await ws.send_json(result)
-                        elapsed = time.monotonic() - started
-                        if self.config.get("authority_kind") == "controller" and elapsed >= 3:
-                            LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
-                                result["type"], result["status"], elapsed)
+                    if self.config.get("authority_kind") == "controller":
+                        await self.serve_controller_socket(ws)
+                    else:
+                        async for event in ws:
+                            if event.type != WSMsgType.TEXT:
+                                continue
+                            message = json.loads(event.data)
+                            if message.get("type") == "registered":
+                                self.connected = True
+                                continue
+                            await self.reply_to_authority_request(ws, message)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
