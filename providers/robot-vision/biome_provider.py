@@ -389,7 +389,27 @@ class Remote:
         self.gateway = gateway or load_gateway(cfg["gateway_state"])
 
     def call(self, name, args, rid=None):
-        return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        if name != "cap.fenced":
+            return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        # The worker has already durably installed this generation. Retry the
+        # exact acknowledgement even when the next inbox poll is delayed.
+        if rid is None:
+            identity = json.dumps([args["lease"], args["generation"]], separators=(",", ":"))
+            rid = "vision-fence-" + hashlib.sha256(identity.encode()).hexdigest()
+        delays = iter((.5, 1.5, 3., 5.))
+        while True:
+            try:
+                return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+            except RuntimeError as error:
+                message = str(error).lower()
+                if not any(reason in message for reason in (
+                        "managed controller is busy", "service authority is unavailable",
+                        "shared controller runtime is temporarily unavailable")):
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
 
 def offer(cfg, contract, state):
