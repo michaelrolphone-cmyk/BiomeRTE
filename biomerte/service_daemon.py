@@ -937,8 +937,9 @@ class AuthorityDaemon:
     def authority_request_band(message):
         envelope = message.get("envelope") or {}
         operation = envelope.get("operation", "")
-        if message.get("type") == "inspect" or operation in (
-                "cap.discover", "cap.status", "provider.poll", "stream.inspect"):
+        if message.get("type") == "inspect" or operation == "stream.inspect":
+            return "inspection"
+        if operation in ("cap.discover", "cap.status", "provider.poll"):
             return "read"
         if operation in ("stream.open", "stream.attach"):
             return "attachment"
@@ -973,7 +974,8 @@ class AuthorityDaemon:
                     try:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
-                        if message.get("preparation") or self.authority_request_band(message) != "read":
+                        if message.get("preparation") or self.authority_request_band(message) not in (
+                                "read", "inspection"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1004,24 +1006,29 @@ class AuthorityDaemon:
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
         bands = ("read", "lifecycle", "general")
-        capacity = {"attachment": 1, "read": 8, "lifecycle": 1, "general": 1}
+        stream_bands = ("attachment", "inspection")
+        capacity = {"attachment": 1, "inspection": 4, "read": 8, "lifecycle": 1, "general": 1}
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
 
         async def dispatch_queue():
             index = 0
+            stream_index = 0
             previous = None
             try:
                 while not stopping:
                     await ready.wait()
                     if stopping:
                         break
-                    # Opening a current stream must progress independently of
-                    # lease polling. Other work still runs between attachments.
-                    if pending["attachment"] and (previous != "attachment" or
-                            not any(pending[band] for band in bands)):
-                        band = "attachment"
+                    # Grant validation must not compete for admission with
+                    # inbox reads. Alternate stream work and ordinary work.
+                    if any(pending[band] for band in stream_bands) and (
+                            previous not in stream_bands or not any(pending[band] for band in bands)):
+                        while not pending[stream_bands[stream_index]]:
+                            stream_index = (stream_index + 1) % len(stream_bands)
+                        band = stream_bands[stream_index]
+                        stream_index = (stream_index + 1) % len(stream_bands)
                     else:
                         while not pending[bands[index]]:
                             index = (index + 1) % len(bands)
