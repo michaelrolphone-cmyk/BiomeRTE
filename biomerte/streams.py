@@ -53,8 +53,11 @@ def token(ctx, grant, role, consumer=''):
 
 
 @op('stream.open', 'lease:str ttl_seconds?:int')
-def open_stream(tx, ctx, lease, ttl_seconds=3600):
+def open_stream(tx, ctx, lease, ttl_seconds=None):
     secret, url = settings(ctx)
+    default_lifetime = ttl_seconds is None
+    if default_lifetime:
+        ttl_seconds = 3600
     if not 0 < ttl_seconds <= 86400:
         raise Fault('Invalid stream lifetime')
     l = tx.need('leases', lease)
@@ -104,6 +107,9 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
         realm=ctx.scope, contract=l['contract'], resource=l['resource'], provider=l['provider'],
         generation=l['generation'], server=ctx.actor, direction=direction, delivery=delivery,
         limits=limits, policies=policies, lanes=stream.get('lanes', ['data']), schema=stream.get('schema', {}), state='open', expires_at=time.time() + ttl_seconds)
+    if (default_lifetime and l['contract'] == 'device.outputs.stream:1'
+            and lanes == ['control']):
+        grant['renew_with_lease'] = True
     tx.put('_stream_grants', grant['id'], grant)
     return dict(shared_streams.public(tx, grant), url=url.rstrip('/') + '/' + grant['id'], role='server', attachment_credential=token(ctx, grant, 'server', subscription['id']))
 

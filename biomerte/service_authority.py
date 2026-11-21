@@ -57,9 +57,34 @@ class ScopedAuthority:
                     row=__import__("json").loads(value)
                     if row.get("resource") not in self.resources:
                         raise Fault("Lifecycle record is outside service scope",403)
-            return providers.settle_submissions(tx,Context(self.app,scope="site"))
+            ctx=Context(self.app,scope="site")
+            result=providers.settle_submissions(tx,ctx)
+            self.renew_control_streams(tx,ctx)
+            return result
         with self.lock:
             return self.app.stores["site"].execute(advance)
+
+    @staticmethod
+    def renew_control_streams(tx, ctx):
+        """Renew the existing epoch while its persistent control lease is current."""
+        from . import lifecycle, shared_streams, streams
+        now=time.time()
+        for grant in tx.rows("_stream_grants"):
+            if (grant.get("renew_with_lease") is not True or
+                    grant.get("contract")!="device.outputs.stream:1" or
+                    grant.get("lanes")!=["control"] or grant.get("state")!="open" or
+                    not now<grant["expires_at"]<=now+120):
+                continue
+            try:
+                streams.valid(tx,ctx,grant)
+                lease=tx.need("leases",grant["lease"])
+                if (lifecycle.policy(tx,lease)["lease_class"]!="persistent" or
+                        not shared_streams.consumers(tx,grant)):
+                    continue
+            except Fault:
+                continue
+            grant["expires_at"]=now+3600
+            tx.put("_stream_grants",grant["id"],grant)
 
     def _resource_row(self, tx, kind, key):
         row = tx.need(kind, key)

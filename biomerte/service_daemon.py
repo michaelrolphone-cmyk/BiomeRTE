@@ -463,25 +463,29 @@ class AuthorityDaemon:
         try:
             if message.get("binding")!=self.binding:
                 raise Fault("RPC belongs to another service grant",409)
-            await self.transport.validate(self.binding)
+            await self.transport.validate(self.binding,preparing=typ!="inspect")
             phase=await self.phase()
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
-            async with self.lock:
-                # Reconcile any locally durable update whose previous response
-                # was lost before processing another request.
-                await self.publish()
-                if typ=="call":
-                    result=await asyncio.to_thread(self.authority.call,
-                                      message["envelope"],preparing)
-                    reply["result"]=result
-                elif typ=="inspect" and not preparing:
-                    if message.get("authority")!=self.config["authority_id"]:
-                        raise Fault("Wrong logical stream authority",403)
-                    reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
-                else:
+            if typ=="inspect":
+                if preparing:
                     raise Fault("Service effect admission is unavailable",503)
-                await self.publish()
-                await self.transport.validate(self.binding,preparing=preparing)
+                if message.get("authority")!=self.config["authority_id"]:
+                    raise Fault("Wrong logical stream authority",403)
+                # Inspection is read-only. The router already requires an
+                # attachment credential, which is issued after publication.
+                # Check the exact active binding before and after this read.
+                reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
+                await self.transport.validate(self.binding,preparing=False)
+            elif typ=="call":
+                async with self.lock:
+                    # Reconcile durable updates before processing another call.
+                    await self.publish()
+                    reply["result"]=await asyncio.to_thread(self.authority.call,
+                                                           message["envelope"],preparing)
+                    await self.publish()
+                    await self.transport.validate(self.binding,preparing=preparing)
+            else:
+                raise Fault("Service effect admission is unavailable",503)
         except (Fault,CheckpointError,KeyError,TypeError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error))
             reply.pop("result",None)
@@ -546,9 +550,10 @@ class AuthorityDaemon:
 
     async def serve_requests(self, ws):
         """Keep reading WebSocket control frames while one RPC publishes state."""
-        inbox=asyncio.Queue()
+        calls=asyncio.Queue()
+        inspections=asyncio.Queue()
 
-        async def dispatch_requests():
+        async def dispatch_requests(inbox):
             try:
                 while True:
                     message=await inbox.get()
@@ -561,7 +566,8 @@ class AuthorityDaemon:
                 await ws.close()
                 raise
 
-        task=asyncio.create_task(dispatch_requests())
+        workers=[asyncio.create_task(dispatch_requests(inbox))
+                 for inbox in (calls,inspections)]
         try:
             async for event in ws:
                 if event.type!=WSMsgType.TEXT:
@@ -572,15 +578,17 @@ class AuthorityDaemon:
                 if message.get("type")=="registered":
                     self.connected=True
                 else:
+                    inbox=inspections if message.get("type")=="inspect" else calls
                     inbox.put_nowait(message)
         finally:
             self.connected=False
             # Nothing queued has started. Finish the one claimed RPC so a
             # disconnect cannot interrupt its durable receipt publication.
-            while not inbox.empty():
-                inbox.get_nowait()
-            inbox.put_nowait(None)
-            await task
+            for inbox in (calls,inspections):
+                while not inbox.empty():
+                    inbox.get_nowait()
+                inbox.put_nowait(None)
+            await asyncio.gather(*workers)
 
     async def authority_loop(self):
         while True:
