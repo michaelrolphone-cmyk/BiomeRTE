@@ -544,7 +544,24 @@ def serve(cfg):
             stopping.set()
 
         def advertise():
-            relay_metadata_published = False
+            published_definitions = set()
+            stream_offers = {}
+            relay_definitions = json.loads((HERE / "rover-relay-contracts.json").read_text())
+            stream_definition = {"name": "robot.vision.stream", "version": 1, "inputs": {}, "outputs": {},
+                "description": "Continuous processed frames, pose and telemetry under a persistent native lease"}
+
+            def define_once(spec):
+                key = (spec["name"], spec["version"])
+                if key not in published_definitions:
+                    remote.call("cap.define", spec)
+                    published_definitions.add(key)
+
+            def publish_stream(value):
+                key = value["resource"]
+                if stream_offers.get(key) != value:
+                    remote.call("cap.offer", value)
+                    stream_offers[key] = value
+
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
@@ -562,14 +579,14 @@ def serve(cfg):
                             ready = set()
                         else:
                             raise
-                    if not relay_metadata_published:
-                        for spec in json.loads((HERE / "rover-relay-contracts.json").read_text()):
-                            remote.call("cap.define", spec)
-                        relay_metadata_published = True
-                    remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
-                        "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
+                    # These records are durable. Separate health sampling from
+                    # writes so stable cameras don't contend for controller admission.
+                    define_once(stream_definition)
+                    for spec in relay_definitions:
+                        if stopping.is_set():return
+                        define_once(spec)
                     if stopping.is_set():return
-                    remote.call("cap.offer", stream_offer(cfg, status))
+                    publish_stream(stream_offer(cfg, status))
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
