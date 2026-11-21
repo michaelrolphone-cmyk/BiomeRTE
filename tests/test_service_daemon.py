@@ -56,6 +56,40 @@ class Clock:
         self.now += seconds
 
 
+class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unchanged_root_reuses_ack_but_failed_dirty_publication_retries(self):
+        daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+        daemon.config = {"authority_kind": "controller"}
+        daemon.confirmed_controller_publication = None
+        daemon.controller_publication_refresh_at = 0
+        dirty = True
+        daemon.authority = types.SimpleNamespace(checkpoint_is_dirty=lambda: dirty)
+
+        async def witness(instance):
+            nonlocal dirty
+            dirty = False
+            if response == "lost":
+                raise Fault("Lost publication acknowledgement", 503)
+            return {"checkpoint": response}
+
+        response = "initial"
+        with patch("biomerte.controller_checkpoint.publish_controller", side_effect=witness) as publish:
+            self.assertEqual({"checkpoint": "initial"}, await daemon.publish())
+            self.assertEqual({"checkpoint": "initial"}, await daemon.publish())
+            publish.assert_awaited_once_with(daemon)
+            dirty = True
+            response = "lost"
+            with self.assertRaises(Fault):
+                await daemon.publish()
+            self.assertFalse(dirty)
+            response = "reconciled"
+            self.assertEqual({"checkpoint": "reconciled"}, await daemon.publish())
+            self.assertEqual(3, publish.await_count)
+            daemon.controller_publication_refresh_at = 0
+            await daemon.publish()
+            self.assertEqual(4, publish.await_count)
+
+
 class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):

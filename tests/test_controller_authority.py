@@ -88,6 +88,14 @@ class ControllerTests(unittest.TestCase):
             rows.extend(json.loads(raw))
         return {(kind, key): value for kind, key, value in rows}
 
+    def test_checkpoint_dirty_check_observes_canonical_writes(self):
+        self.authority.snapshot()
+        self.assertFalse(self.authority.checkpoint_is_dirty())
+        self.call("knowledge.put", dict(key="checkpoint-dirty", body={"value": 1}))
+        self.assertTrue(self.authority.checkpoint_is_dirty())
+        self.authority.snapshot()
+        self.assertFalse(self.authority.checkpoint_is_dirty())
+
     def test_signed_alias_preserves_original_signature(self):
         result = self.call("system.info")
         self.assertEqual(result["node"], self.node["node"])

@@ -83,6 +83,14 @@ class ControllerAuthority:
         self.snapshot_reads += 1
         return canonical(rows), len(rows)
 
+    def checkpoint_is_dirty(self):
+        # Canonical record triggers also cover writes made outside this object.
+        with self.lock:
+            return self.app.stores["site"].execute(
+                lambda tx: tx.db.execute(
+                    "SELECT 1 FROM controller_checkpoint_dirty LIMIT 1").fetchone() is not None,
+                read_only=True)
+
     def snapshot(self):
         with self.lock:
             updates = {}

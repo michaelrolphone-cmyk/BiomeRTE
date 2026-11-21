@@ -763,6 +763,8 @@ class AuthorityDaemon:
         self.lock=asyncio.Lock()
         self.connected=False
         self.events=None
+        self.confirmed_controller_publication = None
+        self.controller_publication_refresh_at = 0
         if controller and config.get("event_authorize_url"):
             from .controller_events import ManagedEvents
             self.events=ManagedEvents(self)
@@ -779,7 +781,17 @@ class AuthorityDaemon:
     async def publish(self):
         if self.config.get("authority_kind")=="controller":
             from .controller_checkpoint import publish_controller
-            return await publish_controller(self)
+            if (self.confirmed_controller_publication is not None
+                    and time.monotonic() < self.controller_publication_refresh_at
+                    and not await asyncio.to_thread(self.authority.checkpoint_is_dirty)):
+                return self.confirmed_controller_publication
+            # A failed or uncertain publication must not reuse an earlier ACK,
+            # even when snapshot construction already consumed the dirty list.
+            self.confirmed_controller_publication = None
+            result = await publish_controller(self)
+            self.confirmed_controller_publication = result
+            self.controller_publication_refresh_at = time.monotonic() + 5
+            return result
         state=await asyncio.to_thread(self.authority.snapshot)
         return await self.helper("publish",state=state)
 
