@@ -880,7 +880,12 @@ class AuthorityDaemon:
 
     async def health(self,request):
         try:
-            await self.transport.validate(self.binding,preparing=False)
+            # In the managed controller, the private phase already validates
+            # this exact binding. Its active phase and registered socket are
+            # readiness evidence for the coordinator; requiring the final
+            # coordinator effect grant here makes that report circular.
+            if self.config.get("authority_kind") != "controller":
+                await self.transport.validate(self.binding,preparing=False)
             phase=await self.phase()
             ready=self.connected and phase["phase"]=="active"
             return web.json_response({"ready":ready,"service_id":self.config["service_id"],

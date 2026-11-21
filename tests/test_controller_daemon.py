@@ -91,6 +91,19 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     def document(self,key="boundary"):
         return self.app.stores["site"].execute(lambda tx: tx.get("documents",key),read_only=True)
 
+    async def test_managed_health_requires_exact_active_phase_and_registered_link(self):
+        self.daemon.connected = True
+        self.current_phase = "prepared"
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+        self.current_phase = "active"
+        before = self.validated
+        self.assertEqual((await self.daemon.health(None)).status, 200)
+        self.assertEqual(self.validated-before, 1)
+        self.fail_validate = self.validated+1
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+        self.daemon.connected = False
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+
     async def test_read_batch_verifies_each_actor_and_shares_publication(self):
         import copy
         signed = self.message()["envelope"]
