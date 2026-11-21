@@ -131,6 +131,41 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             await connection
         self.assertEqual(processed, ["first"])
 
+    async def test_lifecycle_request_is_admitted_during_registration_burst(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        processed = []
+
+        async def dispatch(message):
+            processed.append(message["id"])
+            started.set()
+            if message["id"] == "running":
+                await release.wait()
+            return {"id": message["id"], "type": "call_result", "status": 200}
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(name, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
+                        {"type": "call", "id": name, "envelope": {"operation": operation}}))
+
+                yield call("running", "cap.offer")
+                await started.wait()
+                yield call("registration", "cap.define")
+                yield call("lifecycle", "provider.poll")
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                if response["id"] == "registration":
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(processed, ["running", "lifecycle", "registration"])
+
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1
         result=await self.daemon.dispatch(self.message())

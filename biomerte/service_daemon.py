@@ -927,15 +927,33 @@ class AuthorityDaemon:
             LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
                 result["type"], result["status"], elapsed)
 
+    @staticmethod
+    def authority_lifecycle_request(message):
+        operation = message.get("envelope", {}).get("operation", "")
+        return message.get("type") == "inspect" or (isinstance(operation, str) and (
+            operation.startswith("stream.") or operation in (
+                "cap.acquire", "cap.discover", "cap.fenced", "cap.lease", "provider.poll")))
+
     async def serve_controller_socket(self, ws):
-        # A caller's gateway timeout does not remove its already sent frame.
-        # Keep the socket reader responsive and accept one waiting request
-        # while the single dispatcher completes its fenced transaction.
-        pending = asyncio.Queue(maxsize=1)
+        # A gateway timeout cannot retract a frame. Reserve one waiting slot
+        # for lease and stream progression, and one for other controller work.
+        # Alternate when both bands are waiting, using one fenced dispatcher.
+        pending = {}
+        ready = asyncio.Event()
+        stopping = False
 
         async def dispatch_queue():
+            prefer_lifecycle = True
             try:
-                while (message := await pending.get()) is not None:
+                while not stopping:
+                    await ready.wait()
+                    if stopping:
+                        break
+                    band = prefer_lifecycle if prefer_lifecycle in pending else not prefer_lifecycle
+                    message = pending.pop(band)
+                    prefer_lifecycle = not band
+                    if not pending:
+                        ready.clear()
                     await self.reply_to_authority_request(ws, message)
             finally:
                 if not ws.closed:
@@ -950,17 +968,19 @@ class AuthorityDaemon:
                 if message.get("type") == "registered":
                     self.connected = True
                     continue
-                if pending.full():
+                band = self.authority_lifecycle_request(message)
+                if band in pending:
                     typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
                         message.get("type"), "call_result")
                     await ws.send_json(dict(type=typ, id=message.get("id"),
                         binding=self.binding, status=429, error="Managed controller is busy"))
                     continue
-                pending.put_nowait(message)
+                pending[band] = message
+                ready.set()
         finally:
-            if not pending.empty():
-                pending.get_nowait()
-            pending.put_nowait(None)
+            stopping = True
+            pending.clear()
+            ready.set()
             # A running to_thread transaction must settle before reconnecting.
             await dispatcher
 
