@@ -91,8 +91,8 @@ class RoutedRemote(ControllerRoutes):
                 if 'error' in value:
                     raise ConnectionError('Controller rejected Rover request')
                 return value['result']
-            except HTTPError as error:
-                if error.code not in (429, 502, 503, 504):
+            except (HTTPError, TimeoutError) as error:
+                if isinstance(error, HTTPError) and error.code not in (429, 502, 503, 504):
                     raise
                 delay = next(delays, None)
                 if delay is None:
