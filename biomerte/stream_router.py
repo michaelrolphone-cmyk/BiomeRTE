@@ -45,7 +45,7 @@ def decode(message, maximum):
         if len(message) < 4:
             raise Fault('Missing frame metadata')
         size = struct.unpack('!I', message[:4])[0]
-        if size > 16384 or size + 4 > len(message):
+        if size == 0 or size + 4 > len(message):
             raise Fault('Invalid frame metadata')
         metadata = json.loads(message[4:4 + size].decode())
         payload = message[4 + size:]
