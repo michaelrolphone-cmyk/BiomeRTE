@@ -1,0 +1,33 @@
+services:
+  motion-observer:
+    image: ${MOTION_IMAGE:?Set the qualified image tag or digest}
+    command: ["observer", "--config", "/config/observer.json"]
+    user: "${WORKER_UID:?}:${WORKER_GID:?}"
+    environment:
+      HOME: "${WORKER_HOME:?}"
+      BIOME_PROVIDER_HOST: "${PROVIDER_HOST:?}"
+    volumes:
+      - "${MOTION_OBSERVER_CONFIG:?}:/config/observer.json:ro"
+      - "${HOST_IO_CLIENT_CONFIG:?}:/run/biome/host-io.json:ro"
+      - "${HOST_IO_TOKEN_FILE:?}:/run/biome/host-io.token:ro"
+      - "${HOST_IO_CA_FILE:?}:/run/biome/host-io-ca.pem:ro"
+      - "${ROVER_OBSERVER_TOKEN_FILE:?}:/run/biome/rover.token:ro"
+      - "${MOTION_DATABASE_DIRECTORY:?}:${MOTION_DATABASE_DIRECTORY:?}"
+    restart: unless-stopped
+    init: true
+  motion-provider:
+    image: ${MOTION_IMAGE:?}
+    command: ["provider", "--config", "/config/provider.json"]
+    user: "${WORKER_UID:?}:${WORKER_GID:?}"
+    environment:
+      HOME: "${WORKER_HOME:?}"
+      BIOME_PROVIDER_HOST: "${PROVIDER_HOST:?}"
+    volumes:
+      - "${MOTION_PROVIDER_CONFIG:?}:/config/provider.json:ro"
+      - "${HOST_IO_CLIENT_CONFIG:?}:/run/biome/host-io.json:ro"
+      - "${HOST_IO_TOKEN_FILE:?}:/run/biome/host-io.token:ro"
+      - "${HOST_IO_CA_FILE:?}:/run/biome/host-io-ca.pem:ro"
+      - "${MOTION_PROVIDER_STATE:?}:${MOTION_PROVIDER_STATE:?}"
+      - "${MOTION_DATABASE_DIRECTORY:?}:${MOTION_DATABASE_DIRECTORY:?}"
+    restart: unless-stopped
+    init: true

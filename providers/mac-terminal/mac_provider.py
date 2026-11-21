@@ -17,7 +17,7 @@ from pathlib import Path
 
 ORIGIN = 'https://biomerte-controller.cantikash.chatgpt.site'
 RESOURCE = ORIGIN + '/api/mcp'
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get('BIOME_GATEWAY_STATE', Path(__file__).resolve().parent))
 CREDS = ROOT / 'oauth.json'
 
 class HTTPFailure(RuntimeError):
@@ -116,10 +116,23 @@ _persistent_after = 0
 def transport_active():
     return _persistent is not None and _persistent.socket is not None
 
-def invoke(operation, arguments=None, rid=None, realm='site'):
+def invoke(operation, arguments=None, rid=None, realm='site', provider_context=None):
     global _persistent, _persistent_after
     rid = rid or uuid.uuid4().hex
+    bridge = os.environ.get('BIOME_GATEWAY_HOST_IO_CONFIG')
+    if bridge:
+        from biomerte.host_io_client import HostIOClient
+        client = HostIOClient(json.loads(Path(bridge).read_text()))
+        result = client.call('gateway.invoke', dict(operation=operation, arguments=arguments or {},
+            request_id=rid, realm=realm, provider_context=provider_context))
+        heartbeat = os.environ.get('BIOME_WORKER_HEALTH')
+        if heartbeat and (operation == 'provider.poll' or
+                (operation == 'controller.invoke' and (arguments or {}).get('operation') == 'provider.poll')):
+            save_json(Path(heartbeat), {'last_poll': time.time(), 'state': 'online'})
+        return result
     args = dict(operation=operation, arguments=arguments or {}, request_id=rid, realm=realm)
+    if provider_context is not None:
+        args['provider_context'] = provider_context
     rpc = dict(jsonrpc='2.0', id=rid, method='tools/call', params=dict(name='biome_invoke', arguments=args))
     # Keep the same identity across transport failures and delayed controller replies.
     for attempt in range(6):
@@ -186,6 +199,16 @@ def configure():
     save_json(manifest_path, manifest)
     print('Provider:', node, '\nResource:', resource, '\nHost:', socket.gethostname(), flush=True)
 
+def invoke_provider(operation, arguments=None, rid=None, realm='site', provider=None):
+    """Report provider locality; the gateway assigns an available controller."""
+    if provider is None:
+        provider = (arguments or {}).get('provider')
+    if not isinstance(provider, str) or len(provider) != 64:
+        raise ValueError('Provider identity required for gateway placement')
+    return invoke(operation, arguments, rid, realm,
+                  provider_context={'provider': provider, 'host': os.environ.get('BIOME_PROVIDER_HOST', socket.gethostname())})
+
+
 class Remote:
     realm = 'site'
 
@@ -196,7 +219,7 @@ class Remote:
         self.last_health = 0
 
     def call(self, name, args, rid=None):
-        result = invoke(name, args, rid, self.realm)
+        result = invoke_provider(name, args, rid, self.realm, self.node)
         if name == 'provider.poll' and time.monotonic() - self.last_health >= 10:
             save_json(ROOT / 'health.json', dict(provider=self.node, resource=self.resource,
                                                  last_poll=time.time(), state='online'))

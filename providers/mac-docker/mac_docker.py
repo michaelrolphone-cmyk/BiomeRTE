@@ -14,7 +14,7 @@ import time
 HERE = Path(__file__).resolve().parent
 HOME = Path.home()
 STATE = HOME / '.local/share/biome-mac-docker'
-TERMINAL = HOME / '.local/share/biome-mac-terminal'
+TERMINAL = Path(os.environ.get('BIOME_GATEWAY_CODE', HOME / '.local/share/biome-mac-terminal'))
 LABEL = 'org.biomerte.mac-docker'
 sys.path[:0] = [str(HERE.parents[1]), str(HERE.parent / 'pi-docker'), str(TERMINAL)]
 import mac_provider as gateway
@@ -28,12 +28,11 @@ class Remote:
     def __init__(self, cfg):
         self.node = cfg['provider']
         self.site = cfg['site']
-        self.controller = cfg.get('controller')
 
     def call(self, name, args, rid=None):
-        if self.controller:
-            return gateway.invoke('controller.invoke', dict(controller=self.controller, operation=name, arguments=args), rid, self.realm)
-        return gateway.invoke(name, args, rid, self.realm)
+        # The gateway owns placement; a saved native controller may no longer
+        # own site operations after an authority transition.
+        return gateway.invoke_provider(name, args, rid, self.realm, self.node)
 
 
 def offer(cfg, state):
@@ -169,6 +168,8 @@ if __name__ == '__main__':
         install()
     else:
         cfg = json.loads((STATE / 'manifest.json').read_text())
+        if os.environ.get('BIOME_CONTAINER_WORKER') == '1':
+            cfg = dict(cfg, executable='/usr/local/bin/docker', socket='/var/run/docker.sock', desktop=False)
         if sys.argv[1] == 'execute':
             request = json.load(sys.stdin)
             json.dump(execute(cfg, request['inputs'], Remote(cfg), request.get('progress_path')), sys.stdout)

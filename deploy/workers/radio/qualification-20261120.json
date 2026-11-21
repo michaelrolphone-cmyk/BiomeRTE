@@ -1,0 +1,132 @@
+{
+  "base": {
+    "base_image": "debian@sha256:50b15ac0f2b79ba71bad6a3c7606e992c4cc3213aa9b47700efebe7e8678931f",
+    "base_tag_observed": "debian:bookworm-slim",
+    "manifest": {
+      "digest": "sha256:50b15ac0f2b79ba71bad6a3c7606e992c4cc3213aa9b47700efebe7e8678931f",
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "platform": {
+        "architecture": "arm",
+        "os": "linux",
+        "variant": "v7"
+      },
+      "size": 1041
+    },
+    "observed_at": "2026-11-20T15:01:08.891183+00:00",
+    "platform": "linux/arm/v7",
+    "schema": "biomerte-radio-build-inputs/1"
+  },
+  "finished_at": "2026-11-20T15:10:18.401415+00:00",
+  "hardware_qualified": false,
+  "host_launcher_python_3_4_syntax": true,
+  "images": [
+    {
+      "architecture": "arm",
+      "image_id": "sha256:137c3b21e979ad34094e60cb1907f365c84f33b6a1e34049e17b81a6a0d3cbf8",
+      "kind": "sdr",
+      "os": "linux",
+      "qualification": {
+        "checks": [
+          {
+            "check": "dependency-and-source-check",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "{\"hardware_opened\": false, \"implementation\": \"/app/providers/pi-sdr\", \"kind\": \"sdr\", \"libraries\": {\"rtlsdr\": \"librtlsdr.so.0\", \"usb-1.0\": \"libusb-1.0.so.0\"}, \"live_qualified\": false, \"numpy\": \"1.24.2\", \"provider_started\": false, \"pyserial\": \"3.5\"}\n"
+          },
+          {
+            "check": "real-worker-fixtures",
+            "exit_code": 0,
+            "stderr": ".............\n----------------------------------------------------------------------\nRan 13 tests in 10.608s\n\nOK\n",
+            "stdout": ""
+          },
+          {
+            "check": "container-boundaries",
+            "exit_code": 0,
+            "stderr": ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.187s\n\nOK\n",
+            "stdout": ""
+          },
+          {
+            "check": "real-daemon-and-receipts",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "{\"kind\": \"sdr\", \"real_daemon_ready\": true, \"status_ok\": true, \"receipt_replay\": true, \"conflicting_replay_rejected\": true, \"hardware_exercised\": false, \"isolated_state\": true}\n"
+          },
+          {
+            "check": "provider-runtime",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "usage: biome [-h] [--home HOME] [--realm {site,local}]\n             {init,serve,token,identity,call,demo,discover,pair,worker,sync,install-package,resolve-effect,backup,restore,resume-restore}\n             ...\n\npositional arguments:\n  {init,serve,token,identity,call,demo,discover,pair,worker,sync,install-package,resolve-effect,backup,restore,resume-restore}\n    init                Create a private node identity\n    serve               Start the UI, service bus and BPMN runner\n    token               Print this node\u2019s private operator token\n    identity            Print the public node identity\n    call                Invoke a versioned service operation\n    demo                Run, verify and accept a complete work cycle\n    discover            Discover nearby controllers on this LAN\n    pair                Begin or finish physical commissioning\n    worker              Run an enrolled external provider\n    sync                Exchange revision pages with a trusted peer\n    install-package     Install reviewed provider code by exact package digest\n    resolve-effect      Record an observed result for an uncertain local\n                        provider operation\n\noptions:\n  -h, --help            show this help message and exit\n  --home HOME\n  --realm {site,local}\n"
+          }
+        ],
+        "devices": [],
+        "hardware_qualified": false,
+        "image": "sha256:137c3b21e979ad34094e60cb1907f365c84f33b6a1e34049e17b81a6a0d3cbf8",
+        "kind": "sdr",
+        "network": "none",
+        "ok": true
+      },
+      "size_bytes": 141619201,
+      "tag": "biomerte-worker-sdr:0575c049bc8c"
+    },
+    {
+      "architecture": "arm",
+      "image_id": "sha256:c702dd3967b457b7a99d9ffede6a389a283324da32268410cd56745a14224bed",
+      "kind": "fm",
+      "os": "linux",
+      "qualification": {
+        "checks": [
+          {
+            "check": "dependency-and-source-check",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "{\"backend\": \"/usr/local/lib/biomerte/fm_transmitter\", \"backend_sha256\": \"fa464487ff80977e7d43b425e6c1dbbc16678898f5fbd922b8b2987db1b3205f\", \"hardware_opened\": false, \"implementation\": \"/app/providers/pi-fm\", \"kind\": \"fm\", \"live_qualified\": false, \"provider_started\": false}\n"
+          },
+          {
+            "check": "real-worker-fixtures",
+            "exit_code": 0,
+            "stderr": ".........\n----------------------------------------------------------------------\nRan 9 tests in 0.086s\n\nOK\n",
+            "stdout": ""
+          },
+          {
+            "check": "container-boundaries",
+            "exit_code": 0,
+            "stderr": ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.088s\n\nOK\n",
+            "stdout": ""
+          },
+          {
+            "check": "real-daemon-and-receipts",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "{\"kind\": \"fm\", \"real_daemon_ready\": true, \"status_ok\": true, \"receipt_replay\": true, \"conflicting_replay_rejected\": true, \"hardware_exercised\": false, \"isolated_state\": true}\n"
+          },
+          {
+            "check": "provider-runtime",
+            "exit_code": 0,
+            "stderr": "",
+            "stdout": "usage: biome [-h] [--home HOME] [--realm {site,local}]\n             {init,serve,token,identity,call,demo,discover,pair,worker,sync,install-package,resolve-effect,backup,restore,resume-restore}\n             ...\n\npositional arguments:\n  {init,serve,token,identity,call,demo,discover,pair,worker,sync,install-package,resolve-effect,backup,restore,resume-restore}\n    init                Create a private node identity\n    serve               Start the UI, service bus and BPMN runner\n    token               Print this node\u2019s private operator token\n    identity            Print the public node identity\n    call                Invoke a versioned service operation\n    demo                Run, verify and accept a complete work cycle\n    discover            Discover nearby controllers on this LAN\n    pair                Begin or finish physical commissioning\n    worker              Run an enrolled external provider\n    sync                Exchange revision pages with a trusted peer\n    install-package     Install reviewed provider code by exact package digest\n    resolve-effect      Record an observed result for an uncertain local\n                        provider operation\n\noptions:\n  -h, --help            show this help message and exit\n  --home HOME\n  --realm {site,local}\n"
+          }
+        ],
+        "devices": [],
+        "hardware_qualified": false,
+        "image": "sha256:c702dd3967b457b7a99d9ffede6a389a283324da32268410cd56745a14224bed",
+        "kind": "fm",
+        "network": "none",
+        "ok": true
+      },
+      "size_bytes": 113675443,
+      "tag": "biomerte-worker-fm:0575c049bc8c"
+    }
+  ],
+  "limits": [
+    "Built and tested with Docker Desktop ARMv7 emulation on the Mac.",
+    "No physical devices, network, credentials, or existing provider state were exposed to qualification containers.",
+    "Pi kernel 4.4 / Docker API 1.30 device admission and operational cutover remain host qualification work."
+  ],
+  "live_cutover_performed": false,
+  "packaged_source_digests_verified": 34,
+  "pi_kernel_runtime_qualified": false,
+  "platform": "linux/arm/v7",
+  "schema": "biomerte-radio-image-qualification/1",
+  "source_commit": "0575c049bc8c0c2ca957201c723c5a2bd92837ed",
+  "started_at": "2026-11-20T15:08:02.538347+00:00"
+}

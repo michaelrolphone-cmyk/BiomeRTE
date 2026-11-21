@@ -1,0 +1,16 @@
+services:
+  vision-provider:
+    image: ${VISION_IMAGE:?Set the qualified image tag or digest}
+    command: ["provider", "--config", "/config/provider.json"]
+    user: "${WORKER_UID:?}:${WORKER_GID:?}"
+    environment:
+      HOME: "${WORKER_HOME:?}"
+      BIOME_PROVIDER_HOST: "${PROVIDER_HOST:?}"
+    volumes:
+      - "${VISION_PROVIDER_CONFIG:?}:/config/provider.json:ro"
+      - "${HOST_IO_CLIENT_CONFIG:?}:/run/biome/host-io.json:ro"
+      - "${HOST_IO_TOKEN_FILE:?}:/run/biome/host-io.token:ro"
+      - "${HOST_IO_CA_FILE:?}:/run/biome/host-io-ca.pem:ro"
+      - "${VISION_PROVIDER_STATE:?}:${VISION_PROVIDER_STATE:?}"
+    restart: unless-stopped
+    init: true

@@ -1,0 +1,235 @@
+{
+  "captured_utc": "2026-11-20",
+  "changes": [
+    "Dedicated non-root Rover image and deployment definition; actual application source reused unchanged.",
+    "Existing portable entrypoint retains explicit controller/network and native HostIO clock/origin/survey boundaries.",
+    "No credentials or existing route state included.",
+    "Explicit container listener with native loopback default and authenticated host-loopback8093 publication preserves existing native observer consumers."
+  ],
+  "deployed_release": "service-authorities-0b5d03ea8465",
+  "image_files": [
+    {
+      "image_path": "biomerte/__init__.py",
+      "repository_path": "deploy/portable-services/source/biomerte/__init__.py",
+      "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5"
+    },
+    {
+      "image_path": "biomerte/control_clock.py",
+      "repository_path": "deploy/portable-services/source/biomerte/control_clock.py",
+      "sha256": "20e60bbc8ad06bfe51e38719b865bac3a86f5f61fe4c88e33848e8a78c20a735"
+    },
+    {
+      "image_path": "biomerte/identity.py",
+      "repository_path": "deploy/portable-services/source/biomerte/identity.py",
+      "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f"
+    },
+    {
+      "image_path": "biomerte/rover.py",
+      "repository_path": "deploy/portable-services/source/biomerte/rover.py",
+      "sha256": "31f008c215180cde59741b4a063b9946e8d4784801fae8cbff42e1ba5cf7d726"
+    },
+    {
+      "image_path": "biomerte/service_inspection.py",
+      "repository_path": "deploy/portable-services/source/biomerte/service_inspection.py",
+      "sha256": "834329d3259eaf01f04fc7ede5098bf248a30f1b9192021e55329e14cf714a7a"
+    },
+    {
+      "image_path": "biomerte/service_routing.py",
+      "repository_path": "deploy/portable-services/source/biomerte/service_routing.py",
+      "sha256": "97bb5311560ac394686bbdbc7a986de06d8cda57935e06164ad99eacd784dcb9"
+    },
+    {
+      "image_path": "biomerte/store.py",
+      "repository_path": "deploy/portable-services/source/biomerte/store.py",
+      "sha256": "78ac723d35a535003aac587ed3c63869d64f27aea4657017117dc5d507a2f50a"
+    },
+    {
+      "image_path": "biomerte/stream_inspection.py",
+      "repository_path": "deploy/portable-services/source/biomerte/stream_inspection.py",
+      "sha256": "f2c15d0cc6a744255f83883b4fc9ae36a15784b4d47696f3aad3cb60b0efdf11"
+    },
+    {
+      "image_path": "biomerte/stream_router.py",
+      "repository_path": "deploy/portable-services/source/biomerte/stream_router.py",
+      "sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43"
+    },
+    {
+      "image_path": "biomerte/vision_mailbox.py",
+      "repository_path": "deploy/portable-services/source/biomerte/vision_mailbox.py",
+      "sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86"
+    },
+    {
+      "image_path": "camera_light.py",
+      "repository_path": "deploy/portable-services/source/camera_light.py",
+      "sha256": "279007491bb648be7e368e31edc3bd928a4e7d40f166bfed131bed367b495884"
+    },
+    {
+      "image_path": "rover_routes.py",
+      "repository_path": "deploy/portable-services/source/rover_routes.py",
+      "sha256": "5be5e76617c4c0f91ef3d165e391cbb57e942d67da20d995e1fb82c6464ec733"
+    },
+    {
+      "image_path": "rover_service.py",
+      "repository_path": "deploy/portable-services/source/rover_service.py",
+      "sha256": "be5116b4a2d7dab9e075b09423963ae07a33571a640e83ef7c05d49a5e07fa82"
+    },
+    {
+      "image_path": "rover_transport.py",
+      "repository_path": "deploy/portable-services/source/rover_transport.py",
+      "sha256": "860924ab0bd22928139c03bc7c3438cb40040f77368dfef837331bf808844664"
+    },
+    {
+      "image_path": "site_bridge.py",
+      "repository_path": "deploy/portable-services/source/site_bridge.py",
+      "sha256": "f65fd768b21ecda3f3eeae45c4e1e28cc2468d0664ea4dfabf91cf4687006ff3"
+    },
+    {
+      "image_path": "survey_zero.py",
+      "repository_path": "deploy/portable-services/source/survey_zero.py",
+      "sha256": "0e4f258ba867f11e2c7a971f7396201db8e3770de65296d5305db086671e759f"
+    },
+    {
+      "image_path": "rover.py",
+      "repository_path": "deploy/portable-services/rover.py",
+      "sha256": "bd0637a2a9858c3dfe06f5d8da609a4eb15ae4b79987827db3ae6e71b15fd11b"
+    },
+    {
+      "image_path": "portable_common.py",
+      "repository_path": "deploy/portable-services/portable_common.py",
+      "sha256": "96da4b1344913c64e6b187112e90f5c974d2c0b45672d38b3ab8e8c7cdd0a850"
+    },
+    {
+      "image_path": "biomerte/host_io_client.py",
+      "repository_path": "biomerte/host_io_client.py",
+      "sha256": "25d22d43f5e6ca910c32c2b96531324d2ee68ecc878a4868d395ef0861827465"
+    }
+  ],
+  "original_source_manifest": {
+    "baseline_commit": "e131eafba94852953fc0b2d3feab8b45aa34034a",
+    "captured_utc": "2026-11-19",
+    "deployed_release": "service-authorities-0b5d03ea8465",
+    "files": [
+      {
+        "bytes": 78,
+        "packaged_sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5",
+        "path": "biomerte/__init__.py",
+        "sha256": "50584acc86ce32fd01558c656668ab45c061f7fe2165a001ddfe7bbc738871b5",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/__init__.py"
+      },
+      {
+        "bytes": 5221,
+        "packaged_sha256": "20e60bbc8ad06bfe51e38719b865bac3a86f5f61fe4c88e33848e8a78c20a735",
+        "path": "biomerte/control_clock.py",
+        "sha256": "20e60bbc8ad06bfe51e38719b865bac3a86f5f61fe4c88e33848e8a78c20a735",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/control_clock.py"
+      },
+      {
+        "bytes": 1778,
+        "packaged_sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f",
+        "path": "biomerte/identity.py",
+        "sha256": "c004a577c0054e8a36931a2dba2d75510ecefa86828952787d95d826c2ea308f",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/identity.py"
+      },
+      {
+        "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
+        "bytes": 17205,
+        "packaged_sha256": "31f008c215180cde59741b4a063b9946e8d4784801fae8cbff42e1ba5cf7d726",
+        "path": "biomerte/rover.py",
+        "sha256": "9a47811b473fa385a724d910024ac319010b7ef43b259859ebb2b2c93bda3af1",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/biomerte/rover.py"
+      },
+      {
+        "bytes": 2728,
+        "packaged_sha256": "834329d3259eaf01f04fc7ede5098bf248a30f1b9192021e55329e14cf714a7a",
+        "path": "biomerte/service_inspection.py",
+        "sha256": "834329d3259eaf01f04fc7ede5098bf248a30f1b9192021e55329e14cf714a7a",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/service_inspection.py"
+      },
+      {
+        "bytes": 2915,
+        "packaged_sha256": "97bb5311560ac394686bbdbc7a986de06d8cda57935e06164ad99eacd784dcb9",
+        "path": "biomerte/service_routing.py",
+        "sha256": "97bb5311560ac394686bbdbc7a986de06d8cda57935e06164ad99eacd784dcb9",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/biomerte/service_routing.py"
+      },
+      {
+        "bytes": 30496,
+        "packaged_sha256": "78ac723d35a535003aac587ed3c63869d64f27aea4657017117dc5d507a2f50a",
+        "path": "biomerte/store.py",
+        "sha256": "78ac723d35a535003aac587ed3c63869d64f27aea4657017117dc5d507a2f50a",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/store.py"
+      },
+      {
+        "bytes": 1915,
+        "packaged_sha256": "f2c15d0cc6a744255f83883b4fc9ae36a15784b4d47696f3aad3cb60b0efdf11",
+        "path": "biomerte/stream_inspection.py",
+        "sha256": "f2c15d0cc6a744255f83883b4fc9ae36a15784b4d47696f3aad3cb60b0efdf11",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_inspection.py"
+      },
+      {
+        "bytes": 25165,
+        "packaged_sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
+        "path": "biomerte/stream_router.py",
+        "sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_router.py"
+      },
+      {
+        "bytes": 2483,
+        "packaged_sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
+        "path": "biomerte/vision_mailbox.py",
+        "sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/vision_mailbox.py"
+      },
+      {
+        "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
+        "bytes": 2897,
+        "packaged_sha256": "279007491bb648be7e368e31edc3bd928a4e7d40f166bfed131bed367b495884",
+        "path": "camera_light.py",
+        "sha256": "ce09bd7b2257554c657737811036c64f8e69e14a1a36b816f956ca592995d428",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/camera_light.py"
+      },
+      {
+        "bytes": 7296,
+        "packaged_sha256": "5be5e76617c4c0f91ef3d165e391cbb57e942d67da20d995e1fb82c6464ec733",
+        "path": "rover_routes.py",
+        "sha256": "5be5e76617c4c0f91ef3d165e391cbb57e942d67da20d995e1fb82c6464ec733",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_routes.py"
+      },
+      {
+        "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
+        "bytes": 8951,
+        "packaged_sha256": "be5116b4a2d7dab9e075b09423963ae07a33571a640e83ef7c05d49a5e07fa82",
+        "path": "rover_service.py",
+        "sha256": "ddfed9386e80d0c9ba99ad7c40f95dfe3cda529bf936ad89282f9747c8fd6f75",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py"
+      },
+      {
+        "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
+        "bytes": 16286,
+        "packaged_sha256": "860924ab0bd22928139c03bc7c3438cb40040f77368dfef837331bf808844664",
+        "path": "rover_transport.py",
+        "sha256": "443b5f50bea96d90876f4a3cbe3f05c1fd17ac36632eb9d63e1eb57a9ffb1d22",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_transport.py"
+      },
+      {
+        "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
+        "bytes": 17147,
+        "packaged_sha256": "f65fd768b21ecda3f3eeae45c4e1e28cc2468d0664ea4dfabf91cf4687006ff3",
+        "path": "site_bridge.py",
+        "sha256": "7e1724fd22caf289e275dbcc763a916a7c8b8ceb07393bf5a769eb1e9a30c217",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/site_bridge.py"
+      },
+      {
+        "bytes": 1386,
+        "packaged_sha256": "0e4f258ba867f11e2c7a971f7396201db8e3770de65296d5305db086671e759f",
+        "path": "survey_zero.py",
+        "sha256": "0e4f258ba867f11e2c7a971f7396201db8e3770de65296d5305db086671e759f",
+        "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/survey_zero.py"
+      }
+    ],
+    "purpose": "Preserve effective deployed Rover/Router behavior without overwriting newer native controller modules",
+    "schema": "biomerte.portable-source/1"
+  },
+  "reused_source_closure": "deploy/portable-services/source",
+  "schema": "biomerte.rover-worker-source/1"
+}

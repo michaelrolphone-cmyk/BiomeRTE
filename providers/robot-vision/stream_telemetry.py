@@ -1,91 +1,81 @@
-"""Fit live sensor metadata to the existing 16 KiB stream header contract.
-
-Keep physical measurements and their original clocks. Discard duplicated cache
-envelopes and diagnostics before trimming radio scan rows. Report omissions;
-the complete cache remains available through the discrete telemetry capability.
-"""
+"""Preserve complete live telemetry without an artificial metadata size cap."""
 import copy
 import json
 
-
 def size(value):
-    return len(json.dumps(value, separators=(",", ":"), allow_nan=False).encode())
+    return len(json.dumps(value,separators=(",",":"),allow_nan=False).encode())
+
+def complete_registration(registration, baseline):
+    # These keys identify the baseline evaluated, even when fitting is pending.
+    for key, source in (("frame_id", "frame_id"), ("baseline_epoch", "epoch"),
+                        ("baseline_revision", "revision")):
+        registration.setdefault(key, baseline.get(source))
+    for key in ("T_anchor_map", "sample_count"):
+        registration.setdefault(key, None)
+    camera = registration.get("current_camera")
+    if camera is None:
+        camera = registration["current_camera"] = {}
+    for key in ("position_anchor_m", "R_anchor_camera", "age_s", "frame_id"):
+        camera.setdefault(key, None)
 
 
-def bounded_metadata(metadata, maximum=15872):
-    if size(metadata) <= maximum or not any(key in metadata for key in ("ahrs", "radio", "ultrasonic")):
-        return metadata
+def complete_tof(tof):
+    if not isinstance(tof.get("registration"), dict):
+        tof["registration"] = {"valid":False}
+    registration = tof["registration"]
+    complete_registration(registration, tof.get("baseline") or {})
+    refinement = tof.get("rover_refinement")
+    if refinement is None:
+        tof["rover_refinement"] = {"range_exclusions":None}
+    else:
+        refinement.setdefault("range_exclusions", [] if "ranges" in refinement else None)
+
+
+def complete_survey_features(baseline):
+    """Expose stable identities for older surveys that only stored feature labels."""
+    import uuid
+    sonar_labels = {}
+    for item in (baseline.get("checkpoint") or {}).get("sonar", []):
+        sensor = item.get("sensor")
+        if sensor:
+            for suffix in ("sonar", "echo"):
+                sonar_labels[f"{sensor} {suffix}"] = (item.get("observation") or {}).get("id", sensor)
+    for feature in baseline.get("features", []):
+        kind, label = feature.get("kind"), feature.get("label")
+        if "id" not in feature and kind and label:
+            identity = json.dumps([baseline["world_id"], kind, label], ensure_ascii=False)
+            feature["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+        feature.setdefault("id", None)
+        feature.setdefault("sensor_id", sonar_labels.get(label, feature.get("peer")))
+        feature.setdefault("distance_m", feature.get("measured_range_m"))
+        for key in ("vertices_m", "square_m"):
+            feature.setdefault(key, None)
+
+
+def complete_world_registration(page):
+    world = page["map"]
+    registration = world["metadata"]["tof_registration"]
+    registration.setdefault("map_id", world["map_id"])
+    registration.setdefault("map_revision", world["revision"])
+    complete_registration(registration, {})
+    floor = registration.setdefault("floor", {"valid":False})
+    floor.setdefault("valid", False)
+    floor.setdefault("T_floor_anchor", None)
+    surveyed = registration.setdefault("surveyed_world", {})
+    if isinstance(surveyed, dict):
+        surveyed.setdefault("axes", None)
+
+
+def bounded_metadata(metadata, maximum=None):
+    """Compatibility entry point; maximum is ignored and all fields are retained."""
     value = copy.deepcopy(metadata)
-    ahrs = value.get("ahrs")
-    radio = value.get("radio")
-    for sensor in (ahrs, value.get("ultrasonic")):
-        if isinstance(sensor, dict):
-            snapshot = sensor.pop("snapshot", None)
-            if isinstance(snapshot, dict):
-                sensor["cache_timing"] = {key: snapshot[key] for key in (
-                    "received_at", "received_monotonic", "request_started_monotonic",
-                    "request_duration_s", "elapsed_since_receive_s", "age_clock", "timing", "observations")
-                    if key in snapshot}
-    if isinstance(radio, dict):
-        cache = radio.get("telemetry")
-        if isinstance(cache, dict):
-            firmware = cache.get("telemetry")
-            if isinstance(firmware, dict):
-                # The RF endpoint repeats the AHRS envelope already carried above.
-                firmware.pop("ahrs", None)
-                if "ultrasonic" in value:
-                    firmware.pop("ultrasonic", None)
-            if size(value) > maximum:
-                # Retain RF age/index bindings but omit repeated long source IDs.
-                refs = cache.get("observations")
-                if isinstance(refs, list):
-                    cache["source_observation_count"] = len(refs)
-                    cache["observations"] = [{k: row[k] for k in
-                        ("radio", "index", "effective_age_ms") if k in row}
-                        for row in refs if isinstance(row, dict)]
-            if size(value) > maximum and isinstance(firmware, dict):
-                firmware.pop("config", None)
-    # Health diagnostics duplicate fields available through status capabilities.
-    if size(value) > maximum and isinstance(ahrs, dict):
-        source = ahrs.pop("source", None)
-        if isinstance(source, dict):
-            ahrs["source_health"] = {k:source[k] for k in ("state", "error", "enabled") if k in source}
-    if isinstance(radio, dict):
-        for key in ("model", "learning", "localization"):
-            if size(value) <= maximum:
-                break
-            radio.pop(key, None)
-        cache = radio.get("telemetry")
-        firmware = cache.get("telemetry") if isinstance(cache, dict) else None
-        if isinstance(firmware, dict):
-            def scans(node):
-                if isinstance(node, dict):
-                    for item in node.values():
-                        yield from scans(item)
-                elif isinstance(node, list) and node and isinstance(node[0], dict):
-                    yield node
-            groups = {kind: list(scans(firmware.get(kind))) for kind in ("wifi", "ble")}
-            arrays = groups["wifi"] + groups["ble"]
-            omitted = 0
-            while size(value) > maximum and any(arrays):
-                candidates = [rows for rows in arrays if rows]
-                largest = max(candidates, key=lambda rows: size(rows))
-                average = max(1, size(largest) // len(largest))
-                excess = size(value) - maximum
-                count = min(len(largest), max(1, (excess + average - 1) // average))
-                del largest[-count:]
-                omitted += count
-                cache["stream_scan_rows_omitted"] = omitted
-            if omitted:
-                # Never leave an index pointing beyond a trimmed scan array.
-                refs = cache.get("observations", [])
-                limits = {kind: max((len(rows) for rows in groups[kind]), default=0)
-                          for kind in groups}
-                kept = [row for row in refs if row.get("radio") in limits
-                        and isinstance(row.get("index"), int)
-                        and row["index"] < limits[row["radio"]]]
-                cache["observations"] = kept
-                cache["stream_reference_rows_omitted"] = len(refs)-len(kept)
-    if size(value) > maximum:
-        raise ValueError("Live metadata exceeds stream header budget")
+    if "frame_id" in value:
+        if not isinstance(value.get("tof"), dict):
+            value["tof"] = {}
+        complete_tof(value["tof"])
+        if value.get("motion_events") is None:
+            value["motion_events"] = {"state":{"available":False}, "events":[]}
+        # This serializer preserves all recent events supplied by the detector.
+        delivery = value.setdefault("event_delivery", {})
+        delivery.setdefault("recent_events_omitted", 0)
     return value

@@ -1,0 +1,97 @@
+{
+  "name": "biome-tof",
+  "services": {
+    "tof": {
+      "image": "@IMAGE@",
+      "platform": "linux/arm64",
+      "pull_policy": "never",
+      "container_name": "biome-tof-coordinator",
+      "restart": "unless-stopped",
+      "read_only": true,
+      "user": "@USER@",
+      "init": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1"
+      },
+      "tmpfs": [
+        "/tmp:rw,nosuid,nodev,size=64m,mode=1777"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "@TOF_STATE@",
+          "target": "/state/tof"
+        },
+        {
+          "type": "bind",
+          "source": "@VISION_STATE@",
+          "target": "/state/vision"
+        },
+        {
+          "type": "bind",
+          "source": "@CONFIG@",
+          "target": "/config",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "@PRIVATE@",
+          "target": "/private",
+          "read_only": true
+        }
+      ],
+      "ports": [
+        "127.0.0.1:@HEALTH_PORT@:8771",
+        "127.0.0.1:@SURVEY_PORT@:8772"
+      ],
+      "command": [
+        "--camera",
+        "http://registered-camera",
+        "--camera-id",
+        "@CAMERA_ID@",
+        "--state",
+        "/state/tof",
+        "--vision-state",
+        "/state/vision",
+        "--host-io-config",
+        "/config/host-io.json",
+        "--health-port",
+        "8771",
+        "--health-listen",
+        "0.0.0.0",
+        "--survey-port",
+        "8772",
+        "--survey-listen",
+        "0.0.0.0",
+        "--survey-token-file",
+        "/private/survey-control.token"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8771/readyz',timeout=2).read()"
+        ],
+        "interval": "10s",
+        "timeout": "3s",
+        "start_period": "15s",
+        "retries": 3
+      },
+      "labels": {
+        "io.biomerte.worker": "tof-coordinator",
+        "io.biomerte.state-scope": "same-host",
+        "io.biomerte.native-bridge": "host-io"
+      }
+    }
+  }
+}

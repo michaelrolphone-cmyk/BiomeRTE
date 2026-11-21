@@ -1,0 +1,114 @@
+{
+  "container_to_production_tls": {
+    "evidence": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/393ab568450b-20261120/tls-status-preflight.json",
+    "model_generation_performed": false,
+    "native_model_sources": {
+      "chat_module": "0549f6df328586be6a2de7d3bb52d0b4cf4809255c7722b3f60d420195dd0e8e",
+      "image_module": "630d64a4c8da710e5d028146cbc119b44a415f501a8dcb59c1c9f23aa4d6399d",
+      "runtime_module": "646e3ee0d20e33ff49a166e3b522c3546d33ca9c08b153e99a33be356ece911b"
+    },
+    "native_state_mounted": false,
+    "pinned_host_id": "217339021b2b3d61b16660da5562889be8e57e0636bdd9a5d129e3570c67ae4b",
+    "uid": 501,
+    "url": "https://host.docker.internal:8766"
+  },
+  "custody_and_scope": [
+    "The images contain the real session, encryption, worker ledger, progress and artifact implementations.",
+    "LM Studio, ComfyUI, model weights, Metal execution and native ModelRuntime admission remain on the same Mac.",
+    "Native PID-based admission SQLite and native flock are not shared into Linux.",
+    "A disconnected container call retains native admission through backend cleanup; model calls are never automatically retried.",
+    "Signing identity and phone pairing persist. RAM-only hello/session keys do not migrate; half-completed handshakes need a fresh signed exchange.",
+    "Interrupted private operations fail without replay. No plaintext prompt, model result or conversation key is persisted by the bridge.",
+    "Both private workers must be stopped/drained and migrated together; restore original enabled and loaded states on rollback.",
+    "The external supervisor can force-kill the bridge; production restart must wait for native requests to drain.",
+    "No production model generation or physical Android-device test was performed. Source and synthetic qualification are not a live migration."
+  ],
+  "deployment": {
+    "bridge_active_requests_at_preparation": 0,
+    "directory": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/393ab568450b-20261120",
+    "health_module_imported_by_deployment_uid": true,
+    "identity_and_pairing_preserved": true,
+    "identity_preflight": "/Users/micahelbyrns/.local/share/biomerte-private-container/deployments/393ab568450b-20261120/identity-preflight.json",
+    "native_admission_empty_at_preparation": true,
+    "native_launchd_original": {
+      "chat": {
+        "disabled_override": null,
+        "enabled": true,
+        "label": "org.biomerte.private-chat",
+        "loaded": true,
+        "pid": 33201
+      },
+      "image": {
+        "disabled_override": null,
+        "enabled": true,
+        "label": "org.biomerte.private-image",
+        "loaded": true,
+        "pid": 33203
+      }
+    },
+    "native_model_source_root": "/Users/micahelbyrns/.local/share/biomerte-host-io/releases/workers-3775adec5f5d",
+    "native_readonly_status": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-393ab568-20261120/readonly-status.json",
+    "uncertain_actions_at_preparation": {
+      "chat": 0,
+      "image": 0
+    }
+  },
+  "handoff_parser_tests": {
+    "count": 4,
+    "legacy_boolean_states": true,
+    "unknown_explicit_state_rejected": true,
+    "word_states": true
+  },
+  "image_source_commit": "393ab568450b0792a5c0d6c28b37e4620727158a",
+  "images": {
+    "chat": {
+      "architecture": "arm64",
+      "id": "sha256:abc1c24b32ad192a841401b7983fd5fe939e1d6bdd4a712841958eaaf47a3c20",
+      "os": "linux",
+      "size": 280623477,
+      "source_commit": "393ab568450b0792a5c0d6c28b37e4620727158a",
+      "tag": "biomerte-private-chat:ci-393ab568450b-arm64"
+    },
+    "image": {
+      "architecture": "arm64",
+      "id": "sha256:dab445c894d8568bc681130e770194c741a8103f2f4ec2c931ab73f08bf07b5c",
+      "os": "linux",
+      "size": 280724967,
+      "source_commit": "393ab568450b0792a5c0d6c28b37e4620727158a",
+      "tag": "biomerte-private-image:ci-393ab568450b-arm64"
+    }
+  },
+  "in_image_tests": {
+    "evidence": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-qualification-393ab568-20261120/tests.json",
+    "model_bridge": 12,
+    "native_state_mounted": false,
+    "network": "none",
+    "private_chat": 18,
+    "private_image": 6,
+    "read_only_root": true,
+    "total": 36,
+    "user": "501:20"
+  },
+  "maintenance_receipts": [
+    "private-workers-provenance-20261120-01",
+    "private-workers-build-20261120-03",
+    "private-workers-tls-status-20261120-01",
+    "private-workers-launchd-footing-20261120-02"
+  ],
+  "native_tests": {
+    "evidence": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-private-native-qualification-d6b4d33-20261120/native-tests.json",
+    "evidence_sha256": "34322a693c412531d5532babbed76b08ac2db6b92f6447b2edb417e9cbabc80e",
+    "host_io": 12,
+    "machine": "arm64",
+    "model_bridge": 12,
+    "platform": "Darwin",
+    "private_chat": 18,
+    "private_image": 6,
+    "python": "3.11.5",
+    "total": 48
+  },
+  "recorded_at": "2026-11-20T16:07:54.055698+00:00",
+  "runtime_source_commit": "d6b4d331dc6e808ccd1ff10f8506db8a4521f5dc",
+  "schema": "biomerte.private-workers-qualification/1",
+  "state_at_qualification": "prepared_not_migrated"
+}

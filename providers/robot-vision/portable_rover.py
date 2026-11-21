@@ -9,9 +9,7 @@ import math
 from pathlib import Path
 from datetime import datetime, timezone
 
-PORTABLE_OPERATIONS = ["robot.body.model", "robot.control.model",
-                       "robot.sonar.snapshot", "robot.metric.status",
-                       "robot.camera.exposure.status", "robot.camera.exposure.set"]
+PORTABLE_OPERATIONS = ['robot.body.model', 'robot.control.model', 'robot.sonar.snapshot', 'robot.metric.status', 'robot.camera.exposure.status', 'robot.camera.exposure.set']
 MOTION = {"1": "forward", "2": "back", "3": "left", "4": "right",
           "5": "unassigned", "6": "unassigned"}
 DRIVE = {"actuation": "binary_on_off_relays", "pwm_available": False,

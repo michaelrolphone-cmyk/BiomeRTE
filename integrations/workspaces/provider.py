@@ -23,9 +23,11 @@ def main():
  if mode=='worker':
   sys.path.insert(0,str(m.ROOT/'runtime'));from biomerte.worker import run_worker
   cfg=m.read(m.ROOT/'provider.json');g=m.gateway()
+  if os.environ.get('BIOME_CONTAINER_WORKER')=='1':
+   cfg['offers']=[dict(o,argv=[sys.executable,str(Path(__file__).resolve()),*o['argv'][2:]]) for o in cfg['offers']]
   class Remote:
    site=cfg['site'];realm='site';node=m.read(m.ROOT/'identity.json')['node']
-   def call(self,name,args,rid=None):return g.invoke(name,args,rid,self.realm)
+   def call(self,name,args,rid=None):return g.invoke_provider(name,args,rid,self.realm, self.node)
   run_worker(str(m.ROOT),Remote(),cfg,False);return
  if mode=='adapter':
   payload=json.load(sys.stdin)
@@ -37,6 +39,6 @@ def main():
     if type(value) is not types[schema['properties'][key]['type']]:raise ValueError('Invalid type for '+key)
    result=m.handle(operation,args,payload['operation']);out={'ok':result.get('exit_code',0)==0,'result':result}
   except (ValueError,RuntimeError,FileNotFoundError,AssertionError) as e:out={'ok':False,'result':{'error':str(e),'kind':type(e).__name__}}
-  sys.path.insert(0,str(m.GITROOT));import proxy
+  sys.path.insert(0,str(m.GITCODE));import proxy
   print(json.dumps(proxy.compact(out)))
 if __name__=='__main__':main()

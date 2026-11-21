@@ -1,0 +1,12 @@
+**
+!biomerte/
+!biomerte/**
+!providers/
+!providers/robot-vision/
+!providers/robot-vision/**
+!deploy/
+!deploy/workers/
+!deploy/workers/vision/
+!deploy/workers/vision/**
+**/__pycache__
+**/*.pyc

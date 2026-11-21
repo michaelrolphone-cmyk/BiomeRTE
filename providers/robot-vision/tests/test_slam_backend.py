@@ -173,7 +173,8 @@ class BackendContractTests(unittest.TestCase):
         calls = []
         runtime = SimpleNamespace(load_system_state=lambda p: calls.append(("load", p)),
                                   set_tracking_state=lambda s: calls.append(("state", s)),
-                                  loop_closing=SimpleNamespace(last_loop_kf_id=0))
+                                  loop_closing=SimpleNamespace(last_loop_kf_id=0),
+                                  map=SimpleNamespace(update_lock=threading.RLock(),get_keyframes=lambda:[]))
         self.backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
         with patch.object(self.backend, "_new_runtime", return_value=runtime):
             status = self.backend.start("map-one", path)
@@ -300,7 +301,7 @@ class BackendContractTests(unittest.TestCase):
         backend = SlamBackend({"calibration":copy.deepcopy(CALIBRATION),"preprocessing":policy},self.root)
         backend._states = SimpleNamespace(INIT_RELOCALIZE="init-reloc")
         native_map = SimpleNamespace(update_lock=threading.RLock(), get_frame=lambda index: SimpleNamespace(img_id=1),
-            get_keyframes=lambda:[SimpleNamespace(id=10),SimpleNamespace(id=11)],
+            get_keyframes=lambda:[SimpleNamespace(id=10,points=None),SimpleNamespace(id=11,points=None)],
             num_keyframes=lambda:3,num_points=lambda:1)
         received=[]
         def save(target):

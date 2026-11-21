@@ -189,6 +189,30 @@ def patch_dbow3_relocalization(source):
     return replace_once(source, "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure\n                )\n", "        if task.task_type == LoopDetectorTaskType.RELOCALIZATION:\n            if self.entry_id >= 1:\n                results = self.db_query_relocalization(\n                    keyframe.g_des, frame_id, max_num_results=kMaxResultsForLoopClosure,\n                    eligible_frame_ids=getattr(task, \"relocalization_keyframe_ids\", None),\n                )\n")
 
 
+def patch_pnp_exhaustion(source):
+    # Honor both the per-call slice and the solver's existing total budget.
+    source = replace_once(source,
+        "while (mnIterations < mRansacMaxIts || nCurrentIterations < nIterations)",
+        "while (mnIterations < mRansacMaxIts && nCurrentIterations < nIterations)")
+    return replace_once(source, "                Tout = mRefinedTcw;\n                return true;",
+        "                Tout = mRefinedTcw;\n                bNoMore = mnIterations >= mRansacMaxIts;\n                return true;")
+
+
+def patch_relocalizer(source):
+    source = patch_relocalizer_membership(source)
+    # The native solver may return its best pose on its final iteration.
+    source = replace_once(source,
+        "                        num_candidates -= 1\n                        continue\n\n                    if not ok:",
+        "                        num_candidates -= 1\n\n                    if not ok:")
+    # A sparse retained map can contain fewer points than the acceptance threshold.
+    # The projection expansion only considers this candidate's matched map points.
+    source = replace_once(source,
+        "                if kf.id == frame.id or kf.is_bad():",
+        "                if (kf.id == frame.id or kf.is_bad() or\n"
+        "                        len(kf.get_matched_points()) < Parameters.kRelocalizationDoPoseOpt2NumInliers):")
+    return source
+
+
 def patch_relocalizer_membership(source):
     return replace_once(source, "            reloc_candidate_kfs = [\n                keyframes_map[idx]\n                for idx in detection_output.candidate_idxs\n                if idx in keyframes_map\n            ]  # get back the keyframes from their ids\n", "            reloc_candidate_kfs = []\n            for idx in detection_output.candidate_idxs:\n                # A keyframe can be culled while the detector process is querying.\n                candidate = keyframes_map.get(idx)\n                if candidate is not None and not candidate.is_bad():\n                    reloc_candidate_kfs.append(candidate)\n")
 
@@ -389,20 +413,28 @@ PATCHES = {
     "pyslam/loop_closing/loop_closing.py": patch_loop_viewer,
     "pyslam/loop_closing/loop_detector_base.py": patch_loop_detector_task,
     "pyslam/loop_closing/loop_detector_dbow3.py": patch_dbow3_relocalization,
-    "pyslam/slam/relocalizer.py": patch_relocalizer_membership,
+    "pyslam/slam/relocalizer.py": patch_relocalizer,
+    "cpp/modules/solvers/MLPnPsolver.cpp": patch_pnp_exhaustion,
 }
 
 
 class Installer:
-    def __init__(self, state, conda, jobs):
+    def __init__(self, state, conda, jobs, platform_profile="native-macos"):
         self.state = Path(state).expanduser().resolve()
         self.prefix = self.state / "env"
         self.source = self.state / "vendor/pyslam"
         self.python = self.prefix / "bin/python"
         self.conda = str(Path(conda).expanduser())
         self.jobs = jobs
-        if platform.system() != "Darwin" or platform.machine() != "arm64":
-            raise RuntimeError("This setup profile is qualified only for native Apple Silicon macOS.")
+        self.platform_profile = platform_profile
+        if platform_profile == "native-macos":
+            if platform.system() != "Darwin" or platform.machine() != "arm64":
+                raise RuntimeError("The native-macos profile requires Apple Silicon macOS.")
+        elif platform_profile == "linux-cpu":
+            if platform.system() != "Linux" or platform.machine() not in ("aarch64", "x86_64"):
+                raise RuntimeError("The linux-cpu profile requires Linux arm64 or amd64.")
+        else:
+            raise ValueError("Unknown vision platform profile.")
         if self.prefix.resolve() == Path(self.conda).resolve().parent.parent:
             raise RuntimeError("Refusing to mutate the base conda environment.")
         self.state.mkdir(parents=True, exist_ok=True)
@@ -436,22 +468,27 @@ class Installer:
 
     def record(self, phase, data):
         self.receipt.update(pyslam_commit=PYSLAM_COMMIT, state_dir=str(self.state),
-                            python=str(self.python), updated_at_unix_s=time.time())
+                            python=str(self.python), platform_profile=self.platform_profile,
+                            updated_at_unix_s=time.time())
         self.receipt[phase] = data
         temporary = self.receipt_path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(self.receipt, indent=2, sort_keys=True))
         temporary.replace(self.receipt_path)
 
     def environment(self):
+        # Linux aarch64 GTSAM 4.2 wheels use the split Boost 1.86 packages.
+        # Keep the qualified native Mac package family unchanged.
+        packages = ([p for p in CONDA_PACKAGES if not p.startswith("boost-cpp=")] +
+                    ["libboost-devel=1.86"]) if self.platform_profile == "linux-cpu" else CONDA_PACKAGES
         exists = self.python.exists()
         command = [self.conda, "install" if exists else "create", "-y", "--solver", "libmamba",
                    "--override-channels", "-c", "conda-forge", "--prefix", str(self.prefix)]
         if exists:
             command.append("--freeze-installed")
-        self.run(command + CONDA_PACKAGES, "environment")
+        self.run(command + packages, "environment")
         self.run([self.conda, "list", "--prefix", str(self.prefix), "--explicit"],
                  "conda-explicit")
-        self.record("environment", {"packages": CONDA_PACKAGES,
+        self.record("environment", {"packages": packages,
                                     "explicit_log": str(self.logs / "conda-explicit.log")})
 
     def checkout(self):
@@ -459,6 +496,14 @@ class Installer:
         if not self.source.exists():
             self.run(["/usr/bin/git", "clone", "--no-checkout", "--filter=blob:none",
                       PYSLAM_URL, str(self.source)], "source-clone")
+            if self.platform_profile == "linux-cpu":
+                # Preserve the deployed ORB2/g2o/DBoW3 profile and complete core.
+                # Other upstream engines include large unused media/weight trees.
+                self.run(["/usr/bin/git", "-C", str(self.source), "sparse-checkout",
+                          "set", "--cone", "pyslam", "cpp", "settings", "data",
+                          "thirdparty/g2opy", "thirdparty/orbslam2_features",
+                          "thirdparty/pydbow3", "thirdparty/gtsam_factors"],
+                         "source-selected-dependencies")
             self.run(["/usr/bin/git", "-C", str(self.source), "checkout", "--detach", PYSLAM_COMMIT],
                      "source-checkout")
         revision = subprocess.check_output(
@@ -508,8 +553,10 @@ class Installer:
                                          if name.endswith("/loop_detector_base.py") else
                                          "Apply retained-map membership before the ranked relocalization candidate budget."
                                          if name.endswith("/loop_detector_dbow3.py") else
-                                         "Recheck live candidate membership without a check-then-lookup race after loop detection."
+                                         "Recheck live candidates, skip impossible support and evaluate the final PnP hypothesis."
                                          if name.endswith("/relocalizer.py") else
+                                         "Honor the native total and per-call RANSAC iteration budgets, including early success."
+                                         if name.endswith("/MLPnPsolver.cpp") else
                                          "Import optional dense, GUI, and nonselected loop engines only on use.")})
         artifact = {"pyslam_commit": PYSLAM_COMMIT, "patches": manifest}
         (self.source / "biome-patches.json").write_text(json.dumps(artifact, sort_keys=True, indent=2))
@@ -548,9 +595,7 @@ class Installer:
         cmake = self.prefix / "bin/cmake"
         common = [
             "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_C_COMPILER=/usr/bin/clang", "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
-            "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_PREFIX_PATH=" + str(self.prefix),
-            "-DCMAKE_IGNORE_PATH=/opt/homebrew",
+            "-DCMAKE_PREFIX_PATH=" + str(self.prefix),
             "-DPython3_EXECUTABLE=" + str(self.python), "-DPYTHON_EXECUTABLE=" + str(self.python),
             "-DWITH_PYTHON_INTERP_CHECK=ON",
             "-DOpenCV_DIR=" + str(self.prefix / "lib/cmake/opencv4"),
@@ -559,14 +604,25 @@ class Installer:
             "-DCMAKE_MODULE_LINKER_FLAGS=-L" + str(self.prefix / "lib"),
             "-DCMAKE_SHARED_LINKER_FLAGS=-L" + str(self.prefix / "lib"),
         ]
+        if self.platform_profile == "native-macos":
+            common += ["-DCMAKE_C_COMPILER=/usr/bin/clang",
+                       "-DCMAKE_CXX_COMPILER=/usr/bin/clang++",
+                       "-DCMAKE_OSX_ARCHITECTURES=arm64",
+                       "-DCMAKE_IGNORE_PATH=/opt/homebrew"]
+            library_suffix = "dylib"
+        else:
+            common += ["-DCMAKE_C_COMPILER=/usr/bin/gcc",
+                       "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+                       "-DCMAKE_INSTALL_RPATH=" + str(self.prefix / "lib")]
+            library_suffix = "so"
         steps = [
             ("thirdparty/g2opy", [
                 "-DBUILD_CSPARSE=OFF", "-DG2O_USE_OPENGL=OFF", "-DG2O_USE_OPENMP=OFF",
                 "-DG2O_BUILD_APPS=OFF", "-DG2O_BUILD_EXAMPLES=OFF", "-DBUILD_WITH_MARCH_NATIVE=OFF",
                 "-DCHOLMOD_INCLUDE_DIR=" + str(self.prefix / "include/suitesparse"),
-                "-DCHOLMOD_LIBRARY=" + str(self.prefix / "lib/libcholmod.dylib"),
+                "-DCHOLMOD_LIBRARY=" + str(self.prefix / ("lib/libcholmod." + library_suffix)),
                 "-DCSPARSE_INCLUDE_DIR=" + str(self.prefix / "include/suitesparse"),
-                "-DCSPARSE_LIBRARY=" + str(self.prefix / "lib/libcxsparse.dylib")], False),
+                "-DCSPARSE_LIBRARY=" + str(self.prefix / ("lib/libcxsparse." + library_suffix))], False),
             ("thirdparty/orbslam2_features", [], False),
             ("thirdparty/pydbow3/modules/dbow3", [
                 "-DCMAKE_INSTALL_PREFIX=" + str(self.source / "thirdparty/pydbow3/modules/dbow3/install"),
@@ -661,12 +717,14 @@ def main():
     parser.add_argument("--state-dir", default=str(Path.home() / ".local/share/biome-robot-vision"))
     parser.add_argument("--conda", default=str(Path.home() / "miniconda3/bin/conda"))
     parser.add_argument("--jobs", type=int, default=4, help="Native compile concurrency, not a runtime limit")
+    parser.add_argument("--platform-profile", choices=("native-macos", "linux-cpu"),
+                        default="native-macos")
     parser.add_argument("--phase", choices=("all", "environment", "source", "patches", "native",
                                           "python", "vocabulary", "smoke"), default="all")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    installer = Installer(args.state_dir, args.conda, args.jobs)
+    installer = Installer(args.state_dir, args.conda, args.jobs, args.platform_profile)
     actions = {"environment": installer.environment, "source": installer.checkout,
                "patches": installer.patches, "native": installer.native,
                "python": installer.python_packages, "vocabulary": installer.vocabulary,

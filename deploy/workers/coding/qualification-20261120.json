@@ -1,0 +1,33 @@
+{
+  "architecture": "arm64",
+  "build_exit": 0,
+  "compose_config_fixture_validation": true,
+  "credentials_exposed": false,
+  "dependency_check": "{\"credentials_read\": false, \"filesystem_sdk\": \"2.1.0\", \"implementation\": \"coding_http.mjs + coding_mcp.py + container_runner.py\", \"mcp_sdk\": \"2.4.0\", \"native_model_engine_included\": false, \"provider_started\": false, \"tools\": [\"start_command\", \"command_status\", \"git_tools\", \"git_start\", \"git_status\", \"workspace_tools\", \"workspace_start\", \"workspace_status\"]}\n",
+  "dependency_check_exit": 0,
+  "devices": [],
+  "evidence_directory": "/Users/micahelbyrns/.local/share/biomerte-workspaces/worker-rover-container-20261120-evidence/coding-56f4ae8ee2d0",
+  "finished_at": "2026-11-20T15:27:58.729533+00:00",
+  "fixture_exit": 0,
+  "fixture_output": "test_host_origin_and_bearer_boundaries (test_frontend.RealFrontend.test_host_origin_and_bearer_boundaries) ... ok\ntest_real_node_to_python_dispatch_reports_existing_record_error (test_frontend.RealFrontend.test_real_node_to_python_dispatch_reports_existing_record_error) ... ok\ntest_real_official_filesystem_reads_and_confinement (test_frontend.RealFrontend.test_real_official_filesystem_reads_and_confinement) ... ok\ntest_captured_source_and_common_gateway_hashes (test_python.CodingImplementation.test_captured_source_and_common_gateway_hashes) ... ok\ntest_common_gateway_uses_supplied_host_owner_and_same_request_id (test_python.CodingImplementation.test_common_gateway_uses_supplied_host_owner_and_same_request_id) ... ok\ntest_eight_tools_and_existing_workspace_resource (test_python.CodingImplementation.test_eight_tools_and_existing_workspace_resource) ... ok\ntest_existing_done_record_retains_nonzero_result_and_absolute_artifact_path (test_python.CodingImplementation.test_existing_done_record_retains_nonzero_result_and_absolute_artifact_path) ... ok\ntest_lost_submission_persists_original_identity_without_new_effect (test_python.CodingImplementation.test_lost_submission_persists_original_identity_without_new_effect) ... ok\ntest_workspace_archive_preserves_exact_path_and_excludes_results (test_python.CodingImplementation.test_workspace_archive_preserves_exact_path_and_excludes_results) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 1.011s\n\nOK\n",
+  "fixtures": 9,
+  "image_id": "sha256:5200624d0701995628bde40b0321643668234f5cfc0cb18149755b73a9bb4a49",
+  "kind": "coding",
+  "limits": [
+    "Only linux/arm64 was built and tested.",
+    "Tests used isolated fixture state and Docker network=none; no live capabilities, credentials, model engines or physical devices.",
+    "Host source/destination mounts, current controller/HostIO readiness and final operational handoff remain host rollout steps."
+  ],
+  "live_configuration_preflight": false,
+  "live_gateway_qualified": false,
+  "live_handoff": false,
+  "network": "none",
+  "no_live_handoff": true,
+  "os": "linux",
+  "platform": "linux/arm64",
+  "schema": "biomerte.frontend-image-qualification/1",
+  "size_bytes": 289739171,
+  "source_commit": "56f4ae8ee2d08edfc1d29e0d96d87981c3eee25c",
+  "started_at": "2026-11-20T15:27:20.988716+00:00",
+  "tag": "biomerte-worker-coding:56f4ae8ee2d0"
+}

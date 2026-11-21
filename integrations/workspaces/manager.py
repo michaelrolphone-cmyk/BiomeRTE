@@ -3,8 +3,9 @@
 import base64, contextlib, fcntl, gzip, hashlib, json, os, re, secrets, shutil, subprocess, sys, time, uuid
 from pathlib import Path
 ROOT=Path(os.environ.get('BIOME_WORKSPACE_HOME',Path.home()/'.local/share/biome-workspaces'))
-GITROOT=Path.home()/'.local/share/biome-gitlab'
-TERMINAL=Path.home()/'.local/share/biome-mac-terminal'
+GITROOT=Path(os.environ.get('BIOME_GITLAB_HOME',Path.home()/'.local/share/biome-gitlab'))
+GITCODE=Path(os.environ.get('BIOME_GITLAB_CODE',GITROOT))
+TERMINAL=Path(os.environ.get('BIOME_GATEWAY_CODE',Path.home()/'.local/share/biome-mac-terminal'))
 def digest(x):return hashlib.sha256(json.dumps(x,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def read(p):return json.loads(Path(p).read_text())
 def save(p,x):
@@ -110,7 +111,7 @@ def start(w):
  args.extend([w['image'],'-lc','trap "exit 0" TERM INT; while true; do sleep 3600 & wait $!; done']);docker(*args);docker('start',w['container'])
  docker('exec',w['container'],'/bin/bash','-lc','mkdir -p /root/.config; cp /run/biome/gitlab.crt /usr/local/share/ca-certificates/biome-gitlab.crt; update-ca-certificates >/dev/null')
 def git_env(w):
- sys.path.insert(0,str(GITROOT));import proxy
+ sys.path.insert(0,str(GITCODE));import proxy
  token=proxy.token();host=__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(proxy.settings()['url']).hostname
  # Credentials live only on tmpfs; the helper rejects other destinations.
  script='#!/bin/sh\n[ "$1" = get ] || exit 0\nprotocol=; host=\nwhile IFS="=" read -r k v; do case "$k" in protocol) protocol="$v";; host) host="$v";; esac; done\nhost=$(printf "%s" "$host" | tr "[:upper:]" "[:lower:]")\n[ "$protocol" = https ] && [ "$host" = "'+host+':8443" ] || exit 0\nprintf "username=oauth2\\npassword="\ncat /run/biome-secrets/token\nprintf "\\n\\n"\n'
