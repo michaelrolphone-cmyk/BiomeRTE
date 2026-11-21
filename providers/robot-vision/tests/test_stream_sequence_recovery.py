@@ -1,4 +1,5 @@
 """Provider recovery must never reuse sequence numbers within a stream binding."""
+import asyncio
 import io
 import pathlib
 import sqlite3
@@ -13,14 +14,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from leased_streams import VisionStreams
+from leased_streams import VisionStreams, publication_grant
 from stream_sequences import StreamSequences
 from biomerte.stream_router import Session, decode, frame
 
 
+DEFAULT_EXPIRY = time.time() + 3600
+
+
 def grant(**changes):
     value = dict(id='session-a', authority='authority-a', epoch='epoch-a',
-                 generation=7, lane='vision', expires_at=time.time()+3600,
+                 generation=7, lane='vision', expires_at=DEFAULT_EXPIRY,
                  contract='robot.vision.stream:1', direction='provider_to_server',
                  lanes=['vision', 'map'], limits={'max_message_bytes':4194304,
                  'buffer_depth':1, 'messages_per_second':60})
@@ -77,6 +81,18 @@ class SequenceReservationTests(unittest.TestCase):
                 self.assertIsNone(db.execute("SELECT 1 FROM stream_sequences WHERE binding='expired'").fetchone())
             self.assertEqual(StreamSequences(path,block_size=2).next(live),3)
 
+    def test_renewal_keeps_highwater_even_after_the_old_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'sequences.sqlite'
+            expires=100.0
+            with patch('stream_sequences.time.time',return_value=99.0):
+                self.assertEqual(StreamSequences(path,block_size=4).next(grant(expires_at=expires)),1)
+            with patch('stream_sequences.time.time',return_value=101.0):
+                after=grant(expires_at=201.0)
+                self.assertEqual(StreamSequences(path,block_size=4).next(after),5)
+                with sqlite3.connect(str(path)) as db:
+                    self.assertEqual(db.execute('SELECT highwater,expires_at FROM stream_sequences').fetchone(),(8,201.0))
+
     def test_expired_grant_never_allocates_or_publishes(self):
         sequences=StreamSequences()
         with self.assertRaises(ValueError):sequences.next(grant(expires_at=time.time()-1))
@@ -84,7 +100,7 @@ class SequenceReservationTests(unittest.TestCase):
 
 
 class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def publish_once(self,publisher,binding,router,slow_reservation=False):
+    async def publish_once(self,publisher,binding,router,slow_reservation=False,descriptor=None):
         stop=threading.Event();accepted=[];failures=[]
         metadata=dict(type='map_delta',frame_id='fresh-frame',source_timestamp=1,
                       processing_timestamp=2,processed_monotonic=time.monotonic(),
@@ -113,12 +129,14 @@ class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     failures.append(error)
                     raise
                 finally:stop.set()
+            async def wait_closed(self):
+                await asyncio.Event().wait()
             async def __aenter__(self):return self
             async def __aexit__(self,*args):return False
         class Remote:
             def call(self,*args):
-                return {'url':'ws://127.0.0.1:8751/'+binding['id'],
-                        'attachment_credential':'fixture'}
+                return dict(descriptor or binding, url='ws://127.0.0.1:8751/'+binding['id'],
+                            attachment_credential='fixture')
         publisher.remote=Remote()
         with contextlib.ExitStack() as patches:
             patches.enter_context(patch('leased_streams.LocalConnection',return_value=Local()))
@@ -128,7 +146,7 @@ class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 def reserve(value):
                     sequence=original(value);clock['now']=101.1;return sequence
                 patches.enter_context(patch.object(publisher.sequences,'next',side_effect=reserve))
-                patches.enter_context(patch('leased_streams.time',SimpleNamespace(monotonic=lambda:clock['now'])))
+                patches.enter_context(patch('leased_streams.time',SimpleNamespace(monotonic=lambda:clock['now'],time=time.time)))
             await publisher.run(binding,stop)
         self.assertEqual(failures,[],'Router rejected a fresh recovery frame')
         self.assertEqual(len(accepted),1)
@@ -143,6 +161,16 @@ class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
         publisher=VisionStreams(None,'fixture');binding=grant();router=Session(binding)
         sequence=await self.publish_once(publisher,binding,router,slow_reservation=True)
         self.assertEqual(sequence,2)
+
+    async def test_old_publisher_hint_uses_renewed_authoritative_deadline(self):
+        binding=grant(expires_at=time.time()-1)
+        renewed=dict(binding,expires_at=time.time()+3600)
+        publisher=VisionStreams(None,'fixture')
+        self.assertEqual(await self.publish_once(publisher,binding,Session(renewed),descriptor=renewed),1)
+
+    def test_renewal_cannot_move_the_publisher_to_another_epoch(self):
+        with self.assertRaisesRegex(ValueError,'binding changed'):
+            publication_grant(grant(),grant(epoch='different'))
 
     async def test_lane_thread_recreation_preserves_router_watermark(self):
         binding=grant();router=Session(binding);publisher=VisionStreams(None,'fixture')
