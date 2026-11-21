@@ -501,7 +501,7 @@ class Worker:
             self.db.execute('DELETE FROM result_cleanup WHERE id=? AND argv=? AND payload=?',
                             (identifier, argv, payload))
 
-    def recover_result_acknowledgements(self, limit=8):
+    def recover_result_acknowledgements(self, limit=8, *, cleanup=True):
         """Confirm bounded new terminal receipts whose delivery ACK was lost."""
         import logging
         after = getattr(self, '_result_recovery_after', '')
@@ -528,13 +528,15 @@ class Worker:
                     continue
                 adapter = next((o for o in self.offers if o['contract'] == action.get('contract')
                                 and o['resource'] == action.get('resource')), {})
-                if self.retire_result(operation, signature, state, result, adapter.get('acknowledge_argv')):
+                retired = self.retire_result(operation, signature, state, result,
+                                             adapter.get('acknowledge_argv'))
+                if retired and cleanup:
                     self.cleanup_results(operation)
             except Exception as error:
                 # A failing receipt must not starve other receipts or execution.
                 logging.warning('Result acknowledgement recovery pending: %s', type(error).__name__)
 
-    def once(self, pool=None):
+    def once(self, pool=None, *, reconcile_receipts=True):
         import logging
         try:
             self.cleanup_results()
@@ -546,7 +548,8 @@ class Worker:
             cleanup_expired(self)
         except Exception as error:
             logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
-        self.recover_result_acknowledgements()
+        if reconcile_receipts:
+            self.recover_result_acknowledgements()
         queue = self.remote.call('provider.poll', {'provider': self.remote.node})
         try:
             from .worker_expiry import expire

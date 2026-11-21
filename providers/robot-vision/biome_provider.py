@@ -547,14 +547,29 @@ def serve(cfg):
                     print("Vision advertisement retry:", type(exc).__name__, file=sys.stderr, flush=True)
                     stopping.wait(5)
 
+        def reconcile_receipts():
+            # A timeout for an old result must not delay polling a current
+            # vision fence or joining a live stream. Use this thread's own DB
+            # connection and let the main worker run durable cleanup jobs.
+            recovery_worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
+                                     cfg.get("worker_timeout_seconds"))
+            try:
+                while not stopping.is_set():
+                    recovery_worker.recover_result_acknowledgements(limit=1, cleanup=False)
+                    stopping.wait(cfg.get("poll_seconds", 2))
+            finally:
+                recovery_worker.db.close()
+
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         publisher = threading.Thread(target=advertise, name="vision-advertisement", daemon=True)
+        recovery = threading.Thread(target=reconcile_receipts, name="vision-receipt-recovery", daemon=True)
         publisher.start()
+        recovery.start()
         try:
             while not stopping.is_set():
                 try:
-                    worker.once(pool)
+                    worker.once(pool, reconcile_receipts=False)
                     stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
                     # Request/image bytes and gateway credential errors never enter logs.
@@ -563,6 +578,7 @@ def serve(cfg):
         finally:
             stopping.set()
             publisher.join()
+            recovery.join()
             try:
                 try:
                     remote.call("cap.offer", stream_offer(cfg, {}))
