@@ -283,12 +283,30 @@ class CheckpointHelper:
         return status, {w:available[w] for w in self.config["replica_workers"] if w in available}
 
     async def status(self):
-        status,workers = await self.workers()
-        value = await self.transport.request("/api/service-checkpoints/status",{
-            "service_id":self.config["service_id"],"workers":list(workers.values())})
+        status, workers = await self.workers()
+        controller = self.config.get("authority_kind") == "controller"
+        # An empty selection asks the coordinator to enumerate current links
+        # for this service. Supervisor presence alone does not register a
+        # checkpoint helper, even when a sibling service is connected.
+        value = await self.transport.request("/api/service-checkpoints/status", {
+            "service_id": self.config["service_id"],
+            "workers": [] if controller else list(workers.values())})
         if value["boot_epoch"] != status["boot_epoch"]:
-            raise Fault("Witness restarted during checkpoint inspection",503)
-        return value,workers
+            raise Fault("Witness restarted during checkpoint inspection", 503)
+        if controller:
+            linked = {}
+            for row in value["workers"]:
+                worker = row["worker_id"]
+                if worker not in self.config["replica_workers"]:
+                    continue
+                expected = workers.get(worker)
+                if not expected or row["worker_incarnation"] != expected["worker_incarnation"]:
+                    raise Fault("Checkpoint helper incarnation changed during inspection", 503)
+                # A registered helper remains in the replication set even
+                # when its latest status RPC fails.
+                linked[worker] = expected
+            workers = linked
+        return value, workers
 
     async def chunk_missing(self, body):
         b = binding(body.get("binding"))
@@ -372,8 +390,9 @@ class CheckpointHelper:
 
     async def publish_packet(self,b,packet,workers=None,require_all=False):
         await self.validate(b)
+        controller = self.config.get("authority_kind") == "controller"
         if workers is None:
-            unused,workers = await self.workers()
+            _, workers = await (self.status() if controller else self.workers())
         targets=[row for worker,row in workers.items() if worker!=self.config["worker_id"]]
         if require_all and set(workers)!=set(self.config["replica_workers"]):
             raise Fault("Witness restart requires every configured replica",503)
@@ -388,13 +407,13 @@ class CheckpointHelper:
             self.replica_blocks.clear()
             if require_all:
                 raise
-            if self.config.get("authority_kind") == "controller":
+            if controller:
                 if self.config.get("replication_policy", "available-peers") != "available-peers":
                     raise CheckpointError("Unsupported controller replication policy")
                 # An advertised peer is still owed the checkpoint. A timeout is
                 # not evidence that it left membership. Refresh exact identities,
                 # then retry; only an actually absent peer permits degradation.
-                unused, current_workers = await self.workers()
+                _, current_workers = await self.status()
                 acknowledged_targets = [row for worker,row in current_workers.items()
                                         if worker != self.config["worker_id"]]
                 await self.replicate_chunks(b, packet, acknowledged_targets)

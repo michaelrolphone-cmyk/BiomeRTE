@@ -772,6 +772,22 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expected, set(self.workers.links))
         self.assertEqual({}, self.workers.pending)
 
+        # A live supervisor and a sibling relay link do not provide a
+        # controller-checkpoint transport. Recover from the witnessed head
+        # while the missing controller helper is disconnected.
+        controller_tasks["mac"].cancel()
+        await asyncio.gather(controller_tasks["mac"], return_exceptions=True)
+        await self.eventually(lambda: ("mac", controller_service) not in self.workers.links,
+                              "standby controller helper disconnects")
+        self.assertIn(("mac", SERVICE), self.workers.links)
+        self.assertIn("mac", (await primary.transport.candidates())[1])
+        same_state = primary.store.advance(dict(controller_state, shards=[next_desc]), controller_binding)
+        published = await primary.publish_packet(controller_binding, same_state)
+        self.assertEqual(checkpoint_ref(same_state), published["checkpoint"])
+        self.assertEqual([], published["acknowledgements"])
+        self.assertEqual("degraded", primary.replication)
+        self.assertEqual(relay_head, self.workers.head(SERVICE))
+
     async def test_private_helper_https_requires_trusted_certificate_and_completes_activation(self):
         helper = self.helpers["pi"]
         app = web.Application()
