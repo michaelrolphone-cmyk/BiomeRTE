@@ -150,9 +150,15 @@ class Rover:
                     # Reattach without closing another shared subscription.
                     descriptor = await self.call('stream.open', lease=lease['id'])
                 descriptor['subscription_lease'] = lease['id']
+                remember = getattr(self.remote, 'remember_vision_grant', None)
+                renew = contract == 'robot.vision.stream:1' and remember is not None
+                if renew:
+                    await asyncio.to_thread(remember, descriptor, task)
                 self.descriptors[contract] = descriptor
                 lanes = [asyncio.create_task(self.maintain_lane(descriptor, lane))
                          for lane in descriptor['lanes']]
+                if renew:
+                    lanes.append(asyncio.create_task(self.renew_vision_grant(descriptor, task)))
                 await asyncio.gather(*lanes)
             except asyncio.CancelledError:
                 raise
@@ -185,6 +191,23 @@ class Rover:
                         pass
             if not self.closed:
                 await asyncio.sleep(.5)
+
+    async def renew_vision_grant(self, descriptor, task):
+        # The stream has a bounded lifetime even while the lease is held.
+        # Refresh it before expiry without changing the current attachment epoch.
+        while not self.closed:
+            try:
+                current = await self.call('stream.open', lease=descriptor['subscription_lease'], renew=True)
+                current['subscription_lease'] = descriptor['subscription_lease']
+                await asyncio.to_thread(self.remote.remember_vision_grant, current, task)
+                if current['id'] != descriptor['id']:
+                    return
+                delay = max(5, current['expires_at'] - time.time() - 300)
+            except asyncio.CancelledError:
+                raise
+            except (OSError, TimeoutError):
+                delay = 5
+            await asyncio.sleep(delay)
 
     async def maintain_lane(self, descriptor, lane):
         # A transport outage is not a release of a persistent resource. Mint a

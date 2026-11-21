@@ -61,8 +61,8 @@ def token(ctx, grant, role, consumer=''):
     return base64.urlsafe_b64encode(raw).decode().rstrip('=') + '.' + signature
 
 
-@op('stream.open', 'lease:str ttl_seconds?:int')
-def open_stream(tx, ctx, lease, ttl_seconds=3600):
+@op('stream.open', 'lease:str ttl_seconds?:int renew?:bool')
+def open_stream(tx, ctx, lease, ttl_seconds=3600, renew=False):
     secret, url = settings(ctx)
     if not 0 < ttl_seconds <= 86400:
         raise Fault('Invalid stream lifetime')
@@ -104,6 +104,11 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
                                              if item != subscription['id']]
                 tx.put('_stream_grants', prior['id'], prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
+            if renew:
+                deadline = time.time() + ttl_seconds
+                if deadline > prior['expires_at']:
+                    prior['expires_at'] = deadline
+                    tx.put('_stream_grants', prior['id'], prior)
             unused, prior_url = settings(ctx, prior['authority'])
             return dict(shared_streams.public(tx, prior), url=prior_url.rstrip('/') + '/' + prior['id'],
                         role='server', attachment_credential=token(ctx, prior, 'server', member['id']))

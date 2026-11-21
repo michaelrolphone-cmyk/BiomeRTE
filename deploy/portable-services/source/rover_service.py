@@ -9,6 +9,7 @@ import os
 import pathlib
 import signal
 import sys
+import tempfile
 import time
 import urllib.request
 from urllib.error import HTTPError
@@ -100,9 +101,17 @@ class RoutedRemote(ControllerRoutes):
             descriptor = self.signed_request(owner, 'stream.attach',
                 {'session': prior['session'], 'role': 'server', 'lease': prior['lease']}, managed_path=path)
         except HTTPError as error:
-            if error.code in (403, 404, 409, 410):
+            if error.code == 403:
                 return None
-            raise
+            if error.code not in (404, 409, 410):
+                raise
+            try:
+                descriptor = self.signed_request(owner, 'stream.open',
+                    {'lease': prior['lease']}, managed_path=path)
+            except HTTPError as reopen_error:
+                if reopen_error.code in (404, 409, 410):
+                    return None
+                raise
         return dict(descriptor, subscription_lease=prior['lease'])
 
     def resume_vision(self, contract, resource, task):
@@ -125,6 +134,47 @@ class RoutedRemote(ControllerRoutes):
         self.session_resources[descriptor['id']] = (contract, resource)
         self.vision_route = (lease, descriptor['id'], path)
         return {'id': lease}, descriptor
+
+    @staticmethod
+    def write_grant_reference(path, value):
+        try:
+            if read_json(str(path)) == value:
+                return
+        except (OSError, ValueError):
+            pass
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix='.vision-grant-', delete=False) as output:
+            temporary = pathlib.Path(output.name)
+            try:
+                json.dump(value, output)
+                output.flush()
+                os.fsync(output.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def remember_vision_grant(self, descriptor, task):
+        if descriptor['contract'] != 'robot.vision.stream:1':
+            return
+        reference = {'session': descriptor['id'], 'lease': descriptor['subscription_lease'],
+                     'contract': descriptor['contract'], 'resource': descriptor['resource'],
+                     'task': task, 'generation': descriptor['generation']}
+        try:
+            self.write_grant_reference(self.home / 'vision-stream-resume.json', reference)
+        except OSError:
+            logging.warning('Could not record the Rover vision subscription reference')
+        # A colocated publisher can recover its grant even while its inbox is busy.
+        # An independently placed publisher still discovers grants via its inbox.
+        root = pathlib.Path(os.environ.get('ROVER_VISION_PROVIDER_STATE',
+                                          str(self.home.with_name('biome-robot-vision'))))
+        try:
+            provider = read_json(str(root / 'provider-manifest.json'))
+            if (provider.get('provider'), provider.get('resource')) == (descriptor['provider'], descriptor['resource']):
+                fields = ('id', 'epoch', 'authority', 'provider', 'lease', 'generation',
+                          'resource', 'contract', 'lanes', 'state', 'expires_at')
+                self.write_grant_reference(root / 'provider' / 'vision-stream-resume.json',
+                                           {key: descriptor[key] for key in fields})
+        except (OSError, ValueError):
+            logging.warning('Could not record the colocated vision publisher reference')
 
     def signed_request(self, controller, operation, arguments, *, managed_path=None):
         if managed_path is None and self.vision_scope is not None:
