@@ -939,6 +939,8 @@ class AuthorityDaemon:
         if message.get("type") == "inspect" or operation in (
                 "cap.discover", "cap.status", "provider.poll", "stream.inspect"):
             return "read"
+        if operation in ("stream.open", "stream.attach"):
+            return "attachment"
         if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
                 "cap.acquire", "cap.fenced", "cap.lease")):
             return "lifecycle"
@@ -1001,23 +1003,32 @@ class AuthorityDaemon:
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
         bands = ("read", "lifecycle", "general")
-        capacity = {"read": 8, "lifecycle": 1, "general": 1}
-        pending = {band: [] for band in bands}
+        capacity = {"attachment": 1, "read": 8, "lifecycle": 1, "general": 1}
+        pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
 
         async def dispatch_queue():
             index = 0
+            previous = None
             try:
                 while not stopping:
                     await ready.wait()
                     if stopping:
                         break
-                    while not pending[bands[index]]:
+                    # Opening a current stream must progress independently of
+                    # lease polling. Other work still runs between attachments.
+                    if pending["attachment"] and (previous != "attachment" or
+                            not any(pending[band] for band in bands)):
+                        band = "attachment"
+                    else:
+                        while not pending[bands[index]]:
+                            index = (index + 1) % len(bands)
+                        band = bands[index]
                         index = (index + 1) % len(bands)
-                    batch = pending[bands[index]]
-                    pending[bands[index]] = []
-                    index = (index + 1) % len(bands)
+                    batch = pending[band]
+                    pending[band] = []
+                    previous = band
                     if not any(pending.values()):
                         ready.clear()
                     if len(batch) == 1:
