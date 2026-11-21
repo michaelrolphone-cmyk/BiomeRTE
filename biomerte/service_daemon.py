@@ -268,6 +268,8 @@ class CheckpointHelper:
         self.connection = None
         self.replication = "unobserved"
         self.replica_blocks = {}
+        self.confirmed_controller_checkpoint = None
+        self.controller_checkpoint_refresh_at = 0
         if self.store.head() is None and config.get("bootstrap_packet"):
             packet=json.loads(pathlib.Path(config["bootstrap_packet"]).read_text())
             self.store.install(packet)
@@ -283,12 +285,30 @@ class CheckpointHelper:
         return status, {w:available[w] for w in self.config["replica_workers"] if w in available}
 
     async def status(self):
-        status,workers = await self.workers()
-        value = await self.transport.request("/api/service-checkpoints/status",{
-            "service_id":self.config["service_id"],"workers":list(workers.values())})
+        status, workers = await self.workers()
+        controller = self.config.get("authority_kind") == "controller"
+        # An empty selection asks the coordinator to enumerate current links
+        # for this service. Supervisor presence alone does not register a
+        # checkpoint helper, even when a sibling service is connected.
+        value = await self.transport.request("/api/service-checkpoints/status", {
+            "service_id": self.config["service_id"],
+            "workers": [] if controller else list(workers.values())})
         if value["boot_epoch"] != status["boot_epoch"]:
-            raise Fault("Witness restarted during checkpoint inspection",503)
-        return value,workers
+            raise Fault("Witness restarted during checkpoint inspection", 503)
+        if controller:
+            linked = {}
+            for row in value["workers"]:
+                worker = row["worker_id"]
+                if worker not in self.config["replica_workers"]:
+                    continue
+                expected = workers.get(worker)
+                if not expected or row["worker_incarnation"] != expected["worker_incarnation"]:
+                    raise Fault("Checkpoint helper incarnation changed during inspection", 503)
+                # A registered helper remains in the replication set even
+                # when its latest status RPC fails.
+                linked[worker] = expected
+            workers = linked
+        return value, workers
 
     async def chunk_missing(self, body):
         b = binding(body.get("binding"))
@@ -372,8 +392,9 @@ class CheckpointHelper:
 
     async def publish_packet(self,b,packet,workers=None,require_all=False):
         await self.validate(b)
+        controller = self.config.get("authority_kind") == "controller"
         if workers is None:
-            unused,workers = await self.workers()
+            _, workers = await (self.status() if controller else self.workers())
         targets=[row for worker,row in workers.items() if worker!=self.config["worker_id"]]
         if require_all and set(workers)!=set(self.config["replica_workers"]):
             raise Fault("Witness restart requires every configured replica",503)
@@ -388,13 +409,13 @@ class CheckpointHelper:
             self.replica_blocks.clear()
             if require_all:
                 raise
-            if self.config.get("authority_kind") == "controller":
+            if controller:
                 if self.config.get("replication_policy", "available-peers") != "available-peers":
                     raise CheckpointError("Unsupported controller replication policy")
                 # An advertised peer is still owed the checkpoint. A timeout is
                 # not evidence that it left membership. Refresh exact identities,
                 # then retry; only an actually absent peer permits degradation.
-                unused, current_workers = await self.workers()
+                _, current_workers = await self.status()
                 acknowledged_targets = [row for worker,row in current_workers.items()
                                         if worker != self.config["worker_id"]]
                 await self.replicate_chunks(b, packet, acknowledged_targets)
@@ -429,6 +450,10 @@ class CheckpointHelper:
             self.replica_blocks = {(target["worker_id"], target["worker_incarnation"],
                 b["boot_epoch"], b["grant_token"]): set(refs) for target in acknowledged_targets}
         await asyncio.to_thread(self.store.published,checkpoint_ref(packet))
+        if controller:
+            self.confirmed_controller_checkpoint = (b, reply["checkpoint"])
+            # Recheck even an idle root so a returning helper can catch up.
+            self.controller_checkpoint_refresh_at = time.monotonic() + 5
         return reply
 
     async def prepare(self,request):
@@ -502,6 +527,12 @@ class CheckpointHelper:
             if self.config.get("authority_kind") == "controller" and state.get("format") != STATE_FORMAT:
                 raise Fault("Controller authority requires a complete shard root", 409)
             packet=await asyncio.to_thread(self.store.advance,state,b)
+            ref = checkpoint_ref(packet)
+            if (self.confirmed_controller_checkpoint == (b, ref)
+                    and time.monotonic() < self.controller_checkpoint_refresh_at):
+                # This exact root already passed replication, the durable
+                # witness and the current-binding check within this helper.
+                return {"checkpoint": ref, "replication": self.replication}
             reply=await self.publish_packet(b,packet)
             return {"checkpoint":reply["checkpoint"],"replication":self.replication}
 
@@ -725,13 +756,17 @@ class AuthorityDaemon:
         self.token=secret(config["helper_key_file"])
         self.url=os.environ.get("BIOME_SERVICE_ADAPTER_URL") or config["adapter_url"]
         controller=config.get("authority_kind")=="controller"
-        self.app=Application(config["authority_home"],
-                             controller_runtime=config if controller else None)
+        runtime = dict(config, site_rollback_journal=
+            os.environ.get("BIOME_SITE_ROLLBACK_JOURNAL") == "1") if controller else None
+        self.app=Application(config["authority_home"],controller_runtime=runtime)
         authority_type=ControllerAuthority if controller else ScopedAuthority
         self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()
         self.connected=False
         self.events=None
+        self.confirmed_controller_publication = None
+        self.controller_publication_refresh_at = 0
+        self.witnessed_vision_inspections = {}
         if controller and config.get("event_authorize_url"):
             from .controller_events import ManagedEvents
             self.events=ManagedEvents(self)
@@ -748,7 +783,17 @@ class AuthorityDaemon:
     async def publish(self):
         if self.config.get("authority_kind")=="controller":
             from .controller_checkpoint import publish_controller
-            return await publish_controller(self)
+            if (self.confirmed_controller_publication is not None
+                    and time.monotonic() < self.controller_publication_refresh_at
+                    and not await asyncio.to_thread(self.authority.checkpoint_is_dirty)):
+                return self.confirmed_controller_publication
+            # A failed or uncertain publication must not reuse an earlier ACK,
+            # even when snapshot construction already consumed the dirty list.
+            self.confirmed_controller_publication = None
+            result = await publish_controller(self)
+            self.confirmed_controller_publication = result
+            self.controller_publication_refresh_at = time.monotonic() + 5
+            return result
         state=await asyncio.to_thread(self.authority.snapshot)
         return await self.helper("publish",state=state)
 
@@ -770,7 +815,11 @@ class AuthorityDaemon:
         try:
             if message.get("binding")!=self.binding:
                 raise Fault("RPC belongs to another service grant",409)
-            await self.transport.validate(self.binding)
+            controller = self.config.get("authority_kind") == "controller"
+            # The controller phase RPC already validates this exact binding
+            # against the coordinator through the private helper.
+            if not controller:
+                await self.transport.validate(self.binding)
             phase=await self.phase()
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
             async with self.lock:
@@ -798,6 +847,11 @@ class AuthorityDaemon:
                 else:
                     raise Fault("Service effect admission is unavailable",503)
                 await self.publish()
+                if not controller:
+                    await self.transport.validate(self.binding,preparing=preparing)
+            if controller:
+                # The result is already witnessed. The final check still
+                # fences the reply, without holding the application lock.
                 await self.transport.validate(self.binding,preparing=preparing)
         except (Fault,CheckpointError,KeyError,TypeError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error))
@@ -828,7 +882,12 @@ class AuthorityDaemon:
 
     async def health(self,request):
         try:
-            await self.transport.validate(self.binding,preparing=False)
+            # In the managed controller, the private phase already validates
+            # this exact binding. Its active phase and registered socket are
+            # readiness evidence for the coordinator; requiring the final
+            # coordinator effect grant here makes that report circular.
+            if self.config.get("authority_kind") != "controller":
+                await self.transport.validate(self.binding,preparing=False)
             phase=await self.phase()
             ready=self.connected and phase["phase"]=="active"
             return web.json_response({"ready":ready,"service_id":self.config["service_id"],
@@ -865,6 +924,263 @@ class AuthorityDaemon:
                 LOG.warning("Service lifecycle retry: %s",type(error).__name__)
             await asyncio.sleep(interval)
 
+    @staticmethod
+    def vision_grant_metadata(descriptor):
+        return {key: value for key, value in descriptor.items()
+                if key not in ("url", "role", "attachment_credential", "subscription_lease")}
+
+    def remember_vision_inspection(self, message, reply):
+        if reply["status"] != 200:
+            return
+        if message.get("type") == "inspect":
+            grant = reply.get("grant") or {}
+        elif (message.get("envelope") or {}).get("operation") in (
+                "stream.attach", "stream.open", "stream.resume"):
+            grant = self.vision_grant_metadata(reply.get("result") or {})
+        else:
+            return
+        if grant.get("contract") != "robot.vision.stream:1":
+            return
+        key = (grant["authority"], grant["id"])
+        cache = self.witnessed_vision_inspections
+        if key not in cache and len(cache) >= 32:
+            cache.pop(next(iter(cache)))
+        cache[key] = grant
+
+    def witnessed_vision_key(self, message):
+        if message.get("type") == "inspect":
+            key = (message.get("authority"), message.get("session"))
+            if all(isinstance(part, str) for part in key):
+                return key
+        envelope = message.get("envelope") or {}
+        arguments = envelope.get("arguments")
+        if message.get("type") != "call" or not isinstance(arguments, dict):
+            return None
+        operation = envelope.get("operation")
+        if operation == "stream.attach" and isinstance(arguments.get("session"), str):
+            return next((key for key in self.witnessed_vision_inspections
+                         if key[1] == arguments["session"]), None)
+        if operation == "stream.resume" and arguments.get("contract") == "robot.vision.stream:1":
+            from .placement import identity
+            task, resource = arguments.get("task"), arguments.get("resource")
+            if isinstance(task, str) and isinstance(resource, str) and resource:
+                lease = identity(task, arguments["contract"], resource, None)
+                return next((key for key, grant in self.witnessed_vision_inspections.items()
+                             if lease in grant.get("consumers", ())), None)
+        return None
+
+    async def recheck_witnessed_vision_inspection(self, message):
+        cache = self.witnessed_vision_inspections
+        key = self.witnessed_vision_key(message)
+        witnessed = cache.get(key)
+        if (witnessed is None or message.get("binding") != self.binding
+                or message.get("preparation")):
+            return None
+        try:
+            if (await self.phase())["phase"] != "active":
+                return None
+            await self.transport.validate(self.binding, preparing=False)
+            # Both operations read current canonical state. Signed attach also
+            # verifies the caller and issues a fresh credential for its role.
+            if message["type"] == "inspect":
+                field = "grant"
+                value = await asyncio.to_thread(self.authority.inspect, key[1], key[0])
+                current = value
+            else:
+                field = "result"
+                value = await asyncio.to_thread(self.authority.call, message["envelope"], False)
+                current = self.vision_grant_metadata(value)
+        except (Fault, CheckpointError, KeyError, TypeError, OSError, asyncio.TimeoutError):
+            return None
+        # Compare every grant field and consumer against the witnessed value.
+        # Newly visible state follows the full publication path.
+        if current != witnessed or cache.get(key) is not witnessed:
+            return None
+        reply = self.authority_response(message, self.binding)
+        reply[field] = value
+        return reply
+
+    async def reply_to_authority_request(self, ws, message):
+        started = time.monotonic()
+        result = await self.dispatch(message)
+        if self.config.get("authority_kind") == "controller":
+            self.remember_vision_inspection(message, result)
+        if not ws.closed:
+            await ws.send_json(result)
+        elapsed = time.monotonic() - started
+        if self.config.get("authority_kind") == "controller" and elapsed >= 3:
+            LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
+                result["type"], result["status"], elapsed)
+
+    @staticmethod
+    def authority_request_band(message):
+        envelope = message.get("envelope") or {}
+        operation = envelope.get("operation", "")
+        if message.get("type") == "inspect" or operation == "stream.inspect":
+            return "inspection"
+        if operation in ("cap.discover", "cap.status", "provider.poll"):
+            return "read"
+        if operation == "stream.open":
+            return "stream_open"
+        if operation in ("stream.attach", "stream.resume"):
+            return "attachment"
+        if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
+                "cap.acquire", "cap.fenced", "cap.lease")):
+            return "lifecycle"
+        return "general"
+
+    @staticmethod
+    def authority_response(message, binding):
+        typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
+            message.get("type"), "call_result")
+        return dict(type=typ, id=message.get("id"), binding=binding, status=200)
+
+    async def dispatch_managed_reads(self, messages):
+        # Stream grant inspection and provider inbox reads cannot expose
+        # unacknowledged state. A batch shares the before/after publication
+        # barrier, and each signed envelope still passes native authorization.
+        replies = [self.authority_response(message, self.binding) for message in messages]
+
+        def reject(reply, error):
+            reply.pop("grant", None)
+            reply.pop("result", None)
+            reply.update(status=getattr(error, "status", 409), error=str(error))
+
+        try:
+            if (await self.phase())["phase"] != "active":
+                raise Fault("Service effect admission is unavailable", 503)
+            async with self.lock:
+                await self.publish()
+                for message, reply in zip(messages, replies):
+                    try:
+                        if message.get("binding") != self.binding:
+                            raise Fault("RPC belongs to another service grant", 409)
+                        if message.get("preparation") or self.authority_request_band(message) not in (
+                                "read", "inspection", "attachment"):
+                            raise Fault("Service effect admission is unavailable", 503)
+                        if message["type"] == "inspect":
+                            requested = message.get("authority")
+                            if requested not in [self.config["authority_id"]] + self.config.get(
+                                    "controller_aliases", []):
+                                raise Fault("Wrong managed stream authority", 403)
+                            reply["grant"] = await asyncio.to_thread(self.authority.inspect,
+                                message["session"], requested)
+                        else:
+                            reply["result"] = await asyncio.to_thread(self.authority.call,
+                                message["envelope"], False)
+                    except (Fault, CheckpointError, KeyError, TypeError) as error:
+                        reject(reply, error)
+                    except ValueError:
+                        reject(reply, Fault("Invalid managed read request", 400))
+                await self.publish()
+            await self.transport.validate(self.binding, preparing=False)
+        except (Fault, CheckpointError, KeyError, TypeError) as error:
+            for reply in replies:
+                reject(reply, error)
+        except (OSError, asyncio.TimeoutError):
+            for reply in replies:
+                reject(reply, Fault("Service checkpoint transport unavailable", 503))
+        return replies
+
+    async def serve_controller_socket(self, ws):
+        # Keep the wire reader responsive while the single dispatcher runs
+        # fenced transactions. Lease updates, reads, and general work each
+        # have bounded waiting space and take turns if all are busy.
+        bands = ("read", "lifecycle", "general")
+        stream_bands = ("stream_open", "inspection", "attachment")
+        capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
+                    "read": 8, "lifecycle": 1, "general": 1}
+        pending = {band: [] for band in capacity}
+        ready = asyncio.Event()
+        stopping = False
+        fast_inspections = set()
+
+        async def enqueue(message):
+            band = self.authority_request_band(message)
+            queue = pending[band]
+            if len(queue) >= capacity[band]:
+                reply = self.authority_response(message, self.binding)
+                reply.update(status=429, error="Managed controller is busy")
+                await ws.send_json(reply)
+            else:
+                queue.append(message)
+                ready.set()
+
+        async def inspect_or_enqueue(message):
+            reply = await self.recheck_witnessed_vision_inspection(message)
+            if stopping or ws.closed:
+                return
+            if reply is None:
+                await enqueue(message)
+            else:
+                await ws.send_json(reply)
+
+        async def dispatch_queue():
+            index = 0
+            stream_index = 0
+            previous = None
+            try:
+                while not stopping:
+                    await ready.wait()
+                    if stopping:
+                        break
+                    # Grant validation must not compete for admission with
+                    # inbox reads. Alternate stream work and ordinary work.
+                    if any(pending[band] for band in stream_bands) and (
+                            previous not in stream_bands or not any(pending[band] for band in bands)):
+                        while not pending[stream_bands[stream_index]]:
+                            stream_index = (stream_index + 1) % len(stream_bands)
+                        band = stream_bands[stream_index]
+                        stream_index = (stream_index + 1) % len(stream_bands)
+                    else:
+                        while not pending[bands[index]]:
+                            index = (index + 1) % len(bands)
+                        band = bands[index]
+                        index = (index + 1) % len(bands)
+                    batch = pending[band]
+                    pending[band] = []
+                    previous = band
+                    if not any(pending.values()):
+                        ready.clear()
+                    if len(batch) == 1:
+                        await self.reply_to_authority_request(ws, batch[0])
+                    else:
+                        replies = await self.dispatch_managed_reads(batch)
+                        for message, reply in zip(batch, replies):
+                            self.remember_vision_inspection(message, reply)
+                            if not ws.closed:
+                                await ws.send_json(reply)
+            finally:
+                if not ws.closed:
+                    await ws.close()
+
+        dispatcher = asyncio.create_task(dispatch_queue())
+        try:
+            async for event in ws:
+                if event.type != WSMsgType.TEXT:
+                    continue
+                message = json.loads(event.data)
+                if message.get("type") == "registered":
+                    self.connected = True
+                    continue
+                key = self.witnessed_vision_key(message)
+                if (key in self.witnessed_vision_inspections
+                        and len(fast_inspections) < capacity["inspection"]):
+                    task = asyncio.create_task(inspect_or_enqueue(message))
+                    fast_inspections.add(task)
+                    task.add_done_callback(fast_inspections.discard)
+                else:
+                    await enqueue(message)
+        finally:
+            stopping = True
+            for task in fast_inspections:
+                task.cancel()
+            await asyncio.gather(*fast_inspections, return_exceptions=True)
+            pending.clear()
+            ready.set()
+            # A running to_thread transaction must settle before reconnecting.
+            await dispatcher
+
     async def authority_loop(self):
         while True:
             try:
@@ -881,16 +1197,17 @@ class AuthorityDaemon:
                     headers={"Authorization":"Bearer "+self.transport.key},
                     heartbeat=15,max_msg_size=MAX_BODY) as ws:
                     await ws.send_json({"type":"register","binding":self.binding})
-                    async for event in ws:
-                        if event.type!=WSMsgType.TEXT:
-                            if event.type in (WSMsgType.CLOSE,WSMsgType.CLOSED,WSMsgType.ERROR):
-                                break
-                            continue
-                        message=json.loads(event.data)
-                        if message.get("type")=="registered":
-                            self.connected=True
-                            continue
-                        await ws.send_json(await self.dispatch(message))
+                    if self.config.get("authority_kind") == "controller":
+                        await self.serve_controller_socket(ws)
+                    else:
+                        async for event in ws:
+                            if event.type != WSMsgType.TEXT:
+                                continue
+                            message = json.loads(event.data)
+                            if message.get("type") == "registered":
+                                self.connected = True
+                                continue
+                            await self.reply_to_authority_request(ws, message)
             except asyncio.CancelledError:
                 raise
             except Exception as error:

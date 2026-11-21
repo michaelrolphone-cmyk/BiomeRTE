@@ -389,7 +389,27 @@ class Remote:
         self.gateway = gateway or load_gateway(cfg["gateway_state"])
 
     def call(self, name, args, rid=None):
-        return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        if name != "cap.fenced":
+            return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        # The worker has already durably installed this generation. Retry the
+        # exact acknowledgement even when the next inbox poll is delayed.
+        if rid is None:
+            identity = json.dumps([args["lease"], args["generation"]], separators=(",", ":"))
+            rid = "vision-fence-" + hashlib.sha256(identity.encode()).hexdigest()
+        delays = iter((.5, 1.5, 3., 5.))
+        while True:
+            try:
+                return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+            except RuntimeError as error:
+                message = str(error).lower()
+                if not any(reason in message for reason in (
+                        "managed controller is busy", "service authority is unavailable",
+                        "shared controller runtime is temporarily unavailable")):
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
 
 def offer(cfg, contract, state):
@@ -494,6 +514,26 @@ def serve(cfg):
         worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
                         cfg.get("worker_timeout_seconds"))
         worker.stream_handler = live_streams.update
+        resume_path = worker_state / "vision-stream-resume.json"
+        resumed_session = None
+
+        def resume_live_stream():
+            nonlocal resumed_session
+            # The hint carries identity only. The normal publisher still asks
+            # the authority for its signed attachment before any payload.
+            try:
+                grant = json.loads(resume_path.read_text())
+            except (OSError, ValueError):
+                return
+            if (isinstance(grant, dict) and grant.get("provider") == cfg["provider"]
+                    and grant.get("contract") == "robot.vision.stream:1"
+                    and grant.get("resource") == cfg["resource"]
+                    and all(isinstance(grant.get(key), str) and grant[key] for key in ("id", "authority", "epoch"))
+                    and type(grant.get("generation")) is int and grant["id"] != resumed_session):
+                live_streams.update([grant])
+                resumed_session = grant["id"]
+
+        resume_live_stream()
         pool = ActionPool(worker, cfg["slots"])
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
@@ -547,14 +587,30 @@ def serve(cfg):
                     print("Vision advertisement retry:", type(exc).__name__, file=sys.stderr, flush=True)
                     stopping.wait(5)
 
+        def reconcile_receipts():
+            # A timeout for an old result must not delay polling a current
+            # vision fence or joining a live stream. Use this thread's own DB
+            # connection and let the main worker run durable cleanup jobs.
+            recovery_worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
+                                     cfg.get("worker_timeout_seconds"))
+            try:
+                while not stopping.is_set():
+                    recovery_worker.recover_result_acknowledgements(limit=1, cleanup=False)
+                    stopping.wait(cfg.get("poll_seconds", 2))
+            finally:
+                recovery_worker.db.close()
+
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         publisher = threading.Thread(target=advertise, name="vision-advertisement", daemon=True)
+        recovery = threading.Thread(target=reconcile_receipts, name="vision-receipt-recovery", daemon=True)
         publisher.start()
+        recovery.start()
         try:
             while not stopping.is_set():
                 try:
-                    worker.once(pool)
+                    resume_live_stream()
+                    worker.once(pool, reconcile_receipts=False)
                     stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
                     # Request/image bytes and gateway credential errors never enter logs.
@@ -563,6 +619,7 @@ def serve(cfg):
         finally:
             stopping.set()
             publisher.join()
+            recovery.join()
             try:
                 try:
                     remote.call("cap.offer", stream_offer(cfg, {}))
