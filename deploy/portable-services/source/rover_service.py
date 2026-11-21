@@ -11,6 +11,7 @@ import signal
 import sys
 import time
 import urllib.request
+from urllib.error import HTTPError
 import uuid
 from aiohttp import web
 from portable_common import read_json
@@ -70,21 +71,33 @@ class RoutedRemote(ControllerRoutes):
                         arguments=arguments, id=request_id, controller=controller)
         auth = dict(actor=self.identity['node'],
                     signature=sign(str(self.home/'node.key'), envelope))
-        if controller == self.app.node:
-            result = self.app.call(operation, arguments, request_id, auth=auth,
-                                   realm='site', controller=controller)
-        else:
-            envelope['auth'] = auth
-            request = urllib.request.Request(self.gateway_url+'/v1/call',
-                data=json.dumps(envelope).encode(), headers={
-                'Content-Type':'application/json','User-Agent':'BiomeRTE-Rover-Server/1'})
-            with urllib.request.urlopen(request, timeout=20) as response:
-                value = json.load(response)
-            if 'error' in value:
-                raise ConnectionError('Controller rejected Rover request')
-            result = value['result']
-        return result
-
+        managed = controller in self.controllers
+        lifecycle = operation in ('cap.discover', 'cap.acquire', 'cap.lease',
+                                  'stream.open', 'stream.attach')
+        # A busy managed controller must not make a transient reply failure
+        # tear down a persistent reservation. Reuse the exact signed ID.
+        delays = iter((.5, 1., 2.5, 4.) if managed and lifecycle else ())
+        while True:
+            try:
+                if controller == self.app.node:
+                    return self.app.call(operation, arguments, request_id, auth=auth,
+                                         realm='site', controller=controller)
+                envelope['auth'] = auth
+                request = urllib.request.Request(self.gateway_url+'/v1/call',
+                    data=json.dumps(envelope).encode(), headers={
+                    'Content-Type':'application/json','User-Agent':'BiomeRTE-Rover-Server/1'})
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    value = json.load(response)
+                if 'error' in value:
+                    raise ConnectionError('Controller rejected Rover request')
+                return value['result']
+            except HTTPError as error:
+                if error.code not in (429, 502, 503, 504):
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
 
 class FreshRover(Rover):
