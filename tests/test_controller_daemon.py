@@ -53,6 +53,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.binding=B
         self.daemon.app=self.app
         self.daemon.authority=self.authority
+        self.daemon.witnessed_vision_inspections={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
         self.validated=0
@@ -148,6 +149,27 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         replies = await self.daemon.dispatch_managed_reads(messages)
         self.assertEqual([row["status"] for row in replies], [503,503])
         self.assertTrue(all("result" not in row for row in replies))
+
+    async def test_only_current_unchanged_witnessed_vision_inspection_uses_fast_path(self):
+        authority = self.config["authority_id"]
+        grant = dict(id="vision", authority=authority, contract="robot.vision.stream:1",
+                     state="open", generation=2, consumers=["viewer"])
+        message = dict(type="inspect", id="rpc", authority=authority, session=grant["id"], binding=B)
+        self.authority.inspect = lambda session, issuer: dict(grant)
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        self.daemon.remember_vision_inspection(message, dict(status=200, grant=dict(grant)))
+        self.assertEqual((await self.daemon.recheck_witnessed_vision_inspection(message))["grant"], grant)
+        self.assertEqual(self.published, 0)
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(
+            dict(message, preparation=True)))
+        self.current_phase = "prepared"
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        self.current_phase = "active"
+        grant["consumers"] = ["replacement"]
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        grant["consumers"] = ["viewer"]
+        self.fail_validate = self.validated+2
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
 
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()

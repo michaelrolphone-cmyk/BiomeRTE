@@ -766,6 +766,7 @@ class AuthorityDaemon:
         self.events=None
         self.confirmed_controller_publication = None
         self.controller_publication_refresh_at = 0
+        self.witnessed_vision_inspections = {}
         if controller and config.get("event_authorize_url"):
             from .controller_events import ManagedEvents
             self.events=ManagedEvents(self)
@@ -923,9 +924,45 @@ class AuthorityDaemon:
                 LOG.warning("Service lifecycle retry: %s",type(error).__name__)
             await asyncio.sleep(interval)
 
+    def remember_vision_inspection(self, message, reply):
+        grant = reply.get("grant") or {}
+        if (message.get("type") != "inspect" or reply["status"] != 200
+                or grant.get("contract") != "robot.vision.stream:1"):
+            return
+        key = (message["authority"], message["session"])
+        cache = self.witnessed_vision_inspections
+        if key not in cache and len(cache) >= 32:
+            cache.pop(next(iter(cache)))
+        cache[key] = grant
+
+    async def recheck_witnessed_vision_inspection(self, message):
+        cache = self.witnessed_vision_inspections
+        key = (message.get("authority"), message.get("session"))
+        witnessed = cache.get(key)
+        if (witnessed is None or message.get("binding") != self.binding
+                or message.get("preparation")):
+            return None
+        try:
+            if (await self.phase())["phase"] != "active":
+                return None
+            await self.transport.validate(self.binding, preparing=False)
+            # Read the exact grant through the native read-only operation.
+            # An unchanged result has already passed the replication barrier.
+            # Newly visible consumers or any other change require a new witness.
+            current = await asyncio.to_thread(self.authority.inspect, key[1], key[0])
+        except (Fault, CheckpointError, KeyError, TypeError, OSError, asyncio.TimeoutError):
+            return None
+        if current != witnessed or cache.get(key) is not witnessed:
+            return None
+        reply = self.authority_response(message, self.binding)
+        reply["grant"] = current
+        return reply
+
     async def reply_to_authority_request(self, ws, message):
         started = time.monotonic()
         result = await self.dispatch(message)
+        if self.config.get("authority_kind") == "controller":
+            self.remember_vision_inspection(message, result)
         if not ws.closed:
             await ws.send_json(result)
         elapsed = time.monotonic() - started
@@ -1011,6 +1048,27 @@ class AuthorityDaemon:
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
+        fast_inspections = set()
+
+        async def enqueue(message):
+            band = self.authority_request_band(message)
+            queue = pending[band]
+            if len(queue) >= capacity[band]:
+                reply = self.authority_response(message, self.binding)
+                reply.update(status=429, error="Managed controller is busy")
+                await ws.send_json(reply)
+            else:
+                queue.append(message)
+                ready.set()
+
+        async def inspect_or_enqueue(message):
+            reply = await self.recheck_witnessed_vision_inspection(message)
+            if stopping or ws.closed:
+                return
+            if reply is None:
+                await enqueue(message)
+            else:
+                await ws.send_json(reply)
 
         async def dispatch_queue():
             index = 0
@@ -1043,7 +1101,8 @@ class AuthorityDaemon:
                         await self.reply_to_authority_request(ws, batch[0])
                     else:
                         replies = await self.dispatch_managed_reads(batch)
-                        for reply in replies:
+                        for message, reply in zip(batch, replies):
+                            self.remember_vision_inspection(message, reply)
                             if not ws.closed:
                                 await ws.send_json(reply)
             finally:
@@ -1059,17 +1118,20 @@ class AuthorityDaemon:
                 if message.get("type") == "registered":
                     self.connected = True
                     continue
-                band = self.authority_request_band(message)
-                queue = pending[band]
-                if len(queue) >= capacity[band]:
-                    reply = self.authority_response(message, self.binding)
-                    reply.update(status=429, error="Managed controller is busy")
-                    await ws.send_json(reply)
-                    continue
-                queue.append(message)
-                ready.set()
+                key = (message.get("authority"), message.get("session"))
+                if (message.get("type") == "inspect" and all(isinstance(part, str) for part in key)
+                        and key in self.witnessed_vision_inspections
+                        and len(fast_inspections) < capacity["inspection"]):
+                    task = asyncio.create_task(inspect_or_enqueue(message))
+                    fast_inspections.add(task)
+                    task.add_done_callback(fast_inspections.discard)
+                else:
+                    await enqueue(message)
         finally:
             stopping = True
+            for task in fast_inspections:
+                task.cancel()
+            await asyncio.gather(*fast_inspections, return_exceptions=True)
             pending.clear()
             ready.set()
             # A running to_thread transaction must settle before reconnecting.
