@@ -66,6 +66,17 @@ class SharedGrants(StreamGrants):
             ctx=SimpleNamespace(app=self.app,permissions=[],actor='independent-client',scope='site')
             attached=streams.attach(tx,ctx,stream['id'],'server',second['id'])
             self.assertTrue(attached['attachment_credential'])
+            from biomerte.store import Fault
+            resumed=streams.resume(tx,ctx,second['task'],second['contract'],second['requested_resource'])
+            self.assertEqual(stream['id'],resumed['id'])
+            self.assertEqual(second['id'],resumed['subscription_lease'])
+            self.assertTrue(resumed['attachment_credential'])
+            with self.assertRaises(Fault) as denied:
+                streams.resume(tx,ctx,first['task'],first['contract'],first['requested_resource'])
+            self.assertEqual(denied.exception.status,403)
+            with self.assertRaises(Fault) as missing:
+                streams.resume(tx,ctx,'missing-task',second['contract'],second['requested_resource'])
+            self.assertEqual(missing.exception.status,404)
             with self.assertRaises(Exception):
                 streams.attach(tx,ctx,stream['id'],'server',first['id'])
             ctx.actor='unsubscribed-client'

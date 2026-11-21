@@ -65,6 +65,22 @@ class RoutedRemote(ControllerRoutes):
         owner = self.service_resolver(resource)
         return owner if owner is not None else super().resolve_new(contract, resource)
 
+    def resume_vision(self, contract, resource, task):
+        owner = self.app.node
+        try:
+            descriptor = self.signed_request(owner, 'stream.resume',
+                {'contract': contract, 'resource': resource, 'task': task})
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        lease = descriptor['subscription_lease']
+        self.leases[lease] = owner
+        self.lease_resources[lease] = (contract, resource)
+        self.sessions[descriptor['id']] = owner
+        self.session_resources[descriptor['id']] = (contract, resource)
+        return {'id': lease}, descriptor
+
     def signed_request(self, controller, operation, arguments):
         request_id = uuid.uuid4().hex
         envelope = dict(site=self.app.config['site'], realm='site', operation=operation,
@@ -73,7 +89,7 @@ class RoutedRemote(ControllerRoutes):
                     signature=sign(str(self.home/'node.key'), envelope))
         managed = controller in self.controllers
         lifecycle = operation in ('cap.discover', 'cap.acquire', 'cap.lease',
-                                  'stream.open', 'stream.attach')
+                                  'stream.open', 'stream.attach', 'stream.resume')
         # A busy managed controller must not make a transient reply failure
         # tear down a persistent reservation. Reuse the exact signed ID.
         delays = iter((.5, 1., 2.5, 4.) if managed and lifecycle else ())

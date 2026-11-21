@@ -146,6 +146,27 @@ def attach(tx, ctx, session, role, lease=''):
                 attachment_credential=token(ctx, grant, role, member))
 
 
+@op('stream.resume', 'task:str contract:str resource:str', False)
+def resume(tx, ctx, task, contract, resource):
+    # Use the same identity and ownership rules as cap.acquire. This
+    # read-only operation can restore a caller's existing subscription.
+    from .placement import identity, normalize
+    resource, selector = normalize(resource, None)
+    lease = tx.need('leases', identity(task, contract, resource, selector))
+    if ctx.permissions is not None and lease.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
+    root = shared_streams.root(tx, lease)
+    sessions = [grant for grant in tx.matching('_stream_grants', ('open',))
+                if grant['lease'] == root['id'] and grant['generation'] == root['generation']
+                and grant['expires_at'] > time.time()]
+    if not sessions:
+        raise Fault('No current stream for the server subscription', 404)
+    if len(sessions) != 1:
+        raise Fault('Ambiguous current stream for the server subscription', 409)
+    return dict(attach(tx, ctx, sessions[0]['id'], 'server', lease['id']),
+                subscription_lease=lease['id'])
+
+
 @op('stream.inspect', 'session:str', False)
 def inspect(tx, ctx, session):
     grant = tx.need('_stream_grants', session)

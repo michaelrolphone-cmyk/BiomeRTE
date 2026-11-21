@@ -927,14 +927,15 @@ class AuthorityDaemon:
     @staticmethod
     def vision_grant_metadata(descriptor):
         return {key: value for key, value in descriptor.items()
-                if key not in ("url", "role", "attachment_credential")}
+                if key not in ("url", "role", "attachment_credential", "subscription_lease")}
 
     def remember_vision_inspection(self, message, reply):
         if reply["status"] != 200:
             return
         if message.get("type") == "inspect":
             grant = reply.get("grant") or {}
-        elif (message.get("envelope") or {}).get("operation") in ("stream.attach", "stream.open"):
+        elif (message.get("envelope") or {}).get("operation") in (
+                "stream.attach", "stream.open", "stream.resume"):
             grant = self.vision_grant_metadata(reply.get("result") or {})
         else:
             return
@@ -953,10 +954,19 @@ class AuthorityDaemon:
                 return key
         envelope = message.get("envelope") or {}
         arguments = envelope.get("arguments")
-        if (message.get("type") == "call" and envelope.get("operation") == "stream.attach"
-                and isinstance(arguments, dict) and isinstance(arguments.get("session"), str)):
+        if message.get("type") != "call" or not isinstance(arguments, dict):
+            return None
+        operation = envelope.get("operation")
+        if operation == "stream.attach" and isinstance(arguments.get("session"), str):
             return next((key for key in self.witnessed_vision_inspections
                          if key[1] == arguments["session"]), None)
+        if operation == "stream.resume" and arguments.get("contract") == "robot.vision.stream:1":
+            from .placement import identity
+            task, resource = arguments.get("task"), arguments.get("resource")
+            if isinstance(task, str) and isinstance(resource, str) and resource:
+                lease = identity(task, arguments["contract"], resource, None)
+                return next((key for key, grant in self.witnessed_vision_inspections.items()
+                             if lease in grant.get("consumers", ())), None)
         return None
 
     async def recheck_witnessed_vision_inspection(self, message):
@@ -1010,7 +1020,7 @@ class AuthorityDaemon:
             return "inspection"
         if operation in ("cap.discover", "cap.status", "provider.poll"):
             return "read"
-        if operation in ("stream.open", "stream.attach"):
+        if operation in ("stream.open", "stream.attach", "stream.resume"):
             return "attachment"
         if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
                 "cap.acquire", "cap.fenced", "cap.lease")):
