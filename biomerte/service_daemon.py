@@ -928,33 +928,100 @@ class AuthorityDaemon:
                 result["type"], result["status"], elapsed)
 
     @staticmethod
-    def authority_lifecycle_request(message):
-        operation = message.get("envelope", {}).get("operation", "")
-        return message.get("type") == "inspect" or (isinstance(operation, str) and (
-            operation.startswith("stream.") or operation in (
-                "cap.acquire", "cap.discover", "cap.fenced", "cap.lease", "provider.poll")))
+    def authority_request_band(message):
+        envelope = message.get("envelope") or {}
+        operation = envelope.get("operation", "")
+        if message.get("type") == "inspect" or operation in (
+                "cap.discover", "cap.status", "provider.poll", "stream.inspect"):
+            return "read"
+        if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
+                "cap.acquire", "cap.fenced", "cap.lease")):
+            return "lifecycle"
+        return "general"
+
+    @staticmethod
+    def authority_response(message, binding):
+        typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
+            message.get("type"), "call_result")
+        return dict(type=typ, id=message.get("id"), binding=binding, status=200)
+
+    async def dispatch_managed_reads(self, messages):
+        # Stream grant inspection and provider inbox reads cannot expose
+        # unacknowledged state. A batch shares the before/after publication
+        # barrier, and each signed envelope still passes native authorization.
+        replies = [self.authority_response(message, self.binding) for message in messages]
+
+        def reject(reply, error):
+            reply.pop("grant", None)
+            reply.pop("result", None)
+            reply.update(status=getattr(error, "status", 409), error=str(error))
+
+        try:
+            if (await self.phase())["phase"] != "active":
+                raise Fault("Service effect admission is unavailable", 503)
+            async with self.lock:
+                await self.publish()
+                for message, reply in zip(messages, replies):
+                    try:
+                        if message.get("binding") != self.binding:
+                            raise Fault("RPC belongs to another service grant", 409)
+                        if message.get("preparation") or self.authority_request_band(message) != "read":
+                            raise Fault("Service effect admission is unavailable", 503)
+                        if message["type"] == "inspect":
+                            requested = message.get("authority")
+                            if requested not in [self.config["authority_id"]] + self.config.get(
+                                    "controller_aliases", []):
+                                raise Fault("Wrong managed stream authority", 403)
+                            reply["grant"] = await asyncio.to_thread(self.authority.inspect,
+                                message["session"], requested)
+                        else:
+                            reply["result"] = await asyncio.to_thread(self.authority.call,
+                                message["envelope"], False)
+                    except (Fault, CheckpointError, KeyError, TypeError) as error:
+                        reject(reply, error)
+                    except ValueError:
+                        reject(reply, Fault("Invalid managed read request", 400))
+                await self.publish()
+            await self.transport.validate(self.binding, preparing=False)
+        except (Fault, CheckpointError, KeyError, TypeError) as error:
+            for reply in replies:
+                reject(reply, error)
+        except (OSError, asyncio.TimeoutError):
+            for reply in replies:
+                reject(reply, Fault("Service checkpoint transport unavailable", 503))
+        return replies
 
     async def serve_controller_socket(self, ws):
-        # A gateway timeout cannot retract a frame. Reserve one waiting slot
-        # for lease and stream progression, and one for other controller work.
-        # Alternate when both bands are waiting, using one fenced dispatcher.
-        pending = {}
+        # Keep the wire reader responsive while the single dispatcher runs
+        # fenced transactions. Lease updates, reads, and general work each
+        # have bounded waiting space and take turns if all are busy.
+        bands = ("read", "lifecycle", "general")
+        capacity = {"read": 8, "lifecycle": 1, "general": 1}
+        pending = {band: [] for band in bands}
         ready = asyncio.Event()
         stopping = False
 
         async def dispatch_queue():
-            prefer_lifecycle = True
+            index = 0
             try:
                 while not stopping:
                     await ready.wait()
                     if stopping:
                         break
-                    band = prefer_lifecycle if prefer_lifecycle in pending else not prefer_lifecycle
-                    message = pending.pop(band)
-                    prefer_lifecycle = not band
-                    if not pending:
+                    while not pending[bands[index]]:
+                        index = (index + 1) % len(bands)
+                    batch = pending[bands[index]]
+                    pending[bands[index]] = []
+                    index = (index + 1) % len(bands)
+                    if not any(pending.values()):
                         ready.clear()
-                    await self.reply_to_authority_request(ws, message)
+                    if len(batch) == 1:
+                        await self.reply_to_authority_request(ws, batch[0])
+                    else:
+                        replies = await self.dispatch_managed_reads(batch)
+                        for reply in replies:
+                            if not ws.closed:
+                                await ws.send_json(reply)
             finally:
                 if not ws.closed:
                     await ws.close()
@@ -968,14 +1035,14 @@ class AuthorityDaemon:
                 if message.get("type") == "registered":
                     self.connected = True
                     continue
-                band = self.authority_lifecycle_request(message)
-                if band in pending:
-                    typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
-                        message.get("type"), "call_result")
-                    await ws.send_json(dict(type=typ, id=message.get("id"),
-                        binding=self.binding, status=429, error="Managed controller is busy"))
+                band = self.authority_request_band(message)
+                queue = pending[band]
+                if len(queue) >= capacity[band]:
+                    reply = self.authority_response(message, self.binding)
+                    reply.update(status=429, error="Managed controller is busy")
+                    await ws.send_json(reply)
                     continue
-                pending[band] = message
+                queue.append(message)
                 ready.set()
         finally:
             stopping = True

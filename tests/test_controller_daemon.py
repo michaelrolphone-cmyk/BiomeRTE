@@ -91,6 +91,26 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     def document(self,key="boundary"):
         return self.app.stores["site"].execute(lambda tx: tx.get("documents",key),read_only=True)
 
+    async def test_read_batch_verifies_each_actor_and_shares_publication(self):
+        import copy
+        signed = self.message()["envelope"]
+        signed["operation"] = "cap.discover"
+        signed["arguments"] = {}
+        body = {key:value for key,value in signed.items() if key != "auth"}
+        signed["auth"]["signature"] = sign(self.key, body)
+        denied = copy.deepcopy(signed)
+        denied["auth"]["signature"] = self.message("different")["envelope"]["auth"]["signature"]
+        messages = [dict(self.message(), envelope=value, id=str(i))
+                    for i,value in enumerate((signed, denied))]
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [200,400])
+        self.assertEqual(self.published, 2)
+        self.assertNotIn("result", replies[1])
+        self.fail_validate = self.validated+2
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [503,503])
+        self.assertTrue(all("result" not in row for row in replies))
+
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
         processed, replies = [], []
@@ -110,7 +130,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 await started.wait()
                 for name in ("waiting", "excess"):
                     yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
-                        {"type": "inspect", "id": name}))
+                        {"type": "pair", "id": name}))
                 await rejected.wait()
                 self.closed = True
 
@@ -124,7 +144,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         try:
             await asyncio.wait_for(rejected.wait(), 1)
             self.assertFalse(connection.done())
-            self.assertEqual(replies, [{"id": "excess", "type": "inspect_result",
+            self.assertEqual(replies, [{"id": "excess", "type": "pair_result",
                 "binding": B, "status": 429, "error": "Managed controller is busy"}])
         finally:
             release.set()
