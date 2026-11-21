@@ -788,6 +788,22 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("degraded", primary.replication)
         self.assertEqual(relay_head, self.workers.head(SERVICE))
 
+        body = dict(binding=controller_binding, state=same_state["payload"]["state"])
+        with patch.object(primary, "publish_packet", wraps=primary.publish_packet) as republish:
+            cached = await primary.publish(body)
+            self.assertEqual(checkpoint_ref(same_state), cached["checkpoint"])
+            republish.assert_not_awaited()
+            # An unchanged root must still catch up a newly registered helper.
+            start_controller("mac")
+            await self.eventually(lambda: ("mac", controller_service) in self.workers.links,
+                                  "standby controller helper rejoins")
+            primary.controller_checkpoint_refresh_at = 0
+            refreshed = await primary.publish(body)
+            republish.assert_awaited_once()
+        self.assertEqual(checkpoint_ref(same_state), refreshed["checkpoint"])
+        self.assertEqual("complete", refreshed["replication"])
+        self.assertEqual(same_state, standby.store.get(checkpoint_ref(same_state)))
+
     async def test_private_helper_https_requires_trusted_certificate_and_completes_activation(self):
         helper = self.helpers["pi"]
         app = web.Application()

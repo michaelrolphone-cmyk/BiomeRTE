@@ -268,6 +268,8 @@ class CheckpointHelper:
         self.connection = None
         self.replication = "unobserved"
         self.replica_blocks = {}
+        self.confirmed_controller_checkpoint = None
+        self.controller_checkpoint_refresh_at = 0
         if self.store.head() is None and config.get("bootstrap_packet"):
             packet=json.loads(pathlib.Path(config["bootstrap_packet"]).read_text())
             self.store.install(packet)
@@ -448,6 +450,10 @@ class CheckpointHelper:
             self.replica_blocks = {(target["worker_id"], target["worker_incarnation"],
                 b["boot_epoch"], b["grant_token"]): set(refs) for target in acknowledged_targets}
         await asyncio.to_thread(self.store.published,checkpoint_ref(packet))
+        if controller:
+            self.confirmed_controller_checkpoint = (b, reply["checkpoint"])
+            # Recheck even an idle root so a returning helper can catch up.
+            self.controller_checkpoint_refresh_at = time.monotonic() + 5
         return reply
 
     async def prepare(self,request):
@@ -521,6 +527,12 @@ class CheckpointHelper:
             if self.config.get("authority_kind") == "controller" and state.get("format") != STATE_FORMAT:
                 raise Fault("Controller authority requires a complete shard root", 409)
             packet=await asyncio.to_thread(self.store.advance,state,b)
+            ref = checkpoint_ref(packet)
+            if (self.confirmed_controller_checkpoint == (b, ref)
+                    and time.monotonic() < self.controller_checkpoint_refresh_at):
+                # This exact root already passed replication, the durable
+                # witness and the current-binding check within this helper.
+                return {"checkpoint": ref, "replication": self.replication}
             reply=await self.publish_packet(b,packet)
             return {"checkpoint":reply["checkpoint"],"replication":self.replication}
 
