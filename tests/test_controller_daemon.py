@@ -68,6 +68,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 raise Fault("Missing replica acknowledgement",503)
             return {"checkpoint":"fixture"}
         async def phase():
+            # The real private adapter validates the binding before returning
+            # its phase. Revocation on the final fence must still hide a result.
+            await validate(B)
             return {"phase":self.current_phase}
         self.daemon.transport=types.SimpleNamespace(validate=validate)
         self.daemon.publish=publish
@@ -110,6 +113,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         result=await self.daemon.dispatch(self.message())
         self.assertEqual(result["status"],503)
         self.assertNotIn("result",result)
+        self.assertIsNotNone(self.document())
+        self.assertEqual(self.published,2)
 
     async def test_preparation_never_admits_site_commands(self):
         self.current_phase="prepared"
