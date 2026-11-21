@@ -514,6 +514,18 @@ def serve(cfg):
         worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
                         cfg.get("worker_timeout_seconds"))
         worker.stream_handler = live_streams.update
+        # Seed only the provider's own current stream. The publisher still
+        # obtains its normal signed attachment and the router validates it.
+        try:
+            grant = json.loads((worker_state / "vision-stream-resume.json").read_text())
+        except (OSError, ValueError):
+            grant = None
+        if (isinstance(grant, dict) and grant.get("provider") == cfg["provider"]
+                and grant.get("contract") == "robot.vision.stream:1"
+                and grant.get("resource") == cfg["resource"]
+                and all(isinstance(grant.get(key), str) and grant[key] for key in ("id", "authority", "epoch"))
+                and type(grant.get("generation")) is int):
+            live_streams.update([grant])
         pool = ActionPool(worker, cfg["slots"])
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
