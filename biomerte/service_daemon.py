@@ -37,6 +37,25 @@ BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "registry",
                              "reservation", "fence", *RECOVERY_BANDS))
 
 
+class StageTimes:
+    """Measure completed stages using fixed labels and a monotonic clock."""
+    def __init__(self):
+        self.start = self.previous = time.monotonic()
+        self.seconds = {}
+
+    def mark(self, name):
+        now = time.monotonic()
+        self.seconds[name] = now - self.previous
+        self.previous = now
+
+    def report(self, activity, count=1):
+        total = time.monotonic() - self.start
+        if total >= 2.0:
+            LOG.warning("Managed runtime stages activity=%s count=%d seconds=%.3f %s",
+                        activity, count, total, " ".join(
+                            "%s=%.3f" % (name, seconds) for name, seconds in self.seconds.items()))
+
+
 def secret(path):
     value = pathlib.Path(path).read_text().strip()
     if len(value) < 32:
@@ -879,6 +898,7 @@ class AuthorityDaemon:
             await self.publish()
 
     async def dispatch(self,message):
+        stages = StageTimes()
         typ=message.get("type")
         reply=self.authority_response(message, self.binding)
         try:
@@ -890,11 +910,14 @@ class AuthorityDaemon:
             if not controller:
                 await self.transport.validate(self.binding)
             phase=await self.phase()
+            stages.mark("phase")
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
             async with self.lock:
+                stages.mark("lock_wait")
                 # Reconcile any locally durable update whose previous response
                 # was lost before processing another request.
                 await self.publish()
+                stages.mark("prior_publish")
                 if typ=="call":
                     result=await asyncio.to_thread(self.authority.call,
                                       message["envelope"],preparing)
@@ -917,13 +940,16 @@ class AuthorityDaemon:
                         reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
                 else:
                     raise Fault("Service effect admission is unavailable",503)
+                stages.mark("operation")
                 await self.publish()
+                stages.mark("result_publish")
                 if not controller:
                     await self.transport.validate(self.binding,preparing=preparing)
             if controller:
                 # The result is already witnessed. The final check still
                 # fences the reply, without holding the application lock.
                 await self.transport.validate(self.binding,preparing=preparing)
+            stages.mark("validate")
         except (Fault,CheckpointError,KeyError,TypeError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error))
             reply.pop("result",None)
@@ -932,6 +958,7 @@ class AuthorityDaemon:
             reply.update(status=503,error="Service checkpoint transport unavailable")
             reply.pop("result",None)
             reply.pop("grant",None)
+        stages.report(self.authority_request_band(message))
         return reply
 
     async def fence(self,request):
@@ -968,28 +995,40 @@ class AuthorityDaemon:
             return web.json_response({"ready":False},status=503)
 
     async def maintain_once(self):
+        stages = StageTimes()
         self.maintenance_stage = "validate_binding"
         await self.transport.validate(self.binding,preparing=False)
+        stages.mark("validate")
         self.maintenance_stage = "read_phase"
         phase=await self.phase()
+        stages.mark("phase")
         if phase["phase"]!="active":
             return
         async with self.lock:
+            stages.mark("lock_wait")
             self.maintenance_stage = "publish_before_tick"
             await self.publish()
+            stages.mark("prior_publish")
             self.maintenance_stage = "authority_tick"
             await asyncio.to_thread(self.authority.maintain)
+            stages.mark("maintenance")
             self.maintenance_stage = "publish_tick"
             await self.publish()
+            stages.mark("result_publish")
             self.maintenance_stage = "validate_tick"
             await self.transport.validate(self.binding,preparing=False)
+            stages.mark("validate_tick")
             if getattr(self,"events",None) is not None:
                 self.maintenance_stage = "event_delivery"
                 await asyncio.to_thread(self.events.deliver)
+                stages.mark("events")
                 self.maintenance_stage = "publish_events"
                 await self.publish()
+                stages.mark("publish_events")
                 self.maintenance_stage = "validate_events"
                 await self.transport.validate(self.binding,preparing=False)
+                stages.mark("validate_events")
+        stages.report("maintenance")
 
     async def maintenance_loop(self):
         interval=self.config.get("maintenance_interval_s",1)
@@ -1254,6 +1293,7 @@ class AuthorityDaemon:
     async def dispatch_managed_reads(self, messages):
         # Share a publication barrier per batch. Each envelope keeps its own native
         # authorization, receipt and transaction. No reply precedes the ACK.
+        stages = StageTimes()
         replies = [self.authority_response(message, self.binding) for message in messages]
 
         def reject(reply, error):
@@ -1264,8 +1304,11 @@ class AuthorityDaemon:
         try:
             if (await self.phase())["phase"] != "active":
                 raise Fault("Service effect admission is unavailable", 503)
+            stages.mark("phase")
             async with self.lock:
+                stages.mark("lock_wait")
                 await self.publish()
+                stages.mark("prior_publish")
                 for message, reply in zip(messages, replies):
                     try:
                         if message.get("binding") != self.binding:
@@ -1289,14 +1332,18 @@ class AuthorityDaemon:
                         reject(reply, error)
                     except ValueError:
                         reject(reply, Fault("Invalid managed read request", 400))
+                stages.mark("operations")
                 await self.publish()
+                stages.mark("result_publish")
             await self.transport.validate(self.binding, preparing=False)
+            stages.mark("validate")
         except (Fault, CheckpointError, KeyError, TypeError) as error:
             for reply in replies:
                 reject(reply, error)
         except (OSError, asyncio.TimeoutError):
             for reply in replies:
                 reject(reply, Fault("Service checkpoint transport unavailable", 503))
+        stages.report("batch", len(messages))
         return replies
 
     async def serve_controller_socket(self, ws):
