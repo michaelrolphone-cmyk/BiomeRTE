@@ -1,4 +1,5 @@
 from tests.test_bounded_lifecycle import BoundedLifecycle
+from biomerte.app import Application
 from biomerte.store import Fault
 
 
@@ -33,3 +34,52 @@ class StreamGrants(BoundedLifecycle):
         self.call('stream.revoke',session=stream['id'])
         with self.assertRaises(Fault):
             self.call('stream.attach',session=stream['id'],role='server')
+
+    def test_provider_restart_only_receives_grant_for_current_fence(self):
+        self.offer('persistent', stream={'enabled': True})
+        old_lease = self.acquire()
+        self.call('cap.fenced', provider='test', lease=old_lease['id'], generation=old_lease['generation'])
+        old_stream = self.call('stream.open', lease=old_lease['id'])
+        self.call('cap.offer', provider='test', contract='sample:1', resource='slot', state='offline')
+        self.app.tick('site')
+        self.assertEqual('released', self.call('cap.lease', lease=old_lease['id'])['state'])
+
+        self.app = Application(self.tmp.name)
+        self.app.config.update(stream_router_secret='a'*64, stream_gateway_url='wss://gateway/api/stream')
+        self.offer('persistent', stream={'enabled': True})
+        new_lease = self.acquire()
+        self.assertEqual(old_lease['id'], new_lease['id'])
+        self.assertGreater(new_lease['generation'], old_lease['generation'])
+        with self.assertRaises(Fault) as stale_fence:
+            self.call('cap.fenced', provider='test', lease=old_lease['id'], generation=old_lease['generation'])
+        self.assertEqual(409, stale_fence.exception.status)
+
+        self.assertEqual([new_lease['id']], [lease['id'] for lease in self.call('provider.poll', provider='test')['fences']])
+        self.call('cap.fenced', provider='test', lease=new_lease['id'], generation=new_lease['generation'])
+        self.assertEqual([], self.call('provider.poll', provider='test')['streams'])
+        with self.assertRaises(Fault) as stale_stream:
+            self.call('stream.attach', session=old_stream['id'], role='provider')
+        self.assertEqual(409, stale_stream.exception.status)
+
+        new_stream = self.call('stream.open', lease=new_lease['id'])
+        self.assertNotEqual(old_stream['id'], new_stream['id'])
+        self.assertEqual([new_stream['id']], [grant['id'] for grant in self.call('provider.poll', provider='test')['streams']])
+        self.assertTrue(self.call('stream.attach', session=new_stream['id'], role='provider')['attachment_credential'])
+
+    def test_released_lease_collection_does_not_block_another_stream(self):
+        self.offer('persistent', stream={'enabled': True})
+        released = self.acquire('released')
+        self.call('cap.fenced', provider='test', lease=released['id'], generation=released['generation'])
+        self.call('stream.open', lease=released['id'])
+        self.call('cap.release', lease=released['id'])
+        self.now += 301
+        self.app.tick('site')
+        with self.assertRaises(Fault) as missing:
+            self.call('cap.lease', lease=released['id'])
+        self.assertEqual(404, missing.exception.status)
+
+        current = self.acquire('current')
+        self.call('cap.fenced', provider='test', lease=current['id'], generation=current['generation'])
+        live_stream = self.call('stream.open', lease=current['id'])
+        inbox = self.call('provider.poll', provider='test')
+        self.assertEqual([live_stream['id']], [grant['id'] for grant in inbox['streams']])
