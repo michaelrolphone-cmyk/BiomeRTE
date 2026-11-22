@@ -41,7 +41,11 @@ class LiveFrames:
         with self.lock:
             for inbox in self.subscribers:
                 if inbox.full():
-                    inbox.get_nowait()
+                    try:
+                        inbox.get_nowait()
+                    except queue.Empty:
+                        # A reader can take the old frame while we replace it.
+                        pass
                 inbox.put_nowait(value)
 
     def close(self):
