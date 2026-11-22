@@ -13,11 +13,18 @@ repo = here.parents[1]
 
 def bundle():
     files = {p.name: p.read_bytes() for p in (here / 'mac_provider.py', here / 'terminal_adapter.py',
+                                               here / 'terminal_receipt_recovery.py',
+                                               here / 'persistent_transport.py',
                                                here.parent / 'pi-terminal/terminal.py',
                                                here.parent / 'pi-terminal/terminal_limits.py')}
-    for name in ('__init__', 'api', 'worker', 'store', 'identity', 'command_watch'):
+    for name in ('__init__', 'api', 'worker', 'store', 'identity', 'command_watch',
+                 'command_runner', 'supervised_commands', 'worker_expiry', 'worker_history'):
         p = repo / 'biomerte' / (name + '.py')
         files['runtime/biomerte/' + p.name] = p.read_bytes()
+    vendor = repo / 'deploy' / 'transport_vendor'
+    for path in [vendor / 'six.py', *sorted((vendor / 'websocket').glob('*.py')),
+                 *sorted(vendor.glob('*.dist-info/LICENSE')), *sorted(vendor.glob('*.dist-info/COPYING*'))]:
+        files['transport_vendor/' + path.relative_to(vendor).as_posix()] = path.read_bytes()
     files['runtime-source.txt'] = ('Shared BiomeRTE worker sha256 ' +
                                     hashlib.sha256(files['runtime/biomerte/worker.py']).hexdigest() + '\n').encode()
     files['SHA256SUMS.json'] = json.dumps({k: hashlib.sha256(v).hexdigest() for k, v in files.items()}).encode()
