@@ -1304,7 +1304,7 @@ class AuthorityDaemon:
         bands = ("result_status", "read", "lease_demand", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
-        recovery_slots = {"result_status": 4, "lease_demand": 1, "provider_progress": 4, "fence": 4, "lease_status": 4}
+        recovery_slots = {"result_status": 4, "provider_progress": 4, "fence": 4, "lease_status": 4}
         fast_slots = {"inspection": 4, "read": 8, "result_status": recovery_slots["result_status"]}
         # Protocol v1 gateways used 64 concurrent requests and a 20s response
         # budget before advertising the configured values at registration.
@@ -1314,6 +1314,9 @@ class AuthorityDaemon:
         # On a small connection, reserve at most half of its slots and give
         # the first guarantees to the operations that can settle existing work.
         first = dict.fromkeys((*recovery_slots, "inspection", "read", "attachment", *outstanding))
+        # Placement has a separate dispatch queue but shares the existing read
+        # admission budget. Reserving another credit would displace other callers.
+        first.pop("lease_demand")
         credits = list(first) + [band for band, slots in recovery_slots.items() for _ in range(slots - 1)]
         reserved = Counter(credits[:rpc_limit // 2])
         pending = {band: [] for band in outstanding}
@@ -1332,7 +1335,11 @@ class AuthorityDaemon:
             enqueued_at[id(message)] = time.monotonic()
             ready.set()
 
+        def admission_band(band):
+            return "read" if band == "lease_demand" else band
+
         def admit(band):
+            band = admission_band(band)
             # Keep space on the gateway connection for callers reading results,
             # advancing leases and validating fences while ordinary calls queue.
             # Include requests already dispatched until their replies are sent.
@@ -1358,7 +1365,7 @@ class AuthorityDaemon:
                 enqueue(message)
             else:
                 await ws.send_json(reply)
-                outstanding[self.authority_request_band(message)] -= 1
+                outstanding[admission_band(self.authority_request_band(message))] -= 1
 
         async def dispatch_queue():
             index = 0
@@ -1444,7 +1451,7 @@ class AuthorityDaemon:
                             if not ws.closed:
                                 await ws.send_json(reply)
                     for message in batch:
-                        outstanding[self.authority_request_band(message)] -= 1
+                        outstanding[admission_band(self.authority_request_band(message))] -= 1
             finally:
                 if not ws.closed:
                     await ws.close()
