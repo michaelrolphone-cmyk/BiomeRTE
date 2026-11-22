@@ -108,7 +108,9 @@ class AutomatedQualification(unittest.IsolatedAsyncioTestCase):
                     event.set()
                 return streams()
 
-            with (patch.object(runner, "release_binding", AsyncMock(return_value={"manifest_revision": "v1"})),
+            with (patch("tests.qualify_signed_submission_concurrency.scheduled_pressure",
+                        AsyncMock(return_value={"passed": True, "receipt": "fixture"})),
+                  patch.object(runner, "release_binding", AsyncMock(return_value={"manifest_revision": "v1"})),
                   patch.object(runner, "Site"), patch.object(runner, "collect_action", action),
                   patch.object(runner, "observe_streams", observe), patch("builtins.print")):
                 self.assertEqual(await runner.monitor(args), 1)
@@ -140,3 +142,42 @@ class AutomatedQualification(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads((state / "last-measurement.json").read_text()), previous)
             current = json.loads((state / "latest.json").read_text())
             self.assertIn("HTTP 503", current["failures"][0])
+
+    async def test_pressure_failure_keeps_streams_and_first_replies_across_forced_checks(self):
+        from tests.test_signed_submission_concurrency_qualification import SiteFixture
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            node = state / "node.json"
+            node.write_text(json.dumps({"node":"alias", "stream_gateway_url":"wss://gateway.invalid"}))
+            args = SimpleNamespace(state_dir=state, node_file=node, force=True, gateway_home=state,
+                                   window_seconds=4, max_gap_seconds=1, max_delivery_age_seconds=1,
+                                   bridge="ws://127.0.0.1:8093/api/live/vision")
+            site = SiteFixture()
+            site.drop_first_reply = True
+            site.call = AsyncMock(wraps=site.call)
+            async def action(_, op, window):
+                return dict(submission={"operation":op, "status":200, "lease":"metadata"},
+                            results=[{"operation":op, "status":200, "lease":"metadata",
+                                      "state":"succeeded", "has_result":True}],
+                            lease_check={"operation":op, "lease":"metadata", "status":200, "state":"released"})
+            async def observe(public, bridge, node, window, ready):
+                for event in ready.values():
+                    event.set()
+                return streams()
+            with (patch.object(runner, "Site", return_value=site),
+                  patch.object(runner, "collect_action", action), patch.object(runner, "observe_streams", observe),
+                  patch.object(runner, "release_binding", AsyncMock(return_value={"manifest_revision":"v1"})),
+                  patch("builtins.print")):
+                self.assertEqual(await runner.monitor(args), 1)
+                before = json.loads((state / "latest.json").read_text())
+                self.assertEqual(before["evidence"]["streams"], streams())
+                self.assertEqual(before["evidence"]["lease_check"]["state"], "released")
+                self.assertEqual(len(before["failures"]), 1)
+                original = (state / before["signed_pressure"]["receipt"]).read_bytes()
+                self.assertEqual(json.loads(original)["submissions"][0]["status"], 429)
+                total = site.call.await_count
+                self.assertEqual(await runner.monitor(args), 1)
+                self.assertEqual(site.call.await_count, total)
+                after = json.loads((state / "latest.json").read_text())
+                self.assertEqual(after["signed_pressure"], before["signed_pressure"])
+                self.assertEqual((state / after["signed_pressure"]["receipt"]).read_bytes(), original)
