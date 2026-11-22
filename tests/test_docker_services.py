@@ -435,6 +435,26 @@ class CapabilityLeaseTests(RunnerCase):
         self.write_manifest(self.value)
         self.prepare()
 
+    def test_failed_initial_probes_get_only_the_declared_startup_window(self):
+        sid = self.value["id"]
+        grant = self.grant(capability_demand={"id": "d" * 64, "generation": 1})
+        self.runner.accept(self.response(grant), self.clock())
+        child = self.runner.containers[sid]
+        state = self.engine.children[child]["State"]
+        state["Health"] = {"Status": "unhealthy"}
+        self.assertIsNone(self.runner._health(sid))
+        state["Running"] = False
+        self.assertFalse(self.runner._health(sid))
+        state["Running"] = True
+        self.clock.advance(self.value.get("startup_grace_s", 20))
+        self.assertFalse(self.runner._health(sid))
+        state["Health"]["Status"] = "healthy"
+        self.assertTrue(self.runner._health(sid))
+        state["Health"]["Status"] = "unhealthy"
+        self.assertFalse(self.runner._health(sid))
+        self.runner.stop_service(sid)
+        self.assertNotIn(child, self.runner.initial_health_deadlines)
+
     def test_exact_identity_readiness_reuse_replacement_and_release(self):
         for demand in (None, {}, {"id": "x", "generation": 1},
                        {"id": "c" * 64, "generation": True}):
@@ -444,7 +464,7 @@ class CapabilityLeaseTests(RunnerCase):
         grant = self.grant(capability_demand=lease)
         self.runner.accept(self.response(grant), self.clock())
         child = self.runner.containers[self.value["id"]]
-        self.assertFalse(self.runner._health(self.value["id"]))
+        self.assertIsNone(self.runner._health(self.value["id"]))
         self.engine.children[child]["State"]["Health"] = {"Status": "healthy"}
         self.assertTrue(self.runner._health(self.value["id"]))
         self.runner.accept(self.response(grant), self.clock())
