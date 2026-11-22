@@ -49,3 +49,28 @@ class Discovery(unittest.TestCase):
                                            'result_code':'operation_failed'}]})
         self.assertEqual(result['state'], 'degraded')
         self.assertEqual(result['assistants'][0]['state'], 'blocked')
+
+    def test_health_matches_individual_reads_and_enforces_component_permissions(self):
+        from types import SimpleNamespace
+        from biomerte.app import initialize, Application, system_health
+        from biomerte.service_daemon import AuthorityDaemon
+        with tempfile.TemporaryDirectory() as directory:
+            initialize(directory)
+            app = Application(directory)
+            try:
+                report = app.call('system.health', {})
+                self.assertEqual(report['node'], app.node)
+                self.assertEqual(report['controller'], app.call('system.info', {}))
+                self.assertEqual(report['cluster'], app.call('cluster.status', {}))
+                self.assertEqual(report['health'], {'realms': {'site': 'ready'},
+                    'consumer_health': app.call('system.progress', {})})
+                for denied in ('system.info', 'system.progress', 'cluster.status'):
+                    ctx = SimpleNamespace(allowed=lambda name: name != denied)
+                    with self.assertRaises(Fault) as error:
+                        system_health(None, ctx)
+                    self.assertEqual(error.exception.status, 403)
+                self.assertEqual(AuthorityDaemon.authority_request_band(
+                    {'type': 'call', 'envelope': {'operation': 'system.health'}}), 'diagnostic')
+            finally:
+                for store in app.stores.values():
+                    store.close()
