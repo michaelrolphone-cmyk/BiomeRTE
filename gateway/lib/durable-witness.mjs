@@ -68,7 +68,7 @@ export async function durableWitness(req,env){
       typeof value.lease_s!=='number'||!Number.isFinite(value.lease_s)||value.lease_s<=0||value.lease_s>600||
       typeof value.max_grant_s!=='number'||!Number.isFinite(value.max_grant_s)||value.max_grant_s<=0||
       value.max_grant_s>300||value.lease_s<2*value.max_grant_s)throw error('Bounded witness lease and grant interval required');
-   await db.prepare('INSERT INTO service_witness_leases(witness,epoch,boot_id,expires_at,ready_at,max_grant_s) VALUES(?,1,?,'+nowSQL+'+?,'+nowSQL+'+?,?) ON CONFLICT(witness) DO UPDATE SET epoch=service_witness_leases.epoch+1,boot_id=excluded.boot_id,expires_at='+nowSQL+'+?,ready_at='+nowSQL+'+MAX(service_witness_leases.max_grant_s,excluded.max_grant_s),max_grant_s=excluded.max_grant_s WHERE service_witness_leases.expires_at<='+nowSQL)
+   await db.prepare('INSERT INTO service_witness_leases(witness,epoch,boot_id,expires_at,ready_at,max_grant_s) VALUES(?,1,?,'+nowSQL+'+?,'+nowSQL+'+?,?) ON CONFLICT(witness) DO UPDATE SET epoch=service_witness_leases.epoch+1,boot_id=excluded.boot_id,expires_at='+nowSQL+'+?,ready_at='+nowSQL+'+MAX(service_witness_leases.max_grant_s,excluded.max_grant_s),max_grant_s=excluded.max_grant_s WHERE service_witness_leases.expires_at<='+nowSQL+' AND (service_witness_leases.expires_at<>0 OR service_witness_leases.boot_id<>excluded.boot_id)')
     .bind(witness,value.boot_id,value.lease_s,value.max_grant_s,value.max_grant_s,value.lease_s).run();
    const row=await lease(db,witness);
    if(row.boot_id!==value.boot_id||row.expires_at<=row.server_now)
@@ -76,6 +76,16 @@ export async function durableWitness(req,env){
    return response({protocol,lease:row});
   }
   const who=owner(value.owner);
+  if(operation==='release'){
+   // Zero records voluntary retirement. A delayed acquire from this boot
+   // cannot reopen it. The next boot still waits out the prior child grants.
+   await db.prepare('UPDATE service_witness_leases SET expires_at=0 WHERE witness=? AND epoch=? AND boot_id=?')
+    .bind(witness,who.epoch,who.boot_id).run();
+   const row=await lease(db,witness);
+   if(!row||row.boot_id!==who.boot_id||row.epoch!==who.epoch||row.expires_at!==0)
+    throw error('Witness owner changed',409);
+   return response({protocol,released:true});
+  }
   if(operation==='renew'){
    if(typeof value.lease_s!=='number'||!Number.isFinite(value.lease_s)||value.lease_s<=0||value.lease_s>600)
     throw error('Bounded witness lease required');
