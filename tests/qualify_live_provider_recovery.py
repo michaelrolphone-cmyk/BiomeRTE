@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import hmac
+import io
 import json
 import math
 import struct
@@ -42,7 +43,7 @@ def assess(evidence, window_seconds, max_gap_seconds, max_delivery_age_seconds):
         failures.append("the normal signed API did not return the completed result for this operation and lease")
 
     release = evidence.get("lease_check") or {}
-    if (not lease or release.get("operation") != operation
+    if (release.get("status") != 200 or not lease or release.get("operation") != operation
             or release.get("lease") != lease or release.get("state") != "released"):
         failures.append("release of the exact lease was not observed")
 
@@ -60,6 +61,8 @@ def assess(evidence, window_seconds, max_gap_seconds, max_delivery_age_seconds):
             if type(count) is not int or count < 2:
                 failures.append(f"{consumer} {feed} delivered fewer than two distinct records")
                 continue
+            if feed.startswith("frame:") and (sample.get("decoded_frames") != count or sample.get("invalid_frames") != 0):
+                failures.append(f"{consumer} {feed} lacks successful JPEG decoding for every counted frame or delivered corrupt frames")
             if not positive(gap) or gap > max_gap_seconds:
                 failures.append(f"{consumer} {feed} exceeded the {max_gap_seconds:g}s continuity budget ({gap}s)")
             age = sample.get("max_delivery_age_seconds")
@@ -86,7 +89,7 @@ def feed_record(data, *, include_unidentified=False):
     source = next((metadata[key] for key in ("camera_id", "camera", "source")
                    if metadata.get(key) in ("front", "rear")), None)
     name = f"{kind}:{source}"
-    if name not in FEEDS or (kind == "frame" and len(data) == end):
+    if name not in FEEDS or (kind == "frame" and len(data) == end and not include_unidentified):
         return None
     packet = metadata.get("sensor_packet")
     if isinstance(packet, dict):
@@ -101,12 +104,24 @@ def feed_record(data, *, include_unidentified=False):
     return (name, None, metadata.get("processed_monotonic")) if include_unidentified else None
 
 
+def decodable_jpeg(payload):
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(payload), formats=("JPEG",)) as image:
+            image.load()
+        return True
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return False
+
+
 async def capture(session, url, token, window_seconds, ready=None):
     from aiohttp import ClientWSTimeout, WSMsgType
 
     stamps = {feed: [] for feed in FEEDS}
     received_counts = dict.fromkeys(FEEDS, 0)
     unidentified = dict.fromkeys(FEEDS, 0)
+    invalid_frames = dict.fromkeys(FEEDS, 0)
     seen = {feed: set() for feed in FEEDS}
     ages = {feed: [] for feed in FEEDS}
     observation = {"seconds": 0, "feeds": {}}
@@ -126,16 +141,22 @@ async def capture(session, url, token, window_seconds, ready=None):
                     observation["error"] = message.type.name
                     break
                 if message.type == WSMsgType.BINARY:
+                    received = time.monotonic()
                     record = feed_record(message.data, include_unidentified=True)
                     if record is not None:
                         feed, fingerprint, processed = record
                         received_counts[feed] += 1
+                        if feed.startswith("frame:"):
+                            body_offset = 4 + struct.unpack_from("!I", message.data)[0]
+                            payload = memoryview(message.data)[body_offset:]
+                            if not await asyncio.to_thread(decodable_jpeg, payload):
+                                invalid_frames[feed] += 1
+                                continue
                         if fingerprint is None:
                             unidentified[feed] += 1
                             continue
                         if fingerprint not in seen[feed]:
                             seen[feed].add(fingerprint)
-                            received = time.monotonic()
                             stamps[feed].append(received - start)
                             if positive(processed) and processed <= received:
                                 ages[feed].append(received - processed)
@@ -147,11 +168,13 @@ async def capture(session, url, token, window_seconds, ready=None):
                     "records": len(times),
                     "received_records": received_counts[feed],
                     "unidentified_records": unidentified[feed],
-                    "duplicate_records": received_counts[feed] - unidentified[feed] - len(times),
+                    "duplicate_records": received_counts[feed] - unidentified[feed] - invalid_frames[feed] - len(times),
                     "max_gap_seconds": max(b - a for a, b in zip(edges, edges[1:])),
                     "max_delivery_age_seconds": max(ages[feed], default=None),
                     "unclocked_records": len(times) - len(ages[feed]),
                 }
+                if feed.startswith("frame:"):
+                    observation["feeds"][feed].update(decoded_frames=len(times), invalid_frames=invalid_frames[feed])
     except Exception as error:
         observation["error"] = getattr(error, "status", None) or type(error).__name__
     return observation

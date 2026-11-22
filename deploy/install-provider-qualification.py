@@ -21,7 +21,7 @@ def main():
     home = Path.home()
     state = home / ".local/share/biomerte-provider-qualification"
     python = home / ".local/share/biome-robot-vision/env/bin/python"
-    subprocess.run([str(python), "-c", "from aiohttp import ClientWSTimeout"], check=True)
+    subprocess.run([str(python), "-c", "from aiohttp import ClientWSTimeout; from PIL import Image"], check=True)
     files = {name: (root / name).read_bytes() for name in FILES}
     checksum = hashlib.sha256()
     for name, body in files.items():
