@@ -131,6 +131,24 @@ class BulkQueries(unittest.TestCase):
         self.assertEqual(retired,[{n:'offline-'+n for n in self.states}])
         self.assertFalse(list(self.p.directory.glob('*.json')))
 
+    def test_one_invalid_first_enrollment_does_not_block_known_or_new_healthy_contracts(self):
+        broken, new, recovered = sorted(self.states)[:3]
+        self.states = dict.fromkeys((broken, new, recovered), 'ready')
+        del self.remote.rows[broken], self.remote.rows[new]
+        original = self.remote.call
+        def reject_broken_definition(name, args, rid=None):
+            if name == 'cap.define' and args['name'] == self.defs[broken]['name']:
+                raise ValueError('Invalid contract definition')
+            return original(name, args, rid)
+        self.remote.call = reject_broken_definition
+
+        for attempt in range(2):
+            self.assertTrue(self.update())
+            self.assertEqual(self.advertised, {new: 'ready', recovered: 'ready'})
+            self.assertEqual(self.p.pending_names(), {broken})
+        self.assertEqual(sum(op == 'cap.publish' for op, _, _ in self.remote.calls), 1)
+        self.assertEqual(sum(op == 'cap.offer' for op, _, _ in self.remote.calls), 1)
+
     def test_explicit_legacy_protocol_falls_back_once(self):
         original=self.remote.call
         def old(name,args,rid=None):
