@@ -152,6 +152,9 @@ class VisionStore:
         self.db_path = self.data_dir / "vision.sqlite3"
         self._lock = threading.RLock()
         self._closed = False
+        # Serialize checkpoint packages and integrity-cache updates. Acquire this
+        # lock before the SQLite lock when an operation needs both.
+        self._checkpoint_lock = threading.RLock()
         self._checkpoint_integrity = {}
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False,
                                    isolation_level=None)
@@ -871,12 +874,13 @@ PRAGMA user_version=1;
                 stream.flush()
                 os.fsync(stream.fileno())
             _sync_directory(staging)
-            staging.replace(folder)
-            published = True
-            _sync_directory(self.checkpoint_dir)
-            with self._lock:
-                self._open()
-                self._record_checkpoint(result)
+            with self._checkpoint_lock:
+                staging.replace(folder)
+                published = True
+                _sync_directory(self.checkpoint_dir)
+                with self._lock:
+                    self._open()
+                    self._record_checkpoint(result)
             return result
         except BaseException:
             # Once published, retain the complete package even if SQLite
@@ -988,8 +992,9 @@ PRAGMA user_version=1;
 
     def reconcile_checkpoint_inventory(self):
         """Adopt complete orphan publications; never promote partial/retired state."""
-        with self._lock:
-            self._open()
+        with self._checkpoint_lock:
+            with self._lock:
+                self._open()
             recovered = []
             for manifest in self.checkpoint_dir.glob("*/manifest.json"):
                 if manifest.parent.name.endswith(".partial"):
@@ -999,16 +1004,18 @@ PRAGMA user_version=1;
                     identifier = candidate["checkpoint_id"]
                     if self._checkpoint_folder(identifier) != manifest.parent:
                         continue
-                    if self._db.execute("SELECT 1 FROM checkpoints WHERE id=?", (identifier,)).fetchone():
-                        continue
-                    if not self._db.execute("SELECT 1 FROM maps WHERE id=?", (candidate["map_id"],)).fetchone():
-                        continue
-                    if not self._db.execute("SELECT 1 FROM map_revisions WHERE map_id=? AND revision=?",
-                                            (candidate["map_id"], candidate["map_revision"])).fetchone():
-                        continue
+                    with self._lock:
+                        if self._db.execute("SELECT 1 FROM checkpoints WHERE id=?", (identifier,)).fetchone():
+                            continue
+                        if not self._db.execute("SELECT 1 FROM maps WHERE id=?", (candidate["map_id"],)).fetchone():
+                            continue
+                        if not self._db.execute("SELECT 1 FROM map_revisions WHERE map_id=? AND revision=?",
+                                                (candidate["map_id"], candidate["map_revision"])).fetchone():
+                            continue
                     if self._verified_checkpoint(candidate)["availability"] != "available":
                         continue
-                    self._record_checkpoint(candidate)
+                    with self._lock:
+                        self._record_checkpoint(candidate)
                     recovered.append(identifier)
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
@@ -1020,10 +1027,12 @@ PRAGMA user_version=1;
         Legacy records are retained unless a caller explicitly requests a
         one-time recovery audit. Retirement commits before files are removed.
         """
-        with self._lock:
-            self._open()
-            records = [json.loads(row[0]) for row in self._db.execute(
-                "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC")]
+        with self._checkpoint_lock:
+            with self._lock:
+                self._open()
+                rows = self._db.execute(
+                    "SELECT payload FROM checkpoints ORDER BY created_at DESC,id DESC").fetchall()
+            records = [json.loads(row[0]) for row in rows]
             protected = set(protected_ids)
             newest = {}
             backends = {}
@@ -1067,7 +1076,7 @@ PRAGMA user_version=1;
                                              "replacement_checkpoint_id": replacement["checkpoint_id"],
                                              "policy": "current_and_rollback_per_map_plus_explicit",
                                              "legacy_audit": origin is None}}
-                    with self._transaction():
+                    with self._lock, self._transaction():
                         self._db.execute("UPDATE checkpoints SET payload=? WHERE id=?",
                                          (_dump(record), identifier))
                     retired.append(identifier)
@@ -1086,10 +1095,11 @@ PRAGMA user_version=1;
 
 
     def get_checkpoint(self, checkpoint_id):
-        with self._lock:
-            self._open()
-            row = self._db.execute("SELECT payload FROM checkpoints WHERE id=?",
-                                   (checkpoint_id,)).fetchone()
+        with self._checkpoint_lock:
+            with self._lock:
+                self._open()
+                row = self._db.execute("SELECT payload FROM checkpoints WHERE id=?",
+                                       (checkpoint_id,)).fetchone()
             if row is None:
                 return {"availability": "unavailable", "checkpoint_id": checkpoint_id,
                         "reason": "checkpoint_not_found"}
@@ -1097,32 +1107,32 @@ PRAGMA user_version=1;
 
 
     def latest_checkpoint(self, map_id):
-        with self._lock:
-            self._open()
-            self._map_locked(map_id)
-            rows = self._db.execute(
-                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC", (map_id,))
-            for row in rows:
-                result = self._verified_checkpoint(json.loads(row["payload"]))
-                if result["availability"] == "available":
-                    return result
-            return {"availability": "unavailable", "map_id": map_id, "reason": "checkpoint_not_found"}
-
+        return self._latest_verified_checkpoint(map_id, require_backend=False)
 
     def latest_backend_checkpoint(self, map_id):
-        with self._lock:
-            self._open()
-            self._map_locked(map_id)
-            rows = self._db.execute(
-                "SELECT payload FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC", (map_id,))
-            for row in rows:
-                record = json.loads(row["payload"])
-                if record.get("backend_artifact", {}).get("availability") == "available":
-                    result = self._verified_checkpoint(record)
-                    if result["availability"] == "available":
-                        return result
-            return {"availability": "unavailable", "map_id": map_id, "reason": "backend_checkpoint_not_found"}
+        return self._latest_verified_checkpoint(map_id, require_backend=True)
 
+    def _latest_verified_checkpoint(self, map_id, *, require_backend):
+        with self._checkpoint_lock:
+            with self._lock:
+                self._open()
+                self._map_locked(map_id)
+                # Materialize only IDs. A large map can have thousands of manifests.
+                rows = self._db.execute(
+                    "SELECT id FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC",
+                    (map_id,)).fetchall()
+            for row in rows:
+                with self._lock:
+                    payload = self._db.execute(
+                        "SELECT payload FROM checkpoints WHERE id=?", (row[0],)).fetchone()[0]
+                record = json.loads(payload)
+                if require_backend and record.get("backend_artifact", {}).get("availability") != "available":
+                    continue
+                result = self._verified_checkpoint(record)
+                if result["availability"] == "available":
+                    return result
+            reason = "backend_checkpoint_not_found" if require_backend else "checkpoint_not_found"
+            return {"availability": "unavailable", "map_id": map_id, "reason": reason}
 
     def _checkpoint_storage_status(self):
         folders = [path for path in self.checkpoint_dir.iterdir() if path.is_dir() and not path.is_symlink()]
@@ -1134,6 +1144,9 @@ PRAGMA user_version=1;
                 "legacy_retention": "preserved_until_explicit_recovery_audit"}
 
     def status(self):
+        with self._checkpoint_lock:
+            self._open()
+            storage = self._checkpoint_storage_status()
         with self._lock:
             self._open()
             counts = {}
@@ -1146,14 +1159,14 @@ PRAGMA user_version=1;
                 "availability": "available", "schema_version": 1,
                 "database_path": str(self.db_path), "max_observations": self.max_observations,
                 "counts": counts, "maps": maps,
-                "checkpoint_storage": self._checkpoint_storage_status(),
+                "checkpoint_storage": storage,
                 "image_blob_count": len(blobs),
                 "image_bytes": sum(path.stat().st_size for path in blobs if path.exists()),
                 "runtime_liveness": "not_observed_by_store",
                 "estimation": "store_only; no sensor or estimator values are fabricated"}
 
     def close(self):
-        with self._lock:
+        with self._checkpoint_lock, self._lock:
             if not self._closed:
                 self._db.close()
                 self._closed = True

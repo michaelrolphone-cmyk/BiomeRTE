@@ -1,8 +1,10 @@
 """Behavioral tests for persistence, identity, retention and map consistency."""
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -384,6 +386,46 @@ class VisionStoreTests(unittest.TestCase):
                              "available")
             self.assertTrue(Path(item["database_path"]).is_file())
         self.assertEqual(self.store._checkpoint_storage_status()["retained_packages"], 5)
+
+    def test_checkpoint_io_does_not_block_live_observation_reads_or_writes(self):
+        saved = [self.checkpoint_fixture() for _ in range(3)]
+        operations = [
+            ("verification", self.store, "_verified_checkpoint", self.store.retire_superseded_checkpoints),
+            ("exact", self.store, "_verified_checkpoint",
+             lambda: self.store.get_checkpoint(saved[-1]["checkpoint_id"])),
+            ("latest", self.store, "_verified_checkpoint", lambda: self.store.latest_checkpoint(self.map_id)),
+            ("backend", self.store, "_verified_checkpoint",
+             lambda: self.store.latest_backend_checkpoint(self.map_id)),
+            ("status", self.store, "_checkpoint_storage_status", self.store.status),
+        ]
+        # Another superseded package exercises physical cleanup after inventory retirement.
+        for label, target, attribute, operation in operations + [
+                ("unlink", shutil, "rmtree", self.store.retire_superseded_checkpoints)]:
+            if label == "unlink":
+                self.checkpoint_fixture()
+            with self.subTest(operation=label):
+                entered, resume = threading.Event(), threading.Event()
+                original = getattr(target, attribute)
+
+                def slow_io(*args, **kwargs):
+                    entered.set()
+                    if not resume.wait(10):
+                        raise RuntimeError("verification was never released")
+                    return original(*args, **kwargs)
+
+                def live_round_trip():
+                    written = self.publish("frame-" + label)
+                    read = self.store.latest_snapshot(session_id=self.session_id)
+                    self.assertEqual(read["snapshot_id"], written["snapshot_id"])
+
+                with patch.object(target, attribute, side_effect=slow_io), ThreadPoolExecutor(2) as workers:
+                    maintenance = workers.submit(operation)
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        workers.submit(live_round_trip).result(timeout=1)
+                    finally:
+                        resume.set()
+                    maintenance.result(timeout=3)
 
     def test_retired_record_stays_unavailable_when_unlink_fails_and_retry_cleans(self):
         snapshots = [self.checkpoint_fixture() for _ in range(3)]
