@@ -73,6 +73,8 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     redeployment.register_offer(tx, ctx, rec)
     tx.put('offers', key, rec)
     tx.emit('offer.updated', {'offer': key, 'state': state})
+    if state == 'ready':
+        observe_contact(ctx, provider, resource)
     return dict(rec, capacity=capacity_of(tx, rec))
 
 
@@ -150,6 +152,31 @@ def delete(tx, ctx, offer='', contract='', delete_contract=False, allow_system=F
     return {'deleted': key, 'kind': kind, 'audit_event': event['id']}
 
 
+def observe_contact(ctx, provider, resource=None):
+    if getattr(ctx, 'authenticated_provider', None) == provider:
+        ctx.app.provider_contacts[(provider, resource)] = time.monotonic()
+
+
+def effective_offer(tx, ctx, offer):
+    """A restored native execution offer needs a worker in contact with this authority."""
+    app = ctx.app
+    cfg = offer.get('configuration', {})
+    if (not getattr(app, 'controller_runtime', None) or offer['state'] != 'ready'
+            or not cfg.get('execution_custody')):
+        return offer
+    provider = offer['provider']
+    peer = tx.get('peers', provider)
+    if not peer or 'provider.poll' not in peer.get('scopes', []):
+        return offer  # Delegated publishers use the existing offer registration lifecycle.
+    seen = max(app.provider_contacts.get((provider, None), float('-inf')),
+               app.provider_contacts.get((provider, offer['resource']), float('-inf')))
+    lifetime = cfg.get('heartbeat_interval_seconds', 60) * cfg.get('missed_heartbeats_limit', 3)
+    if peer['enabled'] and time.monotonic() - seen < lifetime:
+        return offer
+    return dict(offer, state='offline', advertised_state=offer['state'],
+                availability_reason='no_recent_signed_provider_contact')
+
+
 @op('cap.discover', 'contract?:str', False)
 def discover(tx, ctx, contract=''):
     """List capabilities with per-contract and provider-specific call examples, prerequisites and result paths."""
@@ -167,6 +194,7 @@ def discover(tx, ctx, contract=''):
         guide.update(override)
         if 'parameters' in override:
             guide['parameters'] = dict(guides[key].get('parameters', {}), **override['parameters'])
+        off = effective_offer(tx, ctx, off)
         offers.append(dict(off, capacity=capacity_of(tx, off),
                            usage=caller_usage(definitions[key], guide, off['resource'], off.get('configuration', {}).get('stream'))))
     by_contract = {item['id']: item for item in contracts}
@@ -272,7 +300,10 @@ def bind(tx, ctx, request):
         return None
     for of in tx.rows('offers'):
         resource = of['resource']
-        if of['contract'] != request['contract'] or not admitted(tx, of, request.get('maintenance_deployment', '')):
+        if of['contract'] != request['contract']:
+            continue
+        of = effective_offer(tx, ctx, of)
+        if not admitted(tx, of, request.get('maintenance_deployment', '')):
             continue
         if not selection.matches(of, request['requested_resource'], request.get('placement')):
             continue
@@ -487,8 +518,12 @@ def dispatch(tx, ctx, lease, inputs, operation, destination='', release_after_re
         raise Fault('Use stream.open for this streaming interface', 409)
     contract = tx.need('contracts', l['contract'])
     validate(contract['inputs'], inputs)
-    if not hold and (l['state'] not in ('bound', 'fencing') or not admitted(tx, tx.need('offers', l['offer']), l.get('maintenance_deployment', ''))):
-        raise Fault('Lease unavailable', 409)
+    if not hold:
+        if l['state'] not in ('bound', 'fencing'):
+            raise Fault('Lease unavailable', 409)
+        offer = effective_offer(tx, ctx, tx.need('offers', l['offer']))
+        if not admitted(tx, offer, l.get('maintenance_deployment', '')):
+            raise Fault('Lease unavailable', 409)
     from .authorization import guard, observe
     guard(tx, key, l['contract'], l['resource'], inputs, ctx)
     a = {'id': key, 'contract': l['contract'], 'lease': lease, 'provider': l.get('provider', ''),
@@ -546,6 +581,7 @@ def pending(tx, ctx, provider, limit=64, lease='', generation=None):
         if current['state'] == 'fencing':
             if not held:
                 empty['fences'] = [current]
+            observe_contact(ctx, provider, current['resource'])
             return empty
         empty['actions'] = [a for a in tx.matching('actions', ('queued', 'claimed'), lease=lease)
                             if a['provider'] == provider and a['generation'] == generation and
@@ -557,6 +593,7 @@ def pending(tx, ctx, provider, limit=64, lease='', generation=None):
                     empty['streams'].append(valid_stream(tx, ctx, grant))
                 except Fault:
                     continue
+        observe_contact(ctx, provider, current['resource'])
         return empty
     leases = [l for l in tx.matching('leases', ('fencing',)) if l['provider'] == provider
               and not redeployment.target(tx, l)]
@@ -578,6 +615,7 @@ def pending(tx, ctx, provider, limit=64, lease='', generation=None):
             streams.append(valid_stream(tx, ctx, grant))
         except Fault:
             continue
+    observe_contact(ctx, provider)
     return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations, 'streams': streams}
 
 

@@ -124,8 +124,8 @@ def compact(tx, lease, action, now):
 
 @op('cap.resource.status','resource:str',False)
 def status(tx,ctx,resource):
-    from .providers import owner
-    offers = [o for o in tx.rows('offers') if o['resource']==resource]
+    from .providers import effective_offer, owner
+    offers = [effective_offer(tx, ctx, o) for o in tx.rows('offers') if o['resource']==resource]
     for offer in offers:
         owner(ctx,offer['provider'])
     leases = [l for l in tx.matching('leases',('bound','fencing')) if l['resource']==resource]
