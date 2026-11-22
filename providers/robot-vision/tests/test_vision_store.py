@@ -204,6 +204,74 @@ class VisionStoreTests(unittest.TestCase):
                 "T_map_camera": [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
             })
 
+    def test_map_scan_allows_observation_io_and_keeps_its_wal_snapshot(self):
+        self.publish("before-map")
+        self.store.apply_map_update(self.map_id, 0, [self.point("old", [1, 2, 3])])
+        scan, resume = threading.Event(), threading.Event()
+        connect = sqlite3.connect
+
+        def pause_scan(sql):
+            if sql.startswith("SELECT e.*") and "entity_versions" in sql:
+                scan.set()
+                resume.wait(5)
+
+        def watched_connect(*args, **kwargs):
+            reader = connect(*args, **kwargs)
+            reader.set_trace_callback(pause_scan)
+            return reader
+
+        def publish_during_scan():
+            before = self.store.latest_snapshot()["frame_id"]
+            self.store.apply_map_update(self.map_id, 1, [
+                {"op": "delete", "kind": "sparse_point", "entity_id": "old"},
+                self.point("new", [5, 6, 7])])
+            return before, self.publish("during-map")["frame_id"]
+
+        self.store._db.set_trace_callback(pause_scan)
+        with patch("vision_store.sqlite3.connect", side_effect=watched_connect), ThreadPoolExecutor(2) as pool:
+            page = pool.submit(self.store.read_map, self.map_id)
+            try:
+                self.assertTrue(scan.wait(2))
+                progress = pool.submit(publish_during_scan)
+                self.assertEqual(progress.result(timeout=2), ("before-map", "during-map"))
+            finally:
+                resume.set()
+            page = page.result(timeout=2)
+        self.store._db.set_trace_callback(None)
+        self.assertEqual(page["map"]["revision"], 1)
+        self.assertEqual([item["entity_id"] for item in page["entities"]], ["old"])
+        after = self.store.read_map(self.map_id)
+        self.assertEqual(after["map"]["revision"], 2)
+        self.assertEqual([item["entity_id"] for item in after["entities"]], ["new"])
+
+    def test_map_reader_finishes_across_close_and_releases_its_wal_connection(self):
+        self.store.apply_map_update(self.map_id, 0, [self.point("saved", [0, 0, 0])])
+        connect = sqlite3.connect
+        readers = []
+
+        def record_reader(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            readers.append(db)
+            return db
+
+        def close_after_metadata(cursor, query):
+            self.store.close()
+            return 0
+
+        with patch("vision_store.sqlite3.connect", side_effect=record_reader):
+            with self.assertRaises(KeyError):
+                self.store.read_map("unknown")
+            with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                readers[0].execute("SELECT 1")
+            with patch.object(self.store, "_cursor", side_effect=close_after_metadata):
+                page = self.store.read_map(self.map_id)
+            self.assertEqual([e["entity_id"] for e in page["entities"]], ["saved"])
+            with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                readers[1].execute("SELECT 1")
+            with self.assertRaisesRegex(RuntimeError, "VisionStore is closed"):
+                self.store.read_map(self.map_id)
+            self.assertEqual(len(readers), 2)
+
     def test_map_and_delta_pages_pin_the_revision(self):
         self.store.apply_map_update(self.map_id, 0, [
             self.point("a", [1, 0, 0]), self.point("b", [2, 0, 0]), self.point("c", [3, 0, 0])])
