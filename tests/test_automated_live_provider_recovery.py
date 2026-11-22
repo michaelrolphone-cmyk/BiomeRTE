@@ -14,7 +14,9 @@ from tests.qualify_live_provider_recovery import CONSUMERS, FEEDS, assess
 def streams(window=4):
     return {key: {"seconds": window, "feeds": {
         feed: {"records": 9, "max_gap_seconds": 0.5, "max_delivery_age_seconds": 0.2, "unclocked_records": 0,
-               **({"decoded_frames": 9, "invalid_frames": 0} if feed.startswith("frame:") else {})}
+               **({"decoded_frames": 9, "invalid_frames": 0} if feed.startswith("frame:")
+                  else {"instrument_samples": {"imu.front" if feed.endswith("front") else "lidar.rear": 9},
+                                "instrument_max_gap_seconds": {"imu.front" if feed.endswith("front") else "lidar.rear": 0.5}})}
         for feed in FEEDS}} for key in CONSUMERS}
 
 
