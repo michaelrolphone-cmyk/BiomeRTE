@@ -39,6 +39,25 @@ class ImageReleaseTests(unittest.TestCase):
         arm32[18:20] = (183).to_bytes(2, "little")
         images.validate_elf(arm32, "linux/arm64")
 
+    def test_direct_build_checks_actual_python_against_requested_target(self):
+        from argparse import Namespace
+        with tempfile.TemporaryDirectory() as folder:
+            binary = Path(folder) / "python"
+            with patch.object(images.sys, "executable", str(binary)):
+                header = bytearray(20)
+                header[:6] = b"\x7fELF\x01\x01"
+                header[18:20] = (40).to_bytes(2, "little")
+                binary.write_bytes(header)
+                self.assertEqual(images.runtime_platform(Namespace(platform="linux/arm/v7")),
+                                 {"runtime_platform": "linux/arm/v7"})
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    images.runtime_platform(Namespace(platform="linux/arm64"))
+                header[4] = 2
+                header[18:20] = (183).to_bytes(2, "little")
+                binary.write_bytes(header)
+                self.assertEqual(images.runtime_platform(Namespace(platform="linux/arm64/v8")),
+                                 {"runtime_platform": "linux/arm64"})
+
     def sample(self, directory):
         artifact = directory / "service-linux-arm64.tar"
         artifact.write_bytes(b"verified native export")
