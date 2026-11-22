@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from biomerte.app import Application, initialize
 from biomerte.store import uid
@@ -19,6 +19,40 @@ def streams(window=4):
 
 
 class AutomatedQualification(unittest.IsolatedAsyncioTestCase):
+    async def test_signed_failures_retain_only_bounded_diagnostics_for_each_call(self):
+        site = runner.Site.__new__(runner.Site)
+        def gateway(_url, rpc, **kwargs):
+            args = rpc["params"]["arguments"]
+            op = args["operation"]
+            values = {"cap.submit": (429, "Managed controller is busy"),
+                      "cap.lease": (404, "private lease details")}
+            if op == "cap.status":
+                result = {"structuredContent": {"id": "operation", "state": "succeeded", "lease": "lease",
+                          "result": {"result": {"camera": {}}}}}
+            else:
+                status, detail = values[op]
+                result = {"isError": True, "structuredContent": {"status": status, "retry_same_id": True,
+                          "error_code": "CONTROLLER_RUNTIME_UNAVAILABLE", "private": "secret"},
+                          "content": [{"type": "text", "text": detail}]}
+            return {"id": rpc["id"], "result": result}
+        site.gateway = SimpleNamespace(request=gateway, RESOURCE="https://example.invalid/",
+                                       credentials=lambda: {"access_token": "secret"})
+        proof = await runner.collect_action(site, "operation", 3)
+        for item in [proof["submission"], proof["results"][0], proof["lease_check"]]:
+            self.assertGreater(item["started_at"], 0)
+            self.assertGreaterEqual(item["elapsed_seconds"], 0)
+            self.assertTrue(item["request_id"])
+        self.assertEqual(proof["submission"]["request_id"], "operation-submit")
+        self.assertEqual(proof["submission"]["error_category"], "Managed controller is busy")
+        self.assertEqual(proof["lease_check"]["error_category"], "signed_runtime")
+        self.assertTrue(proof["lease_check"]["retry_same_id"])
+        encoded = json.dumps(proof)
+        self.assertNotIn("secret", encoded)
+        self.assertNotIn("private", encoded)
+        site.gateway.request = Mock(side_effect=type("HTTPFailure", (Exception,), {"status": 429})("private"))
+        status, details = await site.call("cap.status", {"operation":"operation"}, "r")
+        self.assertEqual((status, details), (429, {"error_category": "http_transport"}))
+
     async def test_real_combined_submission_releases_lease_and_preserves_a_lost_submit_response(self):
         with tempfile.TemporaryDirectory() as temp:
             initialize(temp)
