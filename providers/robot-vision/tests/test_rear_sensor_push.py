@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -112,5 +113,62 @@ class SocketTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(InvalidStatus):
             async with connect(self.url,additional_headers={"Authorization":"Sensor wrong"}):
                 pass
+
+    async def test_lidar_delivers_while_jpeg_consumer_is_blocked(self):
+        from websockets.asyncio.client import connect
+        from test_capture_packet import packet as camera_packet
+        entered, release = threading.Event(), threading.Event()
+        callback_finished = []
+        def publish(metadata, image):
+            if image:
+                entered.set()
+                callback_finished.append(release.wait(3))
+            self.output.append((metadata, image))
+        self.rig.service.rear_live_frames.publish = publish
+        frame = camera_packet()
+        frame.update(receiver_id="rear-test", camera_id="rear")
+        header = json.dumps(frame).encode()
+        payload = len(header).to_bytes(4, "big") + header + bytes.fromhex("ffd8ffe0ffd9")
+        async with connect(self.url.replace("/sensors", "/camera"),
+                           additional_headers={"Authorization": "Sensor " + "x" * 32}) as camera:
+            await camera.send(payload)
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                await self.exchange("independent-lidar")
+                self.assertEqual(self.output[-1][0]["sensor_packet"]["boot_id"], "independent-lidar")
+                self.assertEqual(callback_finished, [])
+            finally:
+                release.set()
+            while True:
+                reply = json.loads(await asyncio.wait_for(camera.recv(), 2))
+                if reply["type"] == "camera_ack":
+                    self.assertEqual(reply["frame_id"], frame["frame_id"])
+                    break
+        self.assertEqual(callback_finished, [True])
+
+    async def test_route_registry_wait_does_not_block_other_socket_handshakes(self):
+        from unittest.mock import patch
+        from websockets.asyncio.client import connect
+        from device_routes import DeviceRoutes
+        entered, release = threading.Event(), threading.Event()
+        original = DeviceRoutes.observe
+        released_by_test = []
+        def slow_observe(registry, *args):
+            entered.set()
+            released_by_test.append(release.wait(3))
+            return original(registry, *args)
+        with patch.object(DeviceRoutes, "observe", slow_observe):
+            sensor = asyncio.create_task(self.exchange("route-wait"))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                async with connect(self.url.replace("/sensors", "/camera"),
+                                   additional_headers={"Authorization": "Sensor " + "x" * 32}) as camera:
+                    clock = json.loads(await asyncio.wait_for(camera.recv(), 2))
+                    self.assertEqual(clock["type"], "clock")
+                    self.assertEqual(released_by_test, [])
+            finally:
+                release.set()
+                await sensor
+        self.assertEqual(released_by_test, [True])
 
 if __name__=="__main__":unittest.main()
