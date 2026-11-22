@@ -63,6 +63,40 @@ class VisionUplinkNegotiation(unittest.IsolatedAsyncioTestCase):
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
 
+    async def test_only_opted_in_site_origins_advertise_shared_vision(self):
+        advertised = asyncio.Queue()
+
+        async def attachment(request):
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await advertised.put(request.headers.get("X-Bridge-Capabilities", ""))
+            async for _ in socket:
+                pass
+            return socket
+
+        app = web.Application()
+        app.router.add_get("/rover/bridge", attachment)
+        async with TestServer(app) as server:
+            url = str(server.make_url("/"))
+            native = "ws://127.0.0.1:8751"
+            cases = [
+                ({}, set()),
+                ({"native_router": native}, {"native_router", "owner_inspect"}),
+                ({"shared_site_vision": True}, {"shared_site_vision_v1"}),
+                ({"native_router": native, "shared_site_vision": True},
+                 {"native_router", "owner_inspect", "shared_site_vision_v1"}),
+            ]
+            for options, expected in cases:
+                with self.subTest(options=options):
+                    task = asyncio.create_task(Outbound(url, url, "test-secret", **options).run())
+                    try:
+                        header = await asyncio.wait_for(advertised.get(), timeout=2)
+                        self.assertEqual(set(filter(None, header.split(","))), expected)
+                    finally:
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+
     async def test_vision_negotiates_lossless_compression(self):
         await self.assert_link("vision", True, True)
 

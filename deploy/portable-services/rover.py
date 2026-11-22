@@ -221,7 +221,8 @@ async def run(config):
         await web.TCPSite(runner, "127.0.0.1", port).start()
         transport = asyncio.create_task(Outbound(config["public_stream_gateway"],
             "http://127.0.0.1:" + str(port), secret, rover.local_router,
-            allowed_private_router_hosts=config.get("private_router_hosts", ())).run())
+            allowed_private_router_hosts=config.get("private_router_hosts", ()),
+            shared_site_vision=True).run())
         waiter = asyncio.create_task(stopped.wait())
         done, unused = await asyncio.wait((transport, waiter), return_when=asyncio.FIRST_COMPLETED)
         if transport in done:
