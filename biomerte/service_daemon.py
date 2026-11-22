@@ -25,8 +25,8 @@ from .service_checkpoint import (
     select_current)
 from .service_authority import ScopedAuthority
 from .controller_authority import ControllerAuthority
-from .checkpoint_chunks import (ChunkError, STATE_FORMAT, BLOCK_BYTES, state_blocks,
-                                valid_digest, iter_records)
+from .checkpoint_chunks import (ChunkError, STATE_FORMAT, BLOCK_BYTES, UPLOAD_BATCH_BYTES,
+                                UPLOAD_BATCH_BLOCKS, state_blocks, valid_digest, iter_records)
 from .docker_services import container_name
 
 LOG = logging.getLogger("biomerte.service")
@@ -372,7 +372,11 @@ class CheckpointHelper:
     async def chunk_put(self, body):
         b = binding(body.get("binding"))
         await self.validate(b)
-        block = body.get("block")
+        result = await asyncio.to_thread(self.store_block, body.get("block"))
+        await self.validate(b)
+        return result
+
+    def store_block(self, block):
         if not isinstance(block, dict) or not isinstance(block.get("data"), str):
             raise CheckpointError("Encoded controller block required")
         if len(block["data"]) > ((BLOCK_BYTES + 2) // 3) * 4:
@@ -381,9 +385,32 @@ class CheckpointHelper:
             raw = base64.b64decode(block["data"], validate=True)
         except (ValueError, TypeError):
             raise CheckpointError("Invalid controller block encoding")
-        result = await asyncio.to_thread(self.store.chunks.put, raw, valid_digest(block.get("digest")))
+        return self.store.chunks.put(raw, valid_digest(block.get("digest")))
+
+    async def chunk_put_many(self, body):
+        b = binding(body.get("binding"))
         await self.validate(b)
-        return result
+        blocks = body.get("blocks")
+        if not isinstance(blocks, list) or not 1 <= len(blocks) <= UPLOAD_BATCH_BLOCKS:
+            raise CheckpointError("Bounded nonempty checkpoint block batch required")
+        # Account for per-block base64 padding without decoding an oversized batch.
+        size = 0
+        seen = set()
+        for block in blocks:
+            if not isinstance(block, dict) or not isinstance(block.get("data"), str):
+                raise CheckpointError("Encoded controller block required")
+            digest = valid_digest(block.get("digest"))
+            data = block["data"]
+            if not data or len(data) % 4 or len(data) > ((BLOCK_BYTES + 2) // 3) * 4:
+                raise CheckpointError("Invalid checkpoint block size")
+            padding = 2 if data.endswith("==") else int(data.endswith("="))
+            size += len(data) // 4 * 3 - padding
+            if digest in seen or size > UPLOAD_BATCH_BYTES:
+                raise CheckpointError("Duplicate or oversized checkpoint block batch")
+            seen.add(digest)
+        receipts = await asyncio.to_thread(lambda: [self.store_block(block) for block in blocks])
+        await self.validate(b)
+        return {"receipts": receipts}
 
     async def replicate_chunks(self, b, packet, targets):
         refs = state_blocks(packet["payload"]["state"])
@@ -680,6 +707,8 @@ class CheckpointHelper:
                 value=await self.chunk_missing(body)
             elif body.get("operation")=="chunk_put":
                 value=await self.chunk_put(body)
+            elif body.get("operation")=="chunk_put_many":
+                value=await self.chunk_put_many(body)
             elif body.get("operation")=="status":
                 b=binding(body.get("binding"))
                 await self.validate(b)
@@ -689,6 +718,8 @@ class CheckpointHelper:
                 value=dict(phase,generation_floors=await asyncio.to_thread(
                     self.store.generation_floors,self.config.get("resources", [])),
                     replication=self.replication)
+                if self.config.get("authority_kind") == "controller":
+                    value["chunk_put_many"] = True
             else:
                 raise Fault("Unknown service adapter operation",400)
             return web.json_response(value,headers={"Cache-Control":"no-store"})
@@ -865,7 +896,9 @@ class AuthorityDaemon:
             self.config.get("request_timeout_s",15),self.config.get("adapter_ca_file"))
 
     async def phase(self):
-        return await self.helper("status")
+        phase = await self.helper("status")
+        self.checkpoint_bulk_upload = phase.get("chunk_put_many") is True
+        return phase
 
     async def publish(self):
         if self.config.get("authority_kind")=="controller":

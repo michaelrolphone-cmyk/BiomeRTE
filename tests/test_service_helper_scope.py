@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 from biomerte.service_checkpoint import PROTOCOL
-from biomerte.service_daemon import CheckpointHelper
+from biomerte.service_daemon import AuthorityDaemon, CheckpointHelper
 from biomerte.store import Fault
 
 
@@ -75,7 +75,7 @@ class HelperScopeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_local_adapter_rejects_foreign_scope_before_chunk_or_phase_access(self):
         other = dict(BINDING, service_id="relay")
-        for operation in ("chunk_missing", "chunk_put"):
+        for operation in ("chunk_missing", "chunk_put", "chunk_put_many"):
             with self.subTest(operation=operation):
                 with self.assertRaises(Fault) as caught:
                     await getattr(self.helper, operation)({"binding": other})
@@ -99,6 +99,34 @@ class HelperScopeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("controller", reply["service_id"])
         self.assertIsNone(reply["checkpoint"])
         self.assertEqual({"durable": True, "retained": []}, reply["result"])
+
+    async def test_helper_advertisement_is_read_again_after_replacement(self):
+        self.helper.config["authority_kind"] = "controller"
+        self.helper.replication = "complete"
+        self.helper.store.phase.return_value = dict(binding=BINDING, phase="active")
+        self.helper.store.generation_floors.return_value = {}
+        request = types.SimpleNamespace(headers={"Authorization": "Bearer " + self.helper.token},
+            path="/adapter",json=AsyncMock(return_value={"operation": "status", "binding": BINDING}))
+        response = await self.helper.handle(request)
+        self.assertEqual(response.status, 200)
+        advertised = json.loads(response.body)
+        daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+        daemon.helper = AsyncMock(side_effect=[advertised, {"phase": "active"}])
+        await daemon.phase()
+        self.assertTrue(daemon.checkpoint_bulk_upload)
+        await daemon.phase()
+        self.assertFalse(daemon.checkpoint_bulk_upload)
+
+    async def test_invalid_or_oversized_batch_rejects_before_storage(self):
+        import base64
+        from biomerte.checkpoint_chunks import BLOCK_BYTES
+        from biomerte.service_checkpoint import CheckpointError
+        data = base64.b64encode(b'x' * BLOCK_BYTES).decode()
+        blocks = [{"digest": format(i, '064x'), "data": data} for i in range(5)]
+        for invalid in ([], blocks, [blocks[0], blocks[0]], [dict(blocks[0], data="==")]):
+            with self.assertRaises(CheckpointError):
+                await self.helper.chunk_put_many({"binding": BINDING, "blocks": invalid})
+        self.assertEqual(self.helper.store.mock_calls, [])
 
 
 class Socket:
