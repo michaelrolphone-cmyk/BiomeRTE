@@ -139,6 +139,7 @@ async def release_binding(session, origin, alias):
 
 async def monitor(args):
     from aiohttp import ClientSession, ClientTimeout
+    from tests.qualify_signed_submission_concurrency import pressure_directory, reconcile_pressure, scheduled_pressure
 
     state = args.state_dir
     latest = state / "latest.json"
@@ -157,7 +158,7 @@ async def monitor(args):
             origin = "https://" + router.netloc
             placement = await release_binding(session, origin, node["node"])
             report["placement"] = placement
-            if (not args.force and placement == prior.get("placement")
+            if (not args.force and prior.get("signed_pressure") and placement == prior.get("placement")
                     and time.time() - (prior.get("finished") or 0) < (3600 if prior["passed"] else 900)):
                 print(json.dumps(dict(reused=True, passed=prior["passed"], finished=prior["finished"])))
                 return int(not prior["passed"])
@@ -170,18 +171,41 @@ async def monitor(args):
             site = Site(args.gateway_home)
             ready = {consumer: asyncio.Event() for consumer in CONSUMERS}
 
-            async def observe_action():
+            async def await_connections():
                 try:
                     async with asyncio.timeout(12):
                         await asyncio.gather(*(signal.wait() for signal in ready.values()))
                 except TimeoutError:
                     report["failures"].append("both consumers had not connected before submission")
+
+            connections = asyncio.create_task(await_connections())
+
+            async def observe_action():
+                await connections
                 if not recovering:
                     save(pending, {"operation": operation})
                 return await collect_action(site, operation, args.window_seconds)
 
-            action, streams = await asyncio.gather(observe_action(),
-                observe_streams(public, args.bridge, args.node_file, args.window_seconds, ready=ready))
+            async def observe_pressure():
+                await connections
+                # Reconciliation runs on a later observation and never reissues a submit.
+                try:
+                    folder = pressure_directory(state, placement)
+                    previous_attempt = (folder / "started.json").exists()
+                    result = await scheduled_pressure(state, placement, site,
+                        lambda: release_binding(session, origin, node["node"]))
+                    if previous_attempt and not result["passed"]:
+                        await reconcile_pressure(state, placement, site)
+                    return result
+                except Exception as error:
+                    return dict(passed=False, observation_error=type(error).__name__)
+
+            action, streams, pressure = await asyncio.gather(observe_action(),
+                observe_streams(public, args.bridge, args.node_file, args.window_seconds, ready=ready),
+                observe_pressure())
+            report["signed_pressure"] = pressure
+            if not pressure["passed"]:
+                report["failures"].append("signed concurrency qualification failed; see first release pressure receipt")
             report["evidence"] = dict(action, streams=streams)
             report["failures"].extend(assess(report["evidence"], args.window_seconds,
                                              args.max_gap_seconds, args.max_delivery_age_seconds))

@@ -10,7 +10,8 @@ import sys
 import tempfile
 
 LABEL = "org.biomerte.provider-qualification"
-FILES = ("tests/__init__.py", "tests/qualify_live_provider_recovery.py", "tests/run_live_provider_recovery.py")
+FILES = ("tests/__init__.py", "tests/qualify_live_provider_recovery.py", "tests/run_live_provider_recovery.py",
+         "tests/qualify_signed_submission_concurrency.py")
 
 
 def main():
