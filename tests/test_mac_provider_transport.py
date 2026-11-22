@@ -37,3 +37,17 @@ class MacProviderTransport(unittest.TestCase):
             self.assertEqual(invoke.call_args.kwargs['provider_context']['provider'], 'b' * 64)
         with self.assertRaises(ValueError):
             self.provider.invoke_provider('provider.poll', {}, 'request')
+
+    def test_attachment_error_carries_public_status_without_joining_the_http_retry_loop(self):
+        provider = self.provider
+        for status in (403, 429, 503):
+            reply = {'result': {'isError': True, 'structuredContent': {'status': status},
+                                'content': [{'type': 'text', 'text': 'Managed stream unavailable'}]}}
+            with self.subTest(status=status), mock.patch.object(provider, '_persistent') as ws, \
+                 mock.patch.object(provider, 'credentials', return_value={'access_token': 'fixture'}):
+                ws.invoke.return_value = reply
+                with self.assertRaisesRegex(RuntimeError, 'Managed stream unavailable') as caught:
+                    provider.invoke_provider('stream.attach', {'session': 'original'}, 'original-request',
+                                             provider='b' * 64)
+                self.assertEqual(getattr(caught.exception, 'status', None), status)
+                ws.invoke.assert_called_once()

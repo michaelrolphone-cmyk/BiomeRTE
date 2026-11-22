@@ -26,6 +26,12 @@ class HTTPFailure(RuntimeError):
         # Never echo token response bodies or credentials to persistent logs.
         super().__init__('Gateway HTTP %s (%s)' % (status, body.get('error', 'request rejected') if isinstance(body, dict) else 'non-JSON response'))
 
+class ControllerOperationError(RuntimeError):
+    def __init__(self, detail, structured):
+        super().__init__(detail[:500])
+        status = structured.get('status') if isinstance(structured, dict) else None
+        self.status = status if type(status) is int and 400 <= status < 600 else None
+
 def request(url, obj=None, form=False, headers=None):
     if urllib.parse.urlsplit(url).scheme != 'https' or urllib.parse.urlsplit(url).netloc != urllib.parse.urlsplit(ORIGIN).netloc:
         raise RuntimeError('Unexpected gateway origin')
@@ -147,7 +153,7 @@ def invoke(operation, arguments=None, rid=None, realm='site', provider_context=N
                 detail = ' '.join(x.get('text', '') for x in result.get('content', []) if x.get('type') == 'text')
                 if 'has not replied yet' in detail or 'queue is busy' in detail:
                     raise ConnectionError('Controller reply pending')
-                raise RuntimeError(detail[:500])
+                raise ControllerOperationError(detail, result.get('structuredContent'))
             if result.get('structuredContent') is not None:
                 return result['structuredContent']
             return json.loads(next(x['text'] for x in result['content'] if x['type'] == 'text'))
