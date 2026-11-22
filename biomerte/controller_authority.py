@@ -13,6 +13,7 @@ import json
 import threading
 
 from . import session_api
+from .checkpoint_chunks import describe_shard
 from .store import Fault, digest
 from .service_checkpoint import binding, canonical
 
@@ -108,8 +109,7 @@ class ControllerAuthority:
                                   (prefix, kind, key))
                 for kind, prefix in sorted(affected):
                     raw, count = self._read_shard(tx, kind, prefix)
-                    updates[(kind, prefix)] = (dict(kind=kind, prefix=prefix,
-                        digest=hashlib.sha256(raw).hexdigest(), bytes=len(raw)) if count else None)
+                    updates[(kind, prefix)] = describe_shard(kind, prefix, raw) if count else None
                 tx.db.execute("DELETE FROM controller_checkpoint_dirty")
             self.app.stores["site"].execute(read)
             for key, entry in updates.items():
@@ -118,8 +118,10 @@ class ControllerAuthority:
                 else:
                     self.shards[key] = entry
             self._by_digest = {entry["digest"]: key for key, entry in self.shards.items()}
+            shards = [dict(shard, blocks=[dict(block) for block in shard["blocks"]])
+                      for _, shard in sorted(self.shards.items())]
             return dict(format=FORMAT, authority=self.app.node, site=self.app.site,
-                        shards=[dict(self.shards[key]) for key in sorted(self.shards)])
+                        shards=shards)
 
     def snapshot_chunk(self, shard_digest):
         """Return one exact current shard while the daemon's dispatch lock is held."""

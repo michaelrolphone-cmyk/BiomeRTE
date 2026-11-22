@@ -12,6 +12,7 @@ from biomerte.app import Application, initialize
 from biomerte.api import Context, command
 from biomerte import assistant_support, authorization, providers
 from biomerte.controller_authority import ControllerAuthority
+from biomerte.checkpoint_chunks import describe_shard
 from biomerte.identity import generate, fingerprint, sign
 from biomerte.service_checkpoint import canonical
 from biomerte.store import Fault, digest
@@ -200,6 +201,10 @@ class ControllerTests(unittest.TestCase):
         self.app.stores["site"].execute(lambda tx: tx.put("artifacts","large",{"body":"x"*200000}))
         before = self.authority.snapshot()
         artifact = [row for row in before["shards"] if row["kind"]=="artifacts"]
+        self.assertEqual(len(artifact), 1)
+        shard = artifact[0]
+        raw = self.authority.snapshot_chunk(shard["digest"])
+        self.assertEqual(shard, describe_shard(shard["kind"], shard["prefix"], raw))
         reads = self.authority.snapshot_reads
         self.app.stores["site"].execute(lambda tx: tx.put("future-kind","one",{"value":1}))
         after = self.authority.snapshot()

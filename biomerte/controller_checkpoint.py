@@ -51,9 +51,11 @@ async def publish_controller(daemon):
             if blocks is None:
                 blocks = current.get(key)
                 if blocks is None:
-                    raw = await read_shard(daemon, shard)
-                    blocks = describe_shard(shard["kind"], shard["prefix"], raw)["blocks"]
-                    del raw
+                    blocks = shard.get("blocks")
+                    if blocks is None:
+                        raw = await read_shard(daemon, shard)
+                        blocks = describe_shard(shard["kind"], shard["prefix"], raw)["blocks"]
+                        del raw
                 for block in blocks:
                     unknown.setdefault(block["digest"], block["bytes"])
             current[key] = blocks
