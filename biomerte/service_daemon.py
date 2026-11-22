@@ -1097,8 +1097,7 @@ class AuthorityDaemon:
         return dict(type=typ, id=message.get("id"), binding=binding, status=200)
 
     async def dispatch_managed_reads(self, messages):
-        # Diagnostics, stream reads and provider registrations each get a
-        # publication barrier per batch. Each envelope keeps its own native
+        # Share a publication barrier per batch. Each envelope keeps its own native
         # authorization, receipt and transaction. No reply precedes the ACK.
         replies = [self.authority_response(message, self.binding) for message in messages]
 
@@ -1118,7 +1117,7 @@ class AuthorityDaemon:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
                                 "diagnostic", "read", "discovery", "inspection", "attachment", "registry",
-                                "reservation", "fence", "provider_progress"):
+                                "reservation", "fence", "submission", "provider_progress"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1151,6 +1150,7 @@ class AuthorityDaemon:
         bands = ("read", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
+        lease_bands = {"submission": "provider_progress", "provider_progress": "submission"}
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
                     "diagnostic": 4, "read": 8, "lifecycle": 1, "general": 1,
                     "registry": 8, "reservation": 4, "fence": 4,
@@ -1212,6 +1212,12 @@ class AuthorityDaemon:
                         index = (index + 1) % len(bands)
                     batch = pending[band]
                     pending[band] = []
+                    partner = lease_bands.get(band)
+                    if partner and pending[partner]:
+                        # Both queues retain independent admission. Process their
+                        # already queued calls under the same durable publication.
+                        batch.extend(pending[partner])
+                        pending[partner] = []
                     if band == "diagnostic":
                         # Keep the prior stream-vs-ordinary turn during diagnostics.
                         last_diagnostic = True
