@@ -5,6 +5,7 @@ import os
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 try:
     from biomerte.service_daemon import AuthorityDaemon, scope_digest
@@ -55,6 +56,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.authority=self.authority
         self.daemon.witnessed_vision_inspections={}
         self.daemon.witnessed_provider_polls={}
+        self.daemon.witnessed_capability_demands={}
         self.daemon.witnessed_provider_statuses={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
@@ -135,10 +137,18 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     async def test_capability_demand_keeps_its_wire_type_binding_and_publication_fence(self):
         message = dict(type="capability_demand", id="observe", binding=B,
                        scope=dict(provider=self.actor, resource="slot", contract="job:1"))
-        self.assertEqual("read", self.daemon.authority_request_band(message))
+        self.assertEqual("lease_demand", self.daemon.authority_request_band(message))
         reply = await self.daemon.dispatch(message)
         self.assertEqual("capability_demand_result", reply["type"])
         self.assertEqual({"lease": None}, reply["result"])
+        self.assertIsNone(await self.daemon.recheck_witnessed_demand(message))
+        self.daemon.remember_capability_demand(message, reply)
+        before = self.published
+        self.assertEqual(await self.daemon.recheck_witnessed_demand(message), reply)
+        self.assertEqual(before, self.published)
+        with patch.object(self.daemon.authority, "capability_demand",
+                          return_value={"lease": {"id": "c"*64, "generation": 3}}):
+            self.assertIsNone(await self.daemon.recheck_witnessed_demand(message))
         wrong = dict(message, binding=dict(B, grant_token="revoked"))
         good, stale = await self.daemon.dispatch_managed_reads([message, wrong])
         self.assertEqual(reply, good)
@@ -266,6 +276,21 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.remember_provider_poll(message, next_poll)
         self.assertEqual(next_poll, await self.daemon.recheck_witnessed_provider_poll(message))
         self.assertEqual(next_poll["result"]["activations"][0]["id"], "pending-fixture")
+
+    def test_scoped_inbox_cache_isolates_generation_lease_and_actor(self):
+        message = self.message()
+        env = message["envelope"]
+        env.update(operation="provider.poll", arguments={"provider": "builtin", "lease": "a"*64,
+                                                         "generation": 1})
+        first = self.daemon.provider_poll_key(message)
+        self.assertIsNotNone(first)
+        env["arguments"]["generation"] = 2
+        self.assertNotEqual(first, self.daemon.provider_poll_key(message))
+        env["arguments"]["generation"] = 1
+        env["arguments"]["lease"] = "b"*64
+        self.assertNotEqual(first, self.daemon.provider_poll_key(message))
+        del env["arguments"]["lease"]
+        self.assertIsNone(self.daemon.provider_poll_key(message))
 
     async def test_later_provider_poll_replies_while_another_command_waits_for_publication(self):
         poll = self.message(request="inbox-request")
