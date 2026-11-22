@@ -31,7 +31,11 @@ class LiveMap:
             if len(value)>16392:value=packet(self.current)
             for inbox in self.subscribers:
                 if inbox.full():
-                    while not inbox.empty():inbox.get_nowait()
+                    while True:
+                        try:
+                            inbox.get_nowait()
+                        except queue.Empty:
+                            break
                     inbox.put_nowait(packet(self.current))
                 else:inbox.put_nowait(value)
 

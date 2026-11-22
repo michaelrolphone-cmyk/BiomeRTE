@@ -3,6 +3,7 @@ from pathlib import Path
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from leased_publish import LiveFrames
 from leased_maps import LiveMap
@@ -14,6 +15,34 @@ def metadata(value):
 
 
 class LiveFeedTests(unittest.TestCase):
+    def test_subscriber_consuming_last_item_during_replacement(self):
+        feed = LiveFrames()
+        with feed.subscribe() as racing, feed.subscribe() as other:
+            feed.publish({'frame_id': 'old'}, b'jpeg')
+            def consume_before_discard():
+                racing.get(block=False)
+                return racing.get(block=False)
+
+            with patch.object(racing, 'get_nowait', side_effect=consume_before_discard):
+                feed.publish({'frame_id': 'new'}, b'jpeg')
+            for inbox in (racing, other):
+                self.assertEqual('new', metadata(inbox.get_nowait())['frame_id'])
+
+    def test_map_reader_draining_full_inbox_still_gets_recovery_marker(self):
+        feed = LiveMap()
+        with feed.subscribe() as inbox:
+            for revision in range(1, 8):
+                feed.publish('map', revision - 1, revision, [])
+            self.assertTrue(inbox.full())
+            def consume_before_discard():
+                while not inbox.empty():
+                    inbox.get(block=False)
+                return inbox.get(block=False)
+
+            with patch.object(inbox, 'get_nowait', side_effect=consume_before_discard):
+                feed.publish('map', 7, 8, [])
+            self.assertEqual(8, metadata(inbox.get_nowait())['revision'])
+
     def test_frames_are_newest_only_and_subscriptions_do_not_persist(self):
         feed=LiveFrames()
         with feed.subscribe() as inbox:
