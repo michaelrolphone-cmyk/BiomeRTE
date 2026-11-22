@@ -874,9 +874,7 @@ class AuthorityDaemon:
 
     async def dispatch(self,message):
         typ=message.get("type")
-        reply=dict(type={"inspect":"inspect_result","pair":"pair_result",
-                        "capability_demand":"capability_demand_result"}.get(typ,"call_result"),
-                   id=message.get("id"),binding=self.binding,status=200)
+        reply=self.authority_response(message, self.binding)
         try:
             if message.get("binding")!=self.binding:
                 raise Fault("RPC belongs to another service grant",409)
@@ -1166,6 +1164,8 @@ class AuthorityDaemon:
     def authority_request_band(message):
         envelope = message.get("envelope") or {}
         operation = envelope.get("operation", "")
+        if message.get("type") == "capability_demand":
+            return "read"
         if message.get("type") == "inspect" or operation == "stream.inspect":
             return "inspection"
         if operation in ("system.info", "cluster.status", "system.progress"):
@@ -1199,7 +1199,8 @@ class AuthorityDaemon:
 
     @staticmethod
     def authority_response(message, binding):
-        typ = {"inspect": "inspect_result", "pair": "pair_result"}.get(
+        typ = {"inspect": "inspect_result", "pair": "pair_result",
+               "capability_demand": "capability_demand_result"}.get(
             message.get("type"), "call_result")
         return dict(type=typ, id=message.get("id"), binding=binding, status=200)
 
@@ -1224,7 +1225,10 @@ class AuthorityDaemon:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in BATCHABLE_BANDS:
                             raise Fault("Service effect admission is unavailable", 503)
-                        if message["type"] == "inspect":
+                        if message["type"] == "capability_demand":
+                            reply["result"] = await asyncio.to_thread(
+                                self.authority.capability_demand, message.get("scope"))
+                        elif message["type"] == "inspect":
                             requested = message.get("authority")
                             if requested not in [self.config["authority_id"]] + self.config.get(
                                     "controller_aliases", []):
