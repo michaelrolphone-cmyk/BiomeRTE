@@ -279,6 +279,7 @@ class CheckpointHelper:
         self.replication = "unobserved"
         self.health_proof = None
         self.replica_blocks = {}
+        self.witness_reference_epoch = None
         self.confirmed_controller_checkpoint = None
         self.controller_checkpoint_refresh_at = 0
         if self.store.head() is None and config.get("bootstrap_packet"):
@@ -429,8 +430,16 @@ class CheckpointHelper:
               "checkpoint":dict(checkpoint_ref(packet),package=packet),"targets":targets}
         acknowledged_targets = targets
         try:
-            await self.replicate_chunks(b, packet, targets)
-            reply=await self.transport.request("/api/service-checkpoints/replicate",body)
+            if targets:
+                await self.replicate_chunks(b, packet, targets)
+            publication = body
+            if (controller and not targets and not require_all
+                    and self.witness_reference_epoch == b["boot_epoch"]):
+                payload = packet["payload"]
+                publication = dict(body, checkpoint=checkpoint_ref(packet),
+                    witness_reference={"scope_digest": payload["scope_digest"],
+                                       "previous_digest": payload["previous_digest"]})
+            reply=await self.transport.request("/api/service-checkpoints/replicate",publication)
             self.replication="complete" if len(targets)+1==len(self.config["replica_workers"]) else "degraded"
         except (Fault,asyncio.TimeoutError,OSError):
             self.replica_blocks.clear()
@@ -445,7 +454,8 @@ class CheckpointHelper:
                 current_workers = await self.publication_workers()
                 acknowledged_targets = [row for worker,row in current_workers.items()
                                         if worker != self.config["worker_id"]]
-                await self.replicate_chunks(b, packet, acknowledged_targets)
+                if acknowledged_targets:
+                    await self.replicate_chunks(b, packet, acknowledged_targets)
                 reply = await self.transport.request("/api/service-checkpoints/replicate",
                     dict(body, targets=acknowledged_targets))
                 self.replication = ("complete" if len(acknowledged_targets) + 1 ==
@@ -472,12 +482,16 @@ class CheckpointHelper:
             actual.add(key)
         if actual != expected:
             raise Fault("Witness acknowledgement set differs from requested replicas", 503)
-        refs = state_blocks(packet["payload"]["state"])
+        if not acknowledged_targets:
+            self.replica_blocks.clear()
+        refs = state_blocks(packet["payload"]["state"]) if acknowledged_targets else None
         if refs is not None:
             self.replica_blocks = {(target["worker_id"], target["worker_incarnation"],
                 b["boot_epoch"], b["grant_token"]): set(refs) for target in acknowledged_targets}
         await asyncio.to_thread(self.store.published,checkpoint_ref(packet))
         if controller:
+            self.witness_reference_epoch = (b["boot_epoch"]
+                if reply.get("owner_only_witness_reference") is True else None)
             self.confirmed_controller_checkpoint = (b, reply["checkpoint"])
             # Recheck even an idle root so a returning helper can catch up.
             self.controller_checkpoint_refresh_at = time.monotonic() + 5
