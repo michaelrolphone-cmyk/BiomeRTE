@@ -23,6 +23,7 @@ def streams(window=4):
 class AutomatedQualification(unittest.IsolatedAsyncioTestCase):
     async def test_signed_failures_retain_only_bounded_diagnostics_for_each_call(self):
         site = runner.Site.__new__(runner.Site)
+        site.executor = None
         def gateway(_url, rpc, **kwargs):
             args = rpc["params"]["arguments"]
             op = args["operation"]

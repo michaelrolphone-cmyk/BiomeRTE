@@ -10,6 +10,7 @@ import os
 import signal
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,6 +23,13 @@ PUBLIC_FAILURES = frozenset({
     "Logical service authority is unavailable", "Declared logical service is unavailable",
 })
 TERMINAL = {"succeeded", "failed", "cancelled", "abandoned", "denied", "uncertain"}
+SIGNED_SUBMISSION_CLIENTS = 16
+
+
+def signed_request_pool():
+    # Two progress reads and the metadata job run alongside the entire burst.
+    return ThreadPoolExecutor(max_workers=SIGNED_SUBMISSION_CLIENTS + 3,
+                              thread_name_prefix="qualification-http")
 
 
 def save(path, data):
@@ -36,21 +44,34 @@ def save(path, data):
 class Site:
     """Use the installed Mac Site transport's OAuth rotation and exact single HTTP attempt."""
 
-    def __init__(self, home):
+    def __init__(self, home, executor=None):
+        self.executor = executor
         spec = importlib.util.spec_from_file_location("qualification_gateway", home / "mac_provider.py")
         self.gateway = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.gateway)
 
     async def call(self, operation, arguments, request_id):
-        return await asyncio.to_thread(self._request, operation, arguments, request_id)
+        status, value, _ = await self.call_measured(operation, arguments, request_id)
+        return status, value
 
-    def _request(self, operation, arguments, request_id):
+    async def call_measured(self, operation, arguments, request_id):
+        timing = {}
+        status, value = await asyncio.get_running_loop().run_in_executor(
+            self.executor, self._request, operation, arguments, request_id, timing)
+        return status, value, timing
+
+    def _request(self, operation, arguments, request_id, timing):
         g = self.gateway
         args = dict(operation=operation, arguments=arguments, realm="site", request_id=request_id)
         rpc = dict(jsonrpc="2.0", id=request_id, method="tools/call",
                    params=dict(name="biome_invoke", arguments=args))
         try:
-            reply = g.request(g.RESOURCE, rpc, headers={"Authorization": "Bearer " + g.credentials()["access_token"]})
+            headers = {"Authorization": "Bearer " + g.credentials()["access_token"]}
+            timing["http_started_at"] = time.time()
+            try:
+                reply = g.request(g.RESOURCE, rpc, headers=headers)
+            finally:
+                timing["http_finished_at"] = time.time()
             if reply.get("id") != request_id or "error" in reply:
                 return "protocol_error", {}
             result = reply["result"]
@@ -83,9 +104,14 @@ class Site:
 async def timed_call(site, name, arguments, request_id):
     started_at = time.time()
     start = time.monotonic()
-    status, value = await site.call(name, arguments, request_id)
+    measured = getattr(site, "call_measured", None)
+    if measured is None:
+        status, value = await site.call(name, arguments, request_id)
+        timing = {}
+    else:
+        status, value, timing = await measured(name, arguments, request_id)
     receipt = dict(status=status, started_at=started_at, elapsed_seconds=time.monotonic() - start,
-                   request_id=request_id)
+                   request_id=request_id, **timing)
     if status != 200:
         receipt.update({key: value[key] for key in ("error_category", "retry_same_id") if key in value})
     return receipt, value
@@ -168,7 +194,6 @@ async def monitor(args):
             pending = state / "pending.json"
             recovering = pending.exists()
             operation = json.loads(pending.read_text())["operation"] if recovering else "provider-qualification-" + uuid.uuid4().hex
-            site = Site(args.gateway_home)
             ready = {consumer: asyncio.Event() for consumer in CONSUMERS}
 
             async def await_connections():
@@ -200,9 +225,11 @@ async def monitor(args):
                 except Exception as error:
                     return dict(passed=False, observation_error=type(error).__name__)
 
-            action, streams, pressure = await asyncio.gather(observe_action(),
-                observe_streams(public, args.bridge, args.node_file, args.window_seconds, ready=ready),
-                observe_pressure())
+            with signed_request_pool() as pool:
+                site = Site(args.gateway_home, executor=pool)
+                action, streams, pressure = await asyncio.gather(observe_action(),
+                    observe_streams(public, args.bridge, args.node_file, args.window_seconds, ready=ready),
+                    observe_pressure())
             report["signed_pressure"] = pressure
             if not pressure["passed"]:
                 report["failures"].append("signed concurrency qualification failed; see first release pressure receipt")
