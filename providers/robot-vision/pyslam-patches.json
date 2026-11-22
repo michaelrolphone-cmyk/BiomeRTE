@@ -56,9 +56,9 @@
     },
     {
       "original_sha256": "88bb7df68d64dce851d3dd3c3520a8f918627d01f7ac0660d48031938429d1aa",
-      "patched_sha256": "a3864e366cd789cba1490e99150f316d702de1f280fafbd2de46eeabe65cff4d",
+      "patched_sha256": "c3ccb47b82659c61feea459cf6c96446f13072be27b978106f104fc6df19b99d",
       "path": "pyslam/slam/tracking.py",
-      "reason": "Preserve initialized submap geometry through tracking loss; explicit reset stays available."
+      "reason": "Retain initialized geometry through tracking loss and allow ordered front frames across shared rig IDs."
     },
     {
       "original_sha256": "bc8ae78b6db8d5121478ffb52a26fb83b592fa0a10bf62c9a813fb247aa1efe7",

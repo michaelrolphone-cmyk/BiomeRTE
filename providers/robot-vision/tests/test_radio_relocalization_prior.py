@@ -354,6 +354,23 @@ class RadioRelocalizationPriorTests(unittest.TestCase):
         self.assertEqual(sha_text(self.patched["pyslam/loop_closing/loop_detector_dbow3.py"]),
                          "e0827d2ed9d6d97f0df8a2d3d401eebad9c9f53e5466d353322852be666404af")
 
+    def test_front_tracking_accepts_ids_reserved_for_rear_keyframes(self):
+        path = "pyslam/slam/tracking.py"
+        def check(source, current):
+            node = next(node for node in ast.walk(ast.parse(source))
+                        if isinstance(node, ast.Assert) and "f_ref.img_id" in ast.unparse(node.test))
+            assertion = compile(ast.Module(body=[node], type_ignores=[]), path, "exec")
+            exec(assertion, {"f_ref": SimpleNamespace(img_id=108),
+                             "f_cur": SimpleNamespace(img_id=current)})
+
+        with self.assertRaises(AssertionError):
+            check(self.originals[path], 111)
+        for current in (109, 111):
+            check(self.patched[path], current)
+        for current in (108, 107):
+            with self.assertRaises(AssertionError):
+                check(self.patched[path], current)
+
     def staged_installer(self, directory):
         stage = Path(directory)
         entries = []

@@ -364,7 +364,11 @@ def patch_tracking_continuity(source):
             self.state == SlamState.LOST and self.map.num_keyframes_session() <= 5
             and not preserve_geometry
         )"""
-    return replace_once(source, old, new)
+    source = replace_once(source, old, new)
+    return replace_once(source,
+        "        assert f_ref.img_id == f_cur.img_id - 1",
+        "        # Rear rig keyframes reserve IDs without entering the front tracking chain.\n"
+        "        assert f_ref.img_id < f_cur.img_id")
 
 
 def patch_keyframe_graph_restore(source):
@@ -492,7 +496,7 @@ class Installer:
             path.write_text(patched)
             manifest.append({"path": name, "original_sha256": sha_text(original),
                              "patched_sha256": sha_text(patched),
-                             "reason": ("Retain initialized submap geometry through tracking loss; relocalize instead of resetting the session."
+                             "reason": ("Retain initialized geometry through tracking loss and allow ordered front frames across shared rig IDs."
                                         if name.endswith("/tracking.py") else
                                         "Link the optional g2o OpenGL helper only when its target exists."
                                         if name.endswith("CMakeLists.txt") else
