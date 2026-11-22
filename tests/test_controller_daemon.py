@@ -394,11 +394,15 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 if response["id"] == "confirm-installed-fence":
                     completed.set()
 
+        async def dispatch_batch(messages):
+            return [await dispatch(message) for message in messages]
+
         self.daemon.dispatch = dispatch
+        self.daemon.dispatch_managed_reads = dispatch_batch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
-        self.assertEqual(processed, ["running", "diagnostic", "attachment", "lifecycle", "inspection",
-                                     "lease-poll", "resume", "registration",
-                                     "acquire-after-status", "confirm-installed-fence"])
+        self.assertEqual(processed, ["running", "diagnostic", "inspection", "resume", "lease-poll",
+                                     "attachment", "lifecycle", "acquire-after-status",
+                                     "registration", "confirm-installed-fence"])
 
     async def test_stream_lifecycle_backlog_leaves_admission_for_exact_lease_refresh(self):
         started, release, done = (asyncio.Event() for _ in range(3))
@@ -531,12 +535,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                                    "result": 200, "reconcile": 200})
         self.assertEqual(batches, [["submit", "claim", "heartbeat", "result", "reconcile"]])
 
-    async def test_lease_work_shares_the_next_admitted_publication_under_mixed_load(self):
+    async def queued_publications(self, operations):
         running, release, done = (asyncio.Event() for _ in range(3))
         published, replies = [], []
-        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
-                      "system.health", "system.discovery", "cap.lease"]
-
         async def dispatch(message):
             if message["id"] == "cap.invoke":
                 running.set()
@@ -571,6 +572,20 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.dispatch_managed_reads = dispatch_batch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
         self.assertCountEqual(replies, operations)
+        return published
+
+    async def test_cold_stream_and_lease_work_share_the_next_publication_under_mixed_load(self):
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
+                      "stream.inspect", "stream.attach", "stream.resume", "cap.lease"]
+
+        published = await self.queued_publications(operations)
+        self.assertTrue({"cap.status", "cap.submit", "provider.claim", "stream.inspect",
+                         "stream.attach", "stream.resume", "cap.lease"}.issubset(published[1]), published)
+
+    async def test_health_inbox_and_discovery_share_a_due_lease_publication(self):
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
+                      "system.health", "system.discovery", "cap.lease"]
+        published = await self.queued_publications(operations)
         self.assertCountEqual(published[1], operations[1:])
         self.assertEqual(len(published), 2, published)
 
