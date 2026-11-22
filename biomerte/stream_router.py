@@ -64,6 +64,7 @@ class Session:
         self.peer_status = peer_status
         self.control_clock = control_clock
         self.quarantined = False
+        self.validated_until = grant.get("expires_at", 0)
         self.grant = grant
         self.peers = {}
         self.sequences = {}
@@ -99,11 +100,11 @@ class Session:
         if self.quarantined == value:
             return
         self.quarantined = value
-        # This mode is only enabled for the supersedable relay-control lane.
-        # Neither expiry nor renewed verification may replay saved intent.
-        for peer in self.peers.values():
-            while not peer.queue.empty():
-                peer.queue.get_nowait()
+        # Never replay payload or control intent after revalidation.
+        if value:
+            for peer in self.peers.values():
+                while not peer.queue.empty():
+                    peer.queue.get_nowait()
         self.notify_control_status()
 
     def check(self, role, lane, message, now=None, sender=None):
@@ -188,6 +189,7 @@ class Router:
         self.validators = validators
         self.sessions = {}
         self.tasks = {}
+        self.validating = {}
         self.diagnostics = deque(maxlen=32)
         self.reported = {}
 
@@ -231,7 +233,20 @@ class Router:
         fn = self.validators.get(grant['authority'])
         if fn is None:
             raise Fault('Unknown lease authority', 403)
-        value = await asyncio.to_thread(fn, grant['id'])
+        key = (grant['authority'], grant['id'])
+        check = self.validating.get(key)
+        if check is None or check.done():
+            check = asyncio.create_task(asyncio.to_thread(fn, grant['id']))
+            self.validating[key] = check
+
+            def forget(done):
+                if self.validating.get(key) is done:
+                    self.validating.pop(key)
+                if not done.cancelled():
+                    done.exception()  # A disconnected caller may have stopped awaiting.
+
+            check.add_done_callback(forget)
+        value = await asyncio.shield(check)
         keys = ('id', 'epoch', 'authority', 'generation', 'contract', 'resource', 'lease', 'provider', 'server', 'realm', 'site')
         if any(value.get(k) != grant.get(k) for k in keys) or value.get('state') != 'open':
             raise Fault('Superseded stream grant', 409)
@@ -242,6 +257,10 @@ class Router:
         status = getattr(error, 'status', getattr(error, 'code', None))
         unavailable = status in (408, 429, 500, 502, 503, 504) or (
             status is None and isinstance(error, (OSError, ConnectionError, TimeoutError)))
+        if (g.get('contract') == 'robot.vision.stream:1'
+                and g.get('direction') == 'provider_to_server'
+                and set(g.get('lanes', ())) == {'vision', 'map'}):
+            return unavailable and time.time() < session.validated_until
         return (self.peer_status and g.get('contract') == 'device.outputs.stream:1'
                 and set(g.get('lanes', [])) == {'control'}
                 and g.get('policies', {}).get('control', g.get('delivery')) == 'supersedable'
@@ -262,13 +281,17 @@ class Router:
                     # authority/fence/epoch grant has been revalidated.
                     session.quarantine(True)
                 else:
-                    session.quarantine(False)
+                    session.validated_until = current.get('expires_at', session.validated_until)
                     allowed = current.get('consumers')
+                    released = []
                     if allowed is not None:
                         for key, peer in list(session.peers.items()):
                             if key[0] == 'server' and peer.consumer and peer.consumer not in allowed:
-                                session.peers.pop(key, None)
-                                await peer.close(1008, 'Subscription released')
+                                session.peers.pop(key)
+                                released.append(peer)
+                    session.quarantine(False)
+                    for peer in released:
+                        await peer.close(1008, 'Subscription released')
                 await asyncio.sleep(1)
         finally:
             self.sessions.pop(session.grant['id'], None)
@@ -279,24 +302,22 @@ class Router:
         session_id, lane = path.strip('/').split('/')
         if session_id != grant['id'] or lane not in grant.get('lanes', ['data']):
             raise Fault('Attachment binding mismatch', 403)
-        await self.validate(grant)
+        current = await self.validate(grant)
+        role = grant['role']
+        if role == 'server' and grant.get('consumer') and grant['consumer'] not in current.get('consumers', []):
+            raise Fault('Stream subscription released', 403)
         session = self.sessions.get(session_id)
         if not session:
             session = self.sessions[session_id] = Session(grant, self.peer_status, self.control_clock)
             self.tasks[session_id] = asyncio.create_task(self.watch(session))
         if session.closed or session.grant['epoch'] != grant['epoch']:
             raise Fault('Superseded stream epoch', 409)
-        role = grant['role']
         identity = grant.get('attachment_id') or uuid.uuid4().hex
         key = (role, lane, identity)
         # Credentials may be reused by independent connections; each is separate.
         if key in session.peers:
             identity += '-' + uuid.uuid4().hex
             key = (role, lane, identity)
-        if role == 'server' and grant.get('consumer'):
-            current = await self.validate(grant)
-            if grant['consumer'] not in current.get('consumers', []):
-                raise Fault('Stream subscription released', 403)
         delivery=grant.get('policies', {}).get(lane, grant['delivery'])
         peer = Peer(socket, 1 if delivery=='supersedable' else grant['limits']['buffer_depth'], delivery)
         peer.consumer = grant.get('consumer') or (grant['lease'] if role == 'server' else '')

@@ -61,15 +61,17 @@
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_inspection.py"
     },
     {
-      "bytes": 25165,
-      "packaged_sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
+      "adaptations": "Share concurrent authority reads and hold telemetry sockets without payload during transient validation failures.",
+      "bytes": 26851,
+      "packaged_sha256": "977a23971cc8770f2e98cb78e0627ee70314c0b72759ab0c2026a6568b04236a",
       "path": "biomerte/stream_router.py",
       "sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_router.py"
     },
     {
-      "bytes": 2483,
-      "packaged_sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
+      "adaptations": "Share concurrent authority reads and hold telemetry sockets without payload during transient validation failures.",
+      "bytes": 2600,
+      "packaged_sha256": "1ef31d9910ac93a8073707e79e6abb4f0067740a0b30fdf45882d64cd51f26f2",
       "path": "biomerte/vision_mailbox.py",
       "sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/vision_mailbox.py"

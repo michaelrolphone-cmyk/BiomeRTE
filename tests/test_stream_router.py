@@ -3,8 +3,10 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
+import time
 import unittest
-from biomerte.stream_router import Session, Peer, credential, frame
+from biomerte.stream_router import Session, Peer, Router, credential, frame
 from biomerte.store import Fault, encode
 
 
@@ -64,3 +66,41 @@ class StreamProtocol(unittest.TestCase):
     def test_oversized_binary_and_invalid_metadata_are_rejected(self):
         with self.assertRaises(Fault):
             Session(grant()).check('provider','vision',b'x'*5000,now=100)
+
+
+class RouterAuthorityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_attachments_share_only_an_in_progress_authority_read(self):
+        g = dict(grant(), state='open')
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def inspect(session):
+            calls.append(session)
+            started.set()
+            release.wait()
+            return g
+
+        router = Router({}, {g['authority']: inspect})
+        first = asyncio.create_task(router.validate(g))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 2))
+            second = asyncio.create_task(router.validate(g))
+            await asyncio.sleep(0)
+            self.assertEqual(calls, [g['id']])
+        finally:
+            release.set()
+        self.assertEqual((await asyncio.gather(first, second)), [g, g])
+        await router.validate(g)
+        self.assertEqual(calls, [g['id'], g['id']])
+
+    async def test_vision_waits_only_through_transient_authority_failure(self):
+        g = dict(grant(), contract='robot.vision.stream:1', lanes=['vision','map'],
+                 direction='provider_to_server', expires_at=time.time()+30, state='open')
+        router = Router({}, {})
+        session = Session(g)
+        self.assertTrue(router.can_quarantine(session, TimeoutError()))
+        self.assertTrue(router.can_quarantine(session, Fault('busy',429)))
+        self.assertFalse(router.can_quarantine(session, Fault('revoked',403)))
+        self.assertFalse(router.can_quarantine(session, Fault('superseded',409)))
+        session.validated_until = time.time()-1
+        self.assertFalse(router.can_quarantine(session, TimeoutError()))
