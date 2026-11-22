@@ -108,6 +108,36 @@ def load_plan(path):
         raise ValueError("No image targets")
     return images
 
+def validate_elf(header, platform):
+    # The Engine can label a foreign root filesystem with the requested platform.
+    # Inspect the packaged executable without invoking host emulation.
+    expected = {"linux/amd64": (2, 62), "linux/arm64": (2, 183), "linux/arm/v7": (1, 40)}
+    if len(header) < 20 or header[:4] != b"\x7fELF" or header[5] != 1:
+        raise ValueError("Image runtime is not a supported little-endian ELF executable")
+    actual = (header[4], int.from_bytes(header[18:20], "little"))
+    if actual != expected[platform]:
+        raise ValueError("Image runtime ELF {} does not match {}".format(actual, platform))
+
+
+def check_runtime(docker, image, config, platform):
+    argv = (config.get("Entrypoint") or []) + (config.get("Cmd") or [])
+    program = argv[0] if argv else "/bin/sh"
+    # The catalog uses official Python and Node runtimes in /usr/local/bin.
+    runtime = {"python": "/usr/local/bin/python", "python3": "/usr/local/bin/python3",
+               "node": "/usr/local/bin/node"}.get(program, "/bin/sh")
+    if program.startswith("/") and Path(program).name in ("python", "python3", "node", "sh"):
+        runtime = program
+    container = call([docker, "create", "--entrypoint", runtime, image, "--version"])
+    try:
+        with tempfile.TemporaryDirectory(prefix="biomerte-runtime-elf-") as folder:
+            binary = Path(folder) / "runtime"
+            call([docker, "cp", "-L", container + ":" + runtime, binary])
+            with binary.open("rb") as handle:
+                validate_elf(handle.read(20), platform)
+    finally:
+        call([docker, "rm", "-v", container])
+
+
 def inspect_image(docker, image, platform):
     data = json.loads(call([docker, "image", "inspect", image]))[0]
     if not DIGEST.fullmatch(data.get("Id", "")):
@@ -117,6 +147,7 @@ def inspect_image(docker, image, platform):
         raise ValueError("Image architecture does not match " + platform)
     if variant and data.get("Variant") and data["Variant"] != variant:
         raise ValueError("Image variant does not match " + platform)
+    check_runtime(docker, data["Id"], data.get("Config", {}), platform)
     return data
 
 def archive_source(repo, revision, destination):
