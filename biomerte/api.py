@@ -68,7 +68,7 @@ class Context:
 
     def allowed(self, name):
         return (self.permissions is None or name in self.permissions or
-                (name == 'cap.withdraw' and 'cap.offer' in self.permissions))
+                (name in ('cap.withdraw', 'cap.registrations', 'cap.publish') and 'cap.offer' in self.permissions))
 
 
 def invoke(tx, ctx, name, args):

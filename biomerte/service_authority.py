@@ -17,7 +17,7 @@ from .service_checkpoint import binding
 PREPARATION = frozenset(("cap.offer", "cap.withdraw", "provider.poll", "cap.fenced",
                          "provider.result", "cap.status"))
 CALLS = PREPARATION | frozenset((
-    "provider.claim", "cap.acquire", "cap.lease", "cap.leases", "cap.release",
+    "cap.publish", "cap.registrations", "provider.claim", "cap.acquire", "cap.lease", "cap.leases", "cap.release",
     "cap.invoke", "cap.submit", "stream.open", "stream.attach", "stream.list",
     "stream.inspect", "stream.close"))
 
@@ -96,6 +96,21 @@ class ScopedAuthority:
             registrations = args.get("registrations")
             if not isinstance(registrations, dict) or not registrations.keys() <= self.contracts:
                 raise Fault("Withdrawal outside logical contract scope", 403)
+        if name in ("cap.publish", "cap.registrations"):
+            contracts = args.get("contracts")
+            if name == "cap.publish":
+                entries = args.get("offers")
+                if not isinstance(entries, list):
+                    raise Fault("Expected scoped offers")
+                contracts = []
+                for entry in entries:
+                    item = entry.get("offer") if isinstance(entry, dict) else None
+                    if not isinstance(item, dict) or item.get("capacity") not in (None, 1):
+                        raise Fault("Scoped physical authority requires exclusive capacity one", 403)
+                    contracts.append(item.get("contract"))
+            if (not isinstance(contracts, list) or any(not isinstance(c, str)
+                    or c not in self.contracts for c in contracts)):
+                raise Fault("Publication outside logical contract scope", 403)
         if name=="cap.offer" and args.get("capacity") not in (None,1):
             raise Fault("Scoped physical authority requires exclusive capacity one",403)
         if name in ("cap.acquire","cap.submit") and args.get("resource") not in self.resources:
@@ -117,7 +132,7 @@ class ScopedAuthority:
             if args.get("operation") and name in (
                     "provider.claim","provider.result","cap.status"):
                 self._resource_row(tx, "actions", args["operation"])
-            if name in ("cap.offer", "cap.withdraw"):
+            if name in ("cap.offer", "cap.withdraw", "cap.registrations", "cap.publish"):
                 peer = tx.need("peers", auth["actor"])
                 if args.get("provider") != auth["actor"] or not peer.get("enabled"):
                     raise Fault("Provider identity mismatch", 403)

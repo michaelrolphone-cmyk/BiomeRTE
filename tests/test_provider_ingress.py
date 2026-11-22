@@ -31,6 +31,17 @@ class Opener:
         return Response(b'{"result":{"ok":true}}')
 
 class ProviderIngressTests(unittest.TestCase):
+    def test_bulk_registration_envelopes_keep_exact_signed_actor_and_bytes(self):
+        for operation in ('cap.registrations','cap.publish'):
+            value = dict(packet(), operation=operation, arguments={'provider': ACTOR, 'resource':'vision',
+                'service':'camera', **({'contracts':['one:1']} if operation=='cap.registrations' else {'offers':[]})})
+            self.assertTrue(ingress.valid_envelope(value,'site-one'))
+            self.assertFalse(ingress.valid_envelope(dict(value, arguments=dict(value['arguments'],provider='other')),'site-one'))
+            raw=json.dumps(value,indent=1)
+            opener=Opener()
+            ingress.dispatch_signed_provider({'envelope':raw},'http://localhost:4300','site-one',opener)
+            self.assertEqual(opener.requests[0][0].data, raw.encode())
+
     def result(self,value):return json.loads(value['content'][0]['text'])
     def test_legacy_raw_json_is_forwarded_without_operator_authority(self):
         opener=Opener();raw=json.dumps(packet()).replace('"limit": 1','"limit": 1.0, "big": 9007199254740993')
