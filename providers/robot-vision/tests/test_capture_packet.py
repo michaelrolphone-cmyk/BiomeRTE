@@ -11,9 +11,13 @@ class CaptureTests(unittest.TestCase):
   p=packet();p['ahrs']={'receiver_id':'camera','boot_id':'boot'}
   data,jpeg=read_capture(Response(wire(p)));self.assertEqual(data,p);self.assertIn(b'--biomeframe-not',jpeg)
  def test_cross_boot_or_truncation_rejected(self):
-  p=packet();p['radio']={'receiver_id':'camera','boot_id':'previous'}
+  p=packet();p['ahrs']={'receiver_id':'camera','boot_id':'previous'}
   with self.assertRaises(ValueError):read_capture(Response(wire(p)))
   with self.assertRaises(ValueError):read_capture(Response(wire(packet())[:-6]))
+ def test_legacy_scan_does_not_enter_capture_observations(self):
+  p=packet();p['radio']={'receiver_id':'camera','boot_id':'previous'}
+  data,_=read_capture(Response(wire(p)))
+  self.assertEqual(data,packet())
  def test_clock_preserves_capture_intervals_and_restarts(self):
   s=CaptureSequence();self.assertEqual(s.accept(packet()),1);self.assertIsNone(s.accept(packet()));self.assertEqual(s.accept(packet(1050000)),1.05)
   self.assertGreater(s.accept(packet(10000,'new')),1.05);self.assertAlmostEqual(s.accept(packet(20000,'new'))-s.last_time,0)
@@ -32,6 +36,7 @@ class SensorAssociationTests(unittest.TestCase):
   frame=dict(frame_id=p['frame_id'],stream_epoch='stream',source_id='camera',calibration_id='cal',session_id='session',receive_decode_monotonic_s=999.,measurement_monotonic_s=10.,sensor_packet=p)
   result=model.evidence(frame)
   self.assertTrue(result['timing']['timing_qualified']);self.assertEqual(result['timing']['clock_qualification'],'same_device_capture_clock');self.assertTrue(result['sensors']['imu']['valid']);self.assertEqual(model._pending['candidates']['attitude']['frame_tick'],10.)
+
  def test_radio_age_uses_device_observation_not_receipt(self):
   from capture_packet import frame_radio_snapshot
   from radio_tracking import RadioTracking

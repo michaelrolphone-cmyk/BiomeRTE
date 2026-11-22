@@ -25,7 +25,7 @@ DEFAULT_EXPIRY = time.time() + 3600
 def grant(**changes):
     value = dict(id='session-a', authority='authority-a', epoch='epoch-a',
                  generation=7, lane='vision', expires_at=DEFAULT_EXPIRY,
-                 contract='robot.vision.stream:1', direction='provider_to_server',
+                 contract='robot.vision.stream:1', resource='rover.vision.fixture', direction='provider_to_server',
                  lanes=['vision', 'map'], limits={'max_message_bytes':4194304,
                  'buffer_depth':1, 'messages_per_second':60})
     value.update(changes)
@@ -147,7 +147,7 @@ class PublisherRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     sequence=original(value);clock['now']=101.1;return sequence
                 patches.enter_context(patch.object(publisher.sequences,'next',side_effect=reserve))
                 patches.enter_context(patch('leased_streams.time',SimpleNamespace(monotonic=lambda:clock['now'],time=time.time)))
-            await publisher.run(binding,stop)
+            await asyncio.wait_for(publisher.run(binding,stop),timeout=5)
         self.assertEqual(failures,[],'Router rejected a fresh recovery frame')
         self.assertEqual(len(accepted),1)
         meta,image=accepted[0]

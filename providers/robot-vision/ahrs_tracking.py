@@ -235,8 +235,8 @@ class AHRSTracking:
                 result.update(valid=False, reason="invalid_magnetic_vector_or_frame")
                 return result
             result.update(frame="ak8963_native_xyz", field_uT=field,
-                          calibration=data.get("calibration"), used_for_heading=False,
-                          installation_compass_calibrated=False)
+                          calibration=data.get("calibration"), used_for_heading=data.get("used_for_heading") is True,
+                          installation_compass_calibrated=data.get("calibration")=="hard_soft_iron_matrix")
         elif name == "barometer":
             if not _number(data.get("pressure_pa")) or data["pressure_pa"] <= 0:
                 result.update(valid=False, reason="invalid_pressure")
@@ -254,7 +254,9 @@ class AHRSTracking:
             quaternion = _quaternion(data.get("quaternion_wxyz"))
             reference_valid = (data.get("reference") == "relative_yaw"
                                and data.get("frame") == _ATTITUDE_FRAME
-                               and data.get("heading_absolute") is False
+                               and type(data.get("heading_absolute")) is bool
+                               and (not data["heading_absolute"] or (data.get("world_alignment_valid") is True
+                                    and bool(data.get("world_id")) and bool(data.get("world_reference_id"))))
                                and data.get("mounting_alignment_applied") is False
                                and _uint32(data.get("generation")) and data["generation"] > 0
                                and _uint32(data.get("yaw_origin_uptime_ms")))
@@ -264,7 +266,9 @@ class AHRSTracking:
             result.update(quaternion_wxyz=quaternion, reference="relative_yaw",
                           frame=_ATTITUDE_FRAME, generation=data["generation"],
                           yaw_origin_uptime_ms=data["yaw_origin_uptime_ms"],
-                          heading_absolute=False, mounting_alignment_applied=False,
+                          heading_absolute=data["heading_absolute"], mounting_alignment_applied=False,
+                          world_id=data.get("world_id"),world_reference_id=data.get("world_reference_id"),
+                          world_alignment_valid=data.get("world_alignment_valid"),heading_quality=data.get("heading_quality"),
                           reset_reason=data.get("reset_reason"))
             for key in ("roll_deg", "pitch_deg", "yaw_deg"):
                 result[key] = float(data[key]) if _number(data.get(key)) else None

@@ -186,6 +186,24 @@ class VisionStoreTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.publish("future-revision", localization={**pose, "map_revision": 99})
 
+    def test_unavailable_localization_preserves_frames_in_a_metric_map(self):
+        metric_map = self.store.create_map({"units": "m"})["map_id"]
+        session = self.store.start_session(metric_map)["session_id"]
+        unavailable = {"status": "tracking_lost", "valid": False,
+                       "T_map_camera": None, "units": "arbitrary"}
+        snapshot = self.publish("metric-frame", session_id=session, localization=unavailable)
+        localized = snapshot["localization"]
+        self.assertEqual(localized["map_id"], metric_map)
+        self.assertEqual(localized["units"], "m")
+        self.assertFalse(localized["valid"])
+        self.assertIsNone(localized["T_map_camera"])
+        self.assertEqual(unavailable["units"], "arbitrary")
+        with self.assertRaisesRegex(ValueError, "localization units differ"):
+            self.publish("metric-coordinates", session_id=session, localization={
+                **unavailable, "map_revision": 0,
+                "T_map_camera": [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+            })
+
     def test_map_scan_allows_observation_io_and_keeps_its_wal_snapshot(self):
         self.publish("before-map")
         self.store.apply_map_update(self.map_id, 0, [self.point("old", [1, 2, 3])])
@@ -452,7 +470,9 @@ class VisionStoreTests(unittest.TestCase):
         for item in [explicit, other, metadata] + automatic[-2:]:
             self.assertEqual(self.store.get_checkpoint(item["checkpoint_id"])["availability"],
                              "available")
-            self.assertTrue(Path(item["database_path"]).is_file())
+            current=self.store.get_checkpoint(item["checkpoint_id"])
+            self.assertEqual(current["map_revision"],item["map_revision"])
+            self.assertTrue(Path(current["database_path"]).is_file())
         self.assertEqual(self.store._checkpoint_storage_status()["retained_packages"], 5)
 
     def test_checkpoint_io_does_not_block_live_observation_reads_or_writes(self):

@@ -11,7 +11,8 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from world_atlas import WorldAtlas, similarity, transform_points, fit_submap
 from setup_slam import patch_tracking_continuity
 
-OLD = """        need_reset = self.slam.reset_requested or (
+OLD = """        assert f_ref.img_id == f_cur.img_id - 1
+        need_reset = self.slam.reset_requested or (
             self.state == SlamState.LOST and self.map.num_keyframes_session() <= 5
         )"""
 
@@ -32,7 +33,8 @@ def moved(points,t):
 
 class ContinuityTests(unittest.TestCase):
     def reset_decision(self,patched,*,enabled=True,explicit=False,keyframes=4,points=100,session=2):
-        scope={"SlamState":types.SimpleNamespace(LOST="lost")}
+        scope={"SlamState":types.SimpleNamespace(LOST="lost"),
+               "f_ref": types.SimpleNamespace(img_id=2), "f_cur": types.SimpleNamespace(img_id=3)}
         text=patch_tracking_continuity(OLD) if patched else OLD
         exec("def decision(self):\n"+text+"\n        return need_reset",scope)
         obj=types.SimpleNamespace(state="lost",slam=types.SimpleNamespace(

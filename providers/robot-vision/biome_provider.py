@@ -35,6 +35,12 @@ def field(kind, required=False):
 def contract_definitions():
     """Versioned envelopes; telemetry itself can evolve without false precision."""
     specs = [
+        ("robot.video.import.read", {"request": field("obj", True)}, "List recorded-video imports and available calibrations, or inspect a specific job."),
+        ("robot.video.import.write", {"request": field("obj", True)}, "Create, upload, finish, start or cancel a recorded-video import on the vision resource."),
+        ("robot.map.snapshot", {"map_id":field("str",True), "revision":field("int",True)}, "Complete revision-pinned local map in the same envelope delivered to the console."),
+        ("robot.vision.schemas", {"schema":field("str")}, "Discover the public rover stream schemas and their versions. Omit schema for the entire catalog."),
+        ("robot.vision.rig.status", {}, "Read shared-map front/rear tracking, clock alignment and rig configuration."),
+        ("robot.vision.rig.configure", {"configuration":field("obj",True)}, "Save and hot-reload rear-camera source, intrinsics and rigid mount without reflashing. Both views contribute to the existing shared map."),
         ("robot.camera.exposure.status", {}, "Read live camera auto-exposure, auto-gain and manual driver control values; first-DMA capture stamps are not calibrated photon exposure times."),
         ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure/gain update. Auto modes are Boolean; exposure_value 9..1200 sensor-driver units (not microseconds); exposure_level -2..2; gain 0..30. Settings are RAM-only. Inspect unknown outcomes before retry."),
         ("robot.body.model", {}, "Metric body dimensions, wheelbase, track, camera/sonar/AHRS rigid mounts and always-on-floor invariant."),
@@ -58,6 +64,8 @@ def contract_definitions():
         ("robot.map.radio.read", {"map_id": field("str"), "revision": field("int"),
                                   "cursor": field("str"), "limit": field("int"), "source_id": field("str")},
          "Bounded learned Wi-Fi/BLE signal distributions resolved through current or revision-pinned map anchors."),
+        ("robot.tof.status", {}, "FTM anchor health and fresh ranging evidence; qualification and missing geometry remain explicit."),
+        ("robot.tof.localize", {}, "Current ToF position solution or explicit unavailable status; no unqualified navigation authority."),
         ("robot.camera.light.status", {},
          "Read authenticated camera light command/driver state; physical readback remains as reported."),
         ("robot.camera.light.set", {"on": field("bool"), "brightness": field("int"), "rgb": field("list")},
@@ -121,7 +129,14 @@ def contract_definitions():
          "Read a revision-pinned metric map view with explicit qualification and stale-state reporting."),
     ]
     definitions = [dict(name=name, version=1, description=description, inputs=inputs,
-                        outputs={"result": "obj"}, synchronous=False) for name, inputs, description in specs]
+                        outputs={"result": "obj"}) for name, inputs, description in specs]
+    # Existing v1 contracts remain unchanged; v2 adds explicit camera selection.
+    for original in list(definitions):
+        if original["name"] in ("robot.vision.frame","robot.vision.snapshot","robot.vision.geometry"):
+            modern_camera=copy.deepcopy(original);modern_camera["version"]=2
+            modern_camera["inputs"]["camera_id"]=field("str")
+            modern_camera["description"]="Select front or rear camera observations in the same shared map. "+original["description"]
+            definitions.append(modern_camera)
     ground = next(item for item in definitions if item["name"] == "robot.vision.project_ground")
     modern = copy.deepcopy(ground)
     modern["version"] = 2
@@ -133,14 +148,17 @@ def contract_definitions():
     for item in definitions:
         if item["version"] == 1 and item["name"] in legacy_descriptions:
             item["description"] = legacy_descriptions[item["name"]]
-            item["usage"] = legacy_guidance[item["name"]]
     return definitions
 
+
+LEGACY_GUIDANCE = {'robot.vision.metadata:1': {'before': 'Read robot.body.model:1 and robot.metric.status:1. robot.camera.light.set:1 illuminates the view for driving. First-DMA capture timestamps are not calibrated exposure times.'}, 'robot.camera.light.set:1': {'before': 'The onboard LED illuminates the camera view for driving. Partial on/brightness/rgb update; inspect uncertain outcomes before retry.'}, 'robot.vision.project_ground:1': {'before': 'Legacy v1 schema; use robot.vision.project_ground:2 to project onto the floor plane without a caller contact assertion.'}}
 
 CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contract_definitions()}
 
 
 MUTATING_CONTRACTS = frozenset({
+    "robot.video.import.write:1",
+    "robot.vision.rig.configure:1",
     "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
     "robot.camera.light.set:1", "robot.ahrs.calibrate:1",
@@ -267,6 +285,18 @@ def check_socket(path):
         raise ServiceError("unsafe_socket", "Vision socket and its directory must be owner-only.")
 
 
+def vision_service_has_custody(state):
+    """An owned service lock survives socket teardown until checkpointing finishes."""
+    try:
+        with (Path(state) / "service.lock").open("rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except FileNotFoundError:
+        pass
+    return False
+
 class VisionClient:
     def __init__(self, path, timeout=None):
         self.path, self.timeout = Path(path), timeout
@@ -362,6 +392,17 @@ def execute(action, cfg, remote, client=None):
     if not isinstance(inputs, dict):
         raise ServiceError("invalid_request", "Inputs must be an object.")
     operation = CONTRACTS[contract]["name"]
+    if operation in ("robot.video.import.read", "robot.video.import.write"):
+        from video_jobs import VideoJobs
+        request = inputs.get("request")
+        allowed = {"list", "status"} if operation.endswith(".read") else {"create", "chunk", "finish", "start", "cancel"}
+        if not isinstance(request, dict) or request.get("action") not in allowed:
+            raise ServiceError("invalid_request", "Unknown action for this video capability.")
+        try:
+            response = VideoJobs(cfg["state"]).handle(request)
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            response = {"ok": False, "error": {"code": "VIDEO_INPUT", "message": str(exc)[:500]}}
+        return {"result": response}
     requested = operation == "robot.vision.frame" or (
         operation == "robot.vision.snapshot" and inputs.get("include_frame") is True)
     client = client or VisionClient(cfg["socket"], cfg.get("query_timeout_seconds"))
@@ -424,6 +465,7 @@ def offer(cfg, contract, state):
     for name, guidance in {**SCALE_GUIDANCE.get(contract, {}),
                            **AHRS_GUIDANCE.get(contract, {})}.items():
         usage[name] += " " + guidance
+    usage.update(LEGACY_GUIDANCE.get(contract, {}))
     usage.update(CONTRACTS[contract].get("usage", {}))
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
                 service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)
@@ -482,7 +524,9 @@ def worker_offers(cfg):
 def stream_offer(cfg, status):
     """Advertise only a service that actually supplies both native live feeds."""
     live = status.get("streaming", {})
-    available = (status.get("state") in ("running", "starting") and
+    # The native data lanes remain available while the mapper rotates submaps
+    # or recovers its backend. Only the live endpoint owns stream readiness.
+    available = (status.get("state") not in ("stopping", "stopped") and
                  live.get("available") is True and
                  set(live.get("lanes", [])) >= {"vision", "map"})
     return dict(provider=cfg["provider"], contract="robot.vision.stream:1",
@@ -495,20 +539,50 @@ def stream_offer(cfg, status):
                         "buffer_depth": 8, "max_message_bytes": 2097152}})
 
 
-def publish_stream_offer(remote, value, advertised, pending_offline, *, stopping=False):
-    """Wait for a second health observation before discarding a live reservation."""
+def stream_offers(cfg, status):
+    front = stream_offer(cfg, status)
+    rear = stream_offer(cfg, status)
+    rear["resource"] += ".rear"
+    rear["configuration"]["camera_id"] = "rear"
+    if not status.get("streaming", {}).get("rear_enabled"):
+        rear["state"] = "offline"
+    return front, rear
+
+
+def publish_stream_offer(remote, value, advertised, pending_offline):
+    """Confirm lost health before retiring a persistent reservation."""
     resource = value["resource"]
     if advertised.get(resource) == value:
         pending_offline.discard(resource)
         return
-    if value["state"] == "offline" and not stopping and resource not in pending_offline:
-        # A local listener can briefly disappear while its service rebinds.
-        # Withdrawing an offer also abandons the controller's persistent lease.
+    if value["state"] == "offline" and resource not in pending_offline:
         pending_offline.add(resource)
         return
     remote.call("cap.offer", value)
     advertised[resource] = value
     pending_offline.discard(resource)
+
+
+def withdraw_unavailable_streams(remote, cfg, client):
+    """The producer, which can outlive the adapter, owns feed availability."""
+    unsafe = False
+    try:
+        status = client.query("robot.vision.status", {"provider_only": True})
+    except ServiceError as error:
+        if (not isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
+                and error.code != "unsafe_socket"):
+            return
+        unsafe = error.code == "unsafe_socket"
+        status = {}
+    if (not unsafe and not getattr(client, "host_io", None) and vision_service_has_custody(cfg["state"])
+            and not status.get("streaming", {}).get("available")):
+        return
+    for value in stream_offers(cfg, status):
+        if value["state"] == "offline":
+            try:
+                remote.call("cap.offer", value)
+            except Exception as exc:
+                print("Vision stream withdrawal failed:", type(exc).__name__, file=sys.stderr, flush=True)
 
 
 def serve(cfg):
@@ -522,7 +596,7 @@ def serve(cfg):
     remote = Remote(cfg)
     from leased_streams import VisionStreams
     live_streams = VisionStreams(remote, cfg["socket"], cfg.get("stream_local_router_url"),
-                                 sequence_path=worker_state / "stream-sequences.sqlite")
+                                 sequence_path=worker_state / "stream-sequences.sqlite",rear_resource=cfg["resource"]+".rear")
     client = VisionClient(cfg["socket"], cfg.get("health_timeout_seconds", 5))
     local = worker_offers(cfg)
     with open(worker_state / "worker.lock", "a") as lock:
@@ -560,8 +634,9 @@ def serve(cfg):
             stopping.set()
 
         def advertise():
+            retired_withdrawn=set()
             published_definitions = set()
-            stream_offers = {}
+            stream_offers_published = {}
             stream_offline_confirmation = set()
             relay_definitions = json.loads((HERE / "rover-relay-contracts.json").read_text())
             stream_definition = {"name": "robot.vision.stream", "version": 1, "inputs": {}, "outputs": {},
@@ -573,35 +648,47 @@ def serve(cfg):
                     remote.call("cap.define", spec)
                     published_definitions.add(key)
 
-            def publish_stream(value, status):
-                publish_stream_offer(remote, value, stream_offers, stream_offline_confirmation,
-                    stopping=status.get("state") in ("stopping", "stopped"))
-
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
+                phase = "native health"
                 try:
                     try:
-                        status = client.query("robot.vision.status", {})
+                        status = client.query("robot.vision.status", {"provider_only": True})
                         ready = supported_contracts(status)
                     except ServiceError as error:
                         # A busy/late health reply is unknown, not provider loss.
                         # Only a confirmed missing endpoint or unsafe socket
                         # withdraws offers; explicit service status still governs.
-                        if (isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
-                                or error.code == "unsafe_socket"):
+                        missing = isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
+                        if missing and vision_service_has_custody(cfg["state"]):
+                            # Retain the acquisition while the native service drains its checkpoint.
+                            raise
+                        if missing or error.code == "unsafe_socket":
                             status = {}
                             ready = set()
                         else:
                             raise
                     # These records are durable. Separate health sampling from
                     # writes so stable cameras don't contend for controller admission.
+                    phase = "stream definition"
                     define_once(stream_definition)
+                    if stopping.is_set():return
+                    phase = "stream offer"
+                    if not (status.get("state") == "stopping" and vision_service_has_custody(cfg["state"])):
+                        for value in stream_offers(cfg, status):
+                            publish_stream_offer(remote, value, stream_offers_published, stream_offline_confirmation)
+                    phase = "query and relay registry"
                     for spec in relay_definitions:
                         if stopping.is_set():return
                         define_once(spec)
                     if stopping.is_set():return
-                    publish_stream(stream_offer(cfg, status), status)
+                    # Withdraw stale RSSI offers on FTM-only installations.
+                    retired_withdrawn.difference_update(ready)
+                    for retired in {"robot.radio.status:1","robot.radio.localize:1","robot.map.radio.read:1"} - ready - retired_withdrawn:
+                        remote.call("cap.offer",dict(provider=cfg["provider"],contract=retired,
+                            resource=cfg["resource"],service="robot-vision",capacity=cfg["slots"],state="offline"))
+                        retired_withdrawn.add(retired)
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
@@ -616,7 +703,7 @@ def serve(cfg):
                             advertised[contract] = state
                     stopping.wait(cfg.get("health_seconds", 10))
                 except Exception as exc:
-                    print("Vision advertisement retry:", type(exc).__name__, file=sys.stderr, flush=True)
+                    print("Vision advertisement retry:", phase, type(exc).__name__, file=sys.stderr, flush=True)
                     stopping.wait(5)
 
         def reconcile_receipts():
@@ -653,10 +740,7 @@ def serve(cfg):
             publisher.join()
             recovery.join()
             try:
-                try:
-                    remote.call("cap.offer", stream_offer(cfg, {}))
-                except Exception:
-                    pass
+                withdraw_unavailable_streams(remote, cfg, client)
                 for contract in sorted(defined):
                     try:
                         remote.call("cap.offer", offer(cfg, contract, "offline"))

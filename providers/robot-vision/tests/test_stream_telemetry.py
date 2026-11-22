@@ -16,7 +16,7 @@ class StreamTelemetryTests(unittest.TestCase):
     frame = fixtures.VisionServiceTests.frame
     process = fixtures.VisionServiceTests.process
 
-    def test_frame_contains_complete_firmware_ahrs_and_cached_radio_observations(self):
+    def test_frame_contains_complete_firmware_ahrs_and_cached_ftm_ranges(self):
         service = self.make_service()
         firmware = {"type":"ahrs", "receiver_id":"camera", "boot_id":"boot",
                     "sequence":7, "timestamp_ms":1800000000000,
@@ -24,19 +24,19 @@ class StreamTelemetryTests(unittest.TestCase):
                             "attitude":{"roll_deg":12.5}, "imu":{"accel_m_s2":[0,0,9.8]}}}
         cached = {"telemetry":firmware, "received_at":"2026-11-10T20:00:00Z",
                   "received_monotonic":123.0}
-        radio = {"enabled":True, "telemetry":{"observations":[{"kind":"wifi","rssi_dbm":-51}]}}
+        tof = {"ranges":[{"peer":"anchor","distance_m":1.25}]}
         with patch.object(service.ahrs, "snapshot", return_value=copy.deepcopy(cached)) as snapshot, \
-             patch.object(service.radio, "status", return_value=radio) as status:
+             patch.object(service, "_read_tof", return_value=tof) as status:
             with service.live_frames.subscribe() as inbox:
                 self.process(service, self.frame(service, "sensors"))
                 value = inbox.get(timeout=1)
             size = int.from_bytes(value[:4], "big")
-            metadata, image = decode(value[4:4+size], 4194304)
+            metadata, image = decode(value[4:4+size], 4194304, lane="vision")
             self.assertEqual(metadata["ahrs"]["ahrs"], firmware["ahrs"])
             self.assertEqual(metadata["ahrs"]["boot_id"], "boot")
             self.assertEqual(metadata["ahrs"]["snapshot"]["received_monotonic"], 123.0)
-            self.assertEqual(metadata["radio"]["telemetry"]["observations"][0]["rssi_dbm"], -51)
-            self.assertTrue(any(call.kwargs.get("include_observations") is True for call in status.call_args_list))
+            self.assertEqual(metadata["tof"]["ranges"],tof["ranges"])
+            self.assertTrue(status.called)
             self.assertTrue(snapshot.called)
             self.assertTrue(image)
 

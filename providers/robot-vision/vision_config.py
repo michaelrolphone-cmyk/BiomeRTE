@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
         "pose_history_limit": 1200,
         "mapping": {},
     },
+    "tof": {},
     "ahrs": {
         "enabled": False,
         "poll_interval_s": 0.1,

@@ -5,8 +5,8 @@ import re
 
 UINT32=(1<<32)-1
 
-def validate_packet(packet):
-    if not isinstance(packet,dict) or packet.get('schema')!='biome.capture.v1':
+def validate_packet(packet,allow_sensor_tick=False,*,include_radio=False):
+    if not isinstance(packet,dict) or packet.get('schema') not in (('biome.capture.v1','biome.sensor_tick.v1') if allow_sensor_tick else ('biome.capture.v1',)):
         raise ValueError('Unknown capture packet schema')
     for name in ('receiver_id','boot_id','frame_id'):
         if not isinstance(packet.get(name),str) or not packet[name]:
@@ -17,10 +17,12 @@ def validate_packet(packet):
     if packet['frame_id']!=packet['boot_id']+':'+str(t):raise ValueError('Capture frame identity does not match its timestamp')
     served=packet.get('served_monotonic_us')
     if type(served) is not int or served<t:raise ValueError('Invalid capture service clock')
-    for name in ('width','height'):
+    if packet['schema']=='biome.sensor_tick.v1':
+        if packet.get('image_available') is not False or packet.get('capture_timestamp_semantics')!='sensor_snapshot_tick_no_camera_frame':raise ValueError('Sensor tick cannot claim a camera image')
+    for name in (() if packet['schema']=='biome.sensor_tick.v1' else ('width','height')):
         if type(packet.get(name)) is not int or not 1<=packet[name]<=16384:
             raise ValueError('Invalid frame dimensions')
-    for name in ('ahrs','radio','ultrasonic'):
+    for name in ('ahrs','ultrasonic'):
         data=packet.get(name)
         if data is None:continue
         if not isinstance(data,dict) or any(data.get(k)!=packet[k] for k in ('receiver_id','boot_id')):
@@ -28,6 +30,14 @@ def validate_packet(packet):
     if packet.get("ultrasonic") is not None:
         from ultrasonic_source import validate_ultrasonic
         validate_ultrasonic(packet["ultrasonic"])
+    if "radio" in packet:
+        if include_radio and packet["radio"] is not None:
+            from camera_telemetry import validate_radio_snapshot
+            raw = validate_radio_snapshot(packet["radio"])
+            if any(raw[key] != packet[key] for key in ("receiver_id", "boot_id")):
+                raise ValueError("Radio and camera belong to different devices or boots")
+        elif not include_radio:
+            packet = {key: value for key, value in packet.items() if key != "radio"}
     return packet
 
 
@@ -38,7 +48,7 @@ def sensor_age_ms(capture_us,observed_uptime_ms):
     return age if age<(1<<31) else None
 
 
-def read_capture(response,max_jpeg_bytes=16*1024*1024):
+def read_capture(response,max_jpeg_bytes=16*1024*1024,*,include_radio=False):
     """Read one length-delimited metadata/JPEG bundle; never scan JPEG bytes for boundaries."""
     ctype=response.headers.get('Content-Type','')
     match=re.fullmatch(r'multipart/mixed;\s*boundary=([A-Za-z0-9_-]{1,70})',ctype)
@@ -70,7 +80,7 @@ def read_capture(response,max_jpeg_bytes=16*1024*1024):
         if end!=boundary+(b'--' if index else b''):raise ValueError('Invalid capture boundary')
     if parts[0][0].get('content-type')!='application/json' or parts[1][0].get('content-type')!='image/jpeg':
         raise ValueError('Invalid capture part types')
-    packet=validate_packet(json.loads(parts[0][1]))
+    packet=validate_packet(json.loads(parts[0][1]),include_radio=include_radio)
     return packet,parts[1][1]
 
 
@@ -91,7 +101,7 @@ class CaptureSequence:
 
 def frame_ahrs_snapshot(frame):
     from ahrs_source import validate_ahrs_snapshot, _sensor, _calibration
-    packet=validate_packet(frame['sensor_packet'])
+    packet=validate_packet(frame['sensor_packet'],allow_sensor_tick=True)
     raw=packet.get('ahrs')
     if raw is None:return None
     validate_ahrs_snapshot(raw)
@@ -101,15 +111,15 @@ def frame_ahrs_snapshot(frame):
     return dict(source_id=frame.get('source_id'),receiver_id=raw['receiver_id'],boot_id=raw['boot_id'],
                 received_monotonic=tick,received_at=None,request_duration_s=0.,
                 telemetry=raw,sensors=sensors,calibration=_calibration(raw['ahrs']),
-                available=True,device_frame_aligned=True,
+                available=True,device_frame_aligned=packet['schema']=='biome.capture.v1',sensor_tick_aligned=packet['schema']=='biome.sensor_tick.v1',
                 capture_monotonic_us=packet['capture_monotonic_us'])
 
 
 def frame_radio_snapshot(frame):
-    from camera_telemetry import observation_id,validate_telemetry_snapshot
-    packet=validate_packet(frame['sensor_packet']);raw=packet.get('radio')
+    from camera_telemetry import observation_id,validate_radio_snapshot
+    packet=validate_packet(frame['sensor_packet'],include_radio=True);raw=packet.get('radio')
     if raw is None:return None
-    validate_telemetry_snapshot(raw)
+    validate_radio_snapshot(raw)
     observations=[]
     for radio in ('wifi','ble'):
         for index,row in enumerate(raw.get(radio,[])):

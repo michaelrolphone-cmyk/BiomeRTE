@@ -1,10 +1,4 @@
-"""Bounded ESP32 camera HTTP access and a latest-snapshot telemetry poller.
-
-CameraTelemetrySource.snapshot() performs no I/O. Light calls are explicit,
-synchronous operations for an API worker, never the vision-frame loop. Firmware
-payloads remain unaltered; host receipt, age, and deduplication metadata live
-beside them. Driver receipts do not establish physical light output.
-"""
+"""Authenticated camera HTTP access for light, AHRS, sonar and capture requests."""
 from __future__ import annotations
 
 import base64
@@ -88,6 +82,11 @@ def validate_telemetry_snapshot(value):
         _integer(value.get(name), name)
     if value.get("timestamp_ms") is not None:
         _integer(value["timestamp_ms"], "timestamp_ms", maximum=(1 << 64) - 1)
+    return value
+
+
+def validate_radio_snapshot(value):
+    validate_telemetry_snapshot(value)
     for radio, capacity in (("wifi", 32), ("ble", 64)):
         rows = value.get(radio)
         if not isinstance(rows, list) or len(rows) > capacity:
@@ -211,7 +210,8 @@ class CameraHTTPClient:
         # Resolve lazily: disabled telemetry must not break file/test video
         # sources that do not have an HTTP endpoint.
         try:
-            source = urlsplit(self._camera.get("url", ""))
+            from device_routes import resolve_url
+            source = urlsplit(resolve_url(self._camera.get("url", ""), self._camera))
             configured = self._config.get("base_url")
             if configured:
                 base = urlsplit(configured)
@@ -341,13 +341,14 @@ class CameraHTTPClient:
                                   response=value, outcome_known=False) from None
 
 
-class CameraTelemetrySource:
+
+class SensorTelemetrySource:
     """One background HTTP poller with a bounded, latest-only snapshot buffer.
 
     snapshot() returns unmodified firmware data plus host provenance. Effective
     age adds elapsed host monotonic time to each firmware age. The request
     duration is retained separately as transport timing uncertainty; receipt
-    time is never relabeled as the radio observation time.
+    time is never relabeled as the sensor observation time.
     """
     def __init__(self, camera_config, config=None, *, client=None,
                  monotonic=None, utc_clock=None):
@@ -390,16 +391,16 @@ class CameraTelemetrySource:
             self._stop.wait(self.poll_interval_s)
 
     def _read_snapshot(self):
-        return validate_telemetry_snapshot(self.client.get_telemetry())
+        raise NotImplementedError("A sensor source must select and validate its endpoint")
 
     def _observations(self, value, elapsed):
-        return [
-            {"radio": radio, "index": index,
-             "source_observation_id": observation_id(self.source_id, value["telemetry"], radio, row),
-             "effective_age_ms": row["age_ms"] + elapsed * 1000.0}
-            for radio in ("wifi", "ble")
-            for index, row in enumerate(value["telemetry"][radio])
-        ]
+        raise NotImplementedError("A sensor source must preserve its measurement ages")
+
+    def set_push_source(self, reader):
+        """Use device-clock push snapshots; None explicitly restores HTTP acquisition."""
+        if reader is not None and not callable(reader):
+            raise TypeError('Push source must be callable')
+        self._push_reader = reader
 
     def poll_once(self):
         """Perform one polling attempt; intended for the poller or diagnostics."""
@@ -408,8 +409,14 @@ class CameraTelemetrySource:
         started = self._monotonic()
         attempted_at = self._utc_clock()
         try:
-            telemetry = self._read_snapshot()
-            received = self._monotonic()
+            reader = getattr(self, '_push_reader', None)
+            if reader is None:
+                telemetry = self._read_snapshot()
+                received = self._monotonic()
+            else:
+                pushed = reader()
+                if pushed is None: return False
+                telemetry, started, received = pushed
             if self._stop.is_set():
                 return False
             record = {
@@ -498,17 +505,31 @@ class CameraTelemetrySource:
             result["boot_id"] = latest["telemetry"]["boot_id"]
         return result
 
-    def light_status(self):
-        """Explicit HTTP read for an API worker, independent of radio polling."""
-        return self.client.get_light()
-
-    def set_light(self, update):
-        """Explicit one-shot light mutation; no polling or automatic retries."""
-        return self.client.set_light(update)
-
     def close(self):
         self._stop.set()
         if self._thread is not None and self._thread is not threading.current_thread():
             # Interruptible inter-poll wait; only a current bounded HTTP request
             # can delay shutdown. No extra fixed sleep or whole-job deadline.
             self._thread.join(self.client.network_timeout_s)
+
+
+class CameraTelemetrySource(SensorTelemetrySource):
+    """Poll RSSI snapshots on installations that explicitly enable radio mapping."""
+    def _read_snapshot(self):
+        return validate_radio_snapshot(self.client.get_telemetry())
+
+    def _observations(self, value, elapsed):
+        return [
+            {"radio": radio, "index": index,
+             "source_observation_id": observation_id(self.source_id, value["telemetry"], radio, row),
+             "effective_age_ms": row["age_ms"] + elapsed * 1000.0}
+            for radio in ("wifi", "ble")
+            for index, row in enumerate(value["telemetry"][radio])
+        ]
+
+    def light_status(self):
+        """Explicit HTTP read for an API worker, independent of radio polling."""
+        return self.client.get_light()
+
+    def set_light(self, update):
+        return self.client.set_light(update)

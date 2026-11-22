@@ -35,7 +35,7 @@ def credential(value, secrets, now=None):
         raise Fault('Invalid stream attachment credential', 403)
 
 
-def decode(message, maximum):
+def decode(message, maximum, *, lane=None):
     if len(message) > maximum:
         raise Fault('Stream message too large', 413)
     if isinstance(message, str):
@@ -45,7 +45,9 @@ def decode(message, maximum):
         if len(message) < 4:
             raise Fault('Missing frame metadata')
         size = struct.unpack('!I', message[:4])[0]
-        if size > 16384 or size + 4 > len(message):
+        # Vision frames and map snapshots carry complete sensor records in their
+        # binary header. The negotiated message limit bounds the entire record.
+        if size == 0 or size + 4 > len(message) or (lane not in ("vision", "map") and size > 16384):
             raise Fault('Invalid frame metadata')
         metadata = json.loads(message[4:4 + size].decode())
         payload = message[4 + size:]
@@ -87,7 +89,7 @@ class Session:
             target.put(message)
 
     def forward(self, role, lane, message, sender):
-        meta, payload = decode(message, self.grant['limits']['max_message_bytes'])
+        meta, payload = decode(message, self.grant['limits']['max_message_bytes'], lane=lane)
         key = ('forward', role, lane)
         sequence = max(meta['sequence'], self.sequences.get(key, -1) + 1)
         self.sequences[key] = sequence
@@ -109,7 +111,7 @@ class Session:
 
     def check(self, role, lane, message, now=None, sender=None):
         g = self.grant
-        meta, payload = decode(message, g['limits']['max_message_bytes'])
+        meta, payload = decode(message, g['limits']['max_message_bytes'], lane=lane)
         if lane not in g.get('lanes', ['data']):
             raise Fault('Lane outside stream grant', 403)
         if (meta.get('authority'), meta.get('generation'), meta.get('epoch')) != (
