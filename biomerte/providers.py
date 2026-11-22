@@ -501,8 +501,7 @@ def pending(tx, ctx, provider, limit=64):
         if grant['provider'] != provider:
             continue
         try:
-            # A grant can remain stored as open during a re-fence. Only the
-            # grant for the current bound generation belongs in this inbox.
+            # Reconnection must use the same authority checks as stream.attach.
             streams.append(valid_stream(tx, ctx, grant))
         except Fault:
             continue
