@@ -6,12 +6,14 @@ import contextlib
 import hmac
 import json
 import logging
+import math
 import os
 import pathlib
 import sqlite3
 import ssl
 import time
 import tempfile
+from collections import Counter
 from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
@@ -1273,43 +1275,67 @@ class AuthorityDaemon:
         bands = ("result_status", "read", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
-        capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
-                    "diagnostic": 4, "result_status": 4, "read": 8, "lease_status": 4, "lifecycle": 1, "general": 1,
-                    "registry": 8, "reservation": 4, "fence": 4,
-                    "discovery": 4, "event_management": 1, "submission": 1,
-                    "provider_progress": 4}
-        pending = {band: [] for band in capacity}
+        recovery_slots = {"result_status": 4, "provider_progress": 4, "fence": 4, "lease_status": 4}
+        fast_slots = {"inspection": 4, "read": 8, "result_status": recovery_slots["result_status"]}
+        # Protocol v1 gateways used 64 concurrent requests and a 20s response
+        # budget before advertising the configured values at registration.
+        rpc_limit, rpc_timeout = 64, 20.0
+        outstanding = dict.fromkeys((*bands, *stream_bands, "diagnostic"), 0)
+        # Give every class a turn even if one operation fills the common pool.
+        # On a small connection, reserve at most half of its slots and give
+        # the first guarantees to the operations that can settle existing work.
+        first = dict.fromkeys((*recovery_slots, "inspection", "read", "attachment", *outstanding))
+        credits = list(first) + [band for band, slots in recovery_slots.items() for _ in range(slots - 1)]
+        reserved = Counter(credits[:rpc_limit // 2])
+        pending = {band: [] for band in outstanding}
+        next_rejection_log = {}
+        enqueued_at = {}
         ready = asyncio.Event()
         stopping = False
         fast_inspections = set()
         fast_provider_polls = set()
         fast_results = set()
 
-        async def enqueue(message):
+        def enqueue(message):
             band = self.authority_request_band(message)
-            queue = pending[band]
-            if len(queue) >= capacity[band]:
-                reply = self.authority_response(message, self.binding)
-                reply.update(status=429, error="Managed controller is busy")
-                await ws.send_json(reply)
-            else:
-                queue.append(message)
-                ready.set()
+            pending[band].append(message)
+            enqueued_at[id(message)] = time.monotonic()
+            ready.set()
+
+        def admit(band):
+            # Keep space on the gateway connection for callers reading results,
+            # advancing leases and validating fences while ordinary calls queue.
+            # Include requests already dispatched until their replies are sent.
+            total = sum(outstanding.values())
+            held_for_others = sum(max(0, slots - outstanding[name])
+                                  for name, slots in reserved.items() if name != band)
+            if total >= rpc_limit - held_for_others:
+                now = time.monotonic()
+                if now >= next_rejection_log.get(band, 0):
+                    LOG.warning("Managed runtime admission rejected band=%s outstanding=%d "
+                                "rpc_limit=%d reserved_for_others=%d",
+                                band, total, rpc_limit, held_for_others)
+                    next_rejection_log[band] = now + rpc_timeout
+                return False
+            outstanding[band] += 1
+            return True
 
         async def inspect_or_enqueue(message, recheck):
             reply = await recheck(message)
             if stopping or ws.closed:
                 return
             if reply is None:
-                await enqueue(message)
+                enqueue(message)
             else:
                 await ws.send_json(reply)
+                outstanding[self.authority_request_band(message)] -= 1
 
         async def dispatch_queue():
             index = 0
             stream_index = 0
             previous = None
             last_diagnostic = False
+            urgent_turn = False
             try:
                 while not stopping:
                     await ready.wait()
@@ -1320,7 +1346,16 @@ class AuthorityDaemon:
                     # Alternate stream lifecycle work with ordinary work.
                     # A status probe has a dedicated admission path. Serve at
                     # most one such batch between other work to avoid starvation.
-                    if pending["diagnostic"] and (not last_diagnostic or
+                    # Once half of the caller's RPC window has elapsed, give
+                    # the oldest waiting request a turn. Alternate with ordinary
+                    # fair selection so a slow queue cannot capture the socket.
+                    oldest = min((band for band, queue in pending.items() if queue),
+                                 key=lambda name: enqueued_at[id(pending[name][0])])
+                    urgent_turn = (not urgent_turn and
+                                   time.monotonic() - enqueued_at[id(pending[oldest][0])] >= rpc_timeout / 2)
+                    if urgent_turn:
+                        band = oldest
+                    elif pending["diagnostic"] and (not last_diagnostic or
                             not any(pending[band] for band in (*stream_bands, *bands))):
                         band = "diagnostic"
                     elif any(pending[band] for band in stream_bands) and (
@@ -1334,9 +1369,8 @@ class AuthorityDaemon:
                             index = (index + 1) % len(bands)
                         band = bands[index]
                         index = (index + 1) % len(bands)
-                    batch = pending[band]
-                    pending[band] = []
-                    if band in BATCHABLE_BANDS and not any(m.get("preparation") for m in batch):
+                    if band in BATCHABLE_BANDS and not any(m.get("preparation") for m in pending[band]):
+                        batch, pending[band] = pending[band], []
                         # Cold attachments, inspections and lease operations keep their
                         # individual checks. Share the next compatible checkpoint so
                         # reconnects can finish inside the gateway RPC deadline.
@@ -1354,6 +1388,12 @@ class AuthorityDaemon:
                                 waiting = pending[partner]
                                 if waiting and not waiting[0].get("preparation"):
                                     batch.append(waiting.pop(0))
+                    else:
+                        # Mutations with their own barrier (and preparation
+                        # calls) stay FIFO and use the original dispatch path.
+                        batch = [pending[band].pop(0)]
+                    for message in batch:
+                        enqueued_at.pop(id(message))
                     if band == "diagnostic":
                         # Keep the prior stream-vs-ordinary turn during diagnostics.
                         last_diagnostic = True
@@ -1372,6 +1412,8 @@ class AuthorityDaemon:
                             self.remember_provider_status(message, reply)
                             if not ws.closed:
                                 await ws.send_json(reply)
+                    for message in batch:
+                        outstanding[self.authority_request_band(message)] -= 1
             finally:
                 if not ws.closed:
                     await ws.close()
@@ -1383,29 +1425,42 @@ class AuthorityDaemon:
                     continue
                 message = json.loads(event.data)
                 if message.get("type") == "registered":
+                    limit = message.get("rpc_limit")
+                    timeout = message.get("rpc_timeout_s")
+                    if type(limit) is int and limit > 0:
+                        rpc_limit = limit
+                        reserved = Counter(credits[:rpc_limit // 2])
+                    if type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0:
+                        rpc_timeout = timeout
                     self.connected = True
+                    continue
+                band = self.authority_request_band(message)
+                if not admit(band):
+                    reply = self.authority_response(message, self.binding)
+                    reply.update(status=429, error="Managed controller is busy")
+                    await ws.send_json(reply)
                     continue
                 key = self.witnessed_vision_key(message)
                 if (key in self.witnessed_vision_inspections
-                        and len(fast_inspections) < capacity["inspection"]):
+                        and len(fast_inspections) < fast_slots["inspection"]):
                     task = asyncio.create_task(inspect_or_enqueue(
                         message, self.recheck_witnessed_vision_inspection))
                     fast_inspections.add(task)
                     task.add_done_callback(fast_inspections.discard)
                 elif (self.provider_poll_key(message) in self.witnessed_provider_polls
-                        and len(fast_provider_polls) < capacity["read"]):
+                        and len(fast_provider_polls) < fast_slots["read"]):
                     task = asyncio.create_task(inspect_or_enqueue(
                         message, self.recheck_witnessed_provider_poll))
                     fast_provider_polls.add(task)
                     task.add_done_callback(fast_provider_polls.discard)
                 elif (self.provider_status_key(message) in self.witnessed_provider_statuses
-                        and len(fast_results) < capacity["result_status"]):
+                        and len(fast_results) < fast_slots["result_status"]):
                     task = asyncio.create_task(inspect_or_enqueue(
                         message, self.recheck_witnessed_provider_status))
                     fast_results.add(task)
                     task.add_done_callback(fast_results.discard)
                 else:
-                    await enqueue(message)
+                    enqueue(message)
         finally:
             stopping = True
             fast_tasks = fast_inspections | fast_provider_polls | fast_results

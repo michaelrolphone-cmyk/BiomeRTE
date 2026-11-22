@@ -330,7 +330,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             closed = False
 
             async def __aiter__(self):
-                for message in ({"type": "registered"}, {"type": "call", "id": "first"}):
+                for message in ({"type": "registered", "rpc_limit": 4}, {"type": "call", "id": "first"}):
                     yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
                 await started.wait()
                 for name in ("waiting", "excess"):
@@ -408,6 +408,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         started, release, done = (asyncio.Event() for _ in range(3))
         replies = {}
         calls = (("busy", "cap.invoke"), ("close", "stream.close"),
+                 ("close2", "stream.close"), ("close3", "stream.close"),
                  ("excess", "stream.close"), ("inspect-lease", "cap.lease"))
 
         async def dispatch(message):
@@ -420,6 +421,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             closed = False
 
             async def __aiter__(self):
+                yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
+                    {"type": "registered", "rpc_limit": 8}))
                 for request, operation in calls:
                     yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
                         "type": "call", "binding": B, "id": request,
@@ -437,103 +440,87 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
         self.daemon.dispatch = dispatch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
-        self.assertEqual(replies, {"busy": 200, "close": 200, "excess": 429, "inspect-lease": 200})
+        self.assertEqual(replies.pop("excess"), 429)
+        self.assertEqual(set(replies.values()), {200})
 
-    async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
-        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        replies = {}
-
-        async def dispatch(message):
-            if message["id"] == "running":
-                started.set()
-                await release.wait()
-            return self.daemon.authority_response(message, B)
-
-        class Socket:
-            closed = False
-
-            async def __aiter__(self):
-                def call(request_id, operation):
-                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
-                        "type": "call", "id": request_id,
-                        "envelope": {"operation": operation},
-                    }))
-
-                yield call("running", "cap.invoke")
-                await started.wait()
-                yield call("general", "cap.invoke")
-                yield call("excess", "cap.invoke")
-                yield call("poll", "provider.poll")
-                yield call("catalog", "system.discovery")
-                yield call("grok-list", "gateway.events.grok")
-                release.set()
-                await completed.wait()
-                self.closed = True
-
-            async def send_json(self, response):
-                replies[response["id"]] = response["status"]
-                if len(replies) == 6:
-                    completed.set()
-
-        self.daemon.dispatch = dispatch
-        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
-        self.assertEqual(replies, {"running": 200, "general": 200, "excess": 429,
-                                   "poll": 200, "catalog": 200, "grok-list": 200})
-
-    async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
-        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        replies = {}
-        batches = []
-        calls = {
-            "waiting": "cap.invoke",
-            "excess": "cap.invoke",
-            "submit": "cap.submit",
-            "claim": "provider.claim",
-            "heartbeat": "cap.heartbeat",
-            "result": "provider.result",
-            "reconcile": "provider.reconcile",
-        }
+    async def run_socket_burst(self, calls):
+        started, release, completed = (asyncio.Event() for _ in range(3))
+        replies, publications = {}, []
 
         async def dispatch(message):
+            publications.append([message["id"]])
             if message["id"] == "running":
                 started.set()
                 await release.wait()
             return self.daemon.authority_response(message, B)
 
         async def dispatch_batch(messages):
-            batches.append([message["id"] for message in messages])
-            return [await dispatch(message) for message in messages]
+            publications.append([message["id"] for message in messages])
+            return [self.daemon.authority_response(message, B) for message in messages]
 
         class Socket:
             closed = False
 
             async def __aiter__(self):
-                def call(request_id, operation):
-                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
-                        "type": "call", "id": request_id,
-                        "envelope": {"operation": operation},
-                    }))
-
-                yield call("running", "cap.invoke")
-                await started.wait()
-                for request_id, operation in calls.items():
-                    yield call(request_id, operation)
+                def wire(message):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                yield wire({"type": "registered", "rpc_limit": 64})
+                for request, operation in calls:
+                    yield wire({"type": "call", "id": request, "binding": B,
+                                "envelope": {"operation": operation}})
+                    if request == "running":
+                        await started.wait()
                 release.set()
                 await completed.wait()
                 self.closed = True
 
             async def send_json(self, response):
                 replies[response["id"]] = response["status"]
-                if len(replies) == len(calls) + 1:
+                if len(replies) == len(calls):
                     completed.set()
 
         self.daemon.dispatch = dispatch
         self.daemon.dispatch_managed_reads = dispatch_batch
-        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
-        self.assertEqual(replies, {"running": 200, "waiting": 200, "excess": 429,
-                                   "submit": 200, "claim": 200, "heartbeat": 200,
-                                   "result": 200, "reconcile": 200})
-        self.assertEqual(batches, [["submit", "claim", "heartbeat", "result", "reconcile"]])
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        return replies, publications
+
+    def full_general_burst(self):
+        # The registration permits 64 RPCs. Of 28 guaranteed slots, one
+        # belongs to general calls; the in-flight call counts against it.
+        return [("running", "cap.invoke"),
+                *((f"waiting-{n}", "cap.invoke") for n in range(36)),
+                ("excess", "cap.invoke")]
+
+    async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
+        calls = self.full_general_burst() + [
+            ("poll", "provider.poll"), ("catalog", "system.discovery"),
+            ("grok-list", "gateway.events.grok")]
+        replies, _ = await self.run_socket_burst(calls)
+        self.assertEqual(replies.pop("excess"), 429)
+        self.assertEqual(set(replies.values()), {200})
+
+    async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
+        calls = self.full_general_burst() + [
+            ("submit", "cap.submit"), ("claim", "provider.claim"),
+            ("heartbeat", "cap.heartbeat"), ("result", "provider.result"),
+            ("reconcile", "provider.reconcile")]
+        replies, batches = await self.run_socket_burst(calls)
+        self.assertEqual(replies.pop("excess"), 429)
+        self.assertEqual(set(replies.values()), {200})
+        self.assertIn(["submit", "claim", "heartbeat", "result", "reconcile"], batches)
+
+    async def test_nonbatchable_bands_keep_each_request_and_their_fifo_order(self):
+        operations = ("cap.invoke", "stream.open", "stream.close")
+        calls = [("running", "cap.invoke")]
+        calls.extend((f"{operation}-{i}", operation) for i in range(7) for operation in operations)
+        calls.append(("progress", "provider.result"))
+        replies, publications = await self.run_socket_burst(calls)
+        self.assertEqual(set(replies.values()), {200})
+        self.assertEqual(len(publications), len(calls))
+        for operation in operations:
+            expected = [request for request, op in calls if op == operation]
+            observed = [batch[0] for batch in publications if batch[0] in expected]
+            self.assertEqual(observed, expected)
 
     async def queued_publications(self, operations):
         running, release, done = (asyncio.Event() for _ in range(3))
@@ -589,6 +576,121 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertCountEqual(published[1], operations[1:])
         self.assertEqual(len(published), 2, published)
 
+    async def test_sixteen_signed_submissions_settle_with_exact_receipts_under_concurrent_load(self):
+        first, release, done = (asyncio.Event() for _ in range(3))
+        replies = {}
+        dispatch = self.daemon.dispatch
+
+        def frame(message):
+            return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+
+        def signed_echo(index):
+            key = "parallel-echo-" + str(index)
+            message = self.message(request=key)
+            message["id"] = key
+            envelope = message["envelope"]
+            envelope.update(operation="cap.submit", arguments={"contract": "core.echo:1",
+                            "inputs": {"value": index}, "operation": key})
+            envelope["auth"]["signature"] = sign(self.key, {
+                name: value for name, value in envelope.items() if name != "auth"})
+            return message
+
+        messages = [signed_echo(i) for i in range(16)]
+        repeated = dict(messages[0], id="retry-same-signed-envelope")
+        forged = json.loads(json.dumps(messages[0]))
+        forged["id"] = "unauthorized-copy"
+        forged["envelope"]["auth"]["signature"] = messages[1]["envelope"]["auth"]["signature"]
+        wanted = [*messages, repeated, forged]
+
+        async def suspended(message):
+            if message["id"] == "earlier":
+                first.set()
+                await release.wait()
+                return self.daemon.authority_response(message, B)
+            return await dispatch(message)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                yield frame({"type": "registered", "rpc_limit": 64, "rpc_timeout_s": 20})
+                yield frame({"type": "call", "id": "earlier", "binding": B})
+                await first.wait()
+                for message in wanted:
+                    yield frame(message)
+                    await asyncio.sleep(0)
+                release.set()
+                await done.wait()
+                self.closed = True
+
+            async def send_json(self, reply):
+                replies[reply["id"]] = reply
+                if len(replies) == len(wanted) + 1:
+                    done.set()
+
+        self.daemon.dispatch = suspended
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 15)
+        for i, message in enumerate(messages):
+            reply = replies[message["id"]]
+            self.assertEqual(reply["status"], 200, reply)
+            self.assertEqual(reply["result"]["result"], {"value": i})
+        self.assertEqual(replies[repeated["id"]]["result"], replies[messages[0]["id"]]["result"])
+        self.assertNotEqual(replies[forged["id"]]["status"], 200)
+        self.assertNotIn("result", replies[forged["id"]])
+        self.assertEqual(self.published, 2)
+
+    async def test_admission_reserves_recovery_capacity_and_services_an_aging_submission(self):
+        first, release, done = (asyncio.Event() for _ in range(3))
+        sent, batches = {}, []
+
+        async def dispatch(message):
+            if message["id"] == "earlier":
+                first.set()
+                await release.wait()
+            batches.append([message["id"]])
+            return self.daemon.authority_response(message, B)
+
+        async def dispatch_batch(messages):
+            batches.append([message["id"] for message in messages])
+            return [self.daemon.authority_response(message, B) for message in messages]
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def wire(message):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                def call(name, operation):
+                    return wire({"type": "call", "id": name, "binding": B,
+                                 "envelope": {"operation": operation}})
+                yield wire({"type": "registered", "rpc_limit": 12, "rpc_timeout_s": 0.02})
+                yield call("earlier", "cap.invoke")
+                await first.wait()
+                for i in range(4):
+                    yield call("submit" + str(i), "cap.submit")
+                yield call("open", "stream.open")
+                yield call("submit4", "cap.submit")
+                yield call("status", "cap.status")
+                yield call("claim", "provider.claim")
+                await asyncio.sleep(0.015)
+                release.set()
+                await done.wait()
+                self.closed = True
+
+            async def send_json(self, reply):
+                sent[reply["id"]] = reply["status"]
+                if len(sent) == 9:
+                    done.set()
+
+        self.daemon.dispatch, self.daemon.dispatch_managed_reads = dispatch, dispatch_batch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        self.assertEqual(sent.pop("submit4"), 429)
+        self.assertEqual(set(sent.values()), {200})
+        self.assertEqual(batches[1][:4], ["submit0", "submit1", "submit2", "submit3"])
+        self.assertIn("claim", batches[1])
+        self.assertIn("status", batches[1])
+        self.assertIn(["open"], batches)
+
     async def test_completed_result_is_admitted_with_the_provider_inbox_queue_full(self):
         started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
         replies = {}
@@ -626,6 +728,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             async def __aiter__(self):
                 def frame(message):
                     return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                yield frame({"type": "registered", "rpc_limit": 16})
                 yield frame({"type": "call", "id": "unrelated", "binding": B})
                 await started.wait()
                 for message in inbox_messages:
