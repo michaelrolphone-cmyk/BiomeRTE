@@ -678,6 +678,11 @@ def start_submission(tx, ctx, lease):
 def finish_submission(tx, ctx, operation):
     submission = tx.get('_submissions', operation)
     action = tx.get('actions', operation)
+    if submission and action is None:
+        lease = tx.get('leases', submission['lease'])
+        if not lease or lease['state'] == 'released':
+            tx.drop('_submission_active', operation)
+        return
     if submission and action and action['state'] in lifecycle.TERMINAL:
         held = tx.get('leases', submission['lease'])
         if held:
@@ -723,6 +728,11 @@ def submit(tx, ctx, contract, resource='', inputs=None, operation='', destinatio
     from .completion_receipts import find
     if find(tx, operation):
         raise Fault('Operation result expired; inspect the retained completion receipt, do not replay', 410)
+    if prior:
+        original_lease = tx.get('leases', lease_id)
+        if not original_lease or original_lease['state'] == 'released':
+            # History alone is not evidence that the original command never ran.
+            return submission_status(tx, ctx, operation)
     tx.put('_submissions', operation, record)
     tx.put('_submission_leases', lease_id, operation)
     tx.put('_submission_active', operation, {'id': operation})
@@ -743,7 +753,11 @@ def submission_status(tx, ctx, operation):
     action = tx.get('actions', operation)
     if action:
         return require_payload(action)
-    lease = tx.need('leases', submission['lease'])
+    lease = tx.get('leases', submission['lease'])
+    if not lease or lease['state'] == 'released':
+        return dict(id=operation, lease=submission['lease'], state='missing_unknown',
+                    acknowledged=False, replay_allowed=False,
+                    reason='Original outcome unavailable; reconcile executor evidence')
     return dict(id=operation, lease=lease['id'], state=lease['state'])
 
 
