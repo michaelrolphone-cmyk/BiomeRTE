@@ -1223,7 +1223,7 @@ class AuthorityDaemon:
             return "result_status"
         if operation == "provider.poll":
             return "read"
-        if operation in ("cap.define", "cap.offer", "cap.withdraw"):
+        if operation in ("cap.define", "cap.offer", "cap.withdraw", "cap.registrations", "cap.publish"):
             return "registry"
         if operation == "cap.submit":
             return "submission"

@@ -76,6 +76,23 @@ class AuthorityTests(unittest.TestCase):
         result=self.authority.call(self.envelope('cap.withdraw',args,'shutdown'),preparing=False)
         self.assertEqual(result['withdrawn'],['relay.test:1'])
 
+    def test_signed_bulk_restore_checks_nested_scope_and_keeps_exclusive_capacity(self):
+        scope = dict(provider=self.actor, resource=self.resource, service=self.offer['service'])
+        read = dict(scope, contracts=['relay.test:1'])
+        result = self.authority.call(self.envelope('cap.registrations',read),preparing=False)
+        self.assertEqual(result['registrations'][0]['registration'],self.offer['registration'])
+        entry = dict(definition=dict(name='relay.test',inputs={},outputs={}),
+                     offer=dict(contract='relay.test:1',capacity=1),expected_registration=self.offer['registration'])
+        good = dict(scope, offers=[entry])
+        self.assertEqual(self.authority.call(self.envelope('cap.publish',good,'warm'),False)['offers'][0]['status'],'unchanged')
+        for case in (dict(contract='foreign:1'),dict(contract='relay.test:1',capacity=2)):
+            with self.assertRaises(Fault) as error:
+                self.authority.call(self.envelope('cap.publish',dict(scope,offers=[dict(entry,offer=case)]),'bad'),False)
+            self.assertEqual(error.exception.status,403)
+        with self.assertRaises(Fault) as error:
+            self.authority.call(self.envelope('cap.publish',good,'preparing'),True)
+        self.assertEqual(error.exception.status,503)
+
     def test_former_native_operation_cannot_be_recreated(self):
         def history(tx):
             tx.put("_service_source","initial",{

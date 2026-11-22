@@ -13,7 +13,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request
 
-OPERATIONS = frozenset(('cap.offer','cap.withdraw', 'provider.poll', 'cap.fenced',
+OPERATIONS = frozenset(('cap.offer','cap.withdraw','cap.registrations','cap.publish', 'provider.poll', 'cap.fenced',
                        'provider.claim', 'provider.result', 'cap.status',
                        'cap.configured', 'agent.progress', 'cap.heartbeat', 'cap.command.state', 'stream.attach'))
 IDENT = re.compile(r'^[A-Za-z0-9_.:-]{1,128}$')

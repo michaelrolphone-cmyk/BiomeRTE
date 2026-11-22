@@ -1,7 +1,7 @@
 """Capability contracts, mutable offers, leases, fences and durable dispatch."""
 import math
 import time
-from .api import op, ident, validate, schema
+from .api import OPERATIONS, op, ident, validate, schema
 from .capability_usage import caller_usage, published_usage
 from .store import Fault, uid, text, digest
 from . import lifecycle, placement as selection, redeployment
@@ -12,14 +12,19 @@ def owner(ctx, provider):
         raise Fault('Provider identity mismatch', 403)
 
 
-@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool usage?:obj')
-def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False, usage=None):
-    """Define an immutable executable schema; optionally publish revisable caller instructions and example_inputs."""
+def contract_record(name, inputs, outputs, version=1, description='', synchronous=False, usage=None):
     key = ident(name) + ':' + str(version)
     if version < 1:
         raise Fault('Invalid contract version')
-    record = {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
-              'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
+    return {'id': key, 'name': name, 'version': version, 'inputs': schema(inputs),
+            'outputs': schema(outputs), 'description': description, 'synchronous': synchronous}
+
+
+@op('cap.define', 'name:str inputs:obj outputs:obj version?:int description?:str synchronous?:bool usage?:obj')
+def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronous=False, usage=None):
+    """Define an immutable executable schema; optionally publish revisable caller instructions and example_inputs."""
+    record = contract_record(name, inputs, outputs, version, description, synchronous)
+    key = record['id']
     prior = tx.get('contracts', key) or tx.get('_retired_contracts', key)
     if prior:
         from .retention import require_payload
@@ -31,8 +36,12 @@ def define(tx, ctx, name, inputs, outputs, version=1, description='', synchronou
     return tx.put('contracts', key, record)
 
 
-@op('cap.offer', 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj lease_class?:str')
-def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None, usage=None, lease_class=''):
+OFFER_FIELDS = 'provider:str contract:str resource:str state?:str service?:str configuration?:obj capacity?:int usage?:obj lease_class?:str'
+
+
+@op('cap.offer', OFFER_FIELDS + ' expected_registration?:str expected_absent?:bool publication_id?:str')
+def offer(tx, ctx, provider, contract, resource, state='ready', service='', configuration=None, capacity=None,
+          usage=None, lease_class='', expected_registration=None, expected_absent=False, publication_id=None):
     """Publish or revise an offer. Shared physical resources use the same resource ID."""
     owner(ctx, provider)
     if ctx.permissions is not None and provider in ('builtin', 'routine'):
@@ -42,6 +51,16 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     definition = tx.need('contracts', contract)
     key = digest([provider, contract, resource])
     previous = tx.get('offers', key, {})
+    if publication_id is not None:
+        ident(publication_id)
+    if expected_absent and expected_registration is not None:
+        raise Fault('Choose either an absent offer or an existing registration')
+    if expected_absent and previous:
+        raise Fault('Offer already exists', 409)
+    if expected_registration is not None:
+        if (not previous or previous.get('service') != service
+                or previous.get('registration') != (expected_registration or None)):
+            raise Fault('Superseded offer registration', 409)
     configuration = dict(previous.get('configuration', {}) if configuration is None else configuration)
     if lease_class:
         configuration['lease_class'] = lease_class
@@ -61,9 +80,12 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
         if authority and authority != provider:
             raise Fault('Resource has another enforcement point', 409)
         tx.put('_enforcers', resource, provider)
-    key = digest([provider, contract, resource])
     rec = {'id': key, 'provider': ident(provider), 'contract': contract, 'resource': ident(resource),
            'state': state, 'service': service, 'configuration': configuration or {}, 'registration': uid()}
+    if publication_id is not None:
+        tx.put('_offer_provenance', key, dict(registration=rec['registration'], published_by=publication_id))
+    elif tx.get('_offer_provenance', key):
+        tx.drop('_offer_provenance', key)
     if capacity is not None:
         if capacity < 0:
             raise Fault('Capacity must be 1 (exclusive), a positive slot count, or 0 (unbounded)')
@@ -102,12 +124,129 @@ def withdraw(tx, ctx, provider, resource, service, registrations):
         if not row or row.get('service') != service or row.get('registration') != revision:
             superseded.append(contract)
             continue
-        if row['state'] != 'offline':
-            row.update(state='offline', registration=uid())
-            tx.put('offers', key, row)
+        was_online = row['state'] != 'offline'
+        # Fence a restore already in transit even when the offer is currently offline.
+        row.update(state='offline', registration=uid())
+        tx.put('_offer_provenance', key, dict(registration=row['registration'], withdrawn_from=revision))
+        tx.put('offers', key, row)
+        if was_online:
             tx.emit('offer.updated', {'offer': key, 'state': 'offline'})
         withdrawn.append(contract)
     return {'withdrawn': withdrawn, 'superseded': superseded}
+
+
+def authorize_offer_page(ctx, provider, resource, contracts):
+    owner(ctx, provider)
+    if not 1 <= len(contracts) <= 16 or any(not isinstance(key, str) for key in contracts):
+        raise Fault('Provide between one and sixteen contract identifiers')
+    if len({ident(key) for key in contracts}) != len(contracts):
+        raise Fault('Duplicate contract in offer page')
+    if ctx.permissions is not None and (not ctx.allowed('cap.offer') or provider in ('builtin', 'routine') or
+            'resource:' + resource not in ctx.permissions or
+            any('offer:' + key not in ctx.permissions for key in contracts)):
+        raise Fault('Offer or resource outside provider grant', 403)
+
+
+def registration_result(contract, status, row=None):
+    result = dict(contract=contract, status=status, state=None, registration=None)
+    if row is not None:
+        result.update(state=row['state'], registration=row.get('registration'))
+    return result
+
+
+@op('cap.registrations', 'provider:str resource:str service:str contracts:list', write=False)
+def registrations(tx, ctx, provider, resource, service, contracts):
+    """Read exact enrolled offers, including revision provenance for restart reconciliation."""
+    authorize_offer_page(ctx, provider, resource, contracts)
+    result = []
+    for contract in contracts:
+        key = digest([provider, contract, resource])
+        row = tx.get('offers', key)
+        if row and row.get('service') == service:
+            receipt = registration_result(contract, 'found', row)
+            proof = tx.get('_offer_provenance', key, {})
+            if proof.get('registration') == row.get('registration'):
+                receipt.update({k:proof[k] for k in ('withdrawn_from', 'published_by') if k in proof})
+            result.append(receipt)
+        else:
+            result.append(registration_result(contract, 'superseded' if row else 'missing'))
+    return {'registrations': result}
+
+
+def restore_offer(tx, ctx, provider, resource, service, entry, publication_id):
+    desired, definition = entry['offer'], entry['definition']
+    contract = desired['contract']
+    key = digest([provider, contract, resource])
+    row = tx.get('offers', key)
+    if row is None:
+        return registration_result(contract, 'missing')
+    if (row.get('service') != service or row.get('registration') != entry['expected_registration']
+            or tx.get('_enforcers', resource) not in (None, provider)):
+        return registration_result(contract, 'superseded')
+    try:
+        if set(desired) - {'contract', 'state', 'configuration', 'capacity', 'usage', 'lease_class'}:
+            raise Fault('Invalid nested offer fields')
+        validate(OPERATIONS['cap.offer'][1], dict(desired, provider=provider, resource=resource, service=service))
+        validate(OPERATIONS['cap.define'][1], definition)
+        record = contract_record(**definition)
+        old = tx.get('contracts', contract)
+        prior = old or tx.get('_retired_contracts', contract)
+        if prior:
+            from .retention import require_payload
+            require_payload(prior)
+        state = desired.get('state', 'ready')
+        if record['id'] != contract or (prior and prior != record) or state not in ('ready', 'available_after_setup'):
+            raise Fault('Conflicting contract or nonpublishable state')
+        if 'usage' in definition:
+            published_usage(record, definition['usage'])
+        if 'usage' in desired:
+            published_usage(record, desired['usage'])
+        configuration = dict(desired.get('configuration', row.get('configuration', {})))
+        if desired.get('lease_class'):
+            configuration['lease_class'] = desired['lease_class']
+        config = lifecycle.configuration(configuration, provider in ('builtin', 'routine'))
+    except (Fault, ValueError, TypeError):
+        return registration_result(contract, 'invalid')
+    if (config != lifecycle.configuration(row.get('configuration'), provider in ('builtin', 'routine'))
+            or ('capacity' in desired and desired['capacity'] != capacity_of(tx, row))
+            or ('usage' in desired and desired['usage'] != tx.get('_offer_usage', key))):
+        return registration_result(contract, 'different', row)
+    guide_changed = 'usage' in definition and definition['usage'] != tx.get('_contract_usage', contract)
+    if old is None or guide_changed:
+        if not ctx.allowed('cap.define'):
+            raise Fault('Definition change requires cap.define', 403)
+        define(tx, ctx, **definition)
+    elif row['state'] == state:
+        return registration_result(contract, 'unchanged', row)
+    row.update(state=state, registration=uid())
+    redeployment.register_offer(tx, ctx, row)
+    if publication_id is not None:
+        tx.put('_offer_provenance', key, dict(registration=row['registration'], published_by=publication_id))
+    elif tx.get('_offer_provenance', key):
+        tx.drop('_offer_provenance', key)
+    tx.put('offers', key, row)
+    tx.emit('offer.updated', {'offer':key, 'state':state})
+    return registration_result(contract, 'published', row)
+
+
+@op('cap.publish', 'provider:str resource:str service:str offers:list publication_id?:str')
+def publish(tx, ctx, provider, resource, service, offers, publication_id=None):
+    """Restore existing scoped offers from exact prior revisions, retaining active leases and settings."""
+    if publication_id is not None:
+        ident(publication_id)
+    if not 1 <= len(offers) <= 16:
+        raise Fault('Provide between one and sixteen offers')
+    contracts = []
+    for entry in offers:
+        if (not isinstance(entry, dict) or set(entry) != {'definition', 'offer', 'expected_registration'}
+                or not isinstance(entry['offer'], dict) or not isinstance(entry['definition'], dict)):
+            raise Fault('Exact definition, offer and expected registration required')
+        rev = entry['expected_registration']
+        if rev is not None and (not isinstance(rev, str) or len(rev) != 32 or any(c not in '0123456789abcdef' for c in rev)):
+            raise Fault('Invalid expected offer registration')
+        contracts.append(entry['offer'].get('contract'))
+    authorize_offer_page(ctx, provider, resource, contracts)
+    return {'offers': [restore_offer(tx, ctx, provider, resource, service, entry, publication_id) for entry in offers]}
 
 
 @op('cap.delete', 'offer?:str contract?:str delete_contract?:bool allow_system?:bool')
@@ -143,6 +282,8 @@ def delete(tx, ctx, offer='', contract='', delete_contract=False, allow_system=F
     if contract:
         tx.put('_retired_contracts', cid, record)
     usage_kind = '_offer_usage' if offer else '_contract_usage'
+    if offer and tx.get('_offer_provenance', key):
+        tx.drop('_offer_provenance', key)
     if tx.get(usage_kind, key) is not None:
         tx.drop(usage_kind, key)
     tx.drop(kind, key)
