@@ -1,0 +1,10 @@
+# Live provider recovery qualification
+
+Run this check against the deployed gateway and active controller before qualifying provider recovery. The ordinary test suite exercises code and simulated transports. Deployment acceptance requires a real signed capability round trip and measured stream continuity.
+
+1. Submit a harmless provider operation through the normal signed site API while both Rover vision consumers are connected. Record the HTTP status, returned operation ID and lease ID under `submission` as `status`, `operation` and `lease`.
+2. Read the result through the normal signed site API. Record each attempted result read under `results` with `status`, `operation`, `lease`, `state` and `has_result`. Confirm the exact lease reaches `released` and record its `operation`, `lease` and `state` under `lease_check`.
+3. Observe the public and loopback Rover vision sockets from the Mac with `python -m tests.qualify_live_provider_recovery observe-streams --public <configured WSS vision URL> --bridge <loopback WS vision URL> --node-file <private node.json path> --window-seconds <seconds>`. Store its JSON under `streams` in the same evidence object. The observer records traffic counts and gaps without saving images or credentials.
+4. Run `python -m tests.qualify_live_provider_recovery verify --window-seconds <seconds> --max-gap-seconds <continuity budget> --max-delivery-age-seconds <delivery budget> <evidence.json>`. The command exits nonzero on missing proof, any observed 429 or 503, an unreleased lease, a disconnected consumer, absent front or rear records, or a gap or delivery age beyond the specified budget. The gap includes silence before the first frame and after the last. Delivery age measures elapsed time from processing to receipt on the same Mac monotonic clock. Camera capture age requires a separately synchronized source clock.
+
+Keep the result with the exact deployed image and rollout. Report the local test suite and the live qualification separately. Retain a failed qualification as an open production incident.
