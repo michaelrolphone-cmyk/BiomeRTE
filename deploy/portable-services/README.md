@@ -156,7 +156,11 @@ assertion in a subsequent compatible rollout.
 
 Survey zero uses the same world/request UUIDs and acknowledgement semantics
 through the host adapter. The adapter must target the **current authoritative**
-survey writer; moving that writer requires its own state handoff. Camera-light
+survey writer; moving that writer requires its own state handoff. For a native
+Rover bridge with a portable estimator, install the shared `host_io_client.py`
+in the bridge's `biomerte` package and configure the estimator's existing
+private binding in `~/.local/share/biome-rover-server/survey-estimator.json`.
+Native estimators without this binding use their original Unix socket. Camera-light
 requests resolve the configured device identity through the existing route
 registry every time and never fall back to a frozen IP. Light confirmation
 remains command-state confirmation, not optical verification. Control intent,

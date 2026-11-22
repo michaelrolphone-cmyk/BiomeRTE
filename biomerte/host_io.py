@@ -314,9 +314,7 @@ class HostIO:
         if target.get("url"):
             # The binding is resolved by the runner; the caller never chooses a URL.
             from .host_io_client import HostIOClient
-            client = HostIOClient(target)
-            with client._request("/v1/survey-zero", body) as response:
-                raw = response.read(16385)
+            return HostIOClient(target).survey_estimator_zero(world_id, request_id)
         else:
             path = target.get("socket") or str(Path(
                 self.settings["vision_directory"]) / "survey-pose.sock")

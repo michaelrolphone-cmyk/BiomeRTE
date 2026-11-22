@@ -243,6 +243,52 @@ class Adapters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await action({**body, "world_id": "invalid"})).status, 400)
         self.assertEqual(host.survey_zero.call_count, 2)
 
+    async def test_native_survey_zero_uses_configured_estimator_and_matches_receipts(self):
+        from aiohttp import web
+        from survey_zero import zero_survey
+
+        body = {"type": "survey_zero", "world_id": "11111111-1111-1111-1111-111111111111",
+                "request_id": "22222222-2222-2222-2222-222222222222"}
+        credential = "test-survey-estimator-credential-123456789"
+        requests = []
+        replies = iter([
+            (200, {"ok": True, "world_id": body["world_id"], "reset_id": body["request_id"]}),
+            (400, {"ok": False, "error": "survey_request_rejected"}),
+            (200, {"ok": True, "world_id": body["world_id"], "reset_id": "unrelated"}),
+        ])
+
+        async def estimator(request):
+            requests.append((request.headers.get("Authorization"), await request.json()))
+            status, reply = next(replies)
+            return web.json_response(reply, status=status)
+
+        app = web.Application()
+        app.router.add_post("/v1/survey-zero", estimator)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        try:
+            site = web.TCPSite(runner, "127.0.0.1", 0)
+            await site.start()
+            port = site._server.sockets[0].getsockname()[1]
+            with tempfile.TemporaryDirectory() as name:
+                home = Path(name)
+                token = home / "estimator-credential"
+                token.write_text(credential)
+                binding = home / ".local/share/biome-rover-server/survey-estimator.json"
+                binding.parent.mkdir(parents=True)
+                binding.write_text(json.dumps({"url": f"http://127.0.0.1:{port}",
+                    "allow_local_http": True, "token_file": str(token)}))
+                with mock.patch("survey_zero.Path.home", return_value=home):
+                    self.assertEqual((await zero_survey(body)).status, 200)
+                    rejected = await zero_survey(body)
+                    self.assertEqual(rejected.status, 409)
+                    self.assertIn("Survey estimator rejected", rejected.text)
+                    self.assertEqual((await zero_survey(body)).status, 503)
+            expected = ("Bearer " + credential, {**body, "type": "request"})
+            self.assertEqual(requests, [expected, expected, expected])
+        finally:
+            await runner.cleanup()
+
     async def test_camera_reads_resolve_current_registered_route_each_time(self):
         from aiohttp import web
         servers = []

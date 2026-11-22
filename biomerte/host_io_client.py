@@ -269,6 +269,26 @@ class HostIOClient:
     def survey_zero(self, world_id, request_id):
         return self._call("survey.zero", world_id=world_id, request_id=request_id)["result"]
 
+    def survey_estimator_zero(self, world_id, request_id):
+        """Call a configured estimator endpoint and preserve its domain rejection."""
+        body = dict(type="request", world_id=world_id, request_id=request_id)
+        rejected = False
+        try:
+            response = self._request("/v1/survey-zero", body)
+        except HTTPError as error:
+            if error.code != 400:
+                raise
+            response = error
+            rejected = True
+        with response:
+            raw = response.read(16385)
+        if not raw or len(raw) > 16384:
+            raise ValueError("invalid survey control response")
+        result = json.loads(raw)
+        if rejected and result != {"ok": False, "error": "survey_request_rejected"}:
+            raise ValueError("invalid survey estimator rejection")
+        return result
+
     def device_request(self, device_id, path, payload=None):
         return self._call("device.request", device_id=device_id, path=path, payload=payload)["result"]
 
