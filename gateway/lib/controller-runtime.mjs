@@ -97,9 +97,11 @@ async function signEnvelope(env,config,envelope){
 }
 async function forward(config,raw,path='call'){
  let response;try{response=await fetch(config.origin+'/api/controller-runtimes/'+config.authority+'/'+path,{
-  method:'POST',headers:{'Content-Type':'application/json'},body:raw,redirect:'error',
+  method:'POST',headers:{'Content-Type':'application/json'},body:raw,redirect:'manual',
   signal:AbortSignal.timeout(30000)
  })}catch{throw fault('Controller runtime reply unavailable')}
+ // Workers rejects redirect: 'error'. Manual mode never follows redirects,
+ // and the status allowlist below rejects every redirect response.
  if(![200,400,401,403,404,409,410,413,429,503].includes(response.status))
   throw fault('Controller runtime reply unavailable');
  return new Response(await response.text(),{status:response.status,headers:{
@@ -110,7 +112,12 @@ async function operatorCall(env,config,operation,args,id,controller){
                  controller:controller??config.authority};
  const signed=await signEnvelope(env,config,envelope);
  const response=await forward(config,JSON.stringify(signed));
- let body;try{body=await response.json()}catch{throw fault('Controller runtime reply unavailable')}
+ let body;
+ try{body=await response.json()}catch{
+  if(response.status===503)throw fault('The shared controller runtime is temporarily unavailable');
+  if(response.status===429)throw fault('The shared controller runtime is busy',429);
+  throw fault('Controller runtime reply unavailable');
+ }
  if(response.status!==200)throw fault(body.error??'Controller runtime unavailable',response.status);
  if(!object(body)||!Object.hasOwn(body,'result'))throw fault('Invalid controller runtime result');
  const result=body.result;

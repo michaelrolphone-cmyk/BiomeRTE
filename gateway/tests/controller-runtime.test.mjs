@@ -49,7 +49,7 @@ test('both aliases and an absent provider selector route to the same logical run
    assert.equal((await controllerRuntimeNative(e,raw)).status,200);
    assert.equal(calls.at(-1).body,raw);
    assert.equal(calls.at(-1).url,'https://authority.example/api/controller-runtimes/'+authority+'/call');
-   assert.equal(calls.at(-1).redirect,'error');
+   assert.equal(calls.at(-1).redirect,'manual');
   }
  });
 });
@@ -191,4 +191,36 @@ test('pairing finish adapts the public proof envelope without changing signed va
   assert.equal((await controllerRuntimePair(env(),'finish',JSON.stringify({...proof,site:'foreign'}),pi)).status,403);
   assert.equal(calls.length,1);
  });
+});
+
+
+test('a signed runtime redirect is rejected without sending the envelope to another host',async()=>{
+ await fetched(async calls=>{
+  const raw=JSON.stringify(envelope(mac));
+  const response=await controllerRuntimeNative(env(),raw);
+  assert.equal(response.status,503);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].redirect,'manual');
+  assert.equal(calls[0].body,raw);
+ },()=>new Response(null,{status:307,headers:{Location:'https://other.example/forward'}}));
+});
+
+test('signed result and lease reads preserve plain upstream overload and outage responses',async()=>{
+ for(const [status,operation,message] of [
+  [429,'cap.status','The shared controller runtime is busy'],
+  [503,'cap.lease','The shared controller runtime is temporarily unavailable']
+ ]){
+  await fetched(async calls=>{
+   const id='stable-'+operation;
+   const result=await controllerRuntimeTool(env(),'biome_invoke',{
+    operation,arguments:operation==='cap.status'?{operation:'existing'}:{lease:'existing'},request_id:id
+   });
+   assert.equal(calls.length,1);
+   assert.equal(JSON.parse(calls[0].body).id,id);
+   assert.equal(result.isError,true);
+   assert.equal(result.structuredContent.status,status);
+   assert.equal(result.structuredContent.retry_same_id,true);
+   assert.equal(result.content[0].text,message);
+  },()=>new Response('upstream detail',{status}));
+ }
 });

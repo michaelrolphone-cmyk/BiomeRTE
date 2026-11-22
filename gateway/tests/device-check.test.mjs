@@ -178,7 +178,7 @@ test('ordinary operator status still uses the logical authority when device reco
    const call=JSON.parse(request.body);
    assert.equal(call.auth.actor,declaration.operator_actor);
    assert.ok(call.auth.signature);
-   assert.equal(request.redirect,'error');
+   assert.equal(request.redirect,'manual');
    return Response.json({result:{node:declaration.authority,site:'site'}});
   });
   const reply=await runTool(f.env,'biome_status',{controller:f.mac});
