@@ -127,8 +127,8 @@ class Worker:
             self.db.rollback()
             raise
 
-    def advertise(self):
-        for o in self.offers:
+    def advertise(self, offers=None, request_id=None):
+        for o in (self.offers if offers is None else offers):
             args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
                     'service': o.get('service', ''), 'state': o.get('state', 'ready')}
             for field in ('capacity', 'usage', 'configuration', 'lease_class'):
@@ -138,7 +138,10 @@ class Worker:
                 import socket
                 args['configuration'] = dict(args.get('configuration', {}),
                                              execution_custody=True, execution_host=socket.gethostname())
-            self.remote.call('cap.offer', args)
+            if request_id is None:
+                self.remote.call('cap.offer', args)
+            else:
+                self.remote.call('cap.offer', args, request_id)
 
 
     def reconcile_guard(self, guard, exclude=None):
@@ -671,10 +674,18 @@ class ActionPool:
         return started
 
 
+def unavailable_transport(error):
+    # Older MCP adapters raise plain RuntimeError with the gateway's message.
+    return (getattr(error, 'status', None) in (408, 429, 502, 503, 504)
+            or str(error).strip().lower() in ('managed controller is busy',
+                'the shared controller runtime is temporarily unavailable'))
+
+
 def run_worker(directory, remote, cfg, once):
     import fcntl
+    import inspect
     import logging
-    from urllib.error import HTTPError
+    from collections import deque
     with open(os.path.join(directory, 'worker.lock'), 'a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -685,21 +696,39 @@ def run_worker(directory, remote, cfg, once):
         parallelism = cfg.get('parallelism', 1)
         pool = ActionPool(w, parallelism) if parallelism > 1 else None
         try:
-            announced = False
+            if once:
+                w.advertise()
+                w.once(pool)
+                return 0
+            try:
+                inspect.signature(remote.call).bind('cap.offer', {}, 'request-id')
+                identified = True
+            except (TypeError, ValueError):
+                identified = False
+            pending = deque((offer, uid() if identified else None, 0) for offer in w.offers)
+            retry = cfg.get('retry_seconds', 5)
             while True:
+                if pending and pending[0][2] <= time.monotonic():
+                    offer, request_id, unused = pending.popleft()
+                    try:
+                        w.advertise([offer], request_id)
+                    except (OSError, ValueError, Fault, RuntimeError) as err:
+                        if isinstance(err, RuntimeError) and not unavailable_transport(err):
+                            raise
+                        pending.append((offer, request_id, time.monotonic() + retry))
+                        logging.warning('Provider registration paused for %s: %s', offer['contract'], err)
+                # The provider still owns its existing grants when registration
+                # is partially acknowledged or a new offer is waiting to retry.
                 try:
-                    if not announced:
-                        w.advertise()
-                        announced = True
                     count = w.once(pool)
-                    if once:
-                        return 0
-                    time.sleep(.1 if count else cfg.get('poll_seconds', 2))
-                except (OSError, ValueError, Fault, HTTPError) as err:
-                    if once:
+                except (OSError, ValueError, Fault, RuntimeError) as err:
+                    if isinstance(err, RuntimeError) and not unavailable_transport(err):
                         raise
                     logging.warning('Provider paused: %s', err)
-                    time.sleep(cfg.get('retry_seconds', 5))
+                    time.sleep(retry)
+                else:
+                    registering = pending and pending[0][2] <= time.monotonic()
+                    time.sleep(.1 if count or registering else cfg.get('poll_seconds', 2))
         finally:
             if pool is not None:
                 pool.executor.shutdown(wait=True)
