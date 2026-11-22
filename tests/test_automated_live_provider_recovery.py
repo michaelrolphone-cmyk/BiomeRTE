@@ -84,3 +84,22 @@ class AutomatedQualification(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(operations), 3)
                 self.assertTrue(json.loads((state / "latest.json").read_text())["passed"])
                 self.assertFalse(json.loads((state / "previous.json").read_text())["passed"])
+
+    async def test_placement_outage_preserves_the_last_observation_and_actual_http_status(self):
+        class Unavailable(Exception):
+            status = 503
+
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            node = state / "node.json"
+            node.write_text(json.dumps({"node": "alias", "stream_gateway_url": "wss://gateway.invalid"}))
+            args = SimpleNamespace(state_dir=state, node_file=node, force=False)
+            previous = {"passed": False, "placement": {"manifest_revision": "rev1"},
+                        "evidence": {"submission": {"status": 429}}, "finished": 10}
+            runner.save(state / "latest.json", previous)
+            with patch.object(runner, "release_binding", AsyncMock(side_effect=Unavailable())), patch("builtins.print"):
+                self.assertEqual(await runner.monitor(args), 1)
+            self.assertEqual(json.loads((state / "previous.json").read_text()), previous)
+            self.assertEqual(json.loads((state / "last-measurement.json").read_text()), previous)
+            current = json.loads((state / "latest.json").read_text())
+            self.assertIn("HTTP 503", current["failures"][0])
