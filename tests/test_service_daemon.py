@@ -67,6 +67,8 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
         ref = checkpoint_ref(packet)
         reply = {"binding": binding, "checkpoint": ref,
                  "head": dict(ref, boot_epoch="boot"), "acknowledgements": []}
+        helper.witness_reference_epoch = None
+        helper.replica_blocks = {}
         helper.validate = AsyncMock()
         helper.workers = AsyncMock(return_value=({"boot_epoch": "boot"}, {"mac": {"worker_id": "mac"}}))
         helper.status = AsyncMock(side_effect=AssertionError("No standby to inspect"))
@@ -81,6 +83,58 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
             "checkpoint": dict(ref, package=packet), "targets": []})
         helper.store.published.assert_called_once_with(ref)
         self.assertEqual("degraded", helper.replication)
+
+    async def test_compact_publication_negotiates_then_reverts_to_full_for_returning_peer(self):
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.config = {"authority_kind": "controller", "worker_id": "mac",
+                         "replica_workers": ["mac", "pi"]}
+        helper.witness_reference_epoch = None
+        helper.replica_blocks = {}
+        helper.validate = AsyncMock()
+        helper.store = types.SimpleNamespace(published=Mock())
+        helper.replicate_chunks = AsyncMock()
+        binding = {"boot_epoch":"boot", "grant_token":"grant"}
+        mac = dict(worker_id="mac", worker_incarnation="one")
+        pi = dict(worker_id="pi", worker_incarnation="two")
+        owner = {"mac": mac}
+        both = dict(owner, pi=pi)
+        helper.publication_workers = AsyncMock(return_value=owner)
+        packet = {"payload": {"service_id": "controller", "scope_digest":"c"*64,
+                  "sequence":5, "previous_digest":"d"*64, "state":{"opaque":"x"*933000}},
+                  "digest":"a"*64}
+        ref = checkpoint_ref(packet)
+        response = {"binding":binding, "checkpoint":ref, "head":dict(ref, boot_epoch="boot"),
+                    "acknowledgements":[], "owner_only_witness_reference":True}
+        request = AsyncMock(return_value=response)
+        helper.transport = types.SimpleNamespace(request=request)
+
+        await helper.publish_packet(binding, packet)  # Negotiate with a full packet.
+        self.assertIs(packet, request.await_args.args[1]["checkpoint"]["package"])
+        await helper.publish_packet(binding, packet)
+        compact = request.await_args.args[1]
+        self.assertEqual(ref, compact["checkpoint"])
+        self.assertEqual({"scope_digest":"c"*64, "previous_digest":"d"*64}, compact["witness_reference"])
+        self.assertLess(len(json.dumps(compact)), 1024)
+        helper.replicate_chunks.assert_not_awaited()
+
+        helper.publication_workers.side_effect = [owner, both]
+        response_with_peer = dict(response, acknowledgements=[dict(pi, checkpoint=ref, durable=True)])
+        request.side_effect = [Fault("Full publication required", 409), response_with_peer]
+        await helper.publish_packet(binding, packet)
+        full = request.await_args.args[1]
+        self.assertIs(packet, full["checkpoint"]["package"])
+        self.assertEqual([pi], full["targets"])
+        self.assertNotIn("witness_reference", full)
+        helper.replicate_chunks.assert_awaited_once_with(binding, packet, [pi])
+
+        # A new boot and an old gateway's reply disable compact publication.
+        binding = dict(binding, boot_epoch="other")
+        request.side_effect = None
+        request.return_value = {**response, "head":dict(ref, boot_epoch="other"), "binding":binding}
+        del request.return_value["owner_only_witness_reference"]
+        for _ in range(2):
+            await helper.publish_packet(binding, packet, owner)
+            self.assertIs(packet, request.await_args.args[1]["checkpoint"]["package"])
 
     async def test_unchanged_root_reuses_ack_but_failed_dirty_publication_retries(self):
         daemon = AuthorityDaemon.__new__(AuthorityDaemon)
