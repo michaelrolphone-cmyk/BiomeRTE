@@ -479,21 +479,30 @@ def supported_contracts(status):
             if contract in names or spec["name"] in names}
 
 
-def read_registered(path, cfg):
+def read_registrations(path, cfg):
     path = Path(path)
     if not path.exists():
-        return set()
+        return {}
     record = json.loads(path.read_text())
     if record.get("authority") != [cfg["site"], "site", cfg["provider"]]:
         raise RuntimeError("Advertisement record belongs to another provider authority.")
-    return {contract for contract in record.get("contracts", []) if contract in CONTRACTS}
+    revisions = record.get("registrations", {})
+    return {name: revisions.get(name) for name in record.get("contracts", []) if name in CONTRACTS}
 
 
-def write_registered(path, cfg, contracts):
-    """Remember prior offers so a service outage after restart marks them offline."""
+def read_registered(path, cfg):
+    return set(read_registrations(path, cfg))
+
+
+def write_registered(path, cfg, contracts, registrations=None):
+    """Record confirmed contracts and their last acknowledged publication revisions."""
+    write_registry_json(path, {"authority": [cfg["site"], "site", cfg["provider"]],
+                               "contracts": sorted(contracts), "registrations": registrations or {}})
+
+
+def write_registry_json(path, value):
     path = Path(path)
-    data = json.dumps({"authority": [cfg["site"], "site", cfg["provider"]],
-                       "contracts": sorted(contracts)}).encode()
+    data = json.dumps(value, sort_keys=True).encode()
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
     try:
         with os.fdopen(fd, "wb") as stream:
@@ -594,9 +603,63 @@ def retry_diagnostic(error):
     return category
 
 
-def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, registry, stopping):
+def withdraw_registered_queries(remote, cfg, registrations, pending, legacy_fallback=False):
+    """Queue exact revisions before dispatch. Reloaded providers replay only fenced withdrawals."""
+    pending.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if registrations:
+        names = sorted(registrations)
+        for start in range(0, len(names), 128):
+            chunk = {name: registrations[name] for name in names[start:start + 128]}
+            args = dict(provider=cfg["provider"], resource=cfg["resource"], service="robot-vision",
+                        registrations=chunk)
+            token = hashlib.sha256(json.dumps([cfg["site"], args], sort_keys=True).encode()).hexdigest()
+            path = pending / (token + ".json")
+            if not path.exists():
+                write_registry_json(path, args)
+
+    for path in sorted(pending.glob("*.json")):
+        try:
+            args = json.loads(path.read_text())
+            if (args.get("provider"), args.get("resource"), args.get("service")) != (
+                    cfg["provider"], cfg["resource"], "robot-vision"):
+                continue
+            expected = args["registrations"]
+            digest = hashlib.sha256(json.dumps([cfg["site"], args], sort_keys=True).encode()).hexdigest()
+            if digest != path.stem:
+                continue
+            try:
+                result = remote.call("cap.withdraw", args, "vision-withdraw-" + digest)
+            except Exception as error:
+                # Only the process still holding the publisher lock may use the old
+                # API. A replay, timeout, or authorization error cannot issue a blind withdrawal.
+                missing = getattr(error, "status", None) in (400, 404) and str(error).strip() in (
+                    "Unknown operation", "Unknown operation: cap.withdraw", "Invalid scoped-provider envelope")
+                if (not legacy_fallback or not missing or
+                        any(name not in registrations or registrations[name] is not None
+                            or revision is not None for name, revision in expected.items())):
+                    raise
+                for name in expected:
+                    found = remote.call("cap.discover", {"contract": name})
+                    current = next((row for row in found["offers"] if
+                                    (row.get("contract"), row.get("provider"), row.get("resource")) ==
+                                    (name, cfg["provider"], cfg["resource"])), None)
+                    if (current and current.get("service") == args["service"] and
+                            current.get("registration") is None and current.get("state") != "offline"):
+                        remote.call("cap.offer", offer(cfg, name, "offline"))
+            else:
+                completed = result.get("withdrawn", []) + result.get("superseded", [])
+                if set(completed) != set(expected):
+                    raise RuntimeError("Incomplete query withdrawal receipt")
+            path.unlink()
+        except Exception as error:
+            print("Vision query withdrawal pending:", retry_diagnostic(error), file=sys.stderr, flush=True)
+
+
+def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, registry, stopping, registrations=None):
     """Publish each healthy query as soon as its own definition is confirmed."""
     retry = False
+    if registrations is None:
+        registrations = {}
     primary = {"robot.vision.metadata:1", "robot.vision.status:1"}
     for contract in sorted(ready | defined, key=lambda key: (key not in primary, key)):
         if stopping.is_set():
@@ -605,12 +668,18 @@ def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, 
             if contract in ready and contract not in registered:
                 remote.call("cap.define", CONTRACTS[contract])
                 if contract not in defined:
-                    write_registered(registry, cfg, defined | {contract})
+                    write_registered(registry, cfg, defined | {contract}, registrations)
                     defined.add(contract)
                 registered.add(contract)
             state = "ready" if contract in ready else "offline"
             if advertised.get(contract) != state and not stopping.is_set():
-                remote.call("cap.offer", offer(cfg, contract, state))
+                receipt = remote.call("cap.offer", offer(cfg, contract, state))
+                revision = receipt.get("registration")
+                if registrations.get(contract) != revision:
+                    updated = registrations.copy()
+                    updated[contract] = revision
+                    write_registered(registry, cfg, defined, updated)
+                    registrations[contract] = revision
                 advertised[contract] = state
         except Exception as error:
             print("Vision query advertisement retry:", contract, retry_diagnostic(error),
@@ -661,7 +730,9 @@ def serve(cfg):
         pool = ActionPool(worker, cfg["slots"])
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
-        defined = read_registered(registry, cfg)
+        registrations = read_registrations(registry, cfg)
+        defined = set(registrations)
+        pending_withdrawals = worker_state / "query-withdrawals"
         stopping = threading.Event()
 
         def stop(_sig, _frame):
@@ -718,8 +789,10 @@ def serve(cfg):
                         print("Vision advertisement retry:", phase, retry_diagnostic(error), file=sys.stderr, flush=True)
                         retry = True
                     if reconcile_query_offers(remote, cfg, ready, registered, defined,
-                                              advertised, registry, stopping):
+                                              advertised, registry, stopping, registrations):
                         retry = True
+                    if pending_withdrawals.exists() and not stopping.is_set():
+                        withdraw_registered_queries(remote, cfg, {}, pending_withdrawals)
                     phase = "query and relay registry"
                     for spec in relay_definitions:
                         if stopping.is_set():return
@@ -771,11 +844,8 @@ def serve(cfg):
             recovery.join()
             try:
                 withdraw_unavailable_streams(remote, cfg, client)
-                for contract in sorted(defined):
-                    try:
-                        remote.call("cap.offer", offer(cfg, contract, "offline"))
-                    except Exception:
-                        pass
+                withdraw_registered_queries(remote, cfg, {name: registrations.get(name) for name in defined},
+                                            pending_withdrawals, legacy_fallback=True)
             finally:
                 live_streams.close()
                 pool.executor.shutdown(wait=True)
