@@ -31,7 +31,7 @@ LOG = logging.getLogger("biomerte.service")
 MAX_BODY = 32 * 1024 * 1024
 LEASE_BANDS = ("submission", "provider_progress", "result_status")
 BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "inspection", "attachment",
-                             "registry", "reservation", "fence", *LEASE_BANDS))
+                             "registry", "reservation", "fence", "lease_status", *LEASE_BANDS))
 
 
 def secret(path):
@@ -1190,7 +1190,9 @@ class AuthorityDaemon:
             return "fence"
         if operation in ("cap.acquire", "cap.release"):
             return "reservation"
-        if isinstance(operation, str) and (operation.startswith("stream.") or operation == "cap.lease"):
+        if operation == "cap.lease":
+            return "lease_status"
+        if isinstance(operation, str) and operation.startswith("stream."):
             return "lifecycle"
         return "general"
 
@@ -1249,11 +1251,11 @@ class AuthorityDaemon:
         # Keep the wire reader responsive while the single dispatcher runs
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
-        bands = ("result_status", "read", "lifecycle", "general", "registry", "discovery", "event_management",
+        bands = ("result_status", "read", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
-                    "diagnostic": 4, "result_status": 4, "read": 8, "lifecycle": 1, "general": 1,
+                    "diagnostic": 4, "result_status": 4, "read": 8, "lease_status": 4, "lifecycle": 1, "general": 1,
                     "registry": 8, "reservation": 4, "fence": 4,
                     "discovery": 4, "event_management": 1, "submission": 1,
                     "provider_progress": 4}
