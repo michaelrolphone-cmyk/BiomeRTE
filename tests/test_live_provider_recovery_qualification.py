@@ -66,3 +66,11 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
                 {"boot_id": "boot", "receiver_id": "rear-device", "capture_monotonic_us": 100}}
         self.assertEqual(identity(tick), identity(dict(tick, frame_id="adapter:99", sequence=99, processed_monotonic=340)))
         self.assertNotEqual(identity(tick), identity(dict(tick, sensor_packet=dict(tick["sensor_packet"], boot_id="new-boot"))))
+
+    def test_camera_descriptor_does_not_mask_the_wire_camera_id(self):
+        metadata = {"type": "frame", "camera": {"lens": "calibrated"},
+                    "camera_id": "rear", "frame_id": "rear-boot:42"}
+        raw = json.dumps(metadata).encode()
+        value = feed_record(struct.pack("!I", len(raw)) + raw + b"jpeg")
+        self.assertIsNotNone(value)
+        self.assertEqual(value[0], "frame:rear")

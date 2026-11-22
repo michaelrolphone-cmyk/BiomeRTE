@@ -3,7 +3,31 @@ import asyncio
 import datetime
 
 
-def publish_sensor(ingress,packet,received):
+def publish_sensor(ingress, packet, received):
+    """Give the native receiver the newest preview without waiting on mapping locks."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return _publish_sensor(ingress, packet, received)
+
+    ingress._pending_preview = (packet, received)
+    if getattr(ingress, "_preview_task", None) is None:
+        ingress._preview_task = loop.create_task(_drain_previews(ingress))
+
+
+async def _drain_previews(ingress):
+    try:
+        while ingress._pending_preview is not None and not ingress.stop.is_set():
+            item, ingress._pending_preview = ingress._pending_preview, None
+            try:
+                await asyncio.to_thread(_publish_sensor, ingress, *item)
+            except (KeyError, TypeError, ValueError) as error:
+                ingress.error = "rear_preview:" + str(error)[:120]
+    finally:
+        ingress._preview_task = None
+
+
+def _publish_sensor(ingress,packet,received):
     previous=getattr(ingress,'_preview_identity',None)
     identity=(packet['boot_id'],packet['capture_monotonic_us'])
     if previous and previous[0]==identity[0] and previous[1]>=identity[1]:return
@@ -15,7 +39,10 @@ def publish_sensor(ingress,packet,received):
               capture_timing='device_ticks_only',map_id=svc.map_id,map_revision=svc.revision,session_id=svc.session_id,
               lidar=packet.get('lidar'),ftm=packet.get('ftm'),uart=packet.get('uart'))
     if packet.get('lidar') and getattr(svc,'lidar',None):
-        with svc.lidar.lock:svc.lidar.raw_latest=(packet,None,received)
+        with svc.lidar.lock:
+            if svc.lidar.raw_latest and svc.lidar.raw_latest[2] > received:
+                return
+            svc.lidar.raw_latest=(packet,None,received)
         data['lidar_fusion']=svc.lidar.status()
     svc.rear_live_frames.publish(data,b'')
 
