@@ -331,7 +331,15 @@ The runner then follows this order:
    same checkpoint. Report it to the coordinator.
 6. Wait for the exact coordinator grant to have `effect_ready:true` and state
    `starting` or `active`, then request activation.
-7. Advertise ordinary child health only after an exact activation reply.
+7. After an exact activation reply, sample the Docker daemon's clock and require
+   a completed health probe that started after that boundary before advertising
+   child health. Stale healthy or unhealthy results, including probes that span
+   activation, remain unknown within the existing `startup_grace_s` (default 20).
+   Missing or malformed samples fail closed when that fixed grace expires;
+   fresh unhealthy results and stopped children fail immediately. A child with
+   no configured or inherited health check retains ordinary running readiness.
+   The coordinator's startup deadline and the exact grant/fence checks remain
+   unchanged; a changed grant or child discards the health boundary.
 
 The heartbeat proof is one exact shape:
 
