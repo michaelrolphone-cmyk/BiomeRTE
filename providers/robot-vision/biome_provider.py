@@ -664,13 +664,13 @@ def withdraw_registered_queries(remote, cfg, registrations, pending, legacy_fall
             print("Vision query withdrawal pending:", retry_diagnostic(error), file=sys.stderr, flush=True)
 
 
-def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, registry, stopping, registrations=None):
+def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, registry, stopping, registrations=None, skip=()):
     """Publish each healthy query as soon as its own definition is confirmed."""
     retry = False
     if registrations is None:
         registrations = {}
     primary = {"robot.vision.metadata:1", "robot.vision.status:1"}
-    for contract in sorted(ready | defined, key=lambda key: (key not in primary, key)):
+    for contract in sorted((ready | defined).difference(skip), key=lambda key: (key not in primary, key)):
         if stopping.is_set():
             break
         try:
@@ -742,6 +742,21 @@ def serve(cfg):
         registrations = read_registrations(registry, cfg)
         defined = set(registrations)
         pending_withdrawals = worker_state / "query-withdrawals"
+        from query_publication import QueryPublications
+        fast_queries = QueryPublications(remote, cfg, CONTRACTS, offer, write_registry_json, retry_diagnostic)
+        def retire_query_revisions(revisions):
+            withdraw_registered_queries(remote, cfg, revisions, pending_withdrawals)
+
+        def remember_query(name, state, revision):
+            if name not in defined or (revision is not None and registrations.get(name) != revision):
+                updated = registrations.copy()
+                if revision is not None:
+                    updated[name] = revision
+                write_registered(registry, cfg, defined | {name}, updated)
+                defined.add(name)
+                registrations.update(updated)
+            advertised[name] = state
+            registered.add(name)
         stopping = threading.Event()
 
         def stop(_sig, _frame):
@@ -797,11 +812,20 @@ def serve(cfg):
                     except Exception as error:
                         print("Vision advertisement retry:", phase, retry_diagnostic(error), file=sys.stderr, flush=True)
                         retry = True
-                    if reconcile_query_offers(remote, cfg, ready, registered, defined,
-                                              advertised, registry, stopping, registrations):
-                        retry = True
+                    held = set()
                     if pending_withdrawals.exists() and not stopping.is_set():
                         withdraw_registered_queries(remote, cfg, {}, pending_withdrawals)
+                        for page in pending_withdrawals.glob("*.json"):
+                            entry = json.loads(page.read_text())
+                            held.update(entry.get("arguments",entry).get("registrations",{}))
+                    states = {name: "ready" if name in ready else "offline" for name in (ready | defined) - held}
+                    result = fast_queries.reconcile(states, registrations, advertised, remember_query, stopping,
+                                                    retire_query_revisions)
+                    if result is None:
+                        result = reconcile_query_offers(remote, cfg, ready, registered, defined,
+                                                        advertised, registry, stopping, registrations,
+                                                        skip=held | fast_queries.pending_names())
+                    retry = retry or result
                     phase = "query and relay registry"
                     for spec in relay_definitions:
                         if stopping.is_set():return
@@ -853,8 +877,9 @@ def serve(cfg):
             recovery.join()
             try:
                 withdraw_unavailable_streams(remote, cfg, client)
-                withdraw_registered_queries(remote, cfg, {name: registrations.get(name) for name in defined},
-                                            pending_withdrawals, legacy_fallback=True)
+                fast_queries.stop(remember_query, retire_query_revisions)
+                retiring = {name: registrations.get(name) for name in defined - fast_queries.unclaimed}
+                withdraw_registered_queries(remote, cfg, retiring, pending_withdrawals, legacy_fallback=True)
             finally:
                 live_streams.close()
                 pool.executor.shutdown(wait=True)
