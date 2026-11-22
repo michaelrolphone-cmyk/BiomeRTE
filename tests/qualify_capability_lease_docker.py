@@ -72,7 +72,8 @@ class RealLease(test_controller_authority.ControllerTests):
 
         self.call("cap.define", dict(name="docker.fixture", inputs={}, outputs={"system": "str"}), "define-lease")
         self.call("peer.trust", dict(public_key=self.peer_public, label="docker-fixture-worker",
-                                     scopes=["cap.offer", "cap.fenced", "provider.claim", "provider.result"]),
+                                     scopes=["cap.offer", "offer:" + scope["contract"], "resource:" + worker,
+                                             "cap.fenced", "provider.claim", "provider.result"]),
                   "enroll-worker")
         self.call("cap.offer", dict(scope, capacity=1), "offer-lease", peer=True)
         runner.tick()
