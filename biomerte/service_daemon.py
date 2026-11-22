@@ -863,7 +863,9 @@ class AuthorityDaemon:
         return await self.helper("publish",state=state)
 
     async def start_fences(self):
-        await self.transport.validate(self.binding)
+        # Controller phase reads already validate this grant with the coordinator.
+        if self.config.get("authority_kind") != "controller":
+            await self.transport.validate(self.binding)
         phase=await self.phase()
         checkpoint=os.environ["BIOME_SERVICE_CHECKPOINT"]
         if phase["checkpoint"]!=checkpoint:
