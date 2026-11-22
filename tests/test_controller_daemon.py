@@ -383,6 +383,41 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                                      "lease-poll", "resume", "registration",
                                      "acquire-after-status", "confirm-installed-fence"])
 
+    async def test_stream_lifecycle_backlog_leaves_admission_for_exact_lease_refresh(self):
+        started, release, done = (asyncio.Event() for _ in range(3))
+        replies = {}
+        calls = (("busy", "cap.invoke"), ("close", "stream.close"),
+                 ("excess", "stream.close"), ("inspect-lease", "cap.lease"))
+
+        async def dispatch(message):
+            if message["id"] == "busy":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                for request, operation in calls:
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "binding": B, "id": request,
+                        "envelope": {"operation": operation, "arguments": {}}}))
+                    if request == "busy":
+                        await started.wait()
+                release.set()
+                await done.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies[response["id"]] = response["status"]
+                if len(replies) == len(calls):
+                    done.set()
+
+        self.daemon.dispatch = dispatch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        self.assertEqual(replies, {"busy": 200, "close": 200, "excess": 429, "inspect-lease": 200})
+
     async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
         started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
         replies = {}
