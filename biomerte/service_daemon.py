@@ -1114,7 +1114,9 @@ class AuthorityDaemon:
             return "discovery"
         if operation in ("gateway.events.change", "gateway.events.grok"):
             return "event_management"
-        if operation in ("cap.status", "provider.poll"):
+        if operation == "cap.status":
+            return "result_status"
+        if operation == "provider.poll":
             return "read"
         if operation in ("cap.define", "cap.offer"):
             return "registry"
@@ -1161,7 +1163,7 @@ class AuthorityDaemon:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
-                                "diagnostic", "read", "discovery", "inspection", "attachment", "registry",
+                                "diagnostic", "result_status", "read", "discovery", "inspection", "attachment", "registry",
                                 "reservation", "fence", "submission", "provider_progress"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
@@ -1192,12 +1194,12 @@ class AuthorityDaemon:
         # Keep the wire reader responsive while the single dispatcher runs
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
-        bands = ("read", "lifecycle", "general", "registry", "discovery", "event_management",
+        bands = ("result_status", "read", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
         lease_bands = {"submission": "provider_progress", "provider_progress": "submission"}
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
-                    "diagnostic": 4, "read": 8, "lifecycle": 1, "general": 1,
+                    "diagnostic": 4, "result_status": 4, "read": 8, "lifecycle": 1, "general": 1,
                     "registry": 8, "reservation": 4, "fence": 4,
                     "discovery": 4, "event_management": 1, "submission": 1,
                     "provider_progress": 4}
