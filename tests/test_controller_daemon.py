@@ -535,12 +535,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                                    "result": 200, "reconcile": 200})
         self.assertEqual(batches, [["submit", "claim", "heartbeat", "result", "reconcile"]])
 
-    async def test_cold_stream_and_lease_work_share_the_next_publication_under_mixed_load(self):
+    async def queued_publications(self, operations):
         running, release, done = (asyncio.Event() for _ in range(3))
         published, replies = [], []
-        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
-                      "stream.inspect", "stream.attach", "stream.resume", "cap.lease"]
-
         async def dispatch(message):
             if message["id"] == "cap.invoke":
                 running.set()
@@ -575,8 +572,22 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.dispatch_managed_reads = dispatch_batch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
         self.assertCountEqual(replies, operations)
+        return published
+
+    async def test_cold_stream_and_lease_work_share_the_next_publication_under_mixed_load(self):
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
+                      "stream.inspect", "stream.attach", "stream.resume", "cap.lease"]
+
+        published = await self.queued_publications(operations)
         self.assertTrue({"cap.status", "cap.submit", "provider.claim", "stream.inspect",
                          "stream.attach", "stream.resume", "cap.lease"}.issubset(published[1]), published)
+
+    async def test_health_inbox_and_discovery_share_a_due_lease_publication(self):
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
+                      "system.health", "system.discovery", "cap.lease"]
+        published = await self.queued_publications(operations)
+        self.assertCountEqual(published[1], operations[1:])
+        self.assertEqual(len(published), 2, published)
 
     async def test_completed_result_is_admitted_with_the_provider_inbox_queue_full(self):
         started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()

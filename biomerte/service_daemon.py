@@ -1334,6 +1334,15 @@ class AuthorityDaemon:
                             if waiting and not any(m.get("preparation") for m in waiting):
                                 batch.extend(waiting)
                                 pending[partner] = []
+                        # Preserve the next turn for work needing its own barrier.
+                        # Otherwise one read from each independent queue can
+                        # share this acknowledgement without admitting a burst.
+                        if band not in stream_bands and not any(
+                                pending[key] for key in (*stream_bands, "lifecycle", "general", "event_management")):
+                            for partner in ("diagnostic", "read", "discovery"):
+                                waiting = pending[partner]
+                                if waiting and not waiting[0].get("preparation"):
+                                    batch.append(waiting.pop(0))
                     if band == "diagnostic":
                         # Keep the prior stream-vs-ordinary turn during diagnostics.
                         last_diagnostic = True
