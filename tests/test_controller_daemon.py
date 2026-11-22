@@ -347,6 +347,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
         started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
         replies = {}
+        batches = []
         calls = {
             "waiting": "cap.invoke",
             "excess": "cap.invoke",
@@ -364,6 +365,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             return self.daemon.authority_response(message, B)
 
         async def dispatch_batch(messages):
+            batches.append([message["id"] for message in messages])
             return [await dispatch(message) for message in messages]
 
         class Socket:
@@ -395,6 +397,29 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replies, {"running": 200, "waiting": 200, "excess": 429,
                                    "submit": 200, "claim": 200, "heartbeat": 200,
                                    "result": 200, "reconcile": 200})
+        self.assertEqual(batches, [["submit", "claim", "heartbeat", "result", "reconcile"]])
+
+    async def test_batched_submission_waits_for_publication_and_keeps_actor_checks(self):
+        submission = self.message(request="submit-request")
+        envelope = submission["envelope"]
+        envelope.update(operation="cap.submit", arguments={"contract": "core.echo:1",
+            "operation": "batch-echo", "inputs": {"value": "verified"}})
+        envelope["auth"]["signature"] = sign(self.key, {
+            key: value for key, value in envelope.items() if key != "auth"})
+        denied = self.message(request="progress-request")
+        denied["envelope"].update(operation="provider.reconcile", arguments={})
+
+        self.fail_publish = 2
+        replies = await self.daemon.dispatch_managed_reads([submission, denied])
+        self.assertEqual([row["status"] for row in replies], [503, 503])
+        self.assertTrue(all("result" not in row for row in replies))
+
+        replies = await self.daemon.dispatch_managed_reads([submission, denied])
+        self.assertEqual([row["status"] for row in replies], [200, 400])
+        self.assertEqual(self.published, 4)
+        action = self.app.stores["site"].execute(
+            lambda tx: tx.get("actions", "batch-echo"), read_only=True)
+        self.assertEqual(action["result"], {"value": "verified"})
 
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1
