@@ -54,6 +54,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.app=self.app
         self.daemon.authority=self.authority
         self.daemon.witnessed_vision_inspections={}
+        self.daemon.witnessed_provider_polls={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
         self.validated=0
@@ -218,6 +219,84 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             raise Fault("Revoked credential",403)
         self.authority.call = reject
         self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+
+    async def test_unchanged_witnessed_provider_poll_bypasses_publication_queue(self):
+        message = self.message(request="provider-poll-request")
+        envelope = message["envelope"]
+        envelope.update(operation="provider.poll", arguments={"provider": "builtin"})
+        envelope["auth"]["signature"] = sign(self.key, {
+            key: value for key, value in envelope.items() if key != "auth"})
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_poll(message))
+        witnessed = await self.daemon.dispatch(message)
+        self.assertEqual(witnessed["status"], 200)
+        self.daemon.remember_provider_poll(message, witnessed)
+        before = self.published
+        self.assertEqual(witnessed, await self.daemon.recheck_witnessed_provider_poll(message))
+        self.assertEqual(before, self.published)
+
+        forged = dict(message, envelope=dict(envelope, auth={"actor": self.actor,
+            "signature": self.message("unrelated")["envelope"]["auth"]["signature"]}))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_poll(forged))
+        self.fail_validate = self.validated + 2
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_poll(message))
+
+        # A newly committed local activation has not passed the witness barrier.
+        self.app.stores["site"].execute(lambda tx: tx.put("activations", "pending-fixture",
+            {"id": "pending-fixture", "state": "pending", "provider": "builtin"}))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_poll(message))
+        next_poll = await self.daemon.dispatch(message)
+        self.daemon.remember_provider_poll(message, next_poll)
+        self.assertEqual(next_poll, await self.daemon.recheck_witnessed_provider_poll(message))
+        self.assertEqual(next_poll["result"]["activations"][0]["id"], "pending-fixture")
+
+    async def test_later_provider_poll_replies_while_another_command_waits_for_publication(self):
+        poll = self.message(request="inbox-request")
+        envelope = poll["envelope"]
+        envelope.update(operation="provider.poll", arguments={"provider": "builtin"})
+        envelope["auth"]["signature"] = sign(self.key, {
+            key: value for key, value in envelope.items() if key != "auth"})
+        poll["id"] = "first-poll"
+        first, blocked, release, second = (asyncio.Event() for _ in range(4))
+        seen = {}
+        original = self.daemon.dispatch
+
+        async def dispatch(message):
+            if message["id"] == "blocked-command":
+                blocked.set()
+                await release.wait()
+                return self.daemon.authority_response(message, B)
+            return await original(message)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def frame(message):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                yield frame(poll)
+                await first.wait()
+                yield frame(dict(type="call", id="blocked-command", binding=B))
+                await blocked.wait()
+                yield frame(dict(poll, id="second-poll"))
+                await release.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                seen[response["id"]] = response
+                if response["id"] == "first-poll":
+                    first.set()
+                if response["id"] == "second-poll":
+                    second.set()
+
+        self.daemon.dispatch = dispatch
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(Socket()))
+        try:
+            await asyncio.wait_for(second.wait(), 2)
+            self.assertEqual(seen["second-poll"]["result"], seen["first-poll"]["result"])
+            self.assertNotIn("blocked-command", seen)
+        finally:
+            release.set()
+            await connection
 
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()

@@ -812,6 +812,7 @@ class AuthorityDaemon:
         self.confirmed_controller_publication = None
         self.controller_publication_refresh_at = 0
         self.witnessed_vision_inspections = {}
+        self.witnessed_provider_polls = {}
         if controller and config.get("event_authorize_url"):
             from .controller_events import ManagedEvents
             self.events=ManagedEvents(self)
@@ -1045,11 +1046,55 @@ class AuthorityDaemon:
         reply[field] = value
         return reply
 
+    @staticmethod
+    def provider_poll_key(message):
+        envelope = message.get("envelope") or {}
+        arguments = envelope.get("arguments")
+        auth = envelope.get("auth")
+        if (message.get("type") != "call" or message.get("preparation") or
+                envelope.get("operation") != "provider.poll" or not isinstance(arguments, dict) or
+                set(arguments) - {"provider", "limit"} or not isinstance(auth, dict)):
+            return None
+        actor, provider = auth.get("actor"), arguments.get("provider")
+        limit = arguments.get("limit", 64)
+        if isinstance(actor, str) and isinstance(provider, str) and type(limit) is int:
+            return actor, provider, limit
+        return None
+
+    def remember_provider_poll(self, message, reply):
+        key = self.provider_poll_key(message)
+        if key is not None and reply["status"] == 200:
+            cache = self.witnessed_provider_polls
+            if key not in cache and len(cache) >= 64:
+                cache.pop(next(iter(cache)))
+            cache[key] = digest(reply["result"])
+
+    async def recheck_witnessed_provider_poll(self, message):
+        cache = self.witnessed_provider_polls
+        key = self.provider_poll_key(message)
+        witnessed = cache.get(key)
+        if witnessed is None or message.get("binding") != self.binding:
+            return None
+        try:
+            if (await self.phase())["phase"] != "active":
+                return None
+            # Native signature, current lease and stream checks still run.
+            value = await asyncio.to_thread(self.authority.call, message["envelope"], False)
+            if digest(value) != witnessed or cache.get(key) != witnessed:
+                return None
+            await self.transport.validate(self.binding, preparing=False)
+        except (Fault, CheckpointError, KeyError, TypeError, ValueError, OSError, asyncio.TimeoutError):
+            return None
+        reply = self.authority_response(message, self.binding)
+        reply["result"] = value
+        return reply
+
     async def reply_to_authority_request(self, ws, message):
         started = time.monotonic()
         result = await self.dispatch(message)
         if self.config.get("authority_kind") == "controller":
             self.remember_vision_inspection(message, result)
+            self.remember_provider_poll(message, result)
         if not ws.closed:
             await ws.send_json(result)
         elapsed = time.monotonic() - started
@@ -1160,6 +1205,7 @@ class AuthorityDaemon:
         ready = asyncio.Event()
         stopping = False
         fast_inspections = set()
+        fast_provider_polls = set()
 
         async def enqueue(message):
             band = self.authority_request_band(message)
@@ -1172,8 +1218,8 @@ class AuthorityDaemon:
                 queue.append(message)
                 ready.set()
 
-        async def inspect_or_enqueue(message):
-            reply = await self.recheck_witnessed_vision_inspection(message)
+        async def inspect_or_enqueue(message, recheck):
+            reply = await recheck(message)
             if stopping or ws.closed:
                 return
             if reply is None:
@@ -1232,6 +1278,7 @@ class AuthorityDaemon:
                         replies = await self.dispatch_managed_reads(batch)
                         for message, reply in zip(batch, replies):
                             self.remember_vision_inspection(message, reply)
+                            self.remember_provider_poll(message, reply)
                             if not ws.closed:
                                 await ws.send_json(reply)
             finally:
@@ -1250,16 +1297,24 @@ class AuthorityDaemon:
                 key = self.witnessed_vision_key(message)
                 if (key in self.witnessed_vision_inspections
                         and len(fast_inspections) < capacity["inspection"]):
-                    task = asyncio.create_task(inspect_or_enqueue(message))
+                    task = asyncio.create_task(inspect_or_enqueue(
+                        message, self.recheck_witnessed_vision_inspection))
                     fast_inspections.add(task)
                     task.add_done_callback(fast_inspections.discard)
+                elif (self.provider_poll_key(message) in self.witnessed_provider_polls
+                        and len(fast_provider_polls) < capacity["read"]):
+                    task = asyncio.create_task(inspect_or_enqueue(
+                        message, self.recheck_witnessed_provider_poll))
+                    fast_provider_polls.add(task)
+                    task.add_done_callback(fast_provider_polls.discard)
                 else:
                     await enqueue(message)
         finally:
             stopping = True
-            for task in fast_inspections:
+            fast_tasks = fast_inspections | fast_provider_polls
+            for task in fast_tasks:
                 task.cancel()
-            await asyncio.gather(*fast_inspections, return_exceptions=True)
+            await asyncio.gather(*fast_tasks, return_exceptions=True)
             pending.clear()
             ready.set()
             # A running to_thread transaction must settle before reconnecting.
