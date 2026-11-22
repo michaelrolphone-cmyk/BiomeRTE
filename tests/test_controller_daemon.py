@@ -479,6 +479,47 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                                    "result": 200, "reconcile": 200})
         self.assertEqual(batches, [["submit", "claim", "heartbeat", "result", "reconcile"]])
 
+    async def test_lease_work_shares_the_next_admitted_publication_under_mixed_load(self):
+        running, release, done = (asyncio.Event() for _ in range(3))
+        published, replies = [], []
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim"]
+
+        async def dispatch(message):
+            if message["id"] == "cap.invoke":
+                running.set()
+                await release.wait()
+            published.append([message["id"]])
+            return self.daemon.authority_response(message, B)
+
+        async def dispatch_batch(messages):
+            published.append([message["id"] for message in messages])
+            return [self.daemon.authority_response(message, B) for message in messages]
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                for operation in operations:
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "id": operation, "binding": B,
+                        "envelope": {"operation": operation, "arguments": {}}}))
+                    if operation == "cap.invoke":
+                        await running.wait()
+                release.set()
+                await done.wait()
+                self.closed = True
+
+            async def send_json(self, reply):
+                replies.append(reply["id"])
+                if len(replies) == len(operations):
+                    done.set()
+
+        self.daemon.dispatch = dispatch
+        self.daemon.dispatch_managed_reads = dispatch_batch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        self.assertCountEqual(replies, operations)
+        self.assertTrue({"cap.status", "cap.submit", "provider.claim"}.issubset(published[1]), published)
+
     async def test_completed_result_is_admitted_with_the_provider_inbox_queue_full(self):
         started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
         replies = {}

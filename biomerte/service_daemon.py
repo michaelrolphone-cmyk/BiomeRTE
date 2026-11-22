@@ -29,6 +29,9 @@ from .docker_services import container_name
 
 LOG = logging.getLogger("biomerte.service")
 MAX_BODY = 32 * 1024 * 1024
+LEASE_BANDS = ("submission", "provider_progress", "result_status")
+BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "inspection", "attachment",
+                             "registry", "reservation", "fence", *LEASE_BANDS))
 
 
 def secret(path):
@@ -1197,9 +1200,7 @@ class AuthorityDaemon:
                     try:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
-                        if message.get("preparation") or self.authority_request_band(message) not in (
-                                "diagnostic", "result_status", "read", "discovery", "inspection", "attachment", "registry",
-                                "reservation", "fence", "submission", "provider_progress"):
+                        if message.get("preparation") or self.authority_request_band(message) not in BATCHABLE_BANDS:
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1232,7 +1233,6 @@ class AuthorityDaemon:
         bands = ("result_status", "read", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
-        lease_bands = {"submission": "provider_progress", "provider_progress": "submission"}
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
                     "diagnostic": 4, "result_status": 4, "read": 8, "lifecycle": 1, "general": 1,
                     "registry": 8, "reservation": 4, "fence": 4,
@@ -1296,12 +1296,15 @@ class AuthorityDaemon:
                         index = (index + 1) % len(bands)
                     batch = pending[band]
                     pending[band] = []
-                    partner = lease_bands.get(band)
-                    if partner and pending[partner]:
-                        # Both queues retain independent admission. Process their
-                        # already queued calls under the same durable publication.
-                        batch.extend(pending[partner])
-                        pending[partner] = []
+                    if band in BATCHABLE_BANDS and not any(m.get("preparation") for m in batch):
+                        # Each accepted lease transition and result read keeps its own
+                        # signed transaction. Join the next compatible publication
+                        # already due, including one selected for another queue.
+                        for partner in LEASE_BANDS:
+                            waiting = pending[partner]
+                            if waiting and not any(m.get("preparation") for m in waiting):
+                                batch.extend(waiting)
+                                pending[partner] = []
                     if band == "diagnostic":
                         # Keep the prior stream-vs-ordinary turn during diagnostics.
                         last_diagnostic = True
