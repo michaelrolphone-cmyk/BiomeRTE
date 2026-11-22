@@ -116,10 +116,12 @@ _persistent_after = 0
 def transport_active():
     return _persistent is not None and _persistent.socket is not None
 
-def invoke(operation, arguments=None, rid=None, realm='site'):
+def invoke(operation, arguments=None, rid=None, realm='site', provider_context=None):
     global _persistent, _persistent_after
     rid = rid or uuid.uuid4().hex
     args = dict(operation=operation, arguments=arguments or {}, request_id=rid, realm=realm)
+    if provider_context is not None:
+        args['provider_context'] = provider_context
     rpc = dict(jsonrpc='2.0', id=rid, method='tools/call', params=dict(name='biome_invoke', arguments=args))
     # Keep the same identity across transport failures and delayed controller replies.
     for attempt in range(6):
@@ -146,7 +148,7 @@ def invoke(operation, arguments=None, rid=None, realm='site'):
                 if 'has not replied yet' in detail or 'queue is busy' in detail:
                     raise ConnectionError('Controller reply pending')
                 raise RuntimeError(detail[:500])
-            if 'structuredContent' in result:
+            if result.get('structuredContent') is not None:
                 return result['structuredContent']
             return json.loads(next(x['text'] for x in result['content'] if x['type'] == 'text'))
         except HTTPFailure as exc:
@@ -159,6 +161,15 @@ def invoke(operation, arguments=None, rid=None, realm='site'):
         if attempt < 5:
             time.sleep(min(2 ** attempt, 15))
     raise ConnectionError('Gateway unavailable; request identity retained by worker')
+
+def invoke_provider(operation, arguments=None, rid=None, realm='site', provider=None):
+    """Report provider locality; the gateway assigns an available controller."""
+    if provider is None:
+        provider = (arguments or {}).get('provider')
+    if not isinstance(provider, str) or len(provider) != 64:
+        raise ValueError('Provider identity required for gateway placement')
+    return invoke(operation, arguments, rid, realm,
+                  provider_context={'provider': provider, 'host': socket.gethostname()})
 
 def configure():
     info = invoke('system.info')
@@ -196,7 +207,7 @@ class Remote:
         self.last_health = 0
 
     def call(self, name, args, rid=None):
-        result = invoke(name, args, rid, self.realm)
+        result = invoke_provider(name, args, rid, self.realm, self.node)
         if name == 'provider.poll' and time.monotonic() - self.last_health >= 10:
             save_json(ROOT / 'health.json', dict(provider=self.node, resource=self.resource,
                                                  last_poll=time.time(), state='online'))
