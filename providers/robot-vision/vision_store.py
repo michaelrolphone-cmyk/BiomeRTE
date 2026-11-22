@@ -471,7 +471,11 @@ PRAGMA user_version=1;
                     map_info = self._map_locked(map_id, loc.get("map_revision"))
                     units = map_info["metadata"].get("units", "arbitrary")
                     if loc.get("units") not in (None, units):
-                        raise ValueError("localization units differ from the referenced map")
+                        if loc.get("valid") is not False or world_present:
+                            raise ValueError("localization units differ from the referenced map")
+                        # Unavailable localization carries no coordinates to
+                        # convert. Bind the observation to the actual map units.
+                        loc["units"] = units
                     loc["map_id"] = map_id
                     loc["map_revision"] = map_info["revision"]
                     loc.setdefault("units", units)
