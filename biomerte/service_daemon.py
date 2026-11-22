@@ -292,8 +292,8 @@ class CheckpointHelper:
         status, available = await self.transport.candidates()
         return status, {w:available[w] for w in self.config["replica_workers"] if w in available}
 
-    async def status(self):
-        status, workers = await self.workers()
+    async def status(self, observation=None):
+        status, workers = observation if observation is not None else await self.workers()
         controller = self.config.get("authority_kind") == "controller"
         # An empty selection asks the coordinator to enumerate current links
         # for this service. Supervisor presence alone does not register a
@@ -317,6 +317,19 @@ class CheckpointHelper:
                 linked[worker] = expected
             workers = linked
         return value, workers
+
+    async def publication_workers(self):
+        observation = await self.workers()
+        _, workers = observation
+        if self.config.get("authority_kind") != "controller":
+            return workers
+        # With no eligible standby supervisor there can be no eligible
+        # standby helper. Status would re-verify every block on the owner
+        # just to discover an empty replication target set.
+        if not (workers.keys() - {self.config["worker_id"]}):
+            return workers
+        _, linked = await self.status(observation)
+        return linked
 
     async def chunk_missing(self, body):
         b = binding(body.get("binding"))
@@ -402,7 +415,10 @@ class CheckpointHelper:
         await self.validate(b)
         controller = self.config.get("authority_kind") == "controller"
         if workers is None:
-            _, workers = await (self.status() if controller else self.workers())
+            if require_all and controller:
+                _, workers = await self.status()
+            else:
+                workers = await self.publication_workers()
         targets=[row for worker,row in workers.items() if worker!=self.config["worker_id"]]
         if require_all and set(workers)!=set(self.config["replica_workers"]):
             raise Fault("Witness restart requires every configured replica",503)
@@ -423,7 +439,7 @@ class CheckpointHelper:
                 # An advertised peer is still owed the checkpoint. A timeout is
                 # not evidence that it left membership. Refresh exact identities,
                 # then retry; only an actually absent peer permits degradation.
-                _, current_workers = await self.status()
+                current_workers = await self.publication_workers()
                 acknowledged_targets = [row for worker,row in current_workers.items()
                                         if worker != self.config["worker_id"]]
                 await self.replicate_chunks(b, packet, acknowledged_targets)

@@ -22,7 +22,7 @@ import tempfile
 import types
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 try:
     from aiohttp import ClientSession, ClientConnectorCertificateError, TCPConnector, web
@@ -57,6 +57,31 @@ class Clock:
 
 
 class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_live_publication_without_standby_avoids_full_status_probe(self):
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.config = {"authority_kind": "controller", "worker_id": "mac",
+                         "replica_workers": ["mac", "pi"]}
+        binding = {"boot_epoch": "boot"}
+        packet = {"payload": {"service_id": "controller", "sequence": 5, "state": {}},
+                  "digest": "a" * 64}
+        ref = checkpoint_ref(packet)
+        reply = {"binding": binding, "checkpoint": ref,
+                 "head": dict(ref, boot_epoch="boot"), "acknowledgements": []}
+        helper.validate = AsyncMock()
+        helper.workers = AsyncMock(return_value=({"boot_epoch": "boot"}, {"mac": {"worker_id": "mac"}}))
+        helper.status = AsyncMock(side_effect=AssertionError("No standby to inspect"))
+        helper.replicate_chunks = AsyncMock()
+        helper.transport = types.SimpleNamespace(request=AsyncMock(return_value=reply))
+        helper.store = types.SimpleNamespace(published=Mock())
+
+        self.assertEqual(reply, await helper.publish_packet(binding, packet))
+        helper.status.assert_not_awaited()
+        helper.transport.request.assert_awaited_once_with("/api/service-checkpoints/replicate", {
+            "binding": binding, "local_durable": True,
+            "checkpoint": dict(ref, package=packet), "targets": []})
+        helper.store.published.assert_called_once_with(ref)
+        self.assertEqual("degraded", helper.replication)
+
     async def test_unchanged_root_reuses_ack_but_failed_dirty_publication_retries(self):
         daemon = AuthorityDaemon.__new__(AuthorityDaemon)
         daemon.config = {"authority_kind": "controller"}
