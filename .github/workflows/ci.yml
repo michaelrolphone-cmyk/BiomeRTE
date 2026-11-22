@@ -63,7 +63,7 @@ jobs:
           BIOME_TEST_COORDINATOR: gateway-fixture/biomerte/service_coordinator.py
           BIOME_TEST_LEASE_IMAGE: biome-lease-ci
         run: |
-          printf 'FROM busybox:1.36.1\nVOLUME /lease-tmp\n' | docker build -q -t "$BIOME_TEST_LEASE_IMAGE" -
+          printf 'FROM python:3.12-alpine\nVOLUME /lease-tmp\n' | docker build -q -t "$BIOME_TEST_LEASE_IMAGE" -
           python -m unittest -v tests.qualify_capability_lease_docker.RealLease.test_disposable_worker
   replicated-recovery:
     runs-on: ubuntu-latest
