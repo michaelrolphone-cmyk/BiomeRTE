@@ -1020,7 +1020,11 @@ class AuthorityDaemon:
             return "inspection"
         if operation in ("system.info", "cluster.status", "system.progress"):
             return "diagnostic"
-        if operation in ("cap.discover", "cap.status", "provider.poll"):
+        if operation in ("system.discovery", "bus.discover", "cap.discover"):
+            return "discovery"
+        if operation in ("gateway.events.change", "gateway.events.grok"):
+            return "event_management"
+        if operation in ("cap.status", "provider.poll"):
             return "read"
         if operation in ("cap.define", "cap.offer"):
             return "registry"
@@ -1063,7 +1067,7 @@ class AuthorityDaemon:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
-                                "diagnostic", "read", "inspection", "attachment", "registry",
+                                "diagnostic", "read", "discovery", "inspection", "attachment", "registry",
                                 "reservation", "fence"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
@@ -1094,11 +1098,12 @@ class AuthorityDaemon:
         # Keep the wire reader responsive while the single dispatcher runs
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
-        bands = ("read", "lifecycle", "general", "registry")
+        bands = ("read", "lifecycle", "general", "registry", "discovery", "event_management")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
                     "diagnostic": 4, "read": 8, "lifecycle": 1, "general": 1,
-                    "registry": 8, "reservation": 4, "fence": 4}
+                    "registry": 8, "reservation": 4, "fence": 4,
+                    "discovery": 4, "event_management": 1}
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False

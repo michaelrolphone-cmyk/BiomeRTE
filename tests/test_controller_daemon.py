@@ -303,6 +303,47 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                                      "lease-poll", "resume", "registration",
                                      "acquire-after-status", "confirm-installed-fence"])
 
+    async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = {}
+
+        async def dispatch(message):
+            if message["id"] == "running":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(request_id, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "id": request_id,
+                        "envelope": {"operation": operation},
+                    }))
+
+                yield call("running", "cap.invoke")
+                await started.wait()
+                yield call("general", "cap.invoke")
+                yield call("excess", "cap.invoke")
+                yield call("poll", "provider.poll")
+                yield call("catalog", "system.discovery")
+                yield call("grok-list", "gateway.events.grok")
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies[response["id"]] = response["status"]
+                if len(replies) == 6:
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(replies, {"running": 200, "general": 200, "excess": 429,
+                                   "poll": 200, "catalog": 200, "grok-list": 200})
+
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1
         result=await self.daemon.dispatch(self.message())
