@@ -184,6 +184,24 @@ class VisionStoreTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.publish("future-revision", localization={**pose, "map_revision": 99})
 
+    def test_unavailable_localization_preserves_frames_in_a_metric_map(self):
+        metric_map = self.store.create_map({"units": "m"})["map_id"]
+        session = self.store.start_session(metric_map)["session_id"]
+        unavailable = {"status": "tracking_lost", "valid": False,
+                       "T_map_camera": None, "units": "arbitrary"}
+        snapshot = self.publish("metric-frame", session_id=session, localization=unavailable)
+        localized = snapshot["localization"]
+        self.assertEqual(localized["map_id"], metric_map)
+        self.assertEqual(localized["units"], "m")
+        self.assertFalse(localized["valid"])
+        self.assertIsNone(localized["T_map_camera"])
+        self.assertEqual(unavailable["units"], "arbitrary")
+        with self.assertRaisesRegex(ValueError, "localization units differ"):
+            self.publish("metric-coordinates", session_id=session, localization={
+                **unavailable, "map_revision": 0,
+                "T_map_camera": [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+            })
+
     def test_map_and_delta_pages_pin_the_revision(self):
         self.store.apply_map_update(self.map_id, 0, [
             self.point("a", [1, 0, 0]), self.point("b", [2, 0, 0]), self.point("c", [3, 0, 0])])
