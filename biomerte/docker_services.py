@@ -434,10 +434,18 @@ class State:
     def forget_child(self, service_id, container=None):
         with sqlite3.connect(self.path) as db:
             if container is None:
-                db.execute("DELETE FROM children WHERE service=?", (service_id,))
+                removed = db.execute("DELETE FROM children WHERE service=?", (service_id,))
             else:
-                db.execute("DELETE FROM children WHERE service=? AND container=?",
-                           (service_id, container))
+                removed = db.execute("DELETE FROM children WHERE service=? AND container=?",
+                                     (service_id, container))
+            if removed.rowcount:
+                db.execute("UPDATE services SET state='stopped', observation=?, updated=? WHERE id=?",
+                           (canonical({"container": None, "healthy": False}), time.time(), service_id))
+
+    def cleanup_pending(self, service_id, container):
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE services SET state='cleanup_pending', observation=?, updated=? WHERE id=?",
+                       (canonical({"container": container, "healthy": False}), time.time(), service_id))
 
     def manifests(self):
         with sqlite3.connect(self.path) as db:
@@ -451,8 +459,11 @@ class State:
 
     def save(self, service_id, manifest_revision, phase, observation):
         with sqlite3.connect(self.path) as db:
-            db.execute("INSERT OR REPLACE INTO services VALUES (?,?,?,?,?)",
-                       (service_id, manifest_revision, phase, canonical(observation), time.time()))
+            encoded = canonical(observation)
+            db.execute("INSERT OR REPLACE INTO services SELECT ?,?,?,?,? WHERE NOT EXISTS "
+                       "(SELECT 1 FROM services WHERE id=? AND revision=? AND state=? AND observation=?)",
+                       (service_id, manifest_revision, phase, encoded, time.time(),
+                        service_id, manifest_revision, phase, encoded))
 
 
 class Runner:
@@ -737,6 +748,7 @@ class Runner:
             self.pending_cleanup[service_id] = record
         try:
             self.state.save_child(service_id, container, uncertain)
+            self.state.cleanup_pending(service_id, container)
         except Exception as error:
             # Keep memory custody even when the local disk cannot accept a record.
             LOG.error("Service %s cleanup persistence failed (%s)", service_id, type(error).__name__)

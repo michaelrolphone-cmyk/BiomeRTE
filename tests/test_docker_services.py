@@ -6,6 +6,7 @@ Fake time makes delayed replies and exact lease boundaries reproducible.
 import copy
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -457,6 +458,11 @@ class CapabilityLeaseTests(RunnerCase):
         self.runner.accept(self.response(assignments=[]), self.clock())
         self.assertFalse(self.engine.children)
         self.assertFalse(self.runner.state.children())
+        with sqlite3.connect(self.runner.state.path) as state:
+            phase, observation = state.execute("SELECT state, observation FROM services WHERE id=?",
+                                               (self.value["id"],)).fetchone()
+        self.assertEqual("stopped", phase)
+        self.assertIsNone(json.loads(observation)["container"])
 
 
 class ManifestPropagationTests(RunnerCase):
