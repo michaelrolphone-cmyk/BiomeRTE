@@ -33,8 +33,8 @@ async def upload_block(daemon, block, raw):
     check_receipt(block, reply)
 
 
-async def upload_batch(daemon, batch):
-    if getattr(daemon, "checkpoint_bulk_upload", False):
+async def upload_batch(daemon, batch, bulk):
+    if bulk:
         reply = await daemon.helper("chunk_put_many", blocks=[encoded_block(b, raw) for b, raw in batch])
         receipts = reply.get("receipts") if isinstance(reply, dict) else None
         if not isinstance(receipts, list) or len(receipts) != len(batch):
@@ -95,6 +95,8 @@ async def publish_controller(daemon):
         # identity before sending any bytes. Shared blocks upload only once.
         batch = []
         batch_bytes = 0
+        # Health can renegotiate the helper while a shard read yields. Use
+        # the same protocol to size and send every page of this publication.
         bulk = getattr(daemon, "checkpoint_bulk_upload", False)
         batch_limit = UPLOAD_BATCH_BLOCKS if bulk else CHECKPOINT_UPLOAD_CONCURRENCY
         for shard in shards:
@@ -106,7 +108,7 @@ async def publish_controller(daemon):
                     continue
                 block_bytes = block["bytes"]
                 if batch and (len(batch) == batch_limit or batch_bytes + block_bytes > UPLOAD_BATCH_BYTES):
-                    await upload_batch(daemon, batch)
+                    await upload_batch(daemon, batch, bulk)
                     batch.clear()
                     batch_bytes = 0
                 batch.append((block, raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES]))
@@ -116,7 +118,7 @@ async def publish_controller(daemon):
         if missing:
             raise CheckpointError("Controller root still has unacknowledged blocks")
         if batch:
-            await upload_batch(daemon, batch)
+            await upload_batch(daemon, batch, bulk)
         result = await daemon.helper("publish", state=manifest)
         daemon._controller_shard_blocks = current
         return result
