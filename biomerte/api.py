@@ -67,7 +67,8 @@ class Context:
         self.permissions = permissions
 
     def allowed(self, name):
-        return self.permissions is None or name in self.permissions
+        return (self.permissions is None or name in self.permissions or
+                (name == 'cap.withdraw' and 'cap.offer' in self.permissions))
 
 
 def invoke(tx, ctx, name, args):

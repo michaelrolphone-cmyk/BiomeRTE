@@ -63,7 +63,7 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
         tx.put('_enforcers', resource, provider)
     key = digest([provider, contract, resource])
     rec = {'id': key, 'provider': ident(provider), 'contract': contract, 'resource': ident(resource),
-           'state': state, 'service': service, 'configuration': configuration or {}}
+           'state': state, 'service': service, 'configuration': configuration or {}, 'registration': uid()}
     if capacity is not None:
         if capacity < 0:
             raise Fault('Capacity must be 1 (exclusive), a positive slot count, or 0 (unbounded)')
@@ -75,6 +75,39 @@ def offer(tx, ctx, provider, contract, resource, state='ready', service='', conf
     tx.emit('offer.updated', {'offer': key, 'state': state})
     return dict(rec, capacity=capacity_of(tx, rec))
 
+
+
+@op('cap.withdraw', 'provider:str resource:str service:str registrations:obj')
+def withdraw(tx, ctx, provider, resource, service, registrations):
+    """Withdraw this provider's exact offer revisions together. A successor stays ready."""
+    owner(ctx, provider)
+    if not 1 <= len(registrations) <= 128:
+        raise Fault('Withdraw between one and 128 offer registrations')
+    if ctx.permissions is not None and (provider in ('builtin', 'routine') or
+            'resource:' + resource not in ctx.permissions):
+        raise Fault('Resource outside provider grant', 403)
+    for contract, revision in registrations.items():
+        if not isinstance(contract, str):
+            raise Fault('Invalid withdrawal contract')
+        ident(contract)
+        if revision is not None and (not isinstance(revision, str) or len(revision) != 32
+                or any(c not in '0123456789abcdef' for c in revision)):
+            raise Fault('Invalid offer registration')
+        if ctx.permissions is not None and 'offer:' + contract not in ctx.permissions:
+            raise Fault('Offer outside provider grant', 403)
+    withdrawn, superseded = [], []
+    for contract, revision in sorted(registrations.items()):
+        key = digest([provider, contract, resource])
+        row = tx.get('offers', key)
+        if not row or row.get('service') != service or row.get('registration') != revision:
+            superseded.append(contract)
+            continue
+        if row['state'] != 'offline':
+            row.update(state='offline', registration=uid())
+            tx.put('offers', key, row)
+            tx.emit('offer.updated', {'offer': key, 'state': 'offline'})
+        withdrawn.append(contract)
+    return {'withdrawn': withdrawn, 'superseded': superseded}
 
 
 @op('cap.delete', 'offer?:str contract?:str delete_contract?:bool allow_system?:bool')

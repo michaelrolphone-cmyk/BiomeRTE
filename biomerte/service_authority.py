@@ -14,7 +14,7 @@ from .store import Fault, digest
 from . import providers
 from .service_checkpoint import binding
 
-PREPARATION = frozenset(("cap.offer", "provider.poll", "cap.fenced",
+PREPARATION = frozenset(("cap.offer", "cap.withdraw", "provider.poll", "cap.fenced",
                          "provider.result", "cap.status"))
 CALLS = PREPARATION | frozenset((
     "provider.claim", "cap.acquire", "cap.lease", "cap.leases", "cap.release",
@@ -92,6 +92,10 @@ class ScopedAuthority:
             raise Fault("Provider is outside logical service scope", 403)
         if args.get("contract") is not None and args["contract"] not in self.contracts:
             raise Fault("Contract is outside logical service scope", 403)
+        if name == "cap.withdraw":
+            registrations = args.get("registrations")
+            if not isinstance(registrations, dict) or not registrations.keys() <= self.contracts:
+                raise Fault("Withdrawal outside logical contract scope", 403)
         if name=="cap.offer" and args.get("capacity") not in (None,1):
             raise Fault("Scoped physical authority requires exclusive capacity one",403)
         if name in ("cap.acquire","cap.submit") and args.get("resource") not in self.resources:
@@ -113,7 +117,7 @@ class ScopedAuthority:
             if args.get("operation") and name in (
                     "provider.claim","provider.result","cap.status"):
                 self._resource_row(tx, "actions", args["operation"])
-            if name == "cap.offer":
+            if name in ("cap.offer", "cap.withdraw"):
                 peer = tx.need("peers", auth["actor"])
                 if args.get("provider") != auth["actor"] or not peer.get("enabled"):
                     raise Fault("Provider identity mismatch", 403)
