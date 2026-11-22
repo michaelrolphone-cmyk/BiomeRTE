@@ -171,6 +171,18 @@ class ControllerTests(unittest.TestCase):
         publish = dict(provider=self.peer, resource="first", contract=contract, service="docker")
         old = self.call("cap.offer", publish, "own-register", peer=True)
         self.assertEqual(states(), {"first": "ready", "second": "offline"})
+
+        self.app.provider_contacts.clear()
+        entry = dict(definition=dict(name="docker.cli", inputs={}, outputs={}),
+                     offer=dict(contract=contract), expected_registration=old["registration"])
+        batch = dict(provider=self.peer, resource="first", service="docker", offers=[entry])
+        self.assertEqual(self.call("cap.publish", batch, "admin-batch")["offers"][0]["status"], "unchanged")
+        stale = dict(batch, offers=[dict(entry, expected_registration="0" * 32)])
+        self.assertEqual(self.call("cap.publish", stale, "stale-batch", peer=True)["offers"][0]["status"], "superseded")
+        self.assertEqual(states(), {"first": "offline", "second": "offline"})
+        self.assertEqual(self.call("cap.publish", batch, "worker-batch", peer=True)["offers"][0]["status"], "unchanged")
+        self.assertEqual(states(), {"first": "ready", "second": "offline"})
+
         lease = self.call("cap.acquire", dict(contract=contract, task="runner", resource="first"))
         self.app.provider_contacts.clear()  # A replacement controller has a new local observation set.
         pending = dict(provider=self.peer, lease=lease["id"], generation=lease["generation"])
