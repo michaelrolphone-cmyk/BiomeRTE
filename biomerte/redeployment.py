@@ -283,6 +283,28 @@ def retry(tx, ctx, id, generation):
     return snapshot(tx, hold)
 
 
+@op('cap.redeploy.retarget', 'id:str generation:int expected_version:str reason:str')
+def retarget(tx, ctx, id, generation, expected_version, reason):
+    """Change the requested version without releasing or reconciling any holds."""
+    hold = need_current(tx, ctx, id, generation)
+    if hold.get('owner') != ctx.actor:
+        raise Fault('Only the redeployment owner can retarget its version', 403)
+    if hold['state'] == 'completed':
+        raise Fault('Redeployment is already completed', 409)
+    if not expected_version.strip() or not reason.strip():
+        raise Fault('A nonempty target version and retarget reason are required')
+    previous = hold['expected_version']
+    if previous == expected_version:
+        return snapshot(tx, hold)
+    entry = dict(previous_version=previous, expected_version=expected_version,
+                 reason=reason, actor=ctx.actor, generation=generation, at=time.time())
+    hold.setdefault('version_history', []).append(entry)
+    hold['expected_version'] = expected_version
+    tx.put('_redeployments', id, hold)
+    tx.emit('redeployment.retargeted', dict(entry, id=id))
+    return snapshot(tx, hold)
+
+
 @op('cap.redeploy.quiesce', 'id:str generation:int evidence:obj')
 def quiesce(tx, ctx, id, generation, evidence):
     """Record observed control-stream shutdown; never infer it from disconnection."""

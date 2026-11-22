@@ -77,6 +77,7 @@ its `arguments` object.
 | `cap.redeploy.prepare` | `id`, `generation`, `contract` | `resource` |
 | `cap.redeploy.fail` | `id`, `generation`, `reason` | `evidence` |
 | `cap.redeploy.retry` | `id`, `generation` | None |
+| `cap.redeploy.retarget` | `id`, `generation`, `expected_version`, `reason` | None |
 | `cap.redeploy.complete` | `id`, `generation`, `evidence` | `outcome`: `deployed` or `rolled_back` |
 
 Use a unique hold `id` for a logical deployment and retain the returned
@@ -224,6 +225,39 @@ Submit and prepare require drain readiness and reject failed or completed holds.
 They are not bypasses for the stream quiescence step. If stopping a live adapter
 must happen before drain readiness, use its established service-management or
 enforcement-point shutdown path, then record the resulting observation.
+
+### 4a. Revise the requested version during recovery
+
+If the candidate needs a different firmware or service version, the operator who
+owns the active hold can call `cap.redeploy.retarget` with its current ID and
+generation, a nonempty `expected_version`, and a nonblank `reason`.
+
+```json
+{
+  "id": "deploy-front-camera-20261118",
+  "generation": 17,
+  "expected_version": "<revised-requested-version>",
+  "reason": "<observed reason this recovery needs a different version>"
+}
+```
+
+Retarget changes only the expected version and appends an attributable
+`version_history` entry containing the previous/new versions, reason, actor,
+generation and observation time. It keeps the same generation, resource scope,
+reservations, operations, streams, blockers and failure state. It performs no
+deployment, health check, release, retry or reconciliation. A failed hold still
+requires explicit `cap.redeploy.retry` before maintenance can resume.
+
+Only the hold owner with operator access may retarget. Stale generations,
+completed holds and blank versions/reasons are rejected. Repeating the same
+version is a no-op, and normal request-ID idempotence applies. Use a fresh request
+ID for a different version or reason. Read status to recover the current plan;
+`begin` is not a version-edit operation.
+
+After retarget, a `deployed` completion must report the new expected version
+and actual healthy evidence for every resource. The old version cannot complete
+that deployment. Retarget never makes an unhealthy candidate successful and
+never substitutes for a verified rollback.
 
 ### 5. Verify the returned resource and complete
 
