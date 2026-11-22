@@ -8,7 +8,7 @@ import {dispatchController,rememberProviderInvocation} from './provider-topology
 // This endpoint transports a native scoped-provider envelope. It never converts
 // a caller into the owner. Only the controller verifies signatures and grants.
 export const nativeProviderOperations=new Set([
- 'cap.offer','provider.poll','cap.fenced','provider.claim','provider.result',
+ 'cap.offer','cap.withdraw','provider.poll','cap.fenced','provider.claim','provider.result',
  'cap.status','cap.configured','agent.progress','cap.heartbeat','cap.command.state','stream.attach',
  'provider.custody','provider.reconcile'
 ]);

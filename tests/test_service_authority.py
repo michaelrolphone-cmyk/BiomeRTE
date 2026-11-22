@@ -67,6 +67,15 @@ class AuthorityTests(unittest.TestCase):
                               generation=row["generation"]),"ack-"+lease)
             self.authority.call(env,preparing=True)
 
+    def test_signed_conditional_withdrawal_obeys_exact_logical_contract_scope(self):
+        args=dict(provider=self.actor,resource=self.resource,service=self.offer['service'],
+                  registrations={'relay.test:1':self.offer['registration']})
+        bad=dict(args,registrations={**args['registrations'],'foreign:1':None})
+        with self.assertRaisesRegex(Fault,'logical contract scope'):
+            self.authority.call(self.envelope('cap.withdraw',bad,'foreign'),preparing=False)
+        result=self.authority.call(self.envelope('cap.withdraw',args,'shutdown'),preparing=False)
+        self.assertEqual(result['withdrawn'],['relay.test:1'])
+
     def test_former_native_operation_cannot_be_recreated(self):
         def history(tx):
             tx.put("_service_source","initial",{
