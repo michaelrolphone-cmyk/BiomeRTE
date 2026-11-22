@@ -147,7 +147,8 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
         if marker.is_symlink() or json.loads(marker.read_text()) != expected_marker:
             raise CheckpointError("Controller authority marker differs from prepared identity")
     # The runner calls prepare before child creation. The helper owns this replace.
-    store = Store(str(directory),"site")
+    rollback_journal = controller and config.get("site_rollback_journal") is True
+    store = Store(str(directory), "site", rollback_journal=rollback_journal)
     try:
         if controller:
             # Restore canonical values directly in one transaction. Using an
@@ -166,8 +167,9 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
                         raise CheckpointError("Controller restore requires EXTRA durability")
                 else:
                     db.execute("PRAGMA synchronous=FULL")
-                    if db.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
-                        raise CheckpointError("Existing controller restore requires WAL")
+                    expected = "delete" if rollback_journal else "wal"
+                    if db.execute("PRAGMA journal_mode").fetchone()[0] != expected:
+                        raise CheckpointError("Existing controller restore journal mode changed")
                     # Keep only record identities, with a bounded page cache.
                     # A build that forces temporary data into RAM cannot provide
                     # this restore's disk-backed key-set guarantee.
@@ -216,14 +218,15 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
                                    "AND records.id=record_lifecycle.id)")
                     db.execute("UPDATE position SET seq=0,hash='' WHERE id=1")
                     db.commit()
-                    if empty:
+                    if empty and not rollback_journal:
                         # Bulk data is now durable in the main database. Return
                         # the target to ordinary Store mode before its marker or
                         # any preparation receipt can be published.
                         if db.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
                             raise CheckpointError("Controller restore could not return to WAL")
                         db.execute("PRAGMA synchronous=FULL")
-                    if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
+                    if (not rollback_journal and
+                            db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0):
                         raise CheckpointError("Controller restore checkpoint is still busy")
                 except BaseException:
                     if db.in_transaction:
@@ -258,12 +261,15 @@ def restore_state(home, private_dir, packet, config, chunk_reader=None):
 
 class CheckpointHelper:
     def __init__(self, config, session):
+        if config.get("authority_kind") == "controller" and os.environ.get("BIOME_SITE_ROLLBACK_JOURNAL") == "1":
+            config = dict(config, site_rollback_journal=True)
         self.config,self.session = config,session
         self.transport = Transport(session,config)
         self.token = secret(config["helper_key_file"])
         self.store = CheckpointStore(
             config["checkpoint_db"],config["service_id"],scope_digest(config),
-            secret(config["checkpoint_key_file"]).encode())
+            secret(config["checkpoint_key_file"]).encode(),
+            rollback_journal=config.get("site_rollback_journal") is True)
         self.lock = asyncio.Lock()
         self.connection = None
         self.replication = "unobserved"

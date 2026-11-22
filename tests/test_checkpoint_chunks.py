@@ -1,4 +1,5 @@
 """Durability, corruption, bounded publication and transactional restore tests."""
+import asyncio
 import base64
 import copy
 import contextlib
@@ -41,6 +42,20 @@ class Blocks(unittest.TestCase):
         self.path = os.path.join(self.directory.name, "checkpoint.sqlite")
         self.store = CheckpointStore(self.path, "controller", "scope", b"k" * 32)
         self.addCleanup(self.store.close)
+
+    def test_unmapped_checkpoint_store_reopens_the_same_witness(self):
+        path = os.path.join(self.directory.name, "unmapped-checkpoint.sqlite")
+        with contextlib.closing(CheckpointStore(path, "controller", "scope", b"k" * 32,
+                                                rollback_journal=True)) as store:
+            desc = shard(store.chunks)
+            packet = store.bootstrap(root([desc]), {"source_receipt": "fixture"})
+            self.assertEqual("delete", store.db.execute("PRAGMA journal_mode").fetchone()[0])
+            self.assertEqual(0, store.db.execute("PRAGMA mmap_size").fetchone()[0])
+        with contextlib.closing(CheckpointStore(path, "controller", "scope", b"k" * 32,
+                                                rollback_journal=True)) as reopened:
+            self.assertEqual(packet, reopened.packet())
+            reopened.require_chunks(packet["payload"]["state"])
+            self.assertFalse(os.path.exists(path + "-shm"))
 
     def test_partial_upload_never_acknowledges_a_root(self):
         raw = canonical([["artifacts", "artifact-1", "x" * (BLOCK_BYTES * 2)]])
@@ -258,6 +273,20 @@ class ControllerRestoreModes(unittest.TestCase):
                     "SELECT state,lease,expires_at,delivery FROM record_lifecycle").fetchall())
         finally:
             local.close()
+
+    def test_restore_keeps_host_shared_database_unmapped_for_fresh_and_warm_targets(self):
+        self.config["site_rollback_journal"] = True
+        original = [["artifacts", "old", "starting content"]]
+        observed = self.observe(self.packet(original))
+        self.assertEqual(("delete", 3), (observed["mode"], observed["synchronous"]))
+        self.assert_rows(original)
+        updated = [["artifacts", "new", "replacement content"], ["runs", "ready", {"state": "ready"}]]
+        observed = self.observe(self.packet(updated))
+        self.assertEqual(("delete", 2), (observed["mode"], observed["synchronous"]))
+        self.assert_rows(updated)
+        with contextlib.closing(self.database()) as db:
+            self.assertEqual("delete", db.execute("PRAGMA journal_mode").fetchone()[0])
+        self.assertFalse((self.home / "site.sqlite-shm").exists())
 
     def test_late_corruption_rolls_back_empty_target_and_retry_still_uses_fresh_path(self):
         rows = [["artifacts", "first", "accepted-before-error"],
@@ -522,6 +551,42 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         await publish_controller(self.daemon)
         self.assertEqual(["chunk_missing", "publish"], [operation for operation, unused in self.calls])
+
+    async def test_overlapping_block_uploads_finish_before_publishing_root(self):
+        for index in range(6):
+            self.add("key-" + str(index), "unique value " + str(index))
+        current = 0
+        peak = 0
+        saturated = asyncio.Event()
+        release = asyncio.Event()
+
+        async def helper(operation, **body):
+            nonlocal current, peak
+            if operation == "chunk_put":
+                current += 1
+                peak = max(peak, current)
+                if current == 4:
+                    saturated.set()
+                try:
+                    await release.wait()
+                    return await self.helper(operation, **body)
+                finally:
+                    current -= 1
+            if operation == "publish":
+                self.assertEqual(current, 0)
+            return await self.helper(operation, **body)
+
+        self.daemon.helper = helper
+        publication = asyncio.create_task(publish_controller(self.daemon))
+        try:
+            await asyncio.wait_for(saturated.wait(), 2)
+            self.assertFalse(publication.done())
+            self.assertFalse(any(operation == "publish" for operation, unused in self.calls))
+        finally:
+            release.set()
+            await publication
+        self.assertEqual(peak, 4)
+        self.assertEqual(self.calls[-1][0], "publish")
 
     async def test_cold_4050_shard_4405_block_root_uses_18_bounded_queries(self):
         # Use the real 256 KiB block size and generate large shard bodies on
