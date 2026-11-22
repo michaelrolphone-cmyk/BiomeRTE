@@ -4,6 +4,21 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 import biome_provider as adapter
 
 class RegistrationIsolationTests(unittest.TestCase):
+    def test_retry_diagnostic_preserves_numeric_http_status_without_server_text(self):
+        class ControllerOperationError(RuntimeError):
+            pass
+
+        error = ControllerOperationError("private operation data")
+        for status, expected in ((429, "ControllerOperationError status=429"),
+                                 (503, "ControllerOperationError status=503"),
+                                 (None, "ControllerOperationError"),
+                                 ("private status", "ControllerOperationError"),
+                                 (True, "ControllerOperationError"),
+                                 (999, "ControllerOperationError")):
+            with self.subTest(status=status):
+                error.status = status
+                self.assertEqual(adapter.retry_diagnostic(error), expected)
+
     def test_slow_registration_does_not_block_existing_stream_poll(self):
         active=threading.Event();release=threading.Event();handlers={};observed=[];sequence_paths=[]
         class Remote:

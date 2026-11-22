@@ -585,6 +585,15 @@ def withdraw_unavailable_streams(remote, cfg, client):
                 print("Vision stream withdrawal failed:", type(exc).__name__, file=sys.stderr, flush=True)
 
 
+def retry_diagnostic(error):
+    """Keep the error category and HTTP status without logging remote response text."""
+    category = type(error).__name__
+    status = getattr(error, "status", None)
+    if type(status) is int and 400 <= status < 600:
+        return f"{category} status={status}"
+    return category
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -703,7 +712,7 @@ def serve(cfg):
                             advertised[contract] = state
                     stopping.wait(cfg.get("health_seconds", 10))
                 except Exception as exc:
-                    print("Vision advertisement retry:", phase, type(exc).__name__, file=sys.stderr, flush=True)
+                    print("Vision advertisement retry:", phase, retry_diagnostic(exc), file=sys.stderr, flush=True)
                     stopping.wait(5)
 
         def reconcile_receipts():
@@ -733,7 +742,7 @@ def serve(cfg):
                     stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
                     # Request/image bytes and gateway credential errors never enter logs.
-                    print("Vision provider retry:", type(exc).__name__, file=sys.stderr, flush=True)
+                    print("Vision provider retry:", retry_diagnostic(exc), file=sys.stderr, flush=True)
                     stopping.wait(5)
         finally:
             stopping.set()
