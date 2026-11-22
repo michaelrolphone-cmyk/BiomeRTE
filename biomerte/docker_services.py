@@ -514,6 +514,7 @@ class Runner:
         self.lock = threading.RLock()
         self.grants = {}
         self.containers = {}
+        self.initial_health_deadlines = {}
         self.start_jobs = {}
         self.start_bindings = {}
         self.starting_refs = {}
@@ -608,10 +609,19 @@ class Runner:
                     pass
                 if not fresh or status == "starting":
                     return None if self.clock() < activated["health_deadline"] else False
+        if manifest.get("capability_lease"):
+            with self.lock:
+                if self.containers.get(service_id) != container:
+                    return None
+                if status == "healthy":
+                    self.initial_health_deadlines.pop(container, None)
+                    return True
+                deadline = self.initial_health_deadlines.get(container)
+            # Early Docker probes can fail before the first signed poll returns.
+            # A stopped process was rejected above. Once ready, any failure is real.
+            return None if deadline is not None and self.clock() < deadline else False
         if status == "starting":
             return None
-        if manifest.get("capability_lease"):
-            return status == "healthy"
         return status == "healthy" if status else True
 
     def _inventory_children(self):
@@ -885,6 +895,8 @@ class Runner:
                 admitted = self._admit_start(service_id, grant, staging)
                 if admitted:
                     self.containers[service_id] = container
+                    if manifest.get("capability_lease"):
+                        self.initial_health_deadlines[container] = self.clock() + manifest.get("startup_grace_s", 20)
             if not admitted:
                 self._queue_cleanup(service_id, container)
         except Exception as error:
@@ -1034,6 +1046,7 @@ class Runner:
             if expired_only and (not grant or self.clock() < grant["deadline"]):
                 return True
             container = self.containers.pop(service_id, None)
+            self.initial_health_deadlines.pop(container, None)
             record = ({"container": container, "uncertain": False} if container
                       else self.starting_refs.get(service_id))
             self.grants.pop(service_id, None)
