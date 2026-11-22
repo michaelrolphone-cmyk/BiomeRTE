@@ -200,24 +200,39 @@ class ControllerAuthority:
             return grant
 
     def capability_demand(self, scope):
-        """Snapshot one exclusive capability slot without refreshing its lease."""
-        if (not isinstance(scope, dict) or set(scope) != {"provider", "resource", "contract"} or
-                not all(isinstance(value, str) and 0 < len(value) <= 192 for value in scope.values())):
+        """Snapshot one fenced capacity slot without refreshing its lease."""
+        fields = {"provider", "resource", "contract"}
+        if (not isinstance(scope, dict) or
+                set(scope) not in (fields, fields | {"slot"}, fields | {"slots"}) or
+                not all(isinstance(scope[k], str) and 0 < len(scope[k]) <= 192 for k in fields)):
             raise Fault("Exact capability lease scope required")
-        from .providers import admitted, capacity_of
+        slots = scope.get("slots", [scope.get("slot", 0)])
+        if (not isinstance(slots, list) or not slots or
+                any(type(index) is not int or index < 0 for index in slots) or
+                len(set(slots)) != len(slots)):
+            raise Fault("Distinct nonnegative slot numbers required")
+        from .providers import admitted, capacity_of, slot_guard
 
-        def read(tx):
-            guard = tx.get("guards", scope["resource"], {})
+        def inspect_slot(tx, index):
+            key = slot_guard(scope["resource"], index)
+            guard = tx.get("guards", key, {})
             lease = tx.get("leases", guard.get("holder", ""), {})
             if (lease.get("state") not in ("fencing", "bound") or lease.get("shared_parent") or
-                    lease.get("guard") != scope["resource"] or
-                    lease.get("generation") != guard.get("generation") or
-                    any(lease.get(field) != value for field, value in scope.items())):
-                return {"lease": None}
+                    lease.get("guard") != key or lease.get("generation") != guard.get("generation") or
+                    any(lease.get(k) != scope[k] for k in fields)):
+                return None
             offer = tx.get("offers", lease["offer"])
-            if not offer or capacity_of(tx, offer) != 1 or not admitted(tx, offer):
-                return {"lease": None}
-            return {"lease": {"id": lease["id"], "generation": lease["generation"]}}
+            if not offer or not admitted(tx, offer):
+                return None
+            capacity = capacity_of(tx, offer)
+            if index >= capacity or (set(scope) == fields and capacity != 1):
+                return None
+            return {"id": lease["id"], "generation": lease["generation"]}
+
+        def read(tx):
+            if "slots" in scope:
+                return {"slots": {str(index): inspect_slot(tx, index) for index in slots}}
+            return {"lease": inspect_slot(tx, slots[0])}
 
         with self.lock:
             return self.app.stores["site"].execute(read, read_only=True)

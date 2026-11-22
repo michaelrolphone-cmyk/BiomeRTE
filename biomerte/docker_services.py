@@ -86,9 +86,11 @@ def validate_manifest(value):
     demand = value.get("capability_lease")
     if (demand is not None) != (state == "lease_scoped"):
         raise ValueError("Capability demand requires the lease_scoped state policy")
+    fields = {"controller", "provider", "resource", "contract"}
     if demand is not None and (not isinstance(demand, dict) or
-            set(demand) != {"controller", "provider", "resource", "contract"} or
-            any(not isinstance(v, str) or not 0 < len(v) <= 192 for v in demand.values()) or
+            set(demand) not in (fields, fields | {"slot"}) or
+            any(not isinstance(demand[k], str) or not 0 < len(demand[k]) <= 192 for k in fields) or
+            ("slot" in demand and (type(demand["slot"]) is not int or demand["slot"] < 0)) or
             not all(adapters.DIGEST.fullmatch(demand[k]) for k in ("controller", "provider")) or
             not isinstance(value.get("health"), dict) or
             not isinstance(value["health"].get("command"), list) or not value["health"]["command"] or
@@ -328,6 +330,7 @@ class DockerEngine:
         if manifest.get("capability_lease"):
             lease = grant["capability_demand"]
             labels.update({LEASE: lease["id"], GENERATION: str(lease["generation"])})
+            environment["BIOME_CAPABILITY_SLOT"] = str(manifest["capability_lease"].get("slot", 0))
             environment.update(BIOME_CAPABILITY_LEASE_ID=lease["id"],
                                BIOME_CAPABILITY_LEASE_GENERATION=str(lease["generation"]))
         if initial_phase is not None:

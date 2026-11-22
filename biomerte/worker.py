@@ -50,6 +50,14 @@ class Remote:
 
 class Worker:
     def __init__(self, path, remote, offers, timeout=30):
+        self.lease_binding = {}
+        lease = os.environ.get('BIOME_CAPABILITY_LEASE_ID')
+        generation = os.environ.get('BIOME_CAPABILITY_LEASE_GENERATION')
+        if lease is not None or generation is not None:
+            if (not lease or len(lease) != 64 or any(ch not in '0123456789abcdef' for ch in lease) or
+                    not generation or not generation.isdigit() or int(generation) < 1):
+                raise ValueError('Invalid worker lease binding')
+            self.lease_binding = dict(lease=lease, generation=int(generation))
         mkdir(os.path.dirname(os.path.abspath(path)))
         self.path = path
         self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
@@ -127,8 +135,8 @@ class Worker:
             self.db.rollback()
             raise
 
-    def advertise(self):
-        for o in self.offers:
+    def advertise(self, offers=None, request_id=None):
+        for o in (self.offers if offers is None else offers):
             args = {'provider': self.remote.node, 'contract': o['contract'], 'resource': o['resource'],
                     'service': o.get('service', ''), 'state': o.get('state', 'ready')}
             for field in ('capacity', 'usage', 'configuration', 'lease_class'):
@@ -138,7 +146,10 @@ class Worker:
                 import socket
                 args['configuration'] = dict(args.get('configuration', {}),
                                              execution_custody=True, execution_host=socket.gethostname())
-            self.remote.call('cap.offer', args)
+            if request_id is None:
+                self.remote.call('cap.offer', args)
+            else:
+                self.remote.call('cap.offer', args, request_id)
 
 
     def reconcile_guard(self, guard, exclude=None):
@@ -550,10 +561,11 @@ class Worker:
             logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
         if reconcile_receipts:
             self.recover_result_acknowledgements()
-        queue = self.remote.call('provider.poll', {'provider': self.remote.node})
+        queue = self.remote.call('provider.poll', dict(self.lease_binding, provider=self.remote.node))
         try:
             from .worker_expiry import expire
-            page=expire(self,after=getattr(self,'_whole_expiry_after',''),inventory=queue)
+            page=expire(self,after=getattr(self,'_whole_expiry_after',''),
+                        inventory=None if self.lease_binding else queue)
             self._whole_expiry_after=page['after'] if page['more'] else ''
         except Exception as error:
             logging.warning('Completed record expiry pending: %s',type(error).__name__)
@@ -577,6 +589,8 @@ class Worker:
             self.stream_handler(queue.get('streams', []))
         from .supervised_commands import pending
         recovering = pending(self)
+        if self.lease_binding:
+            recovering = [a for a in recovering if all(a.get(k) == v for k, v in self.lease_binding.items())]
         recovery_ids = {a['id'] for a in recovering}
         recovery_guards = {a.get('guard', a['resource']) for a in recovering}
         # Resolve old custody before admitting a newer fence on the same slot.
@@ -671,10 +685,18 @@ class ActionPool:
         return started
 
 
+def unavailable_transport(error):
+    # Older MCP adapters raise plain RuntimeError with the gateway's message.
+    return (getattr(error, 'status', None) in (408, 429, 502, 503, 504)
+            or str(error).strip().lower() in ('managed controller is busy',
+                'the shared controller runtime is temporarily unavailable'))
+
+
 def run_worker(directory, remote, cfg, once):
     import fcntl
+    import inspect
     import logging
-    from urllib.error import HTTPError
+    from collections import deque
     with open(os.path.join(directory, 'worker.lock'), 'a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -685,21 +707,39 @@ def run_worker(directory, remote, cfg, once):
         parallelism = cfg.get('parallelism', 1)
         pool = ActionPool(w, parallelism) if parallelism > 1 else None
         try:
-            announced = False
+            if once:
+                w.advertise()
+                w.once(pool)
+                return 0
+            try:
+                inspect.signature(remote.call).bind('cap.offer', {}, 'request-id')
+                identified = True
+            except (TypeError, ValueError):
+                identified = False
+            pending = deque((offer, uid() if identified else None, 0) for offer in w.offers)
+            retry = cfg.get('retry_seconds', 5)
             while True:
+                if pending and pending[0][2] <= time.monotonic():
+                    offer, request_id, unused = pending.popleft()
+                    try:
+                        w.advertise([offer], request_id)
+                    except (OSError, ValueError, Fault, RuntimeError) as err:
+                        if isinstance(err, RuntimeError) and not unavailable_transport(err):
+                            raise
+                        pending.append((offer, request_id, time.monotonic() + retry))
+                        logging.warning('Provider registration paused for %s: %s', offer['contract'], err)
+                # The provider still owns its existing grants when registration
+                # is partially acknowledged or a new offer is waiting to retry.
                 try:
-                    if not announced:
-                        w.advertise()
-                        announced = True
                     count = w.once(pool)
-                    if once:
-                        return 0
-                    time.sleep(.1 if count else cfg.get('poll_seconds', 2))
-                except (OSError, ValueError, Fault, HTTPError) as err:
-                    if once:
+                except (OSError, ValueError, Fault, RuntimeError) as err:
+                    if isinstance(err, RuntimeError) and not unavailable_transport(err):
                         raise
                     logging.warning('Provider paused: %s', err)
-                    time.sleep(cfg.get('retry_seconds', 5))
+                    time.sleep(retry)
+                else:
+                    registering = pending and pending[0][2] <= time.monotonic()
+                    time.sleep(.1 if count or registering else cfg.get('poll_seconds', 2))
         finally:
             if pool is not None:
                 pool.executor.shutdown(wait=True)
@@ -746,6 +786,9 @@ def reconcile_receipt(directory, remote, operation, state, outcome):
             if not confirms(a):
                 raise Fault('Conflicting expired result', 409)
             # Never submit a recovery summary as original provider output.
+            result = a
+        elif confirms(a):
+            # The previous write committed before the transport lost its reply.
             result = a
         else:
             result = remote.call('provider.result', {'provider': remote.node, 'operation': operation,

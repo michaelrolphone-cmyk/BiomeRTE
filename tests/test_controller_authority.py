@@ -148,6 +148,30 @@ class ControllerTests(unittest.TestCase):
         self.call("cap.release", dict(lease=lease["id"]), "demand-release")
         self.assertEqual({"lease": None}, self.authority.capability_demand(scope))
 
+    def test_pool_slots_follow_independent_fences_and_release(self):
+        self.call("cap.define", dict(name="pooled", inputs={}, outputs={}), "define-pool")
+        scope = dict(provider="pool-worker", resource="pool", contract="pooled:1")
+        self.call("cap.offer", dict(scope, capacity=2), "pool-offer")
+        leases = [self.call("cap.acquire", dict(resource="pool", contract="pooled:1", task=task), task)
+                  for task in ("first", "second")]
+        self.assertIsNone(self.authority.capability_demand(scope)["lease"])
+        for index, lease in enumerate(leases):
+            self.assertEqual(lease["id"], self.authority.capability_demand(dict(scope, slot=index))["lease"]["id"])
+        inbox = dict(provider=scope["provider"], lease=leases[1]["id"], generation=leases[1]["generation"])
+        self.assertEqual([leases[1]["id"]], [f["id"] for f in self.call("provider.poll", inbox)["fences"]])
+        self.call("cap.fenced", dict(inbox), "fence-pool-second")
+        self.call("cap.invoke", dict(lease=leases[1]["id"], operation="pool-command", inputs={}), "send-pool")
+        self.assertEqual(["pool-command"], [a["id"] for a in self.call("provider.poll", inbox)["actions"]])
+        self.assertFalse(self.call("provider.poll", dict(inbox, generation=inbox["generation"]+1))["actions"])
+        observed = self.authority.capability_demand(dict(scope, slots=[0, 1]))["slots"]
+        self.assertEqual([row["id"] for row in leases], [observed[str(i)]["id"] for i in (0, 1)])
+        self.call("cap.release", dict(lease=leases[0]["id"]), "free-first")
+        self.assertIsNone(self.authority.capability_demand(dict(scope, slot=0))["lease"])
+        self.assertEqual(leases[1]["id"], self.authority.capability_demand(dict(scope, slot=1))["lease"]["id"])
+        self.assertIsNone(self.authority.capability_demand(dict(scope, slot=2))["lease"])
+        with self.assertRaises(Fault):
+            self.authority.capability_demand(dict(scope, slot=True))
+
     def test_pending_preparation_and_external_sessions_are_not_execution_paths(self):
         with self.assertRaises(Fault) as raised:
             self.authority.call(self.envelope("system.info"), True)

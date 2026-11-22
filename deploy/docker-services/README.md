@@ -96,9 +96,12 @@ lease is admitted. Raw Docker names and images never authorize fleet-wide cleanu
 
 ### Disposable capability workers
 
-For an exclusive capacity-one offer, set `state_policy` to `lease_scoped` and
+For an exclusive offer, set `state_policy` to `lease_scoped` and
 supply `capability_lease` with the controller and provider fingerprints, resource
-and versioned contract. Supply an argv health command that checks worker readiness.
+and versioned contract. For a pooled offer, declare a service for each slot with
+an explicit zero-based integer `slot`. Each slot has its own fence, container,
+health and cleanup. Workers receive `BIOME_CAPABILITY_SLOT` as well as their lease
+identity. Supply an argv health command that checks worker readiness.
 The coordinator observes the matching controller lease without renewing it. A
 fencing or bound lease admits the worker. Its container receives
 `BIOME_CAPABILITY_LEASE_ID` and `BIOME_CAPABILITY_LEASE_GENERATION`. Retries
