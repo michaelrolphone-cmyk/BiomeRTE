@@ -16,6 +16,11 @@ from urllib.parse import urlsplit
 from tests.qualify_live_provider_recovery import CONSUMERS, assess, observe_streams, positive
 
 LOCAL = Path.home() / ".local/share"
+PUBLIC_FAILURES = frozenset({
+    "Managed controller is busy", "Controller runtime reply unavailable",
+    "Controller runtime unavailable", "Invalid controller runtime result",
+    "Logical service authority is unavailable", "Declared logical service is unavailable",
+})
 TERMINAL = {"succeeded", "failed", "cancelled", "abandoned", "denied", "uncertain"}
 
 
@@ -53,42 +58,67 @@ class Site:
             if value is None and not result.get("isError"):
                 value = json.loads(result["content"][0]["text"])
             if result.get("isError"):
-                return (value or {}).get("status", "site_error"), {}
+                value = value if isinstance(value, dict) else {}
+                category = "signed_runtime" if value.get("error_code") == "CONTROLLER_RUNTIME_UNAVAILABLE" else "site_error"
+                content = result.get("content")
+                if isinstance(content, list) and content and isinstance(content[0], dict):
+                    detail = content[0].get("text")
+                    if isinstance(detail, str) and detail in PUBLIC_FAILURES:
+                        category = detail
+                diagnostics = {"error_category": category}
+                if type(value.get("retry_same_id")) is bool:
+                    diagnostics["retry_same_id"] = value["retry_same_id"]
+                status = value.get("status")
+                return (status if type(status) is int and 400 <= status < 600 else "site_error"), diagnostics
             if not isinstance(value, dict):
                 return "invalid_result", {}
             return 200, value
         except Exception as error:
-            return getattr(error, "status", None) or type(error).__name__, {}
+            status = getattr(error, "status", None)
+            if type(status) is int and 400 <= status < 600:
+                return status, {"error_category": "http_transport"}
+            return type(error).__name__, {}
+
+
+async def timed_call(site, name, arguments, request_id):
+    started_at = time.time()
+    start = time.monotonic()
+    status, value = await site.call(name, arguments, request_id)
+    receipt = dict(status=status, started_at=started_at, elapsed_seconds=time.monotonic() - start,
+                   request_id=request_id)
+    if status != 200:
+        receipt.update({key: value[key] for key in ("error_category", "retry_same_id") if key in value})
+    return receipt, value
 
 
 async def collect_action(site, operation, window, interval=3):
     deadline = time.monotonic() + window
-    status, value = await site.call("cap.submit", dict(operation=operation, contract="robot.vision.metadata:1",
-                                                      inputs={}), operation + "-submit")
-    submission = dict(status=status, operation=operation, lease=value.get("lease"))
-    if status == 200 and value.get("id") != operation:
+    submission, value = await timed_call(site, "cap.submit", dict(operation=operation,
+                                              contract="robot.vision.metadata:1", inputs={}), operation + "-submit")
+    submission.update(operation=operation, lease=value.get("lease"))
+    if submission["status"] == 200 and value.get("id") != operation:
         submission["status"] = "wrong_operation"
     evidence = dict(submission=submission, results=[], lease_check={})
     lease = submission["lease"]
     delay = interval
     while time.monotonic() < deadline:
-        status, action = await site.call("cap.status", {"operation": operation}, uuid.uuid4().hex)
+        check, action = await timed_call(site, "cap.status", {"operation": operation}, uuid.uuid4().hex)
         result = action.get("result")
         metadata = result.get("result") if isinstance(result, dict) else None
         valid_result = (isinstance(metadata, dict) and not metadata.get("error")
                         and isinstance(metadata.get("camera"), dict))
-        check = dict(status=status, operation=action.get("id"), lease=action.get("lease"),
+        check.update(operation=action.get("id"), lease=action.get("lease"),
                      state=action.get("state"), has_result=valid_result)
         evidence["results"].append(check)
         if action.get("id") == operation and action.get("state") in TERMINAL:
             lease = lease or action.get("lease")
             break
         await asyncio.sleep(min(delay, max(0, deadline - time.monotonic())))
-        delay = interval if status == 200 else min(15, delay * 2)
+        delay = interval if check["status"] == 200 else min(15, delay * 2)
     if isinstance(lease, str) and lease:
-        status, row = await site.call("cap.lease", {"lease": lease}, uuid.uuid4().hex)
-        evidence["lease_check"] = dict(status=status, operation=row.get("task"),
-                                      lease=row.get("id"), state=row.get("state"))
+        check, row = await timed_call(site, "cap.lease", {"lease": lease}, uuid.uuid4().hex)
+        check.update(operation=row.get("task"), lease=row.get("id"), state=row.get("state"))
+        evidence["lease_check"] = check
     return evidence
 
 
