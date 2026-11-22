@@ -495,6 +495,22 @@ def stream_offer(cfg, status):
                         "buffer_depth": 8, "max_message_bytes": 2097152}})
 
 
+def publish_stream_offer(remote, value, advertised, pending_offline, *, stopping=False):
+    """Wait for a second health observation before discarding a live reservation."""
+    resource = value["resource"]
+    if advertised.get(resource) == value:
+        pending_offline.discard(resource)
+        return
+    if value["state"] == "offline" and not stopping and resource not in pending_offline:
+        # A local listener can briefly disappear while its service rebinds.
+        # Withdrawing an offer also abandons the controller's persistent lease.
+        pending_offline.add(resource)
+        return
+    remote.call("cap.offer", value)
+    advertised[resource] = value
+    pending_offline.discard(resource)
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -546,6 +562,7 @@ def serve(cfg):
         def advertise():
             published_definitions = set()
             stream_offers = {}
+            stream_offline_confirmation = set()
             relay_definitions = json.loads((HERE / "rover-relay-contracts.json").read_text())
             stream_definition = {"name": "robot.vision.stream", "version": 1, "inputs": {}, "outputs": {},
                 "description": "Continuous processed frames, pose and telemetry under a persistent native lease"}
@@ -556,11 +573,9 @@ def serve(cfg):
                     remote.call("cap.define", spec)
                     published_definitions.add(key)
 
-            def publish_stream(value):
-                key = value["resource"]
-                if stream_offers.get(key) != value:
-                    remote.call("cap.offer", value)
-                    stream_offers[key] = value
+            def publish_stream(value, status):
+                publish_stream_offer(remote, value, stream_offers, stream_offline_confirmation,
+                    stopping=status.get("state") in ("stopping", "stopped"))
 
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
@@ -586,7 +601,7 @@ def serve(cfg):
                         if stopping.is_set():return
                         define_once(spec)
                     if stopping.is_set():return
-                    publish_stream(stream_offer(cfg, status))
+                    publish_stream(stream_offer(cfg, status), status)
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
