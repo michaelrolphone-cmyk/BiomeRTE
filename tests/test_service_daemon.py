@@ -1,9 +1,9 @@
 """Cross-repository TLS/WS integration with real helpers and scoped authorities.
 
 Set GATEWAY_SOURCE to the companion BiomeRTE-Heorku-Gateway-Stream checkout.
-An adjacent checkout with that repository name is also detected. If neither
-is available, these optional cross-repository cases skip with an actionable
-message; the ordinary BiomeRTE suite does not require the companion source.
+An adjacent checkout with that repository name is also detected. The default
+local suite skips these cases when the companion checkout is absent. Setting
+GATEWAY_SOURCE makes the companion protocol tests mandatory.
 Both HTTP and WebSocket RPCs run over a local TLS server; native signatures, checkpoint
 storage, preparation, fencing, and activation use their real implementations.
 Only the physical provider is a generated-key fixture.
@@ -28,6 +28,8 @@ try:
     from aiohttp import ClientSession, ClientConnectorCertificateError, TCPConnector, web
     from aiohttp.test_utils import TestServer
 except ModuleNotFoundError as error:
+    if os.environ.get("GATEWAY_SOURCE"):
+        raise
     raise unittest.SkipTest(
         'Optional companion integration requires aiohttp; install the companion '
         'gateway requirements and set GATEWAY_SOURCE to run it') from error
@@ -231,6 +233,8 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
             pathlib.Path(__file__).resolve().parents[2] / "BiomeRTE-Heorku-Gateway-Stream")
         required = ("service_coordinator.py", "checkpoint_transport.py", "service_transport.py")
         if any(not (path / "biomerte" / name).is_file() for name in required):
+            if os.environ.get("GATEWAY_SOURCE"):
+                raise FileNotFoundError(f"GATEWAY_SOURCE lacks the required gateway modules: {path}")
             raise unittest.SkipTest(
                 "Optional companion integration: set GATEWAY_SOURCE to the tested "
                 "BiomeRTE-Heorku-Gateway-Stream checkout, or place it beside BiomeRTE")
