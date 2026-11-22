@@ -141,7 +141,7 @@ def migrate(tx, ctx, run, expected_rev, target_rev, nodes, variables=None):
 def prepare(tx, ctx, contract, resource='', placement=None, maintenance_deployment=''):
     """Arrange activation of a configurable offer. Provider confirms before use."""
     resource, placement = providers.selection.normalize(resource, placement)
-    offers = [o for o in tx.rows('offers') if o['contract'] == contract and
+    offers = [providers.effective_offer(tx, ctx, o) for o in tx.rows('offers') if o['contract'] == contract and
               providers.selection.matches(o, resource, placement)]
     for off in offers:
         if providers.admitted(tx, off, maintenance_deployment):
