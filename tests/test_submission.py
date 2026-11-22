@@ -3,6 +3,8 @@ import os
 import tempfile
 import unittest
 from biomerte.app import Application, initialize
+from biomerte.api import Context
+from biomerte import providers
 from biomerte.store import Fault, uid
 
 class SubmissionTests(unittest.TestCase):
@@ -51,6 +53,34 @@ class SubmissionTests(unittest.TestCase):
         self.assertIn('generation', second)
         self.complete(second)
         self.assertEqual('succeeded', self.call('cap.submission', {'operation':'second'})['state'])
+
+    def test_normal_status_preserves_accepted_queue_identity_before_dispatch(self):
+        first = self.submit('occupies-resource')
+        queued = self.submit('waiting-for-resource')
+        self.assertEqual('queued', queued['state'])
+        self.app = Application(self.tmp.name)
+        self.assertEqual(queued, self.call('cap.status', {'operation': queued['id']}))
+        self.assertIsNone(self.app.stores['site'].execute(
+            lambda tx: tx.get('actions', queued['id']), read_only=True))
+        self.complete(first)
+        self.app.tick('site')
+        action = self.call('cap.status', {'operation': queued['id']})
+        self.assertEqual(queued['lease'], action['lease'])
+        self.complete(action)
+        self.assertEqual('succeeded', self.call('cap.status', {'operation': queued['id']})['state'])
+
+    def test_pre_dispatch_status_checks_owner_and_unknown_or_recovery_semantics(self):
+        self.submit('occupies-resource')
+        queued = self.submit('known-queued')
+        other = Context(self.app, actor='different-caller', permissions={'cap.status'})
+        with self.assertRaises(Fault) as denied:
+            self.app.stores['site'].execute(
+                lambda tx: providers.status(tx, other, queued['id']), read_only=True)
+        self.assertEqual(403, denied.exception.status)
+        with self.assertRaises(Fault) as missing:
+            self.call('cap.status', {'operation': 'not-submitted'})
+        self.assertEqual(404, missing.exception.status)
+        self.assertFalse(self.call('cap.status', {'operation': 'not-submitted', 'recovery': True})['replay_allowed'])
 
     def test_missing_original_lease_and_action_never_replay_the_submission(self):
         first = self.submit('interrupted')
