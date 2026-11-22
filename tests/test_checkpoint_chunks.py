@@ -603,6 +603,61 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(helper.validate.await_count, 2 * len(pages))
         self.assertEqual([operation for operation, _ in self.calls], ["chunk_missing", "publish"])
 
+    async def test_packed_page_cannot_fan_out_as_scalar_writes_after_helper_downgrade(self):
+        from biomerte.controller_checkpoint import read_shard
+        from biomerte.service_daemon import AuthorityDaemon
+        from biomerte.store import Fault
+
+        by_prefix = {}
+        index = 0
+        while len(by_prefix) < 16:
+            descriptor = self.add(str(index), index)
+            by_prefix[descriptor["prefix"]] = descriptor
+            index += 1
+        self.manifest = root(list(by_prefix.values()))
+        self.daemon.checkpoint_bulk_upload = True
+        in_flight = peak = 0
+        attempted_batches = []
+
+        async def replacement(operation, **body):
+            nonlocal in_flight, peak
+            if operation == "status":
+                return {"phase": "active"}
+            if operation == "chunk_put_many":
+                attempted_batches.append(len(body["blocks"]))
+                raise Fault("Unknown service adapter operation", 400)
+            if operation == "chunk_put":
+                in_flight += 1
+                peak = max(peak, in_flight)
+                try:
+                    await asyncio.sleep(0)
+                    return await self.helper(operation, **body)
+                finally:
+                    in_flight -= 1
+            return await self.helper(operation, **body)
+
+        async def observe_replacement(daemon, shard):
+            # Health can refresh the helper capability while the publisher
+            # yields to read the next shard of an already sized bulk page.
+            if daemon.checkpoint_bulk_upload:
+                await AuthorityDaemon.phase(daemon)
+            return await read_shard(daemon, shard)
+
+        self.daemon.helper = replacement
+        with patch("biomerte.controller_checkpoint.read_shard", observe_replacement):
+            with self.assertRaisesRegex(Fault, "Unknown service adapter operation"):
+                await publish_controller(self.daemon)
+        self.assertEqual(attempted_batches, [16])
+        self.assertEqual(peak, 0)
+        self.assertEqual([op for op, _ in self.calls], ["chunk_missing"])
+        self.assertEqual(self.daemon._controller_shard_blocks, {})
+
+        await publish_controller(self.daemon)
+        self.assertEqual(peak, 4)
+        self.assertEqual(sum(op == "chunk_put" for op, _ in self.calls), 16)
+        self.assertEqual(self.calls[-1][0], "publish")
+        self.blocks.require(self.manifest)
+
     async def test_bulk_ack_must_cover_every_exact_block_before_root_publication(self):
         a = self.add("a", "first")["blocks"][0]
         b = self.add("b", "second")["blocks"][0]
