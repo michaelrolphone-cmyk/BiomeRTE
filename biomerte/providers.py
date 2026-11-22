@@ -230,6 +230,10 @@ def notify_bound(tx, ctx, lease):
         lease['notified'] = True
 
 
+def slot_guard(resource, slot):
+    return resource if slot == 0 else '!slot:%s:%d' % (resource, slot)
+
+
 def bind(tx, ctx, request):
     if request.get('state') == 'held':
         return None
@@ -255,7 +259,7 @@ def bind(tx, ctx, request):
             # Slot zero uses the original guard and on-device fence key.
             held = {l['guard'] for l in active}
             for slot in range(len(active) + 1):
-                guard_key = resource if slot == 0 else '!slot:%s:%d' % (resource, slot)
+                guard_key = slot_guard(resource, slot)
                 if guard_key not in held:
                     break
         else:
@@ -491,12 +495,36 @@ def activate_action(tx, ctx, a):
     return a
 
 
-@op('provider.poll', 'provider:str limit?:int', False)
-def pending(tx, ctx, provider, limit=64):
+@op('provider.poll', 'provider:str limit?:int lease?:str generation?:int', False)
+def pending(tx, ctx, provider, limit=64, lease='', generation=None):
     """Provider work inbox. Completed actions leave this inbox and remain available via cap.status."""
     owner(ctx, provider)
     if limit < 1:
         raise Fault('Provider inbox page size must be positive')
+    if lease or generation is not None:
+        if not lease or type(generation) is not int or generation < 1:
+            raise Fault('Exact lease and generation required')
+        current = tx.get('leases', lease, {})
+        empty = {'fences': [], 'actions': [], 'activations': [], 'streams': []}
+        if (current.get('provider') != provider or current.get('generation') != generation or
+                current.get('state') not in ('fencing', 'bound')):
+            return empty
+        held = redeployment.target(tx, current)
+        if current['state'] == 'fencing':
+            if not held:
+                empty['fences'] = [current]
+            return empty
+        empty['actions'] = [a for a in tx.matching('actions', ('queued', 'claimed'), lease=lease)
+                            if a['provider'] == provider and a['generation'] == generation and
+                            (a['state'] == 'claimed' or not held)][:limit]
+        from .streams import valid as valid_stream
+        for grant in tx.matching('_stream_grants', ('open',), lease=lease):
+            if grant['provider'] == provider and grant['generation'] == generation:
+                try:
+                    empty['streams'].append(valid_stream(tx, ctx, grant))
+                except Fault:
+                    continue
+        return empty
     leases = [l for l in tx.matching('leases', ('fencing',)) if l['provider'] == provider
               and not redeployment.target(tx, l)]
     actions = [a for a in tx.matching('actions', ('queued', 'claimed')) if a['provider'] == provider and tx.need('leases', a['lease'])['state'] == 'bound'

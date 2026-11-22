@@ -60,6 +60,9 @@ def activate_reply(body):
 
 
 class StagingDocker(FakeDocker):
+    def daemon_time(self):
+        return ds.docker_timestamp("2026-11-20T05:24:45.000000000Z")
+
     def create(self, value, image_ref, worker, incarnation, grant, overrides=None, **extra):
         result = super().create(value, image_ref, worker, incarnation, grant, overrides, **extra)
         self.created[-1]["extra"] = copy.deepcopy({k: v for k, v in extra.items()
@@ -404,6 +407,231 @@ class ActivationTests(StagedCase):
         self.assertIn(self.engine.created[0]["id"], self.engine.removed)
         self.assertEqual({}, self.runner.containers)
         self.assertEqual({}, self.runner.fence_acks)
+
+
+
+class ActivationHealthTests(StagedCase):
+    BEFORE = "2026-11-20T05:24:44.999999999Z"
+    BOUNDARY = "2026-11-20T05:24:45.000000000Z"
+    AFTER = "2026-11-20T05:24:45.000000001Z"
+    END = "2026-11-20T05:24:46.000000000Z"
+
+    def setUp(self):
+        super().setUp()
+        self.value = staged_manifest(
+            startup_grace_s=5,
+            health={"command": ["check-ready"], "interval_s": 2, "timeout_s": 1})
+        self.write_manifest(self.value)
+        self.runner.state.save_manifest(self.value)
+        self.prepare()
+
+    def sample(self, status, start=None, end=None):
+        child = self.runner.containers[self.value["id"]]
+        state = self.engine.children[child]["State"]
+        state["Health"] = {"Status": status, "Log": [{
+            "Start": start or self.BEFORE, "End": end or self.BOUNDARY,
+            "ExitCode": 0 if status == "healthy" else 1,
+        }]}
+
+    def activate_with_sample(self, status="unhealthy"):
+        admitted = self.fenced()
+        self.sample(status)
+        self.step(admitted)
+        return admitted
+
+    def report(self):
+        return self.runner.advertisements()[0]["healthy"]
+
+    def test_stale_failure_then_transition_spanning_probe_waits_for_fresh_success(self):
+        admitted = self.activate_with_sample()
+        child = self.runner.containers[self.value["id"]]
+        self.assertIsNone(self.report())
+        self.sample("unhealthy", self.BEFORE, self.END)
+        self.step(admitted)
+        self.assertIsNone(self.report())
+        self.sample("healthy", self.AFTER, self.END)
+        self.assertTrue(self.report())
+        self.assertEqual(child, self.runner.containers[self.value["id"]])
+        self.assertEqual(["prepare", "activate"],
+                         [call["operation"] for call in self.adapter_calls])
+
+    def test_stale_success_does_not_admit_and_fresh_failure_is_immediate(self):
+        self.activate_with_sample("healthy")
+        self.assertIsNone(self.report())
+        self.sample("unhealthy", self.AFTER, self.END)
+        self.assertFalse(self.report())
+        self.assertLess(self.clock(), self.runner.activation_acks[self.value["id"]]["health_deadline"])
+
+    def test_probe_at_boundary_is_not_proven_to_follow_activation(self):
+        self.activate_with_sample()
+        self.sample("healthy", self.BOUNDARY, self.END)
+        self.assertIsNone(self.report())
+        self.sample("healthy", self.AFTER, self.END)
+        self.assertTrue(self.report())
+
+    def test_daemon_clock_boundary_is_independent_of_runner_wall_clock(self):
+        with mock.patch.object(ds.time, "time", return_value=0):
+            self.activate_with_sample("healthy")
+        self.assertIsNone(self.report())
+        self.sample("healthy", self.AFTER, self.END)
+        self.assertTrue(self.report())
+
+    def test_missing_malformed_and_stale_samples_have_one_fixed_grace(self):
+        self.activate_with_sample()
+        child = self.runner.containers[self.value["id"]]
+        deadline = self.runner.activation_acks[self.value["id"]]["health_deadline"]
+        variants = [
+            {}, {"Status": "healthy"}, {"Status": "unhealthy", "Log": []},
+            {"Log": [{"Start": self.AFTER, "End": self.END}]},
+            {"Status": "healthy", "Log": [{"Start": "invalid", "End": self.END}]},
+            {"Status": "healthy", "Log": [{"Start": self.AFTER, "End": self.BEFORE}]},
+        ]
+        for health in variants:
+            self.engine.children[child]["State"]["Health"] = health
+            self.assertIsNone(self.report())
+            self.assertEqual(deadline, self.runner.activation_acks[self.value["id"]]["health_deadline"])
+        self.clock.advance(4.999)
+        self.assertIsNone(self.report())
+        self.clock.advance(.001)
+        self.assertFalse(self.report())
+        self.assertEqual(deadline, self.runner.activation_acks[self.value["id"]]["health_deadline"])
+
+    def test_unavailable_daemon_time_cannot_admit_or_retry_activation_forever(self):
+        admitted = self.fenced()
+        self.sample("healthy", self.AFTER, self.END)
+        with mock.patch.object(self.engine, "daemon_time", side_effect=OSError("unavailable")) as clock:
+            self.step(admitted)
+            self.step(admitted)
+            self.assertEqual(1, clock.call_count)
+        self.assertIsNone(self.report())
+        self.clock.advance(5)
+        self.assertFalse(self.report())
+        self.assertEqual(["prepare", "activate"],
+                         [call["operation"] for call in self.adapter_calls])
+
+    def test_stopped_child_is_not_hidden_by_health_grace(self):
+        self.activate_with_sample()
+        child = self.runner.containers[self.value["id"]]
+        self.engine.children[child]["State"]["Running"] = False
+        self.assertFalse(self.report())
+
+    def test_inherited_healthcheck_requires_a_fresh_sample(self):
+        self.value = staged_manifest(startup_grace_s=5)
+        self.write_manifest(self.value)
+        self.runner.state.save_manifest(self.value)
+        self.prepare()
+        admitted = self.fenced()
+        child = self.runner.containers[self.value["id"]]
+        self.engine.children[child]["Config"]["Healthcheck"] = {"Test": ["CMD", "check-ready"]}
+        self.step(admitted)
+        self.assertIsNone(self.report())
+        self.sample("healthy", self.AFTER, self.END)
+        self.assertTrue(self.report())
+
+    def test_no_healthcheck_preserves_running_readiness_when_daemon_time_fails(self):
+        self.value = staged_manifest()
+        self.write_manifest(self.value)
+        self.runner.state.save_manifest(self.value)
+        self.prepare()
+        admitted = self.fenced()
+        child = self.runner.containers[self.value["id"]]
+        self.engine.children[child]["Config"]["Healthcheck"] = {"Test": ["NONE"]}
+        with mock.patch.object(self.engine, "daemon_time", side_effect=OSError("unavailable")):
+            self.step(admitted)
+        self.assertTrue(self.report())
+
+    def test_supersession_clears_old_boundary_and_new_binding_requires_new_probe(self):
+        self.activate_with_sample()
+        old_child = self.runner.containers[self.value["id"]]
+        replacement = self.grant(grant_token="replacement")
+        self.step(replacement)
+        self.assertEqual({}, self.runner.activation_acks)
+        self.assertIn(old_child, self.engine.removed)
+        self.step(replacement)
+        self.sample("healthy", self.AFTER, self.END)
+        admitted = dict(replacement, state="starting", effect_ready=True)
+        with mock.patch.object(self.engine, "daemon_time", return_value=ds.docker_timestamp(self.END)):
+            self.step(admitted)
+        self.assertNotEqual(old_child, self.runner.containers[self.value["id"]])
+        self.assertIsNone(self.report())
+        self.assertEqual("replacement", self.runner.activation_acks[self.value["id"]]["binding"]["grant_token"])
+
+    def test_changed_container_discards_activation_ack_and_boundary(self):
+        admitted = self.fenced()
+        def changed():
+            self.runner.containers[self.value["id"]] = "replacement-container"
+            return ds.docker_timestamp(self.BOUNDARY)
+        with mock.patch.object(self.engine, "daemon_time", side_effect=changed):
+            self.step(admitted)
+        self.assertEqual({}, self.runner.activation_acks)
+
+    def test_slow_clock_read_does_not_extend_activation_grace(self):
+        admitted = self.fenced()
+        self.sample("unhealthy")
+        def delayed():
+            self.clock.advance(4)
+            return ds.docker_timestamp(self.BOUNDARY)
+        with mock.patch.object(self.engine, "daemon_time", side_effect=delayed):
+            self.step(admitted)
+        self.assertIsNone(self.report())
+        self.clock.advance(1)
+        self.assertFalse(self.report())
+
+    def test_watchdog_expires_while_daemon_clock_read_is_blocked(self):
+        admitted = self.fenced()
+        child = self.runner.containers[self.value["id"]]
+        entered, release = threading.Event(), threading.Event()
+        def blocked():
+            entered.set()
+            release.wait(3)
+            return ds.docker_timestamp(self.BOUNDARY)
+        with mock.patch.object(self.engine, "daemon_time", side_effect=blocked), \
+                mock.patch.object(ds.threading, "Thread", REAL_THREAD), \
+                mock.patch.object(sa.AdapterClient, "call", side_effect=self.adapter):
+            self.runner.accept(self.response(admitted), self.clock())
+            self.assertTrue(entered.wait(2))
+            jobs = list(self.runner.adapter_jobs.values())
+            watchdog = REAL_THREAD(target=self.runner.watchdog)
+            watchdog.start()
+            try:
+                self.clock.advance(11)
+                until = time.monotonic() + 2
+                while (self.runner.grants or child in self.engine.children) and time.monotonic() < until:
+                    time.sleep(.01)
+                self.assertEqual({}, self.runner.grants)
+                self.assertIn(child, self.engine.removed)
+            finally:
+                self.runner.stop_event.set()
+                watchdog.join(2)
+                release.set()
+                for job in jobs:
+                    job.join(2)
+        self.assertEqual({}, self.runner.activation_acks)
+
+
+class DockerHealthTimestampTests(unittest.TestCase):
+    def test_nanoseconds_and_timezone_offsets_preserve_exact_order(self):
+        timestamp = ds.docker_timestamp
+        base = timestamp("2026-11-20T05:24:45Z")
+        self.assertEqual(base, timestamp("2026-11-19T22:24:45-07:00"))
+        self.assertEqual(base, timestamp("2026-11-20T10:54:45+05:30"))
+        self.assertEqual(base + 1, timestamp("2026-11-20T05:24:45.000000001Z"))
+        self.assertEqual(base + 999999999, timestamp("2026-11-20T05:24:45.999999999Z"))
+
+    def test_missing_timezone_and_invalid_timestamps_are_rejected(self):
+        for value in (None, 0, "", "NaN", "2026-11-20T05:24:45",
+                      "2026-11-20T05:24:45+24:00", "2026-11-20T05:24:45+00:60",
+                      "2026-11-20T05:24:45.0000000001Z", "2026-11-31T05:24:45Z"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ds.docker_timestamp(value)
+
+    def test_daemon_time_uses_existing_engine_api_clock(self):
+        engine = ds.DockerEngine()
+        with mock.patch.object(engine, "request", return_value={
+                "SystemTime": "2026-11-20T05:24:45.000000001Z"}) as request:
+            self.assertEqual(ds.docker_timestamp("2026-11-20T05:24:45.000000001Z"),
+                             engine.daemon_time())
+        request.assert_called_once_with("GET", "/v1.24/info")
 
 
 class BindingAndWireTests(unittest.TestCase):

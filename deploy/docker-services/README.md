@@ -64,8 +64,8 @@ administration capability. Bind-mount source paths in service manifests refer
 to the Docker host, not paths inside the supervisor. On macOS, the Docker host is
 the Linux VM; host filesystem sharing must already make the paths available.
 
-The supervisor uses the v1.24 Engine API, compatible with the observed Pi
-17.06 and Mac 24.x versions. Actual image/kernel/architecture compatibility must
+The supervisor uses Engine API v1.24 on the Pi 17.06 and Mac 24.x engines. On
+newer engines it reads the daemon’s minimum API version from `/version`. Actual image/kernel/architecture compatibility must
 still be qualified on each host. Services have Docker restart policy `no`;
 only the grant-aware runner starts them. The supervisor itself may have
 `unless-stopped`.
@@ -85,18 +85,30 @@ not grow with that budget. Fast Docker inspection requests retain a four-second
 budget. Docker startup rechecks the full grant before create, before start, and
 after completion; a renewed matching grant may survive a long start.
 
-The runner persists one current child reference per service in local SQLite.
-An unanswered create retains its deterministic name and blocks another create;
-a single absent inspect does not prove that a delayed create cannot finish.
-Once the named child appears, the runner removes it before trying again. This
-custody survives supervisor restart. A permanently unknown create stays pending
-for explicit reconciliation instead of replaying under another name. Removal
-also withdraws admission immediately and keeps cleanup pending until confirmed.
+The runner records the child name before Docker create and the immutable container
+ID before start. Release or expiry immediately withdraws local admission. The
+runner verifies ownership labels and removes that exact ID. Cleanup failures keep
+the current child reference in SQLite for retry after a daemon or supervisor restart.
+If create loses its reply, the runner waits for the outstanding start job to finish.
+An absent name is checked again after 15 seconds. An unanswered create has no ID
+to start. The inventory sweep removes late, untracked children even after a new
+lease is admitted. Raw Docker names and images never authorize fleet-wide cleanup.
 
-On expiry, revocation, manifest mismatch, or a changed owner token, the runner
-kills and removes its managed child. It never stops unrelated containers. Its
-current observations overwrite local SQLite rows, so there is no growing shared
-execution journal. Docker logs rotate.
+### Disposable capability workers
+
+For an exclusive offer, set `state_policy` to `lease_scoped` and
+supply `capability_lease` with the controller and provider fingerprints, resource
+and versioned contract. For a pooled offer, declare a service for each slot with
+an explicit zero-based integer `slot`. Each slot has its own fence, container,
+health and cleanup. Workers receive `BIOME_CAPABILITY_SLOT` as well as their lease
+identity. Supply an argv health command that checks worker readiness.
+The coordinator observes the matching controller lease without renewing it. A
+fencing or bound lease admits the worker. Its container receives
+`BIOME_CAPABILITY_LEASE_ID` and `BIOME_CAPABILITY_LEASE_GENERATION`. Retries
+with the same binding reuse the child. A released lease, a replacement generation,
+or an expired placement loses admission. The runner removes the child and its
+anonymous volumes. Bind mounts and explicitly named volumes retain their contents.
+Current transitions are stored in the local services table. Docker logs rotate.
 
 A gateway restart invalidates its old boot epoch and holds promotion through its
 configured maximum lease interval. New grants have new tokens. Worker recovery
@@ -322,7 +334,15 @@ The runner then follows this order:
    same checkpoint. Report it to the coordinator.
 6. Wait for the exact coordinator grant to have `effect_ready:true` and state
    `starting` or `active`, then request activation.
-7. Advertise ordinary child health only after an exact activation reply.
+7. After an exact activation reply, sample the Docker daemon's clock and require
+   a completed health probe that started after that boundary before advertising
+   child health. Stale healthy or unhealthy results, including probes that span
+   activation, remain unknown within the existing `startup_grace_s` (default 20).
+   Missing or malformed samples fail closed when that fixed grace expires;
+   fresh unhealthy results and stopped children fail immediately. A child with
+   no configured or inherited health check retains ordinary running readiness.
+   The coordinator's startup deadline and the exact grant/fence checks remain
+   unchanged; a changed grant or child discards the health boundary.
 
 The heartbeat proof is one exact shape:
 

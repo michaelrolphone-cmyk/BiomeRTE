@@ -199,6 +199,44 @@ class ControllerAuthority:
                 raise Fault("Stream grant belongs to another authority",403)
             return grant
 
+    def capability_demand(self, scope):
+        """Snapshot one fenced capacity slot without refreshing its lease."""
+        fields = {"provider", "resource", "contract"}
+        if (not isinstance(scope, dict) or
+                set(scope) not in (fields, fields | {"slot"}, fields | {"slots"}) or
+                not all(isinstance(scope[k], str) and 0 < len(scope[k]) <= 192 for k in fields)):
+            raise Fault("Exact capability lease scope required")
+        slots = scope.get("slots", [scope.get("slot", 0)])
+        if (not isinstance(slots, list) or not slots or
+                any(type(index) is not int or index < 0 for index in slots) or
+                len(set(slots)) != len(slots)):
+            raise Fault("Distinct nonnegative slot numbers required")
+        from .providers import admitted, capacity_of, slot_guard
+
+        def inspect_slot(tx, index):
+            key = slot_guard(scope["resource"], index)
+            guard = tx.get("guards", key, {})
+            lease = tx.get("leases", guard.get("holder", ""), {})
+            if (lease.get("state") not in ("fencing", "bound") or lease.get("shared_parent") or
+                    lease.get("guard") != key or lease.get("generation") != guard.get("generation") or
+                    any(lease.get(k) != scope[k] for k in fields)):
+                return None
+            offer = tx.get("offers", lease["offer"])
+            if not offer or not admitted(tx, offer):
+                return None
+            capacity = capacity_of(tx, offer)
+            if index >= capacity or (set(scope) == fields and capacity != 1):
+                return None
+            return {"id": lease["id"], "generation": lease["generation"]}
+
+        def read(tx):
+            if "slots" in scope:
+                return {"slots": {str(index): inspect_slot(tx, index) for index in slots}}
+            return {"lease": inspect_slot(tx, slots[0])}
+
+        with self.lock:
+            return self.app.stores["site"].execute(read, read_only=True)
+
     def prepare_fences(self, prepared_checkpoint, retained_floors=None):
         # This is logical write ownership, not a physical resource-generation
         # fence. Existing action/lease/stream and assistant epoch rows are intact.

@@ -50,6 +50,14 @@ class Remote:
 
 class Worker:
     def __init__(self, path, remote, offers, timeout=30):
+        self.lease_binding = {}
+        lease = os.environ.get('BIOME_CAPABILITY_LEASE_ID')
+        generation = os.environ.get('BIOME_CAPABILITY_LEASE_GENERATION')
+        if lease is not None or generation is not None:
+            if (not lease or len(lease) != 64 or any(ch not in '0123456789abcdef' for ch in lease) or
+                    not generation or not generation.isdigit() or int(generation) < 1):
+                raise ValueError('Invalid worker lease binding')
+            self.lease_binding = dict(lease=lease, generation=int(generation))
         mkdir(os.path.dirname(os.path.abspath(path)))
         self.path = path
         self.db = sqlite3.connect(path, isolation_level=None, timeout=30)
@@ -553,10 +561,11 @@ class Worker:
             logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
         if reconcile_receipts:
             self.recover_result_acknowledgements()
-        queue = self.remote.call('provider.poll', {'provider': self.remote.node})
+        queue = self.remote.call('provider.poll', dict(self.lease_binding, provider=self.remote.node))
         try:
             from .worker_expiry import expire
-            page=expire(self,after=getattr(self,'_whole_expiry_after',''),inventory=queue)
+            page=expire(self,after=getattr(self,'_whole_expiry_after',''),
+                        inventory=None if self.lease_binding else queue)
             self._whole_expiry_after=page['after'] if page['more'] else ''
         except Exception as error:
             logging.warning('Completed record expiry pending: %s',type(error).__name__)
@@ -580,6 +589,8 @@ class Worker:
             self.stream_handler(queue.get('streams', []))
         from .supervised_commands import pending
         recovering = pending(self)
+        if self.lease_binding:
+            recovering = [a for a in recovering if all(a.get(k) == v for k, v in self.lease_binding.items())]
         recovery_ids = {a['id'] for a in recovering}
         recovery_guards = {a.get('guard', a['resource']) for a in recovering}
         # Resolve old custody before admitting a newer fence on the same slot.
