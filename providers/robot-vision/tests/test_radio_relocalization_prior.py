@@ -358,7 +358,7 @@ class RadioRelocalizationPriorTests(unittest.TestCase):
             if entry["path"].endswith(".py"):
                 compile(self.patched[entry["path"]], entry["path"], "exec")
         self.assertEqual(sha_text(self.patched["pyslam/slam/relocalizer.py"]),
-                         "95045f7d2c17277e3d0c6097eda8b0e0da0303a355c739605e00d15eb4a0bd85")
+                         "8e321a024c7dd42b30593e24ce909d4d24e7e9ced703f216f1c9074560558005")
         self.assertEqual(sha_text(self.patched["pyslam/loop_closing/loop_detector_dbow3.py"]),
                          "e0827d2ed9d6d97f0df8a2d3d401eebad9c9f53e5466d353322852be666404af")
 

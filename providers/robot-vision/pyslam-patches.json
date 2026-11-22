@@ -50,9 +50,9 @@
     },
     {
       "original_sha256": "c60086bbbba82c233f687ce7f64c3918b18a8f09b5065e4f50ee3a50148c0753",
-      "patched_sha256": "95045f7d2c17277e3d0c6097eda8b0e0da0303a355c739605e00d15eb4a0bd85",
+      "patched_sha256": "8e321a024c7dd42b30593e24ce909d4d24e7e9ced703f216f1c9074560558005",
       "path": "pyslam/slam/relocalizer.py",
-      "reason": "Recheck live candidate membership without a check-then-lookup race after loop detection."
+      "reason": "Recheck live candidates, skip impossible support and evaluate the final PnP hypothesis."
     },
     {
       "original_sha256": "88bb7df68d64dce851d3dd3c3520a8f918627d01f7ac0660d48031938429d1aa",
