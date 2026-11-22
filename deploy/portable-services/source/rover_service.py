@@ -105,6 +105,17 @@ class RoutedRemote(ControllerRoutes):
                 return None
             if error.code not in (404, 409, 410):
                 raise
+            # A stale stream hint can refer to an abandoned reservation after
+            # the provider briefly disappeared. Only a bound lease can reopen.
+            try:
+                current = self.signed_request(owner, 'cap.lease',
+                    {'lease': prior['lease']}, managed_path=path)
+            except HTTPError as lookup_error:
+                if lookup_error.code == 404:
+                    return None
+                raise
+            if current.get('state') != 'bound':
+                return None
             try:
                 descriptor = self.signed_request(owner, 'stream.open',
                     {'lease': prior['lease']}, managed_path=path)
