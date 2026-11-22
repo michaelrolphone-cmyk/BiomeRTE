@@ -150,6 +150,25 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["status"] for row in replies], [503,503])
         self.assertTrue(all("result" not in row for row in replies))
 
+    async def test_registry_batch_does_not_expose_result_before_acknowledgement(self):
+        messages = []
+        for i in range(2):
+            message = self.message(request="definition-" + str(i))
+            message["id"] = "rpc-" + str(i)
+            envelope = message["envelope"]
+            envelope["operation"] = "cap.define"
+            envelope["arguments"] = dict(name="diagnostic_fixture_" + str(i),
+                version=1, inputs={}, outputs={})
+            envelope["auth"]["signature"] = sign(self.key, {
+                key:value for key,value in envelope.items() if key != "auth"})
+            messages.append(message)
+        self.fail_publish = 2
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [503,503])
+        self.assertTrue(all("result" not in row for row in replies))
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [200,200])
+
     async def test_only_current_unchanged_witnessed_vision_inspection_uses_fast_path(self):
         authority = self.config["authority_id"]
         grant = dict(id="vision", authority=authority, contract="robot.vision.stream:1",
@@ -262,6 +281,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 yield call("running", "cap.offer")
                 await started.wait()
                 yield call("registration", "cap.define")
+                yield call("diagnostic", "system.info")
                 yield call("lifecycle", "provider.poll")
                 yield call("lease-poll", "cap.lease")
                 yield call("attachment", "stream.open")
@@ -277,7 +297,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
         self.daemon.dispatch = dispatch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
-        self.assertEqual(processed, ["running", "attachment", "lifecycle", "inspection",
+        self.assertEqual(processed, ["running", "diagnostic", "attachment", "lifecycle", "inspection",
                                      "lease-poll", "resume", "registration"])
 
     async def test_no_new_transaction_before_previous_state_is_published(self):

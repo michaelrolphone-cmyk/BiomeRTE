@@ -1009,8 +1009,8 @@ class AuthorityDaemon:
             await ws.send_json(result)
         elapsed = time.monotonic() - started
         if self.config.get("authority_kind") == "controller" and elapsed >= 3:
-            LOG.warning("Managed runtime slow RPC type=%s status=%s seconds=%.3f",
-                result["type"], result["status"], elapsed)
+            LOG.warning("Managed runtime slow RPC band=%s type=%s status=%s seconds=%.3f",
+                self.authority_request_band(message), result["type"], result["status"], elapsed)
 
     @staticmethod
     def authority_request_band(message):
@@ -1018,8 +1018,12 @@ class AuthorityDaemon:
         operation = envelope.get("operation", "")
         if message.get("type") == "inspect" or operation == "stream.inspect":
             return "inspection"
+        if operation in ("system.info", "cluster.status", "system.progress"):
+            return "diagnostic"
         if operation in ("cap.discover", "cap.status", "provider.poll"):
             return "read"
+        if operation in ("cap.define", "cap.offer"):
+            return "registry"
         if operation == "stream.open":
             return "stream_open"
         if operation in ("stream.attach", "stream.resume"):
@@ -1036,9 +1040,9 @@ class AuthorityDaemon:
         return dict(type=typ, id=message.get("id"), binding=binding, status=200)
 
     async def dispatch_managed_reads(self, messages):
-        # Stream grant inspection and provider inbox reads cannot expose
-        # unacknowledged state. A batch shares the before/after publication
-        # barrier, and each signed envelope still passes native authorization.
+        # Diagnostics, stream reads and provider registrations each get a
+        # publication barrier per batch. Each envelope keeps its own native
+        # authorization, receipt and transaction. No reply precedes the ACK.
         replies = [self.authority_response(message, self.binding) for message in messages]
 
         def reject(reply, error):
@@ -1056,7 +1060,7 @@ class AuthorityDaemon:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
-                                "read", "inspection", "attachment"):
+                                "diagnostic", "read", "inspection", "attachment", "registry"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1086,10 +1090,11 @@ class AuthorityDaemon:
         # Keep the wire reader responsive while the single dispatcher runs
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
-        bands = ("read", "lifecycle", "general")
+        bands = ("read", "lifecycle", "general", "registry")
         stream_bands = ("stream_open", "inspection", "attachment")
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
-                    "read": 8, "lifecycle": 1, "general": 1}
+                    "diagnostic": 4, "read": 8, "lifecycle": 1, "general": 1,
+                    "registry": 8}
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
@@ -1119,6 +1124,7 @@ class AuthorityDaemon:
             index = 0
             stream_index = 0
             previous = None
+            last_diagnostic = False
             try:
                 while not stopping:
                     await ready.wait()
@@ -1126,7 +1132,12 @@ class AuthorityDaemon:
                         break
                     # Grant validation must not compete for admission with
                     # inbox reads. Alternate stream work and ordinary work.
-                    if any(pending[band] for band in stream_bands) and (
+                    # A status probe has a dedicated admission path. Serve at
+                    # most one such batch between other work to avoid starvation.
+                    if pending["diagnostic"] and (not last_diagnostic or
+                            not any(pending[band] for band in (*stream_bands, *bands))):
+                        band = "diagnostic"
+                    elif any(pending[band] for band in stream_bands) and (
                             previous not in stream_bands or not any(pending[band] for band in bands)):
                         while not pending[stream_bands[stream_index]]:
                             stream_index = (stream_index + 1) % len(stream_bands)
@@ -1139,7 +1150,12 @@ class AuthorityDaemon:
                         index = (index + 1) % len(bands)
                     batch = pending[band]
                     pending[band] = []
-                    previous = band
+                    if band == "diagnostic":
+                        # Keep the prior stream-vs-ordinary turn during diagnostics.
+                        last_diagnostic = True
+                    else:
+                        previous = band
+                        last_diagnostic = False
                     if not any(pending.values()):
                         ready.clear()
                     if len(batch) == 1:
