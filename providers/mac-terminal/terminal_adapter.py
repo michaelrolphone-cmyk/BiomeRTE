@@ -143,25 +143,66 @@ def recover_finished(remote, cfg):
     return failures
 
 
+def failed_runner_evidence(directory, saved):
+    """Require the original adapter failure and positive loss of its process group."""
+    runner = ROOT / 'command-runners' / directory.name
+    try:
+        marker = json.loads((runner / 'state.json').read_text())
+        completion = json.loads((runner / 'completion.json').read_text())
+    except FileNotFoundError:
+        return None
+    pgid = saved.get('pgid')
+    code = completion.get('returncode')
+    if (marker.get('operation') != saved['operation'] or type(pgid) is not int or pgid <= 1
+            or saved.get('pid') != pgid or type(saved.get('adapter_pid')) is not int
+            or marker.get('adapter_pid') != saved['adapter_pid']
+            or completion.get('state') != 'finished' or type(code) is not int or code == 0):
+        return None
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return marker, dict(quiescent=True, adapter_returncode=code, pgid=pgid,
+                            adapter_pid=saved['adapter_pid'], process_group_absent=True)
+    except PermissionError:
+        pass
+    return None
+
+
 def recover_one_finished(remote, cfg, operation, reconcile_receipt):
     directory = ROOT / 'terminal-results' / hashlib.sha256(operation.encode()).hexdigest()
     path = directory / 'receipt.json'
     if not path.exists():
         return
     with (directory / 'lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
         saved = json.loads(path.read_text())
-        if saved['state'] != 'finished':
+        failed = failed_runner_evidence(directory, saved) if saved['state'] == 'running' else None
+        if saved['state'] != 'finished' and failed is None:
             return
         action = remote.call('cap.status', {'operation': operation})
         expected = hashlib.sha256(json.dumps([operation, action['inputs'], cfg['terminal_profile']],
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         if saved['signature'] != expected or saved['operation'] != operation:
             raise RuntimeError('Terminal recovery identity mismatch')
-        result = dict(saved['result'], streams={})
+        if failed is not None:
+            from biomerte.store import digest
+            marker, evidence = failed
+            identity = digest([action[k] for k in ('contract', 'inputs', 'resource', 'generation', 'lease')])
+            if (action.get('id') != operation or action.get('provider') != remote.node
+                    or action.get('contract') != 'host.terminal.run:1' or marker.get('signature') != identity):
+                return
+            result = dict(reason='terminal_adapter_exited_before_recording_outcome',
+                          effects_unknown=True, replay_allowed=False, evidence=evidence, streams={})
+            state = 'failed'
+        else:
+            result = dict(saved['result'], streams={})
+            state = 'succeeded'
         for name in ('stdout', 'stderr'):
             result[name], result['streams'][name] = store_stream(directory / name, remote, 48 * 1024)
-        reconcile_receipt(str(ROOT), remote, operation, 'succeeded', result)
+        reconcile_receipt(str(ROOT), remote, operation, state, result)
         save_receipt(directory / 'published.json', result)
 
 

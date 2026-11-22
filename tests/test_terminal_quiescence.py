@@ -1,0 +1,74 @@
+"""Recovery proofs for a terminal adapter which exited before saving its result."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+from biomerte.store import digest
+from tests.test_terminal_stream_retry import load_source, ROOT
+
+
+class TerminalQuiescence(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        mac = types.SimpleNamespace(ROOT=root, Remote=object)
+        limits = types.SimpleNamespace(read_limits=None, apply_limits=None)
+        terminal = types.SimpleNamespace(store_stream=lambda *a: ('', {}), check_argv=None)
+        with mock.patch.dict(sys.modules, mac_provider=mac, terminal=terminal, terminal_limits=limits):
+            self.adapter = load_source(ROOT / 'providers/mac-terminal/terminal_adapter.py', 'quiescence_adapter')
+        self.op = 'interrupted-upload'
+        self.action = dict(id=self.op, contract='host.terminal.run:1', inputs={'argv': ['tool']},
+                           resource='terminal.mac', generation=2, lease='lease', state='uncertain',
+                           provider='mac', custody={'state': 'finished'})
+        self.remote = mock.Mock(node='mac')
+        self.remote.call.return_value = self.action
+        self.settle = mock.Mock()
+        key = hashlib.sha256(self.op.encode()).hexdigest()
+        self.adapter_dir = root / 'terminal-results' / key
+        self.runner_dir = root / 'command-runners' / key
+        self.adapter_dir.mkdir(parents=True)
+        self.runner_dir.mkdir(parents=True)
+        signature = digest([self.action[k] for k in ('contract', 'inputs', 'resource', 'generation', 'lease')])
+        self.write(self.adapter_dir, 'receipt', dict(operation=self.op, signature=digest([self.op, self.action['inputs'], {}]),
+                   adapter_pid=51, state='running', pid=52, pgid=52))
+        self.write(self.runner_dir, 'state', dict(operation=self.op, signature=signature, adapter_pid=51))
+        self.write(self.runner_dir, 'completion', dict(state='finished', returncode=1))
+        self.kill = mock.patch.object(os, 'killpg', side_effect=ProcessLookupError())
+        self.check_group = self.kill.start()
+        self.addCleanup(self.kill.stop)
+
+    def write(self, directory, name, value):
+        (directory / (name + '.json')).write_text(json.dumps(value))
+
+    def recover(self):
+        self.adapter.recover_one_finished(self.remote, {'terminal_profile': {}}, self.op, self.settle)
+
+    def test_exact_failed_runner_and_absent_process_group_settle_without_replay(self):
+        self.recover()
+        self.settle.assert_called_once()
+        args = self.settle.call_args[0]
+        self.assertEqual(args[2:4], (self.op, 'failed'))
+        self.assertTrue(args[4]['evidence']['quiescent'])
+        self.assertTrue(args[4]['effects_unknown'])
+        self.assertFalse(args[4]['replay_allowed'])
+        self.check_group.assert_called_once_with(52, 0)
+
+    def test_live_or_unobservable_group_remains_in_custody(self):
+        for error in (None, PermissionError()):
+            self.check_group.side_effect = error
+            self.recover()
+        self.settle.assert_not_called()
+
+    def test_old_generation_or_unfinished_runner_cannot_settle(self):
+        self.action['generation'] += 1
+        self.recover()
+        self.action['generation'] -= 1
+        (self.runner_dir / 'completion.json').unlink()
+        self.recover()
+        self.settle.assert_not_called()
