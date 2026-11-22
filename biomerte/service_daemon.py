@@ -32,7 +32,7 @@ from .docker_services import container_name
 LOG = logging.getLogger("biomerte.service")
 MAX_BODY = 32 * 1024 * 1024
 RECOVERY_BANDS = ("submission", "provider_progress", "result_status", "inspection",
-                  "attachment", "lease_status")
+                  "attachment", "lease_status", "lease_demand")
 BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "registry",
                              "reservation", "fence", *RECOVERY_BANDS))
 
@@ -833,6 +833,7 @@ class AuthorityDaemon:
         self.controller_publication_refresh_at = 0
         self.witnessed_vision_inspections = {}
         self.witnessed_provider_polls = {}
+        self.witnessed_capability_demands = {}
         self.witnessed_provider_statuses = {}
         if controller and config.get("event_authorize_url"):
             from .controller_events import ManagedEvents
@@ -1080,17 +1081,41 @@ class AuthorityDaemon:
         return reply
 
     @staticmethod
+    def capability_demand_key(message):
+        scope = message.get("scope")
+        if message.get("type") == "capability_demand" and not message.get("preparation") and isinstance(scope, dict):
+            return digest(scope)
+        return None
+
+    def remember_capability_demand(self, message, reply):
+        key = self.capability_demand_key(message)
+        if key is not None and reply["status"] == 200:
+            cache = self.witnessed_capability_demands
+            if key not in cache and len(cache) >= 64:
+                cache.pop(next(iter(cache)))
+            cache[key] = digest(reply["result"])
+
+    async def recheck_witnessed_demand(self, message):
+        return await self.recheck_witnessed_query(message, self.witnessed_capability_demands,
+                                                  self.capability_demand_key(message))
+
+    @staticmethod
     def provider_poll_key(message):
         envelope = message.get("envelope") or {}
         arguments = envelope.get("arguments")
         auth = envelope.get("auth")
         if (message.get("type") != "call" or message.get("preparation") or
                 envelope.get("operation") != "provider.poll" or not isinstance(arguments, dict) or
-                set(arguments) - {"provider", "limit"} or not isinstance(auth, dict)):
+                set(arguments) - {"provider", "limit", "lease", "generation"} or not isinstance(auth, dict)):
             return None
         actor, provider = auth.get("actor"), arguments.get("provider")
         limit = arguments.get("limit", 64)
         if isinstance(actor, str) and isinstance(provider, str) and type(limit) is int:
+            if "lease" in arguments or "generation" in arguments:
+                lease, generation = arguments.get("lease"), arguments.get("generation")
+                if isinstance(lease, str) and type(generation) is int:
+                    return actor, provider, limit, lease, generation
+                return None
             return actor, provider, limit
         return None
 
@@ -1148,7 +1173,10 @@ class AuthorityDaemon:
             if (await self.phase())["phase"] != "active":
                 return None
             # Native signature and current record authorization still run.
-            value = await asyncio.to_thread(self.authority.call, message["envelope"], False)
+            if message.get("type") == "capability_demand":
+                value = await asyncio.to_thread(self.authority.capability_demand, message["scope"])
+            else:
+                value = await asyncio.to_thread(self.authority.call, message["envelope"], False)
             if digest(value) != witnessed or cache.get(key) != witnessed:
                 return None
             await self.transport.validate(self.binding, preparing=False)
@@ -1165,6 +1193,7 @@ class AuthorityDaemon:
         result = await self.dispatch(message)
         if self.config.get("authority_kind") == "controller":
             self.remember_vision_inspection(message, result)
+            self.remember_capability_demand(message, result)
             self.remember_provider_poll(message, result)
             self.remember_provider_status(message, result)
         if not ws.closed:
@@ -1179,7 +1208,7 @@ class AuthorityDaemon:
         envelope = message.get("envelope") or {}
         operation = envelope.get("operation", "")
         if message.get("type") == "capability_demand":
-            return "read"
+            return "lease_demand"
         if message.get("type") == "inspect" or operation == "stream.inspect":
             return "inspection"
         if operation in ("system.health", "system.info", "cluster.status", "system.progress"):
@@ -1272,10 +1301,10 @@ class AuthorityDaemon:
         # Keep the wire reader responsive while the single dispatcher runs
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
-        bands = ("result_status", "read", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
+        bands = ("result_status", "read", "lease_demand", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
-        recovery_slots = {"result_status": 4, "provider_progress": 4, "fence": 4, "lease_status": 4}
+        recovery_slots = {"result_status": 4, "lease_demand": 1, "provider_progress": 4, "fence": 4, "lease_status": 4}
         fast_slots = {"inspection": 4, "read": 8, "result_status": recovery_slots["result_status"]}
         # Protocol v1 gateways used 64 concurrent requests and a 20s response
         # budget before advertising the configured values at registration.
@@ -1294,6 +1323,7 @@ class AuthorityDaemon:
         stopping = False
         fast_inspections = set()
         fast_provider_polls = set()
+        fast_demand = set()
         fast_results = set()
 
         def enqueue(message):
@@ -1408,6 +1438,7 @@ class AuthorityDaemon:
                         replies = await self.dispatch_managed_reads(batch)
                         for message, reply in zip(batch, replies):
                             self.remember_vision_inspection(message, reply)
+                            self.remember_capability_demand(message, reply)
                             self.remember_provider_poll(message, reply)
                             self.remember_provider_status(message, reply)
                             if not ws.closed:
@@ -1447,6 +1478,11 @@ class AuthorityDaemon:
                         message, self.recheck_witnessed_vision_inspection))
                     fast_inspections.add(task)
                     task.add_done_callback(fast_inspections.discard)
+                elif (self.capability_demand_key(message) in self.witnessed_capability_demands
+                        and len(fast_demand) < fast_slots["read"]):
+                    task = asyncio.create_task(inspect_or_enqueue(message, self.recheck_witnessed_demand))
+                    fast_demand.add(task)
+                    task.add_done_callback(fast_demand.discard)
                 elif (self.provider_poll_key(message) in self.witnessed_provider_polls
                         and len(fast_provider_polls) < fast_slots["read"]):
                     task = asyncio.create_task(inspect_or_enqueue(
@@ -1463,7 +1499,7 @@ class AuthorityDaemon:
                     enqueue(message)
         finally:
             stopping = True
-            fast_tasks = fast_inspections | fast_provider_polls | fast_results
+            fast_tasks = fast_inspections | fast_provider_polls | fast_results | fast_demand
             for task in fast_tasks:
                 task.cancel()
             await asyncio.gather(*fast_tasks, return_exceptions=True)
