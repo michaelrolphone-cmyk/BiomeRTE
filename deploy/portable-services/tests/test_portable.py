@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[3]
 PORTABLE = Path(__file__).resolve().parents[1]
@@ -26,10 +28,33 @@ from biomerte.store import Fault
 import router
 import rover
 from rover_routes import ControllerRoutes
-from rover_service import LocalAuthority
+from rover_service import LocalAuthority, RoutedRemote
 from rover_transport import local_router, Outbound
 from camera_light import CameraLight
 from site_bridge import SiteBridge
+
+
+class VisionResume(unittest.TestCase):
+    def test_unavailable_optional_resume_keeps_scope_for_normal_acquisition(self):
+        for status in (403, 404, 429, 503):
+            with self.subTest(status=status):
+                remote = RoutedRemote.__new__(RoutedRemote)
+                remote.app = SimpleNamespace(node='paired-controller')
+                remote.vision_controller_path = mock.Mock(return_value='/managed')
+                remote.resume_from_bootstrap = mock.Mock(return_value=None)
+                remote.signed_request = mock.Mock(side_effect=HTTPError(
+                    None, status, 'resume unavailable', None, None))
+                contract = 'robot.vision.stream:1'
+                resource = 'vision-camera'
+                if status in (403, 404):
+                    self.assertIsNone(remote.resume_vision(contract, resource, 'rover'))
+                    self.assertEqual(remote.resolve_new(contract, resource), remote.app.node)
+                else:
+                    with self.assertRaises(HTTPError):
+                        remote.resume_vision(contract, resource, 'rover')
+                remote.signed_request.assert_called_once_with(remote.app.node, 'stream.resume',
+                    {'contract': contract, 'resource': resource, 'task': 'rover'}, managed_path='/managed')
+
 
 def router_config():
     return {"transport": "private_docker_http", "network_scope": "private",
