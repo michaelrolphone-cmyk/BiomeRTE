@@ -344,6 +344,58 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replies, {"running": 200, "general": 200, "excess": 429,
                                    "poll": 200, "catalog": 200, "grok-list": 200})
 
+    async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = {}
+        calls = {
+            "waiting": "cap.invoke",
+            "excess": "cap.invoke",
+            "submit": "cap.submit",
+            "claim": "provider.claim",
+            "heartbeat": "cap.heartbeat",
+            "result": "provider.result",
+            "reconcile": "provider.reconcile",
+        }
+
+        async def dispatch(message):
+            if message["id"] == "running":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        async def dispatch_batch(messages):
+            return [await dispatch(message) for message in messages]
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(request_id, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "id": request_id,
+                        "envelope": {"operation": operation},
+                    }))
+
+                yield call("running", "cap.invoke")
+                await started.wait()
+                for request_id, operation in calls.items():
+                    yield call(request_id, operation)
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies[response["id"]] = response["status"]
+                if len(replies) == len(calls) + 1:
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        self.daemon.dispatch_managed_reads = dispatch_batch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(replies, {"running": 200, "waiting": 200, "excess": 429,
+                                   "submit": 200, "claim": 200, "heartbeat": 200,
+                                   "result": 200, "reconcile": 200})
+
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1
         result=await self.daemon.dispatch(self.message())
