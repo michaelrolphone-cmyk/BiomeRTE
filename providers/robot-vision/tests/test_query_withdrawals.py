@@ -34,6 +34,29 @@ class WithdrawalTests(unittest.TestCase):
         self.assertFalse(list(self.pending.glob('*.json')))
         self.assertEqual({k:v for _,args,_ in calls[:3] for k,v in args['registrations'].items()},revisions)
 
+    def test_expired_receipt_rotates_only_the_fenced_request_and_keeps_it_across_restart(self):
+        name = 'robot.vision.metadata:1'
+        old = {name: 'a' * 32}
+        seen = []
+        class Retired(RuntimeError):
+            status = 410
+        class Remote:
+            def call(self, operation, args, rid):
+                seen.append((operation, args.copy(), rid))
+                if len(seen) == 1:
+                    raise Retired('Receipt result retired; request will not execute again')
+                if len(seen) == 2:
+                    raise TimeoutError('reply unavailable')
+                return {'withdrawn': [], 'superseded': [name]}
+        remote = Remote()
+        adapter.withdraw_registered_queries(remote, self.cfg, old, self.pending)
+        adapter.withdraw_registered_queries(remote, self.cfg, {}, self.pending)
+        adapter.withdraw_registered_queries(remote, self.cfg, {}, self.pending)
+        self.assertTrue(all(op=='cap.withdraw' and args['registrations']==old for op,args,_ in seen))
+        self.assertNotEqual(seen[0][2], seen[1][2])
+        self.assertEqual(seen[1][2],seen[2][2])
+        self.assertFalse(list(self.pending.glob('*.json')))
+
     def test_unsafe_or_ambiguous_reply_never_triggers_unfenced_legacy_offer(self):
         class Missing(RuntimeError):
             status = 404
