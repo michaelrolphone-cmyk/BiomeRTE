@@ -12,7 +12,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from tests.run_live_provider_recovery import LOCAL, Site, release_binding, save, timed_call
+from tests.run_live_provider_recovery import (
+    LOCAL, SIGNED_SUBMISSION_CLIENTS, Site, release_binding, save, signed_request_pool, timed_call)
 
 
 async def submit(site, operation):
@@ -45,7 +46,11 @@ def all_jobs_passed(report):
     first = report.get("submissions", [])
     progress = report.get("progress", [])
     results = report.get("readback", [])
-    if len(first) != 16 or len(results) != 16 or len(progress) != 2:
+    if (len(first) != SIGNED_SUBMISSION_CLIENTS or len(results) != SIGNED_SUBMISSION_CLIENTS
+            or len(progress) != 2):
+        return False
+    if ("peak_concurrent_http_submissions" in report and
+            report["peak_concurrent_http_submissions"] != SIGNED_SUBMISSION_CLIENTS):
         return False
     seed = report.get("baseline", {})
     progress_lease = seed.get("lease") or report.get("progress_lease")
@@ -76,7 +81,7 @@ async def readback(site, operation, initial_lease=None, observe=None):
     return dict(operation=operation, action=action, release=released)
 
 
-async def qualify(site, run_id, progress_operation=None, progress_lease=None, stagger=.035, observe=None):
+async def qualify(site, run_id, progress_operation=None, progress_lease=None, stagger=0, observe=None):
     report = dict(run_id=run_id, passed=False)
 
     async def recorded(operation):
@@ -110,8 +115,16 @@ async def qualify(site, run_id, progress_operation=None, progress_lease=None, st
         return [action, lease]
 
     submissions, previous = await asyncio.gather(
-        asyncio.gather(*(staggered(i) for i in range(16))), progress())
+        asyncio.gather(*(staggered(i) for i in range(SIGNED_SUBMISSION_CLIENTS))), progress())
     report.update(submissions=submissions, progress=previous)
+    if all("http_started_at" in row and "http_finished_at" in row for row in submissions):
+        events = [(row["http_started_at"], 1) for row in submissions]
+        events.extend((row["http_finished_at"], -1) for row in submissions)
+        current = peak = 0
+        for _, change in sorted(events):
+            current += change
+            peak = max(peak, current)
+        report["peak_concurrent_http_submissions"] = peak
     limit = asyncio.Semaphore(4)
 
     async def bounded(first):
@@ -228,8 +241,9 @@ def main():
     if bool(args.progress_operation) != bool(args.progress_lease):
         parser.error("--progress-operation and --progress-lease must be specified together")
     node = json.loads(args.node_file.read_text())
-    report = asyncio.run(qualify_release(Site(args.gateway_home), node, args.run_id,
-                                         args.progress_operation, args.progress_lease))
+    with signed_request_pool() as pool:
+        report = asyncio.run(qualify_release(Site(args.gateway_home, executor=pool), node, args.run_id,
+                                             args.progress_operation, args.progress_lease))
     print(json.dumps(report))
     return int(not report["passed"])
 
