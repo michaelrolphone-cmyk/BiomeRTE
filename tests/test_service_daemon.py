@@ -802,7 +802,7 @@ class DaemonIntegration(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_legacy_relay_and_scoped_controller_share_workers_with_complete_enrollment(self):
-        from legacy_checkpoint_helper_fixture import LegacyCheckpointHelper
+        from tests.legacy_checkpoint_helper_fixture import LegacyCheckpointHelper
         from biomerte.checkpoint_chunks import STATE_FORMAT, canonical
         import hashlib
 
