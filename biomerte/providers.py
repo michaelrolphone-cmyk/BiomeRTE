@@ -495,9 +495,16 @@ def pending(tx, ctx, provider, limit=64):
         guard = a.get('guard', a['resource'])
         (rest if guard in seen else first).append(a)
         seen.add(guard)
-    streams = [g for g in tx.matching('_stream_grants', ('open',)) if g['provider'] == provider and g['expires_at'] > time.time()
-               and tx.need('leases', g['lease'])['state'] == 'bound'
-               and not redeployment.current(tx, g['resource'])]
+    from .streams import valid as valid_stream
+    streams = []
+    for grant in tx.matching('_stream_grants', ('open',)):
+        if grant['provider'] != provider:
+            continue
+        try:
+            # Reconnection must use the same authority checks as stream.attach.
+            streams.append(valid_stream(tx, ctx, grant))
+        except Fault:
+            continue
     return {'fences': leases, 'actions': (first + rest)[:min(limit, 64)], 'activations': activations, 'streams': streams}
 
 
