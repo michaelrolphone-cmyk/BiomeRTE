@@ -671,7 +671,7 @@ def result(tx, ctx, provider, operation, generation, state, result):
 
 @op('cap.status', 'operation:str recovery?:bool', False)
 def status(tx, ctx, operation, recovery=False):
-    """Read action state and the provider result, including after the lease is released."""
+    """Read an accepted submission while waiting, then its action and provider result."""
     a = tx.get('actions', operation)
     if not a and recovery:
         from .completion_receipts import find
@@ -681,6 +681,13 @@ def status(tx, ctx, operation, recovery=False):
                         result_expired=True, replay_allowed=False,
                         reason='No retained authoritative completion; reconcile original executor evidence')
     if not a:
+        # A combined submission can wait for capacity before any action exists.
+        # Preserve ordinary missing-action semantics after lease retention.
+        submission = tx.get('_submissions', operation)
+        if submission and submission.get('lease'):
+            lease = tx.get('leases', submission['lease'])
+            if lease and lease['state'] != 'released':
+                return submission_status(tx, ctx, operation)
         a = tx.need('actions', operation)
     from .retention import require_payload
     owner(ctx, a['provider'])
