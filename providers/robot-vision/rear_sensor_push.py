@@ -208,6 +208,11 @@ class RearSensorIngress:
             except Exception as exc:
                 self.device_error=type(exc).__name__+":"+str(exc)[:100]
 
+    def _observe_route(self, receiver_id, host):
+        from device_routes import DeviceRoutes
+        registry = DeviceRoutes(self.service.state_dir / "device-routes.sqlite3")
+        registry.observe(receiver_id, host, {"kind": "camera"})
+
     async def serve(self):
         from websockets.asyncio.server import serve
         self.loop=asyncio.get_running_loop()
@@ -240,9 +245,12 @@ class RearSensorIngress:
                     if camera is not None:
                         camera.push_jpeg(packet,jpeg,interval,received)
                 from rear_transport_preview import publish_image
-                await receive_camera(socket,self.config['receiver_id'],'rear',ClockAlignment(),deliver,
-                    messages=messages_with_idle_recovery(socket,idle_seconds),
-                    boot_hint=lambda:getattr(self,'last_wire_boot',None),preview=lambda p,j,t:publish_image(self,p,j,t))
+                # A slow JPEG consumer can hold up its own acknowledgement only.
+                await receive_camera(socket, self.config['receiver_id'], 'rear', ClockAlignment(),
+                    lambda *args: asyncio.to_thread(deliver, *args),
+                    messages=messages_with_idle_recovery(socket, idle_seconds),
+                    boot_hint=lambda: getattr(self, 'last_wire_boot', None),
+                    preview=lambda *args: asyncio.to_thread(publish_image, self, *args))
                 return
             clock=ClockAlignment()
             # Prior bounds are usable across TCP reconnects for the same device boot.
@@ -278,8 +286,7 @@ class RearSensorIngress:
                     self.last_wire_boot=packet["boot_id"]
                     peer=getattr(socket,"remote_address",None)
                     if peer and not getattr(socket,"_route_registered",False):
-                        from device_routes import DeviceRoutes
-                        DeviceRoutes(self.rig.service.state_dir/"device-routes.sqlite3").observe(packet["receiver_id"],peer[0],{"kind":"camera"})
+                        await asyncio.to_thread(self._observe_route, packet["receiver_id"], peer[0])
                         socket._route_registered=True
                     self.last_delivery_mode=packet.get("delivery_mode","legacy_ack")
                     if clock.boot!=packet["boot_id"]:
@@ -295,7 +302,7 @@ class RearSensorIngress:
                         readings.put(interval[0], (packet,interval,received))
                         self.expired_packets=readings.expired
                         continue
-                    self.publish(packet,interval,received)
+                    await asyncio.to_thread(self.publish, packet, interval, received)
                     await socket.send(json.dumps({"type":"ack","boot_id":packet["boot_id"],
                         "stream_sequence":packet["stream_sequence"],
                         "monotonic_us":packet["capture_monotonic_us"]}))

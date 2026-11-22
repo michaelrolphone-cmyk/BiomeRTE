@@ -1,6 +1,7 @@
 """Authenticated camera WebSocket messages from one registered ESP32."""
 import asyncio
 import json
+import inspect
 import struct
 import time
 from capture_packet import validate_packet
@@ -52,9 +53,11 @@ async def receive_camera(socket, receiver_id, role, clock, deliver, boot_hint=No
             packet, jpeg = unpack_capture(message, receiver_id, role, include_radio=include_radio)
             if getattr(clock,'boot',None)==packet['boot_id'] or preview is None:
                 interval = clock.capture_interval(packet, received)
-                deliver(packet, jpeg, interval, received)
+                delivered = deliver(packet, jpeg, interval, received)
             else:
-                preview(packet,jpeg,received)
+                delivered = preview(packet,jpeg,received)
+            if inspect.isawaitable(delivered):
+                await delivered
             await socket.send(json.dumps({'type':'camera_ack','frame_id':packet['frame_id']}))
     finally:
         sync.cancel()
