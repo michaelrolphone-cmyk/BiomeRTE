@@ -45,6 +45,7 @@ class RealLease(test_controller_authority.ControllerTests):
         manifest = dict(id=worker, images={platform: image},
                         entrypoint=["python"], command=["/lease-src/tests/lease_fixture_worker.py"],
                         environment=dict(FIXTURE_PROVIDER=self.peer, FIXTURE_RESOURCE=worker,
+                                         FIXTURE_SITE=self.node["node"],
                                          PYTHONPATH="/lease-src", PYTHONDONTWRITEBYTECODE="1"),
                         mounts=[dict(source=str(source), target="/lease-src", read_only=True),
                                 dict(source=str(transport), target="/transport",

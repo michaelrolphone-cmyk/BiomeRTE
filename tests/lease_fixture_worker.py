@@ -12,6 +12,8 @@ from biomerte.worker import Worker
 
 class Remote:
     """Forward provider RPCs to the signed test transport."""
+    realm = "site"
+    site = os.environ["FIXTURE_SITE"]
     node = os.environ["FIXTURE_PROVIDER"]
 
     def call(self, name, args, rid=None):
