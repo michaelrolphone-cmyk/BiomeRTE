@@ -287,18 +287,21 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 yield call("attachment", "stream.open")
                 yield call("inspection", "stream.inspect")
                 yield call("resume", "stream.resume")
+                yield call("acquire-after-status", "cap.acquire")
+                yield call("confirm-installed-fence", "cap.fenced")
                 release.set()
                 await completed.wait()
                 self.closed = True
 
             async def send_json(self, response):
-                if response["id"] == "registration":
+                if response["id"] == "confirm-installed-fence":
                     completed.set()
 
         self.daemon.dispatch = dispatch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
         self.assertEqual(processed, ["running", "diagnostic", "attachment", "lifecycle", "inspection",
-                                     "lease-poll", "resume", "registration"])
+                                     "lease-poll", "resume", "registration",
+                                     "acquire-after-status", "confirm-installed-fence"])
 
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1

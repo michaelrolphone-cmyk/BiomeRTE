@@ -1028,8 +1028,11 @@ class AuthorityDaemon:
             return "stream_open"
         if operation in ("stream.attach", "stream.resume"):
             return "attachment"
-        if isinstance(operation, str) and (operation.startswith("stream.") or operation in (
-                "cap.acquire", "cap.fenced", "cap.lease")):
+        if operation == "cap.fenced":
+            return "fence"
+        if operation in ("cap.acquire", "cap.release"):
+            return "reservation"
+        if isinstance(operation, str) and (operation.startswith("stream.") or operation == "cap.lease"):
             return "lifecycle"
         return "general"
 
@@ -1060,7 +1063,8 @@ class AuthorityDaemon:
                         if message.get("binding") != self.binding:
                             raise Fault("RPC belongs to another service grant", 409)
                         if message.get("preparation") or self.authority_request_band(message) not in (
-                                "diagnostic", "read", "inspection", "attachment", "registry"):
+                                "diagnostic", "read", "inspection", "attachment", "registry",
+                                "reservation", "fence"):
                             raise Fault("Service effect admission is unavailable", 503)
                         if message["type"] == "inspect":
                             requested = message.get("authority")
@@ -1091,10 +1095,10 @@ class AuthorityDaemon:
         # fenced transactions. Lease updates, reads, and general work each
         # have bounded waiting space and take turns if all are busy.
         bands = ("read", "lifecycle", "general", "registry")
-        stream_bands = ("stream_open", "inspection", "attachment")
+        stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
         capacity = {"stream_open": 1, "inspection": 4, "attachment": 4,
                     "diagnostic": 4, "read": 8, "lifecycle": 1, "general": 1,
-                    "registry": 8}
+                    "registry": 8, "reservation": 4, "fence": 4}
         pending = {band: [] for band in capacity}
         ready = asyncio.Event()
         stopping = False
@@ -1130,8 +1134,9 @@ class AuthorityDaemon:
                     await ready.wait()
                     if stopping:
                         break
-                    # Grant validation must not compete for admission with
-                    # inbox reads. Alternate stream work and ordinary work.
+                    # A status poll cannot fill the waiting slot for a new
+                    # reservation or block an installed fence acknowledgement.
+                    # Alternate stream lifecycle work with ordinary work.
                     # A status probe has a dedicated admission path. Serve at
                     # most one such batch between other work to avoid starvation.
                     if pending["diagnostic"] and (not last_diagnostic or
