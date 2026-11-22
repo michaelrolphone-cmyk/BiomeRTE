@@ -29,9 +29,10 @@ from .docker_services import container_name
 
 LOG = logging.getLogger("biomerte.service")
 MAX_BODY = 32 * 1024 * 1024
-LEASE_BANDS = ("submission", "provider_progress", "result_status")
-BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "inspection", "attachment",
-                             "registry", "reservation", "fence", "lease_status", *LEASE_BANDS))
+RECOVERY_BANDS = ("submission", "provider_progress", "result_status", "inspection",
+                  "attachment", "lease_status")
+BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "registry",
+                             "reservation", "fence", *RECOVERY_BANDS))
 
 
 def secret(path):
@@ -1325,10 +1326,10 @@ class AuthorityDaemon:
                     batch = pending[band]
                     pending[band] = []
                     if band in BATCHABLE_BANDS and not any(m.get("preparation") for m in batch):
-                        # Each accepted lease transition and result read keeps its own
-                        # signed transaction. Join the next compatible publication
-                        # already due, including one selected for another queue.
-                        for partner in LEASE_BANDS:
+                        # Cold attachments, inspections and lease operations keep their
+                        # individual checks. Share the next compatible checkpoint so
+                        # reconnects can finish inside the gateway RPC deadline.
+                        for partner in RECOVERY_BANDS:
                             waiting = pending[partner]
                             if waiting and not any(m.get("preparation") for m in waiting):
                                 batch.extend(waiting)
