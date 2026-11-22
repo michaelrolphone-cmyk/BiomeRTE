@@ -55,7 +55,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.authority=self.authority
         self.daemon.witnessed_vision_inspections={}
         self.daemon.witnessed_provider_polls={}
-        self.daemon.witnessed_terminal_results={}
+        self.daemon.witnessed_provider_statuses={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
         self.validated=0
@@ -571,6 +571,25 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replies["read-result"]["status"], 200)
         self.assertEqual(replies["read-result"]["result"]["result"], {"value": "verified"})
 
+    async def test_claimed_status_skips_an_unrelated_publication_only_while_unchanged(self):
+        operation = "already-claimed"
+        action = dict(id=operation, provider="test-provider", lease="active-lease", state="claimed")
+        self.app.stores["site"].execute(lambda tx: tx.put("actions", operation, action))
+        message = self.message(request="inspect-claimed")
+        envelope = message["envelope"]
+        envelope.update(operation="cap.status", arguments={"operation": operation})
+        envelope["auth"]["signature"] = sign(self.key, {
+            key: value for key, value in envelope.items() if key != "auth"})
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_status(message))
+        reply = await self.daemon.dispatch(message)
+        self.assertEqual(reply["status"], 200)
+        self.daemon.remember_provider_status(message, reply)
+        async with self.daemon.lock:
+            self.assertEqual(await self.daemon.recheck_witnessed_provider_status(message), reply)
+        self.app.stores["site"].execute(lambda tx: tx.put("actions", operation,
+            dict(action, state="succeeded", result={"done": True})))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_status(message))
+
     async def test_completed_result_is_delivered_while_another_command_waits_for_publication(self):
         def call(rpc, operation, arguments):
             message = self.message(request=rpc + "-request")
@@ -627,9 +646,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             await connection
 
         forged = dict(result, envelope=dict(result["envelope"], auth=submission["envelope"]["auth"]))
-        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(forged))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_status(forged))
         self.fail_validate = self.validated + 2
-        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(result))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_status(result))
 
         def retire(tx):
             action = tx.need("actions", "completed-echo")
@@ -638,7 +657,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             tx.put("actions", "completed-echo", action)
 
         self.app.stores["site"].execute(retire)
-        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(result))
+        self.assertIsNone(await self.daemon.recheck_witnessed_provider_status(result))
 
     async def test_batched_submission_waits_for_publication_and_keeps_actor_checks(self):
         submission = self.message(request="submit-request")
