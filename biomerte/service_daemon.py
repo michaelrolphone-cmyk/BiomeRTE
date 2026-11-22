@@ -874,7 +874,8 @@ class AuthorityDaemon:
 
     async def dispatch(self,message):
         typ=message.get("type")
-        reply=dict(type={"inspect":"inspect_result","pair":"pair_result"}.get(typ,"call_result"),
+        reply=dict(type={"inspect":"inspect_result","pair":"pair_result",
+                        "capability_demand":"capability_demand_result"}.get(typ,"call_result"),
                    id=message.get("id"),binding=self.binding,status=200)
         try:
             if message.get("binding")!=self.binding:
@@ -897,6 +898,8 @@ class AuthorityDaemon:
                 elif typ=="pair" and self.config.get("authority_kind")=="controller":
                     reply["result"]=await asyncio.to_thread(self.authority.pair,
                         message.get("operation"),message.get("payload"),preparing)
+                elif typ=="capability_demand" and not preparing and self.config.get("authority_kind")=="controller":
+                    reply["result"]=await asyncio.to_thread(self.authority.capability_demand, message.get("scope"))
                 elif typ=="inspect" and not preparing:
                     requested=message.get("authority")
                     if self.config.get("authority_kind")=="controller":

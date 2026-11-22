@@ -135,6 +135,28 @@ class AsyncDockerTests(RunnerCase):
         self.runner.accept(self.response(), self.clock())
         self.assertEqual(1, len(self.engine.created))
 
+    def test_missing_create_eventually_unblocks_and_inventory_reaps_late_child(self):
+        self.prepare()
+        name = ds.container_name(self.value, WORKER_ID, INCARNATION, self.grant())
+        error = TimeoutError("unanswered create")
+        error.container_id, error.creation_uncertain = name, True
+        self.engine.start_error = error
+        self.runner.accept(self.response(), self.clock())
+        self.runner.expire()
+        self.clock.advance(ds.INVENTORY_INTERVAL_S + 1)
+        self.runner.expire()
+        self.assertFalse(self.runner.pending_cleanup)
+        self.engine.start_error = None
+        self.runner.advertisements()
+        self.runner.accept(self.response(self.grant(grant_token="next")), self.clock())
+        child = self.runner.containers[self.value["id"]]
+        self.engine.add_child(name, running=False)
+        self.engine.children[name]["Config"]["Labels"][ds.SERVICE] = self.value["id"]
+        self.clock.advance(ds.INVENTORY_INTERVAL_S)
+        self.runner.advertisements()
+        self.assertIn(name, self.engine.removed)
+        self.assertIn(child, self.engine.children)
+
     def test_pending_create_custody_survives_supervisor_restart(self):
         self.prepare()
         name = ds.container_name(self.value, WORKER_ID, INCARNATION, self.grant())

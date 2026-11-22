@@ -425,6 +425,40 @@ class LeaseAndFailureTests(RunnerCase):
 
 
 
+class CapabilityLeaseTests(RunnerCase):
+    def setUp(self):
+        super().setUp()
+        self.value = manifest(state_policy="lease_scoped", health={"command": ["true"]},
+                              capability_lease={"controller": "a" * 64, "provider": "b" * 64,
+                                                "contract": "job:1", "resource": "worker"})
+        self.write_manifest(self.value)
+        self.prepare()
+
+    def test_exact_identity_readiness_reuse_replacement_and_release(self):
+        for demand in (None, {}, {"id": "x", "generation": 1},
+                       {"id": "c" * 64, "generation": True}):
+            self.runner.accept(self.response(self.grant(capability_demand=demand)), self.clock())
+            self.assertEqual([], self.engine.created)
+        lease = {"id": "c" * 64, "generation": 1}
+        grant = self.grant(capability_demand=lease)
+        self.runner.accept(self.response(grant), self.clock())
+        child = self.runner.containers[self.value["id"]]
+        self.assertFalse(self.runner._health(self.value["id"]))
+        self.engine.children[child]["State"]["Health"] = {"Status": "healthy"}
+        self.assertTrue(self.runner._health(self.value["id"]))
+        self.runner.accept(self.response(grant), self.clock())
+        self.assertEqual(1, len(self.engine.created))
+        replacement = self.grant(capability_demand=dict(lease, generation=2))
+        self.assertNotEqual(ds.container_name(self.value, WORKER_ID, INCARNATION, grant),
+                            ds.container_name(self.value, WORKER_ID, INCARNATION, replacement))
+        self.runner.accept(self.response(replacement), self.clock())
+        self.assertIn(child, self.engine.removed)
+        self.assertEqual(2, len(self.engine.created))
+        self.runner.accept(self.response(assignments=[]), self.clock())
+        self.assertFalse(self.engine.children)
+        self.assertFalse(self.runner.state.children())
+
+
 class ManifestPropagationTests(RunnerCase):
     def restarted_runner(self):
         return ds.Runner({
