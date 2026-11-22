@@ -162,6 +162,7 @@ class VisionStore:
                                    isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys=ON")
+        self._db.execute("PRAGMA recursive_triggers=ON")
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript("""
@@ -228,6 +229,7 @@ CREATE INDEX IF NOT EXISTS checkpoint_full_time ON checkpoints(created_at DESC,i
 PRAGMA user_version=1;
 """)
         self._ensure_entity_heads()
+        self._ensure_entity_version_count()
         with self._lock:
             with self._transaction():
                 self._ensure_prune_candidates()
@@ -235,6 +237,21 @@ PRAGMA user_version=1;
                 expired = self._prune_locked()
             self._delete_blobs(expired)
         self.reconcile_checkpoint_inventory()
+
+    def _ensure_entity_version_count(self):
+        # Backfill older databases once. BEGIN IMMEDIATE covers the initial count
+        # and both triggers, so no writer can slip between them.
+        with self._lock, self._transaction():
+            self._db.execute("""CREATE TABLE IF NOT EXISTS entity_version_count (
+                id INTEGER PRIMARY KEY CHECK(id=1), total INTEGER NOT NULL CHECK(total>=0))""")
+            if not self._db.execute("SELECT 1 FROM entity_version_count WHERE id=1").fetchone():
+                self._db.execute("INSERT INTO entity_version_count SELECT 1,COUNT(*) FROM entity_versions")
+            self._db.execute("""CREATE TRIGGER IF NOT EXISTS count_entity_version_insert
+                AFTER INSERT ON entity_versions BEGIN
+                UPDATE entity_version_count SET total=total+1 WHERE id=1; END""")
+            self._db.execute("""CREATE TRIGGER IF NOT EXISTS count_entity_version_delete
+                AFTER DELETE ON entity_versions BEGIN
+                UPDATE entity_version_count SET total=total-1 WHERE id=1; END""")
 
     def _ensure_entity_heads(self):
         """Materialize current identities once; retain every historical version."""
@@ -291,7 +308,7 @@ PRAGMA user_version=1;
         return self._map_info(self._db, map_id, revision)
 
     @contextmanager
-    def _map_reader(self):
+    def _snapshot_reader(self):
         # Admission is serialized with close(). Each admitted read owns its WAL
         # snapshot and connection, even if the store closes before it finishes.
         with self._lock:
@@ -801,7 +818,7 @@ PRAGMA user_version=1;
         region = _bounds(bounds) if bounds is not None else None
         if kinds is not None:
             kinds = sorted({_id(kind, "kind") for kind in kinds})
-        with self._map_reader() as reader:
+        with self._snapshot_reader() as reader:
             info = self._map_info(reader, map_id, revision)
             query_key = {"map_id": map_id, "revision": info["revision"],
                          "bounds": list(region) if region is not None else None, "kinds": kinds}
@@ -1406,23 +1423,30 @@ PRAGMA user_version=1;
         with self._checkpoint_lock:
             self._open()
             storage = self._checkpoint_storage_status()
-        with self._lock:
-            self._open()
+        with self._snapshot_reader() as reader:
             counts = {}
             for name in ("maps", "sessions", "frames", "snapshots", "observations",
-                         "frame_pins", "entity_versions", "checkpoints"):
-                counts[name] = self._db.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
-            blobs = list(self.blob_dir.glob("*.blob"))
-            maps = [self._map_locked(row[0]) for row in self._db.execute("SELECT id FROM maps")]
-            return {
-                "availability": "available", "schema_version": 1,
-                "database_path": str(self.db_path), "max_observations": self.max_observations,
-                "counts": counts, "maps": maps,
-                "checkpoint_storage": storage,
-                "image_blob_count": len(blobs),
-                "image_bytes": sum(path.stat().st_size for path in blobs if path.exists()),
-                "runtime_liveness": "not_observed_by_store",
-                "estimation": "store_only; no sensor or estimator values are fabricated"}
+                         "frame_pins", "checkpoints"):
+                counts[name] = reader.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
+            counts["entity_versions"] = reader.execute(
+                "SELECT total FROM entity_version_count WHERE id=1").fetchone()[0]
+            maps = [self._map_info(reader, row[0], None)
+                    for row in reader.execute("SELECT id FROM maps")]
+        image_bytes = image_count = 0
+        for path in self.blob_dir.glob("*.blob"):
+            try:
+                image_bytes += path.stat().st_size
+            except FileNotFoundError:
+                continue  # Retention may remove a blob during the inventory.
+            image_count += 1
+        return {
+            "availability": "available", "schema_version": 1,
+            "database_path": str(self.db_path), "max_observations": self.max_observations,
+            "counts": counts, "maps": maps,
+            "checkpoint_storage": storage,
+            "image_blob_count": image_count, "image_bytes": image_bytes,
+            "runtime_liveness": "not_observed_by_store",
+            "estimation": "store_only; no sensor or estimator values are fabricated"}
 
     def close(self):
         with self._checkpoint_lock, self._lock:

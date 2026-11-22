@@ -204,6 +204,73 @@ class VisionStoreTests(unittest.TestCase):
                 "T_map_camera": [[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
             })
 
+    def test_history_count_backfills_legacy_rows_and_tracks_replacement_rollback_and_delete(self):
+        self.store.apply_map_update(self.map_id, 0, [self.point("p", [0, 0, 0])])
+        self.store.apply_map_update(self.map_id, 1, [
+            {"op": "delete", "kind": "sparse_point", "entity_id": "p"}])
+        db_path = self.store.db_path
+        self.store.close()
+        with sqlite3.connect(db_path) as legacy:
+            legacy.execute("DROP TRIGGER count_entity_version_insert")
+            legacy.execute("DROP TRIGGER count_entity_version_delete")
+            legacy.execute("DROP TABLE entity_version_count")
+        self.store = VisionStore(db_path.parent)
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 2)
+        db = self.store._db
+        db.execute("INSERT OR REPLACE INTO entity_versions SELECT * FROM entity_versions WHERE revision=2")
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 2)
+        db.execute("BEGIN")
+        db.execute("DELETE FROM entity_versions WHERE revision=1")
+        self.assertEqual(db.execute("SELECT total FROM entity_version_count").fetchone()[0], 1)
+        db.execute("ROLLBACK")
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 2)
+        db.execute("DELETE FROM entity_versions WHERE revision=1")
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 1)
+        self.store.close()
+        self.store = VisionStore(db_path.parent)
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 1)
+
+    def test_inventory_counts_allow_live_reads_and_writes_on_a_pinned_snapshot(self):
+        self.publish("before-status")
+        counted, resume = threading.Event(), threading.Event()
+        status_sql = []
+        connect = sqlite3.connect
+
+        def pause_count(sql):
+            if sql == "SELECT COUNT(*) FROM sessions":
+                counted.set()
+                resume.wait(5)
+
+        def watched_connect(*args, **kwargs):
+            reader = connect(*args, **kwargs)
+            def record(sql):
+                status_sql.append(sql)
+                pause_count(sql)
+            reader.set_trace_callback(record)
+            return reader
+
+        def live_round_trip():
+            self.assertEqual(self.store.latest_snapshot()["frame_id"], "before-status")
+            self.store.apply_map_update(self.map_id, 0, [self.point("after", [0, 0, 0])])
+            self.publish("during-status")
+
+        self.store._db.set_trace_callback(pause_count)
+        with patch("vision_store.sqlite3.connect", side_effect=watched_connect), ThreadPoolExecutor(2) as pool:
+            inventory = pool.submit(self.store.status)
+            try:
+                self.assertTrue(counted.wait(2))
+                pool.submit(live_round_trip).result(timeout=2)
+            finally:
+                resume.set()
+            inventory = inventory.result(timeout=2)
+        self.store._db.set_trace_callback(None)
+        self.assertIn("SELECT COUNT(*) FROM sessions", status_sql)
+        self.assertFalse(any("FROM entity_versions" in sql for sql in status_sql))
+        self.assertEqual(inventory["counts"]["frames"], 1)
+        self.assertEqual(inventory["counts"]["entity_versions"], 0)
+        self.assertEqual(inventory["maps"][0]["revision"], 0)
+        self.assertEqual(self.store.status()["counts"]["entity_versions"], 1)
+
     def test_map_scan_allows_observation_io_and_keeps_its_wal_snapshot(self):
         self.publish("before-map")
         self.store.apply_map_update(self.map_id, 0, [self.point("old", [1, 2, 3])])
