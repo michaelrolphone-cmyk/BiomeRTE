@@ -534,7 +534,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     async def test_lease_work_shares_the_next_admitted_publication_under_mixed_load(self):
         running, release, done = (asyncio.Event() for _ in range(3))
         published, replies = [], []
-        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim"]
+        operations = ["cap.invoke", "cap.status", "provider.poll", "cap.submit", "provider.claim",
+                      "system.health", "system.discovery", "cap.lease"]
 
         async def dispatch(message):
             if message["id"] == "cap.invoke":
@@ -570,7 +571,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.dispatch_managed_reads = dispatch_batch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
         self.assertCountEqual(replies, operations)
-        self.assertTrue({"cap.status", "cap.submit", "provider.claim"}.issubset(published[1]), published)
+        self.assertCountEqual(published[1], operations[1:])
+        self.assertEqual(len(published), 2, published)
 
     async def test_completed_result_is_admitted_with_the_provider_inbox_queue_full(self):
         started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
