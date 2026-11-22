@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from biomerte.app import Application
+from biomerte.api import Context, command
 from biomerte.store import Fault
 from tests import test_runtime
 
@@ -74,6 +75,153 @@ class RedeploymentHold(unittest.TestCase):
                         for resource in resources}})
         args.update(extra)
         return self.call('cap.redeploy.complete', args)
+
+
+    def retarget(self, hold, version='v3', reason='Repair failed candidate', rid=None):
+        return self.call('cap.redeploy.retarget', {
+            'id': hold['id'], 'generation': hold['generation'],
+            'expected_version': version, 'reason': reason}, rid=rid)
+
+    def test_retarget_preserves_streams_reservations_and_undispatched_work(self):
+        self.a.config.update(stream_router_secret='s' * 32,
+                             stream_gateway_url='wss://stream.example')
+        self.advertise(configuration={
+            'lease_class': 'persistent',
+            'stream': {'enabled': True, 'lanes': ['data']},
+            'reservation_policy': {'release_after_result': False}})
+        first = self.fence(self.acquire('retarget-viewer-one'))
+        second = self.acquire('retarget-viewer-two')
+        stream = self.call('stream.open', {'lease': first['id']})
+        action = self.invoke(first, 'retarget-pending')
+        hold = self.begin()
+        before = self.status(hold)
+        self.assertIn(action['id'], before['held_operations'])
+        self.assertIn(stream['id'], before['held_streams'])
+        self.assertTrue(before['blockers'])
+        records = [('leases', first['id']), ('leases', second['id']),
+                   ('actions', action['id']), ('_stream_grants', stream['id']),
+                   ('_redeploy_resources', 'port')]
+        def preserved():
+            return self.a.stores['site'].execute(
+                lambda tx: [tx.get(table, key) for table, key in records],
+                read_only=True)
+        original_records = preserved()
+        changed = self.retarget(hold)
+        for key in ('id', 'owner', 'generation', 'selector', 'resources', 'state',
+                    'held_leases', 'held_operations', 'held_streams', 'blockers'):
+            self.assertEqual(changed[key], before[key], key)
+        self.assertEqual(preserved(), original_records)
+        self.assertFalse(changed['ready_to_deploy'])
+        with self.assertRaises(Fault):
+            self.complete(changed, version='v3')
+
+    def test_retarget_does_not_settle_claimed_effect_or_clear_blocker(self):
+        lease = self.fence(self.acquire('retarget-effect-owner'))
+        action = self.claim(self.invoke(lease, 'retarget-claimed-effect'))
+        hold = self.begin()
+        before = self.status(hold)
+        changed = self.retarget(hold)
+        self.assertEqual(changed['blockers'], before['blockers'])
+        self.assertTrue(any(row.get('operation') == action['id']
+                            for row in changed['blockers']))
+        self.assertFalse(changed['ready_to_deploy'])
+        self.assertEqual(self.lease(lease)['generation'], lease['generation'])
+        with self.assertRaises(Fault):
+            self.complete(changed, version='v3')
+
+    def test_retarget_keeps_failed_hold_failed_until_explicit_retry(self):
+        lease = self.acquire('retarget-failed-owner')
+        hold = self.begin()
+        failed = self.call('cap.redeploy.fail', {
+            'id': hold['id'], 'generation': hold['generation'],
+            'reason': 'No rear video', 'evidence': {'rear_jpegs': 0}})
+        changed = self.retarget(failed)
+        self.assertEqual(changed['state'], 'failed')
+        self.assertEqual(changed['failure'], failed['failure'])
+        self.assertEqual(changed['generation'], failed['generation'])
+        self.assertEqual(self.lease(lease)['state'], 'held')
+        with self.assertRaises(Fault):
+            self.call('cap.redeploy.submit', {
+                'id': changed['id'], 'generation': changed['generation'],
+                'contract': 'deploy.test:1', 'inputs': {}, 'operation': 'still-failed'})
+        retried = self.call('cap.redeploy.retry', {
+            'id': changed['id'], 'generation': changed['generation']})
+        self.assertEqual(retried['expected_version'], 'v3')
+        self.assertEqual(retried['version_history'], changed['version_history'])
+        self.assertTrue(retried['ready_to_deploy'])
+        self.assertEqual(self.lease(lease)['state'], 'held')
+
+    def test_retarget_rejects_other_owner_scoped_actor_stale_and_blank_input(self):
+        hold = self.begin()
+        args = dict(id=hold['id'], generation=hold['generation'],
+                    expected_version='v3', reason='Repair failed candidate')
+        for ctx in (Context(self.a, actor='other-operator'),
+                    Context(self.a, actor='admin',
+                            permissions=['cap.redeploy.retarget'])):
+            with self.subTest(actor=ctx.actor, permissions=ctx.permissions):
+                with self.assertRaises(Fault):
+                    self.a.stores['site'].execute(
+                        lambda tx: command(tx, ctx, 'cap.redeploy.retarget',
+                                           args, 'unauthorized-retarget'))
+        with self.assertRaises(Fault):
+            self.retarget(dict(hold, generation=hold['generation'] + 1))
+        for version, reason in (('', 'reason'), ('  ', 'reason'), ('v3', ''),
+                                ('v3', '  ')):
+            with self.subTest(version=version, reason=reason), self.assertRaises(Fault):
+                self.retarget(hold, version=version, reason=reason)
+        self.assertEqual(self.status(hold), hold)
+
+    def test_retarget_requires_new_version_healthy_complete_evidence(self):
+        self.advertise(resource='second-port')
+        first = self.acquire('retarget-first')
+        second = self.acquire('retarget-second', resource='second-port')
+        changed = self.retarget(self.begin(resources=['port', 'second-port']))
+        with self.assertRaisesRegex(Fault, 'does not match'):
+            self.complete(changed, resources=('port', 'second-port'), version='v2')
+        for observations in (
+                {},
+                {'port': {'healthy': True, 'version': 'v3'}},
+                {'port': {'healthy': True, 'version': 'v3'},
+                 'second-port': {'healthy': False, 'version': 'v3'}},
+                {'port': {'healthy': True, 'version': 'v3'},
+                 'second-port': {'healthy': True, 'version': ''}}):
+            with self.subTest(observations=observations), self.assertRaises(Fault):
+                self.call('cap.redeploy.complete', {
+                    'id': changed['id'], 'generation': changed['generation'],
+                    'evidence': {'resources': observations}})
+            self.assertEqual(self.lease(first)['state'], 'held')
+            self.assertEqual(self.lease(second)['state'], 'held')
+        completed = self.complete(changed, resources=('port', 'second-port'), version='v3')
+        self.assertEqual(completed['state'], 'completed')
+        self.assertEqual(completed['version_history'], changed['version_history'])
+        with self.assertRaisesRegex(Fault, 'already completed'):
+            self.retarget(completed, version='v4')
+        self.assertEqual(self.status(completed), completed)
+
+    def test_retarget_history_and_idempotence_survive_restart(self):
+        hold = self.begin()
+        changed = self.retarget(hold, rid='retarget-once')
+        self.assertEqual(self.retarget(hold, rid='retarget-once'), changed)
+        self.assertEqual(self.retarget(changed), changed)
+        history = changed['version_history']
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]['previous_version'], 'v2')
+        self.assertEqual(history[0]['expected_version'], 'v3')
+        self.assertEqual(history[0]['reason'], 'Repair failed candidate')
+        self.assertEqual(history[0]['actor'], hold['owner'])
+        self.assertEqual(history[0]['generation'], hold['generation'])
+        with self.assertRaises(Fault):
+            self.retarget(changed, version='v4', rid='retarget-once')
+        newer = self.retarget(changed, version='v4', reason='Verified repair target')
+        self.a = Application(self.home)
+        restored = self.status(hold)
+        self.assertEqual(restored, newer)
+        self.assertEqual(restored['version_history'][0], history[0])
+        self.assertEqual(restored['version_history'][1]['previous_version'], 'v3')
+        self.assertEqual(restored['version_history'][1]['expected_version'], 'v4')
+        with self.assertRaises(Fault):
+            self.complete(restored, version='v3')
+        self.complete(restored, version='v4')
 
     def test_idle_and_waiting_reservations_keep_identity_and_fifo(self):
         first = self.fence(self.acquire('first'))
