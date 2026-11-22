@@ -355,7 +355,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             closed = False
 
             async def __aiter__(self):
-                for message in ({"type": "registered", "rpc_limit": 4}, {"type": "call", "id": "first"}):
+                for message in ({"type": "registered", "rpc_limit": 2}, {"type": "call", "id": "first"}):
                     yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
                 await started.wait()
                 for name in ("waiting", "excess"):
@@ -432,9 +432,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_lifecycle_backlog_leaves_admission_for_exact_lease_refresh(self):
         started, release, done = (asyncio.Event() for _ in range(3))
         replies = {}
-        calls = (("busy", "cap.invoke"), ("close", "stream.close"),
-                 ("close2", "stream.close"), ("close3", "stream.close"),
-                 ("excess", "stream.close"), ("inspect-lease", "cap.lease"))
+        calls = [("busy", "cap.invoke"),
+                 *((f"close-{n}", "stream.close") for n in range(6)),
+                 ("inspect-lease", "cap.lease"), ("excess", "stream.close")]
 
         async def dispatch(message):
             if message["id"] == "busy":
@@ -509,26 +509,37 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
         return replies, publications
 
-    def full_general_burst(self):
-        # The registration permits 64 RPCs. Of 28 guaranteed slots, one
-        # belongs to general calls; the in-flight call counts against it.
+    def general_burst(self, size):
         return [("running", "cap.invoke"),
-                *((f"waiting-{n}", "cap.invoke") for n in range(36)),
-                ("excess", "cap.invoke")]
+                *((f"waiting-{n}", "cap.invoke") for n in range(size - 1))]
+
+    async def test_full_gateway_window_settles_mixed_provider_reads_and_signed_submissions(self):
+        calls = [("running", "cap.invoke")]
+        calls.extend((f"inbox-{i}", "provider.poll") for i in range(40))
+        calls.extend((f"submit-{i}", "cap.submit") for i in range(16))
+        calls.extend((name, op) for name, op in (("historical", "cap.status"), ("lease", "cap.lease"),
+                     ("progress", "provider.result"), ("discover", "system.discovery"),
+                     ("events", "gateway.events.grok"), ("fence", "cap.fenced"), ("open", "stream.open")))
+        self.assertEqual(len(calls), 64)
+        replies, batches = await self.run_socket_burst([*calls, ("over-limit", "cap.submit")])
+        self.assertEqual(replies.pop("over-limit"), 429)
+        self.assertEqual(set(replies.values()), {200})
+        for name, _ in calls:
+            self.assertEqual(sum(batch.count(name) for batch in batches), 1)
 
     async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
-        calls = self.full_general_burst() + [
+        calls = self.general_burst(61) + [
             ("poll", "provider.poll"), ("catalog", "system.discovery"),
-            ("grok-list", "gateway.events.grok")]
+            ("grok-list", "gateway.events.grok"), ("excess", "cap.invoke")]
         replies, _ = await self.run_socket_burst(calls)
         self.assertEqual(replies.pop("excess"), 429)
         self.assertEqual(set(replies.values()), {200})
 
     async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
-        calls = self.full_general_burst() + [
+        calls = self.general_burst(59) + [
             ("submit", "cap.submit"), ("claim", "provider.claim"),
             ("heartbeat", "cap.heartbeat"), ("result", "provider.result"),
-            ("reconcile", "provider.reconcile")]
+            ("reconcile", "provider.reconcile"), ("excess", "cap.invoke")]
         replies, batches = await self.run_socket_burst(calls)
         self.assertEqual(replies.pop("excess"), 429)
         self.assertEqual(set(replies.values()), {200})
@@ -664,7 +675,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("result", replies[forged["id"]])
         self.assertEqual(self.published, 2)
 
-    async def test_admission_reserves_recovery_capacity_and_services_an_aging_submission(self):
+    async def test_admission_services_recovery_and_an_aging_submission_at_capacity(self):
         first, release, done = (asyncio.Event() for _ in range(3))
         sent, batches = {}, []
 
@@ -688,7 +699,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 def call(name, operation):
                     return wire({"type": "call", "id": name, "binding": B,
                                  "envelope": {"operation": operation}})
-                yield wire({"type": "registered", "rpc_limit": 12, "rpc_timeout_s": 0.02})
+                yield wire({"type": "registered", "rpc_limit": 9, "rpc_timeout_s": 0.02})
                 yield call("earlier", "cap.invoke")
                 await first.wait()
                 for i in range(4):
@@ -697,6 +708,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 yield call("submit4", "cap.submit")
                 yield call("status", "cap.status")
                 yield call("claim", "provider.claim")
+                yield call("excess", "cap.submit")
                 await asyncio.sleep(0.015)
                 release.set()
                 await done.wait()
@@ -704,12 +716,12 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
             async def send_json(self, reply):
                 sent[reply["id"]] = reply["status"]
-                if len(sent) == 9:
+                if len(sent) == 10:
                     done.set()
 
         self.daemon.dispatch, self.daemon.dispatch_managed_reads = dispatch, dispatch_batch
         await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
-        self.assertEqual(sent.pop("submit4"), 429)
+        self.assertEqual(sent.pop("excess"), 429)
         self.assertEqual(set(sent.values()), {200})
         self.assertEqual(batches[1][:4], ["submit0", "submit1", "submit2", "submit3"])
         self.assertIn("claim", batches[1])
@@ -744,7 +756,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         # The deployed reader receives already signed envelopes. Generate load
         # before measuring admission; OpenSSL subprocess startup is client work.
         inbox_messages = [call("inbox-" + str(n), "provider.poll", {"provider": "builtin"})
-                          for n in range(9)]
+                          for n in range(15)]
         result_read = call("read-result", "cap.status", {"operation": "completed-echo"})
 
         class Socket:
@@ -756,9 +768,10 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 yield frame({"type": "registered", "rpc_limit": 16})
                 yield frame({"type": "call", "id": "unrelated", "binding": B})
                 await started.wait()
-                for message in inbox_messages:
+                for message in inbox_messages[:-1]:
                     yield frame(message)
                 yield frame(result_read)
+                yield frame(inbox_messages[-1])
                 release.set()
                 await done.wait()
                 self.closed = True
@@ -779,7 +792,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             done.set()
             await connection
-        self.assertEqual(replies["inbox-8"]["status"], 429)
+        self.assertEqual(replies["inbox-14"]["status"], 429)
         self.assertEqual(replies["read-result"]["status"], 200)
         self.assertEqual(replies["read-result"]["result"]["result"], {"value": "verified"})
 
