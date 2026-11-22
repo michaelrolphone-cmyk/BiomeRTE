@@ -11,7 +11,7 @@ from urllib.request import Request
 from camera_telemetry import (
     CameraHTTPClient, CameraHTTPError, CameraTelemetrySource, MAX_LIGHT_BODY_BYTES,
     MAX_RESPONSE_BYTES, UINT32_MAX, _NoRedirect, encode_light_update,
-    observation_id, validate_telemetry_snapshot,
+    observation_id, validate_radio_snapshot,
 )
 
 
@@ -241,7 +241,7 @@ class IdentityTests(unittest.TestCase):
     def test_validate_identity_types_capacity_and_streamed_later_observation(self):
         value = snapshot(uptime_ms=28000)
         value["wifi"][0]["observed_uptime_ms"] = 28005
-        self.assertIs(validate_telemetry_snapshot(value), value)
+        self.assertIs(validate_radio_snapshot(value), value)
         mutations = [
             lambda v: v.update(schema=True), lambda v: v.update(schema=2),
             lambda v: v.update(boot_id=""), lambda v: v.update(receiver_id=""),
@@ -258,7 +258,7 @@ class IdentityTests(unittest.TestCase):
             invalid = snapshot()
             mutation(invalid)
             with self.subTest(value=invalid), self.assertRaises(ValueError):
-                validate_telemetry_snapshot(invalid)
+                validate_radio_snapshot(invalid)
 
     def test_observation_identity_distinguishes_boot_source_type_and_new_sample(self):
         value = snapshot()

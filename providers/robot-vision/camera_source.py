@@ -41,6 +41,9 @@ class CameraSource:
         self._error_details = None
         self._epoch = None
         self._capture_clock_known = False
+        self._pending_jpeg = None
+        self._websocket = config.get('capture_transport') == 'websocket_push' or (
+            bool(config.get('device_id')) and config.get('synchronized_capture') is True)
 
     def start(self):
         if self._thread is None:
@@ -49,6 +52,8 @@ class CameraSource:
         return self
 
     def _run(self):
+        if self._websocket:
+            return self._decode_pushed()
         if self.config.get('synchronized_capture') is True:
             return self._run_synchronized()
         try:
@@ -62,7 +67,8 @@ class CameraSource:
             try:
                 options = {"rtsp_transport": "tcp"} if self.config["url"].startswith("rtsp:") else {}
                 timeout = float(self.config.get("network_timeout_s", 5.0))
-                with av.open(self.config["url"], options=options, timeout=(timeout, timeout)) as container:
+                from device_routes import resolve_url
+                with av.open(resolve_url(self.config["url"],self.config), options=options, timeout=(timeout, timeout)) as container:
                     epoch = uuid.uuid4().hex
                     with self._condition:
                         self._epoch = epoch
@@ -117,9 +123,61 @@ class CameraSource:
             self._connected = False
             self._condition.notify_all()
 
-    def _run_synchronized(self):
+    def push_jpeg(self, packet, jpeg, interval, received):
+        # One waiting JPEG per physical camera. A slow decoder or tracker cannot
+        # accumulate images or hold the sensor connection.
+        if not self._websocket or self._stop.is_set():
+            return
+        with self._condition:
+            self._pending_jpeg=(packet,jpeg,interval,received)
+            self._condition.notify_all()
+
+    def _decode_pushed(self):
+        import cv2
+        from capture_packet import CaptureSequence
+        sequence=CaptureSequence()
+        while not self._stop.is_set():
+            with self._condition:
+                self._condition.wait_for(lambda:self._pending_jpeg is not None or self._stop.is_set())
+                if self._stop.is_set():return
+                packet,jpeg,interval,received=self._pending_jpeg
+                self._pending_jpeg=None
+            try:
+                self._publish_jpeg(packet,jpeg,interval,sequence)
+            except (ValueError, RuntimeError, cv2.error) as exc:
+                with self._condition:
+                    self._error='websocket_capture_failed:'+str(exc)
+
+    def _publish_jpeg(self,packet,jpeg,capture_interval,sequence):
         import cv2
         import numpy as np
+        image=cv2.imdecode(np.frombuffer(jpeg,dtype=np.uint8),cv2.IMREAD_COLOR)
+        if image is None or image.shape[:2]!=(packet['height'],packet['width']):
+            raise ValueError('capture_dimensions_mismatch')
+        tick=time.monotonic()
+        tracking_time=sequence.accept(packet,anchor_s=sum(capture_interval)/2.)
+        if tracking_time is None:
+            return
+        epoch=packet['receiver_id']+':'+packet['boot_id']
+        with self._condition:
+            if self._epoch!=epoch or not self._connected:self._connections+=1
+            self._epoch=epoch;self._connected=True;self._error=None;self._error_details=None
+            self._capture_clock_known=True;self._sequence+=1;self._received+=1;self._last_decode=tick
+            metadata=dict(frame_id=packet['frame_id'],sequence=self._sequence,stream_epoch=epoch,source_id=self.config.get('source_id','esp32-camera'),
+                width=packet['width'],height=packet['height'],pixel_format='bgr24',
+                capture_time=None,capture_time_status='device_monotonic_capture_known_utc_unmapped',
+                capture_monotonic_us=packet['capture_monotonic_us'],capture_boot_id=packet['boot_id'],
+                capture_clock='esp_timer',capture_timestamp_semantics=packet.get('capture_timestamp_semantics'),
+                capture_transport='websocket_push' if self._websocket else 'http_capture',
+                capture_host_monotonic_interval_s=capture_interval,
+                capture_age_at_decode_upper_s=max(0.,tick-capture_interval[0]),
+                receive_decode_time=utc_now(),receive_decode_clock='mac_utc_after_decode',
+                measurement_monotonic_s=tracking_time,
+                measurement_clock='device_capture_intervals_host_epoch_anchor',
+                source_media_seconds=packet['capture_monotonic_us']/1e6,sensor_packet=packet)
+            self._latest=CapturedFrame(image,metadata,tick,self._sequence,jpeg);self._condition.notify_all()
+
+    def _run_synchronized(self):
         from urllib.request import Request
         from camera_telemetry import CameraHTTPClient
         from capture_packet import read_capture,CaptureSequence
@@ -133,33 +191,10 @@ class CameraSource:
                 headers['Accept']='multipart/mixed'
                 with client._open(Request(origin+'/api/capture',headers=headers),timeout=client.network_timeout_s) as response:
                     if response.getcode()!=200:raise ConnectionError('capture_endpoint_unavailable')
-                    packet,jpeg=read_capture(response)
-                image=cv2.imdecode(np.frombuffer(jpeg,dtype=np.uint8),cv2.IMREAD_COLOR)
-                if image is None or image.shape[:2]!=(packet['height'],packet['width']):
-                    raise ValueError('capture_dimensions_mismatch')
+                    packet,jpeg=read_capture(response,include_radio=self.config.get("include_radio",False))
                 tick=time.monotonic()
-                source_age=(packet['served_monotonic_us']-packet['capture_monotonic_us'])/1e6
-                capture_interval=[started-source_age,tick-source_age]
-                tracking_time=sequence.accept(packet,anchor_s=sum(capture_interval)/2.)
-                if tracking_time is None:
-                    self._stop.wait(interval);continue
-                epoch=packet['receiver_id']+':'+packet['boot_id']
-                with self._condition:
-                    if self._epoch!=epoch or not self._connected:self._connections+=1
-                    self._epoch=epoch;self._connected=True;self._error=None;self._error_details=None
-                    self._capture_clock_known=True;self._sequence+=1;self._received+=1;self._last_decode=tick
-                    metadata=dict(frame_id=packet['frame_id'],sequence=self._sequence,stream_epoch=epoch,source_id=self.config.get('source_id','esp32-camera'),
-                        width=packet['width'],height=packet['height'],pixel_format='bgr24',
-                        capture_time=None,capture_time_status='device_monotonic_capture_known_utc_unmapped',
-                        capture_monotonic_us=packet['capture_monotonic_us'],capture_boot_id=packet['boot_id'],
-                        capture_clock='esp_timer',capture_timestamp_semantics=packet.get('capture_timestamp_semantics'),
-                        capture_host_monotonic_interval_s=capture_interval,
-                        capture_age_at_decode_upper_s=source_age+tick-started,
-                        receive_decode_time=utc_now(),receive_decode_clock='mac_utc_after_decode',
-                        measurement_monotonic_s=tracking_time,
-                        measurement_clock='device_capture_intervals_host_epoch_anchor',
-                        source_media_seconds=packet['capture_monotonic_us']/1e6,sensor_packet=packet)
-                    self._latest=CapturedFrame(image,metadata,tick,self._sequence,jpeg);self._condition.notify_all()
+                age=(packet['served_monotonic_us']-packet['capture_monotonic_us'])/1e6
+                self._publish_jpeg(packet,jpeg,[started-age,tick-age],sequence)
             except Exception as exc:
                 with self._condition:
                     self._connected=False;self._error='synchronized_capture_failed:'+type(exc).__name__
@@ -184,12 +219,14 @@ class CameraSource:
     def status(self):
         with self._condition:
             now = time.monotonic()
+            stale = self._websocket and self._last_decode is not None and now - self._last_decode > float(self.config.get("network_timeout_s", 5.0))
             return {
-                "state": "connected" if self._connected else "disconnected",
+                "state": "stale" if stale else ("connected" if self._connected else "disconnected"),
                 "error": self._error,
                 "error_details": self._error_details,
                 "stream_epoch": self._epoch,
                 "frames_decoded": self._received,
+                "capture_transport": "websocket_push" if self._websocket else ("http_capture" if self.config.get("synchronized_capture") else "video_stream"),
                 "connections": self._connections,
                 "reconnects": max(0, self._connections - 1),
                 "decode_fps_since_start": self._received / max(now - self._started, 1e-6),

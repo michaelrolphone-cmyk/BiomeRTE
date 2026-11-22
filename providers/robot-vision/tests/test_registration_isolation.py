@@ -15,21 +15,22 @@ class RegistrationIsolationTests(unittest.TestCase):
                     active.clear()
                 return {}
         class Client:
-            def __init__(self,*args):pass
+            def __init__(self,*args,**kwargs):pass
             def query(self,*args):
                 return {'availability':'available','state':'running','capabilities':['robot.vision.status'],
                         'streaming':{'available':True,'lanes':['vision','map']}}
         class Worker:
-            def __init__(self,*args):self.db=types.SimpleNamespace(close=lambda:None)
-            def once(self,pool):
+            def __init__(self,*args,**kwargs):self.db=types.SimpleNamespace(close=lambda:None)
+            def recover_result_acknowledgements(self, **kwargs):pass
+            def once(self,pool,*,reconcile_receipts=True):
                 active.wait(.5)
                 observed.append(active.is_set())
                 release.set()
                 handlers[adapter.signal.SIGTERM](None,None)
         class Pool:
-            def __init__(self,*args):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
+            def __init__(self,*args,**kwargs):self.executor=types.SimpleNamespace(shutdown=lambda **kwargs:None)
         class Streams:
-            def __init__(self,*args,sequence_path=None):sequence_paths.append(sequence_path)
+            def __init__(self,*args,sequence_path=None,rear_resource=None,host_io_config=None):sequence_paths.append(sequence_path)
             def update(self,*args):pass
             def close(self):pass
         with tempfile.TemporaryDirectory() as folder:

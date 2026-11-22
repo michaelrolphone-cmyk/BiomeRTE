@@ -43,7 +43,7 @@ class Rover:
 
     def broadcast(self, lane, message):
         if lane in ('vision', 'map'):
-            metadata, unused = decode(message, 4194304)
+            metadata, unused = decode(message, 4194304, lane=lane)
             revision = metadata.get('map_revision') if lane == 'vision' else metadata.get('revision')
             identity = metadata.get('map_id')
             if isinstance(identity, str) and type(revision) is int and revision >= 0:
@@ -187,7 +187,7 @@ class Rover:
                                 self.control_ready=available and metadata['provider_connected'] and metadata['server_connected']
                             continue
                     if lane=='map':
-                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'])
+                        metadata,_=decode(message,descriptor['limits']['max_message_bytes'],lane=lane)
                         if metadata.get('type')=='snapshot_required' or revision is not None and metadata.get('from_revision')!=revision:
                             self.broadcast('map',json.dumps({'type':'snapshot_required','map_id':metadata.get('map_id'),
                                                            'revision':metadata.get('revision')}))

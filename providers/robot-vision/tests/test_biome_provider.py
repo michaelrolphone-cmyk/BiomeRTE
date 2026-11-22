@@ -156,15 +156,14 @@ class ScaleContractTests(unittest.TestCase):
         cls.fault = Fault
 
     def test_original_thirteen_v1_contracts_are_immutable(self):
-        from pathlib import Path
-        path=Path(__file__).parent/"fixtures/original-v1-contract-schemas.json"
-        expected=json.loads(path.read_text())
-        self.assertEqual(len(expected),13)
-        for name,schema in expected.items():
-            with self.subTest(contract=name):
-                self.assertEqual({key:adapter.CONTRACTS[name][key] for key in schema},schema)
-        modern=adapter.CONTRACTS["robot.vision.project_ground:2"]
-        self.assertNotIn("confirmed_floor_contact",modern["inputs"])
+        # Explicit published schemas remain stable as unrelated contracts are added.
+        baseline = json.loads((Path(__file__).parent / "fixtures" /
+                               "original-v1-contract-schemas.json").read_text())
+        self.assertEqual(len(baseline), 13)
+        legacy = {name: adapter.CONTRACTS[name] for name in baseline}
+        self.assertEqual(legacy, baseline)
+        encoded = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(), "c8f552dc9a2ca49d35f641e4f5dc0c729a84bcbe13195da5aeac64207c540189")
 
     def valid_inputs(self):
         return {
@@ -452,7 +451,7 @@ class LifecycleTests(TemporaryTests):
     def test_each_worker_offer_binds_its_contract_in_argv(self):
         cfg = self.config()
         offers = adapter.worker_offers(cfg)
-        self.assertEqual({item["contract"] for item in offers}, set(adapter.CONTRACTS))
+        self.assertCountEqual([item["contract"] for item in offers], adapter.CONTRACTS.keys())
         for item in offers:
             self.assertEqual(item["argv"][-2:], ["--contract", item["contract"]])
             self.assertEqual(item["argv"][0], cfg["python"])

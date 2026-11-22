@@ -519,7 +519,7 @@ class RadioServiceIntegrationTests(unittest.TestCase):
 
     def test_new_contracts_match_service_capabilities_and_light_is_mutating(self):
         from biome_provider import CONTRACTS, MUTATING_CONTRACTS
-        self.assertEqual(len(CAPABILITIES), 38)
+        self.assertEqual(set(CAPABILITIES), {spec["name"] for spec in CONTRACTS.values()})
         for name in ("robot.radio.status", "robot.radio.localize", "robot.map.radio.read",
                      "robot.camera.light.status", "robot.camera.light.set"):
             self.assertIn(name, CAPABILITIES)
