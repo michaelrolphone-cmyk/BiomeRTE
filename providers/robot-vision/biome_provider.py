@@ -594,6 +594,31 @@ def retry_diagnostic(error):
     return category
 
 
+def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, registry, stopping):
+    """Publish each healthy query as soon as its own definition is confirmed."""
+    retry = False
+    primary = {"robot.vision.metadata:1", "robot.vision.status:1"}
+    for contract in sorted(ready | defined, key=lambda key: (key not in primary, key)):
+        if stopping.is_set():
+            break
+        try:
+            if contract in ready and contract not in registered:
+                remote.call("cap.define", CONTRACTS[contract])
+                if contract not in defined:
+                    write_registered(registry, cfg, defined | {contract})
+                    defined.add(contract)
+                registered.add(contract)
+            state = "ready" if contract in ready else "offline"
+            if advertised.get(contract) != state and not stopping.is_set():
+                remote.call("cap.offer", offer(cfg, contract, state))
+                advertised[contract] = state
+        except Exception as error:
+            print("Vision query advertisement retry:", contract, retry_diagnostic(error),
+                  file=sys.stderr, flush=True)
+            retry = True
+    return retry
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -680,13 +705,21 @@ def serve(cfg):
                             raise
                     # These records are durable. Separate health sampling from
                     # writes so stable cameras don't contend for controller admission.
-                    phase = "stream definition"
-                    define_once(stream_definition)
-                    if stopping.is_set():return
-                    phase = "stream offer"
-                    if not (status.get("state") == "stopping" and vision_service_has_custody(cfg["state"])):
-                        for value in stream_offers(cfg, status):
-                            publish_stream_offer(remote, value, stream_offers_published, stream_offline_confirmation)
+                    retry = False
+                    try:
+                        phase = "stream definition"
+                        define_once(stream_definition)
+                        if stopping.is_set():return
+                        phase = "stream offer"
+                        if not (status.get("state") == "stopping" and vision_service_has_custody(cfg["state"])):
+                            for value in stream_offers(cfg, status):
+                                publish_stream_offer(remote, value, stream_offers_published, stream_offline_confirmation)
+                    except Exception as error:
+                        print("Vision advertisement retry:", phase, retry_diagnostic(error), file=sys.stderr, flush=True)
+                        retry = True
+                    if reconcile_query_offers(remote, cfg, ready, registered, defined,
+                                              advertised, registry, stopping):
+                        retry = True
                     phase = "query and relay registry"
                     for spec in relay_definitions:
                         if stopping.is_set():return
@@ -698,19 +731,7 @@ def serve(cfg):
                         remote.call("cap.offer",dict(provider=cfg["provider"],contract=retired,
                             resource=cfg["resource"],service="robot-vision",capacity=cfg["slots"],state="offline"))
                         retired_withdrawn.add(retired)
-                    for contract in sorted(ready - registered):
-                        if stopping.is_set():return
-                        remote.call("cap.define", CONTRACTS[contract])
-                        registered.add(contract)
-                        defined.add(contract)
-                    write_registered(registry, cfg, defined)
-                    for contract in sorted(defined):
-                        if stopping.is_set():return
-                        state = "ready" if contract in ready else "offline"
-                        if advertised.get(contract) != state:
-                            remote.call("cap.offer", offer(cfg, contract, state))
-                            advertised[contract] = state
-                    stopping.wait(cfg.get("health_seconds", 10))
+                    stopping.wait(5 if retry else cfg.get("health_seconds", 10))
                 except Exception as exc:
                     print("Vision advertisement retry:", phase, retry_diagnostic(exc), file=sys.stderr, flush=True)
                     stopping.wait(5)
