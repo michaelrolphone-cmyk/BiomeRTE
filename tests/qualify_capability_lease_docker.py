@@ -70,7 +70,7 @@ class RealLease(test_controller_authority.ControllerTests):
                                 str(coordinator.status()["services"]))
                 time.sleep(.2)
 
-        self.call("cap.define", dict(name="docker.fixture", inputs={}, outputs={}), "define-lease")
+        self.call("cap.define", dict(name="docker.fixture", inputs={}, outputs={"system": "str"}), "define-lease")
         self.call("cap.offer", dict(scope, capacity=1), "offer-lease")
         runner.tick()
         self.assertEqual([], engine.containers(worker))
@@ -108,6 +108,15 @@ class RealLease(test_controller_authority.ControllerTests):
         self.assertEqual([child], [row["Id"] for row in engine.containers(worker)])
         self.call("cap.fenced", dict(provider=scope["provider"], lease=lease["id"],
                                      generation=lease["generation"]), "fence-one")
+        self.call("cap.invoke", dict(lease=lease["id"], operation="container-system", inputs={},
+                                     release_after_result=False), "submit-container-system")
+        custody = dict(provider=scope["provider"], operation="container-system", generation=lease["generation"])
+        self.call("provider.claim", custody, "claim-container-system")
+        system = subprocess.check_output(["docker", "exec", child, "uname", "-s"], text=True).strip()
+        self.call("provider.result", dict(custody, state="succeeded", result={"system": system}),
+                  "return-container-system")
+        receipt = self.call("cap.status", dict(operation="container-system"), "get-container-system")
+        self.assertEqual({"system": "Linux"}, receipt["result"])
         self.call("cap.release", dict(lease=lease["id"]), "release-one")
         until(lambda: not engine.containers(worker) and not runner.pending_cleanup)
         assert_removed(child, volumes)

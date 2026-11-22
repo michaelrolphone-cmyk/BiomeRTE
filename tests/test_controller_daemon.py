@@ -132,6 +132,23 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.connected = False
         self.assertEqual((await self.daemon.health(None)).status, 503)
 
+    async def test_capability_demand_keeps_its_wire_type_binding_and_publication_fence(self):
+        message = dict(type="capability_demand", id="observe", binding=B,
+                       scope=dict(provider=self.actor, resource="slot", contract="job:1"))
+        self.assertEqual("read", self.daemon.authority_request_band(message))
+        reply = await self.daemon.dispatch(message)
+        self.assertEqual("capability_demand_result", reply["type"])
+        self.assertEqual({"lease": None}, reply["result"])
+        wrong = dict(message, binding=dict(B, grant_token="revoked"))
+        good, stale = await self.daemon.dispatch_managed_reads([message, wrong])
+        self.assertEqual(reply, good)
+        self.assertEqual(409, stale["status"])
+        self.assertNotIn("result", stale)
+        self.current_phase = "prepared"
+        denied = await self.daemon.dispatch(message)
+        self.assertEqual(503, denied["status"])
+        self.assertNotIn("result", denied)
+
     async def test_read_batch_verifies_each_actor_and_shares_publication(self):
         import copy
         signed = self.message()["envelope"]
