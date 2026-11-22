@@ -50,7 +50,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 
 
@@ -272,21 +272,6 @@ PRAGMA user_version=1;
             self._db.execute("CREATE TRIGGER entity_heads_update AFTER UPDATE ON entity_versions "
                              "BEGIN " + repair_old + upsert + " END")
 
-    @contextmanager
-    def _read_transaction(self):
-        self._open()
-        nested = self._db.in_transaction
-        if not nested:
-            self._db.execute("BEGIN")
-        try:
-            yield
-            if not nested:
-                self._db.execute("COMMIT")
-        except BaseException:
-            if not nested:
-                self._db.execute("ROLLBACK")
-            raise
-
     def _open(self):
         if self._closed:
             raise RuntimeError("VisionStore is closed")
@@ -303,11 +288,27 @@ PRAGMA user_version=1;
             raise
 
     def _map_locked(self, map_id, revision=None):
-        row = self._db.execute("SELECT * FROM maps WHERE id=?", (map_id,)).fetchone()
+        return self._map_info(self._db, map_id, revision)
+
+    @contextmanager
+    def _map_reader(self):
+        # Admission is serialized with close(). Each admitted read owns its WAL
+        # snapshot and connection, even if the store closes before it finishes.
+        with self._lock:
+            self._open()
+        with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
+                                     uri=True, isolation_level=None)) as reader:
+            reader.row_factory = sqlite3.Row
+            reader.execute("BEGIN")
+            yield reader
+
+    @staticmethod
+    def _map_info(db, map_id, revision):
+        row = db.execute("SELECT * FROM maps WHERE id=?", (map_id,)).fetchone()
         if row is None:
             raise KeyError("unknown map_id: " + str(map_id))
         rev = row["revision"] if revision is None else _integer(revision, "revision")
-        item = self._db.execute(
+        item = db.execute(
             "SELECT * FROM map_revisions WHERE map_id=? AND revision=?",
             (map_id, rev)).fetchone()
         if item is None:
@@ -800,41 +801,37 @@ PRAGMA user_version=1;
         region = _bounds(bounds) if bounds is not None else None
         if kinds is not None:
             kinds = sorted({_id(kind, "kind") for kind in kinds})
-        with self._lock, self._read_transaction():
-            self._open()
-            info = self._map_locked(map_id, revision)
+        with self._map_reader() as reader:
+            info = self._map_info(reader, map_id, revision)
             query_key = {"map_id": map_id, "revision": info["revision"],
                          "bounds": list(region) if region is not None else None, "kinds": kinds}
             offset = self._cursor(cursor, query_key)
             if kinds is not None and not kinds:
                 return {"map": info, "entities": [], "next_cursor": None}
-            kind_filter = (" AND kind IN (" + ",".join("?" for _ in kinds) + ")"
-                           if kinds is not None else "")
             if info["revision"] == info["latest_revision"]:
-                sql = ("SELECT e.* FROM entity_heads h JOIN entity_versions e "
-                       "ON e.map_id=h.map_id AND e.revision=h.revision AND e.ordinal=h.ordinal "
-                       "WHERE h.map_id=? AND e.deleted=0")
-                args = [map_id]
-                if kinds is not None:
-                    sql += " AND h.kind IN (" + ",".join("?" for _ in kinds) + ")"
-                    args.extend(kinds)
+                join = "e.map_id=h.map_id AND e.revision=h.revision AND e.ordinal=h.ordinal"
+                args = []
             else:
-                sql = (
-                    "SELECT e.* FROM entity_versions e JOIN "
-                    "(SELECT kind,entity_id,MAX(revision) revision FROM entity_versions "
-                    "WHERE map_id=? AND revision<=?" + kind_filter +
-                    " GROUP BY kind,entity_id) v "
-                    "ON e.kind=v.kind AND e.entity_id=v.entity_id AND e.revision=v.revision "
-                    "WHERE e.map_id=? AND e.deleted=0")
-                args = [map_id, info["revision"], *(kinds or []), map_id]
+                # The heads index retains every identity, including tombstones.
+                # Seek its last version at the requested revision before filtering.
+                join = ("e.rowid=(SELECT v.rowid FROM entity_versions v WHERE "
+                        "v.map_id=h.map_id AND v.kind=h.kind AND v.entity_id=h.entity_id "
+                        "AND v.revision<=? ORDER BY v.revision DESC LIMIT 1)")
+                args = [info["revision"]]
+            sql = ("SELECT e.* FROM entity_heads h JOIN entity_versions e ON " + join +
+                   " WHERE h.map_id=? AND e.deleted=0")
+            args.append(map_id)
+            if kinds is not None:
+                sql += " AND h.kind IN (" + ",".join("?" for _ in kinds) + ")"
+                args.extend(kinds)
             if region is not None:
                 sql += " AND e.min_x IS NOT NULL AND e.max_x>=? AND e.min_x<=? AND e.max_y>=? AND e.min_y<=?"
                 args.extend([region[0], region[3], region[1], region[4]])
                 if region[2] is not None:
                     sql += " AND e.min_z IS NOT NULL AND e.max_z>=? AND e.min_z<=?"
                     args.extend([region[2], region[5]])
-            sql += " ORDER BY e.kind,e.entity_id LIMIT ? OFFSET ?"
-            rows = self._db.execute(sql, [*args, limit + 1, offset]).fetchall()
+            sql += " ORDER BY h.kind,h.entity_id LIMIT ? OFFSET ?"
+            rows = reader.execute(sql, [*args, limit + 1, offset]).fetchall()
             more = len(rows) > limit
             return {"map": info, "entities": [self._entity(row) for row in rows[:limit]],
                     "region_excludes_unlocated_entities": region is not None,
