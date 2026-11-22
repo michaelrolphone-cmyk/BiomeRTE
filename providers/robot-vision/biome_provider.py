@@ -619,7 +619,8 @@ def withdraw_registered_queries(remote, cfg, registrations, pending, legacy_fall
 
     for path in sorted(pending.glob("*.json")):
         try:
-            args = json.loads(path.read_text())
+            record = json.loads(path.read_text())
+            args = record.get("arguments", record)
             if (args.get("provider"), args.get("resource"), args.get("service")) != (
                     cfg["provider"], cfg["resource"], "robot-vision"):
                 continue
@@ -628,8 +629,16 @@ def withdraw_registered_queries(remote, cfg, registrations, pending, legacy_fall
             if digest != path.stem:
                 continue
             try:
-                result = remote.call("cap.withdraw", args, "vision-withdraw-" + digest)
+                request_id = record.get("request_id", "vision-withdraw-" + digest)
+                result = remote.call("cap.withdraw", args, request_id)
             except Exception as error:
+                if (getattr(error, "status", None) == 410 and
+                        str(error).strip() == "Receipt result retired; request will not execute again"):
+                    # A retired receipt cannot answer a retry. The unchanged registration
+                    # conditions also fence this new request if a successor has appeared.
+                    next_id = "vision-withdraw-" + hashlib.sha256(request_id.encode()).hexdigest()
+                    write_registry_json(path, {"arguments": args, "request_id": next_id})
+                    continue
                 # Only the process still holding the publisher lock may use the old
                 # API. A replay, timeout, or authorization error cannot issue a blind withdrawal.
                 missing = getattr(error, "status", None) in (400, 404) and str(error).strip() in (

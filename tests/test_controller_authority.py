@@ -97,6 +97,92 @@ class ControllerTests(unittest.TestCase):
         self.authority.snapshot()
         self.assertFalse(self.authority.checkpoint_is_dirty())
 
+    def test_restored_supervised_offer_requires_recent_contact_from_its_signed_provider(self):
+        contract, resource = "host.terminal.run:1", "terminal.test"
+        def seed(tx):
+            peer = tx.need("peers", self.peer)
+            tx.put("peers", self.peer, dict(peer, scopes=["provider.poll", "cap.offer", "cap.fenced", "provider.claim", "provider.result",
+                "resource:" + resource, "offer:" + contract]))
+            ctx = Context(self.app)
+            providers.define(tx, ctx, "host.terminal.run", {}, {})
+            providers.offer(tx, ctx, self.peer, contract, resource, "ready", "terminal",
+                {"execution_custody": True, "heartbeat_interval_seconds": 2,
+                 "missed_heartbeats_limit": 3})
+            providers.offer(tx, ctx, "delegated-worker", contract, "terminal.delegated",
+                            "ready", "terminal", {"execution_custody": True})
+        self.app.stores["site"].execute(seed)
+
+        def catalog():
+            view = self.call("cap.discover", {"contract": contract})
+            return {o["resource"]: o["state"] for o in view["offers"]}
+
+        def reserve(task, request=None):
+            return self.call("cap.acquire", dict(contract=contract, resource=resource, task=task), request or task)
+
+        with patch("biomerte.providers.time.monotonic", return_value=100) as clock:
+            self.assertEqual(catalog(), {resource: "offline", "terminal.delegated": "ready"})
+            self.assertEqual(reserve("waiting")["state"], "queued")
+            self.call("provider.poll", {"provider": self.peer}, "operator-reads-inbox")
+            forged = self.envelope("provider.poll", {"provider": self.peer}, "wrong", peer=True)
+            forged["id"] = "modified"
+            with self.assertRaises(Fault):
+                self.authority.call(forged, False)
+            self.assertEqual(catalog()[resource], "offline")
+            self.call("provider.poll", {"provider": self.peer}, "own-poll", peer=True)
+            self.assertEqual(catalog()[resource], "ready")
+            held = reserve("waiting", "refresh-after-contact")
+            self.assertEqual(held["state"], "fencing")
+            fence = dict(lease=held["id"], generation=held["generation"], provider=self.peer)
+            self.call("cap.fenced", fence, "fence", peer=True)
+            invocation = dict(lease=held["id"], inputs={}, operation="original-work")
+            self.call("cap.invoke", invocation, "original-invoke")
+            job = dict(provider=self.peer, generation=held["generation"], operation="original-work")
+            self.call("provider.claim", job, "claim", peer=True)
+            self.call("provider.result", dict(job, state="uncertain", result={}), "uncertain", peer=True)
+            clock.return_value = 107
+            self.assertEqual(catalog()[resource], "offline")
+            self.assertEqual(reserve("another")["state"], "queued")
+            with self.assertRaises(Fault):
+                self.call("cap.invoke", dict(invocation, operation="new-work"), "new-invoke")
+            original = self.call("cap.status", {"operation": "original-work"})
+            self.assertEqual((original["state"], original["lease"]), ("uncertain", held["id"]))
+            retained = self.call("cap.leases", {"task": "waiting"})[0]
+            self.assertEqual((retained["id"], retained["generation"], retained["state"]),
+                             (held["id"], held["generation"], "bound"))
+            self.call("provider.poll", {"provider": self.peer}, "reconnected", peer=True)
+            self.assertEqual(catalog()[resource], "ready")
+
+    def test_contact_from_one_resource_cannot_reopen_a_withdrawn_or_unrelated_offer(self):
+        contract = "docker.cli:1"
+        def seed(tx):
+            ctx = Context(self.app)
+            providers.define(tx, ctx, "docker.cli", {}, {})
+            peer = tx.need("peers", self.peer)
+            tx.put("peers", self.peer, dict(peer, scopes=["provider.poll", "cap.offer",
+                "offer:" + contract, "resource:first", "resource:second"]))
+            for resource in ("first", "second"):
+                providers.offer(tx, ctx, self.peer, contract, resource, "ready", "docker",
+                                {"execution_custody": True})
+        self.app.stores["site"].execute(seed)
+
+        def states():
+            return {o["resource"]: o["state"] for o in self.call("cap.discover",
+                                                                {"contract": contract})["offers"]}
+        publish = dict(provider=self.peer, resource="first", contract=contract, service="docker")
+        old = self.call("cap.offer", publish, "own-register", peer=True)
+        self.assertEqual(states(), {"first": "ready", "second": "offline"})
+        lease = self.call("cap.acquire", dict(contract=contract, task="runner", resource="first"))
+        self.app.provider_contacts.clear()  # A replacement controller has a new local observation set.
+        pending = dict(provider=self.peer, lease=lease["id"], generation=lease["generation"])
+        self.call("provider.poll", dict(pending, generation=pending["generation"]+1), "wrong-generation", peer=True)
+        self.assertEqual(states(), {"first": "offline", "second": "offline"})
+        self.call("provider.poll", pending, "exact-lease-inbox", peer=True)
+        self.assertEqual(states(), {"first": "ready", "second": "offline"})
+        self.call("cap.withdraw", dict(provider=self.peer, resource="first", service="docker",
+                                      registrations={contract: old["registration"]}), "withdraw", peer=True)
+        self.call("provider.poll", {"provider": self.peer}, "general-inbox", peer=True)
+        self.assertEqual(states(), {"first": "offline", "second": "ready"})
+
     def test_signed_alias_preserves_original_signature(self):
         result = self.call("system.info")
         self.assertEqual(result["node"], self.node["node"])

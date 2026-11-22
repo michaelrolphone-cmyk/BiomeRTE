@@ -37,6 +37,25 @@ BATCHABLE_BANDS = frozenset(("diagnostic", "read", "discovery", "registry",
                              "reservation", "fence", *RECOVERY_BANDS))
 
 
+class StageTimes:
+    """Measure completed stages using fixed labels and a monotonic clock."""
+    def __init__(self):
+        self.start = self.previous = time.monotonic()
+        self.seconds = {}
+
+    def mark(self, name):
+        now = time.monotonic()
+        self.seconds[name] = now - self.previous
+        self.previous = now
+
+    def report(self, activity, count=1):
+        total = time.monotonic() - self.start
+        if total >= 2.0:
+            LOG.warning("Managed runtime stages activity=%s count=%d seconds=%.3f %s",
+                        activity, count, total, " ".join(
+                            "%s=%.3f" % (name, seconds) for name, seconds in self.seconds.items()))
+
+
 def secret(path):
     value = pathlib.Path(path).read_text().strip()
     if len(value) < 32:
@@ -879,6 +898,7 @@ class AuthorityDaemon:
             await self.publish()
 
     async def dispatch(self,message):
+        stages = StageTimes()
         typ=message.get("type")
         reply=self.authority_response(message, self.binding)
         try:
@@ -890,11 +910,14 @@ class AuthorityDaemon:
             if not controller:
                 await self.transport.validate(self.binding)
             phase=await self.phase()
+            stages.mark("phase")
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
             async with self.lock:
+                stages.mark("lock_wait")
                 # Reconcile any locally durable update whose previous response
                 # was lost before processing another request.
                 await self.publish()
+                stages.mark("prior_publish")
                 if typ=="call":
                     result=await asyncio.to_thread(self.authority.call,
                                       message["envelope"],preparing)
@@ -917,13 +940,16 @@ class AuthorityDaemon:
                         reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
                 else:
                     raise Fault("Service effect admission is unavailable",503)
+                stages.mark("operation")
                 await self.publish()
+                stages.mark("result_publish")
                 if not controller:
                     await self.transport.validate(self.binding,preparing=preparing)
             if controller:
                 # The result is already witnessed. The final check still
                 # fences the reply, without holding the application lock.
                 await self.transport.validate(self.binding,preparing=preparing)
+            stages.mark("validate")
         except (Fault,CheckpointError,KeyError,TypeError) as error:
             reply.update(status=getattr(error,"status",409),error=str(error))
             reply.pop("result",None)
@@ -932,6 +958,7 @@ class AuthorityDaemon:
             reply.update(status=503,error="Service checkpoint transport unavailable")
             reply.pop("result",None)
             reply.pop("grant",None)
+        stages.report(self.authority_request_band(message))
         return reply
 
     async def fence(self,request):
@@ -968,28 +995,40 @@ class AuthorityDaemon:
             return web.json_response({"ready":False},status=503)
 
     async def maintain_once(self):
+        stages = StageTimes()
         self.maintenance_stage = "validate_binding"
         await self.transport.validate(self.binding,preparing=False)
+        stages.mark("validate")
         self.maintenance_stage = "read_phase"
         phase=await self.phase()
+        stages.mark("phase")
         if phase["phase"]!="active":
             return
         async with self.lock:
+            stages.mark("lock_wait")
             self.maintenance_stage = "publish_before_tick"
             await self.publish()
+            stages.mark("prior_publish")
             self.maintenance_stage = "authority_tick"
             await asyncio.to_thread(self.authority.maintain)
+            stages.mark("maintenance")
             self.maintenance_stage = "publish_tick"
             await self.publish()
+            stages.mark("result_publish")
             self.maintenance_stage = "validate_tick"
             await self.transport.validate(self.binding,preparing=False)
-            if getattr(self,"events",None) is not None:
+            stages.mark("validate_tick")
+            if getattr(self,"events",None) is not None and await asyncio.to_thread(self.events.active):
                 self.maintenance_stage = "event_delivery"
                 await asyncio.to_thread(self.events.deliver)
+                stages.mark("events")
                 self.maintenance_stage = "publish_events"
                 await self.publish()
+                stages.mark("publish_events")
                 self.maintenance_stage = "validate_events"
                 await self.transport.validate(self.binding,preparing=False)
+                stages.mark("validate_events")
+        stages.report("maintenance")
 
     async def maintenance_loop(self):
         interval=self.config.get("maintenance_interval_s",1)
@@ -1254,6 +1293,7 @@ class AuthorityDaemon:
     async def dispatch_managed_reads(self, messages):
         # Share a publication barrier per batch. Each envelope keeps its own native
         # authorization, receipt and transaction. No reply precedes the ACK.
+        stages = StageTimes()
         replies = [self.authority_response(message, self.binding) for message in messages]
 
         def reject(reply, error):
@@ -1264,8 +1304,11 @@ class AuthorityDaemon:
         try:
             if (await self.phase())["phase"] != "active":
                 raise Fault("Service effect admission is unavailable", 503)
+            stages.mark("phase")
             async with self.lock:
+                stages.mark("lock_wait")
                 await self.publish()
+                stages.mark("prior_publish")
                 for message, reply in zip(messages, replies):
                     try:
                         if message.get("binding") != self.binding:
@@ -1289,38 +1332,31 @@ class AuthorityDaemon:
                         reject(reply, error)
                     except ValueError:
                         reject(reply, Fault("Invalid managed read request", 400))
+                stages.mark("operations")
                 await self.publish()
+                stages.mark("result_publish")
             await self.transport.validate(self.binding, preparing=False)
+            stages.mark("validate")
         except (Fault, CheckpointError, KeyError, TypeError) as error:
             for reply in replies:
                 reject(reply, error)
         except (OSError, asyncio.TimeoutError):
             for reply in replies:
                 reject(reply, Fault("Service checkpoint transport unavailable", 503))
+        stages.report("batch", len(messages))
         return replies
 
     async def serve_controller_socket(self, ws):
-        # Keep the wire reader responsive while the single dispatcher runs
-        # fenced transactions. Lease updates, reads, and general work each
-        # have bounded waiting space and take turns if all are busy.
+        # The gateway admits requests across the whole link. Keep that window
+        # work-conserving here and schedule the admitted classes fairly below.
         bands = ("result_status", "read", "lease_demand", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
-        recovery_slots = {"result_status": 4, "provider_progress": 4, "fence": 4, "lease_status": 4}
-        fast_slots = {"inspection": 4, "read": 8, "result_status": recovery_slots["result_status"]}
+        fast_slots = {"inspection": 4, "read": 8, "result_status": 4}
         # Protocol v1 gateways used 64 concurrent requests and a 20s response
         # budget before advertising the configured values at registration.
         rpc_limit, rpc_timeout = 64, 20.0
         outstanding = dict.fromkeys((*bands, *stream_bands, "diagnostic"), 0)
-        # Give every class a turn even if one operation fills the common pool.
-        # On a small connection, reserve at most half of its slots and give
-        # the first guarantees to the operations that can settle existing work.
-        first = dict.fromkeys((*recovery_slots, "inspection", "read", "attachment", *outstanding))
-        # Placement has a separate dispatch queue but shares the existing read
-        # admission budget. Reserving another credit would displace other callers.
-        first.pop("lease_demand")
-        credits = list(first) + [band for band, slots in recovery_slots.items() for _ in range(slots - 1)]
-        reserved = Counter(credits[:rpc_limit // 2])
         pending = {band: [] for band in outstanding}
         next_rejection_log = {}
         enqueued_at = {}
@@ -1337,23 +1373,16 @@ class AuthorityDaemon:
             enqueued_at[id(message)] = time.monotonic()
             ready.set()
 
-        def admission_band(band):
-            return "read" if band == "lease_demand" else band
-
         def admit(band):
-            band = admission_band(band)
-            # Keep space on the gateway connection for callers reading results,
-            # advancing leases and validating fences while ordinary calls queue.
-            # Include requests already dispatched until their replies are sent.
+            # Include dispatched work through reply delivery. After an upstream
+            # timeout the original transaction can still be settling locally.
             total = sum(outstanding.values())
-            held_for_others = sum(max(0, slots - outstanding[name])
-                                  for name, slots in reserved.items() if name != band)
-            if total >= rpc_limit - held_for_others:
+            if total >= rpc_limit:
                 now = time.monotonic()
                 if now >= next_rejection_log.get(band, 0):
                     LOG.warning("Managed runtime admission rejected band=%s outstanding=%d "
-                                "rpc_limit=%d reserved_for_others=%d",
-                                band, total, rpc_limit, held_for_others)
+                                "rpc_limit=%d active_classes=%s", band, total, rpc_limit,
+                                {name: count for name, count in outstanding.items() if count})
                     next_rejection_log[band] = now + rpc_timeout
                 return False
             outstanding[band] += 1
@@ -1367,7 +1396,7 @@ class AuthorityDaemon:
                 enqueue(message)
             else:
                 await ws.send_json(reply)
-                outstanding[admission_band(self.authority_request_band(message))] -= 1
+                outstanding[self.authority_request_band(message)] -= 1
 
         async def dispatch_queue():
             index = 0
@@ -1431,8 +1460,8 @@ class AuthorityDaemon:
                         # Mutations with their own barrier (and preparation
                         # calls) stay FIFO and use the original dispatch path.
                         batch = [pending[band].pop(0)]
-                    for message in batch:
-                        enqueued_at.pop(id(message))
+                    dispatch_started = time.monotonic()
+                    queue_seconds = dispatch_started - min(enqueued_at.pop(id(message)) for message in batch)
                     if band == "diagnostic":
                         # Keep the prior stream-vs-ordinary turn during diagnostics.
                         last_diagnostic = True
@@ -1453,7 +1482,13 @@ class AuthorityDaemon:
                             if not ws.closed:
                                 await ws.send_json(reply)
                     for message in batch:
-                        outstanding[admission_band(self.authority_request_band(message))] -= 1
+                        outstanding[self.authority_request_band(message)] -= 1
+                    execution_seconds = time.monotonic() - dispatch_started
+                    if ((len(batch) > 1 or queue_seconds >= 3)
+                            and queue_seconds + execution_seconds >= 3):
+                        LOG.warning("Managed runtime slow queue primary=%s admitted=%d wait_s=%.3f "
+                                    "execution_s=%.3f classes=%s", band, len(batch), queue_seconds,
+                                    execution_seconds, dict(Counter(self.authority_request_band(m) for m in batch)))
             finally:
                 if not ws.closed:
                     await ws.close()
@@ -1469,7 +1504,6 @@ class AuthorityDaemon:
                     timeout = message.get("rpc_timeout_s")
                     if type(limit) is int and limit > 0:
                         rpc_limit = limit
-                        reserved = Counter(credits[:rpc_limit // 2])
                     if type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0:
                         rpc_timeout = timeout
                     self.connected = True

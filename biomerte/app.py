@@ -65,6 +65,7 @@ class Application:
         self.node, self.site = self.config['node'], self.config['site']
         self.key = os.path.join(directory, 'node.key')
         self.controller_runtime = dict(controller_runtime or {})
+        self.provider_contacts = {}
         self.controller_aliases = frozenset()
         self.controller_operator_actors = frozenset()
         self.controller_actor_aliases = {}
@@ -174,6 +175,9 @@ class Application:
                 operator_actor = realm == 'site' and peer['id'] in self.controller_operator_actors
                 actor = self.controller_actor_aliases.get(peer['id'], peer['id']) if operator_actor else peer['id']
                 ctx = Context(self, actor, realm, None if operator_actor else peer['scopes'])
+                if (self.controller_runtime and realm == 'site' and not cached and not operator_actor
+                        and name in ('cap.offer', 'provider.poll') and args.get('provider') == peer['id']):
+                    ctx.authenticated_provider = peer['id']
                 if operator_actor:
                     ctx.authenticated_actor = peer['id']
                 if not operator_actor and (name.startswith('peer.') or name.startswith('pair.') or name == 'system.snapshot'):

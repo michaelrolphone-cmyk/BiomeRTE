@@ -79,6 +79,17 @@ class ConditionalPublication(unittest.TestCase):
         self.assertEqual(latest['withdrawn_from'],offline)
         self.assertNotEqual(latest['registration'],offline)
 
+    def test_only_a_matching_signed_ready_publication_proves_contact(self):
+        db = self.a.stores['site']
+        ctx = Context(self.a, 'camera', 'site', {'cap.offer', 'resource:vision', 'offer:one:1'})
+        ctx.authenticated_provider = 'camera'
+        args = dict(self.scope, offers=[self.entry('one', None)])
+        db.execute(lambda tx:invoke(tx,ctx,'cap.publish',args))
+        self.assertNotIn(('camera','vision'),self.a.provider_contacts)
+        args['offers'][0]['expected_registration'] = self.rows['one']['registration']
+        db.execute(lambda tx:invoke(tx,ctx,'cap.publish',args))
+        self.assertIn(('camera','vision'),self.a.provider_contacts)
+
     def test_restore_preserves_bound_lease_guard_capacity_and_other_providers(self):
         db=self.a.stores['site']
         other=self.call('cap.offer',dict(provider='another',resource='different',service='other',contract='one:1'))
