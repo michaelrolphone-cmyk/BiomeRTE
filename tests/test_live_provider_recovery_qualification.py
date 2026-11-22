@@ -1,8 +1,14 @@
+import io
 import json
 import struct
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, AsyncMock
 
-from tests.qualify_live_provider_recovery import CONSUMERS, FEEDS, assess, feed_record
+from aiohttp import WSMsgType
+from PIL import Image
+
+from tests.qualify_live_provider_recovery import CONSUMERS, FEEDS, assess, capture, feed_record
 
 
 class LiveProviderRecoveryQualification(unittest.TestCase):
@@ -11,10 +17,11 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
             "submission": {"status": 200, "operation": "vision-check", "lease": "lease-1"},
             "results": [{"status": 200, "operation": "vision-check", "lease": "lease-1",
                          "state": "succeeded", "has_result": True}],
-            "lease_check": {"operation": "vision-check", "lease": "lease-1", "state": "released"},
+            "lease_check": {"status": 200, "operation": "vision-check", "lease": "lease-1", "state": "released"},
             "streams": {consumer: {"seconds": 80, "feeds": {
                 feed: {"records": 80, "max_gap_seconds": 0.9,
-                       "max_delivery_age_seconds": 0.5, "unclocked_records": 0} for feed in FEEDS}}
+                       "max_delivery_age_seconds": 0.5, "unclocked_records": 0,
+                       **({"decoded_frames": 80, "invalid_frames": 0} if feed.startswith("frame:") else {})} for feed in FEEDS}}
                 for consumer in CONSUMERS},
         }
 
@@ -74,3 +81,42 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
         value = feed_record(struct.pack("!I", len(raw)) + raw + b"jpeg")
         self.assertIsNotNone(value)
         self.assertEqual(value[0], "frame:rear")
+
+
+class RealFrameQualification(unittest.IsolatedAsyncioTestCase):
+    async def test_corruption_does_not_mark_camera_capture_seen_before_valid_retry(self):
+        def wire(frame_id, image):
+            header = json.dumps({"type": "frame", "camera_id": "rear", "frame_id": frame_id}).encode()
+            return SimpleNamespace(type=WSMsgType.BINARY, data=struct.pack("!I", len(header)) + header + image)
+
+        jpeg, png = io.BytesIO(), io.BytesIO()
+        image = Image.new("RGB", (32, 24), "green")
+        image.save(jpeg, "JPEG")
+        image.save(png, "PNG")
+        good = jpeg.getvalue()
+        socket = MagicMock()
+        socket.receive = AsyncMock(side_effect=[
+            wire("1", b"invalid data"), wire("1", good), wire("2", good[:-12]),
+            wire("3", png.getvalue()), wire("4", b""), wire("5", good), wire("5", good), wire("5", b"corrupt duplicate"),
+            SimpleNamespace(type=WSMsgType.CLOSE),
+        ])
+        session = MagicMock()
+        session.ws_connect.return_value.__aenter__.return_value = socket
+        sample = (await capture(session, "ws://localhost", "fixture", 4))["feeds"]["frame:rear"]
+        self.assertEqual(sample["records"], 2)
+        self.assertEqual(sample["decoded_frames"], 2)
+        self.assertEqual(sample["invalid_frames"], 5)
+        self.assertEqual(sample["duplicate_records"], 1)
+
+    def test_old_counts_and_failed_lease_read_cannot_certify_recovery(self):
+        fixture = LiveProviderRecoveryQualification()
+        fixture.setUp()
+        data = fixture.evidence
+        data["lease_check"]["status"] = 503
+        del data["streams"]["public"]["feeds"]["frame:front"]["decoded_frames"]
+        data["streams"]["bridge"]["feeds"]["frame:rear"]["invalid_frames"] = 1
+        failures = assess(data, 80, 1, 1)
+        self.assertEqual(len(failures), 3)
+        self.assertTrue(any("lease" in fail for fail in failures))
+        self.assertTrue(any("public frame:front" in fail for fail in failures))
+        self.assertTrue(any("bridge frame:rear" in fail for fail in failures))
