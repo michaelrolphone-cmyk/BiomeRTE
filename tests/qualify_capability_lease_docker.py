@@ -39,8 +39,18 @@ class RealLease(test_controller_authority.ControllerTests):
         platform = ds.normalize_platform(version["Os"], version["Arch"])
         image = engine.image(os.environ["BIOME_TEST_LEASE_IMAGE"])["Id"]
         scope = dict(provider=self.peer, resource=worker, contract="docker.fixture:1")
-        manifest = dict(id=worker, images={platform: image}, command=["sleep", "600"],
-                        health={"command": ["sh", "-c", "test -n \"$BIOME_CAPABILITY_LEASE_ID\""],
+        transport = Path(self.tmp.name) / "rpc"
+        transport.mkdir()
+        source = Path(__file__).resolve().parents[1]
+        manifest = dict(id=worker, images={platform: image},
+                        entrypoint=["python"], command=["/lease-src/tests/lease_fixture_worker.py"],
+                        environment=dict(FIXTURE_PROVIDER=self.peer, FIXTURE_RESOURCE=worker,
+                                         FIXTURE_SITE=self.node["node"],
+                                         PYTHONPATH="/lease-src", PYTHONDONTWRITEBYTECODE="1"),
+                        mounts=[dict(source=str(source), target="/lease-src", read_only=True),
+                                dict(source=str(transport), target="/transport",
+                                     read_only=False, cache_only=True)],
+                        health={"command": ["test", "-f", "/lease-tmp/ready"],
                                 "interval_s": 1}, effect_policy="stateless", state_policy="lease_scoped",
                         capability_lease=dict(scope, controller=self.node["node"]),
                         lease_ttl_s=3)
@@ -63,6 +73,17 @@ class RealLease(test_controller_authority.ControllerTests):
         def until(condition):
             deadline = time.monotonic() + 45
             while True:
+                for request in transport.glob("*.request"):
+                    operation, args, rid = json.loads(request.read_text())
+                    self.assertIn(operation, {"provider.poll", "cap.fenced", "provider.claim",
+                                              "provider.result", "cap.status"})
+                    try:
+                        answer = {"result": self.call(operation, args, rid, peer=True)}
+                    except Exception as error:
+                        answer = {"error": str(error)}
+                    request.with_suffix(".sending").write_text(json.dumps(answer))
+                    request.with_suffix(".sending").replace(request.with_suffix(".reply"))
+                    request.unlink()
                 runner.tick()
                 if condition():
                     return
@@ -70,10 +91,10 @@ class RealLease(test_controller_authority.ControllerTests):
                                 str(coordinator.status()["services"]))
                 time.sleep(.2)
 
-        self.call("cap.define", dict(name="docker.fixture", inputs={}, outputs={"system": "str"}), "define-lease")
+        self.call("cap.define", dict(name="docker.fixture", inputs={}, outputs={"system": "str", "container": "str"}), "define-lease")
         self.call("peer.trust", dict(public_key=self.peer_public, label="docker-fixture-worker",
                                      scopes=["cap.offer", "offer:" + scope["contract"], "resource:" + worker,
-                                             "cap.fenced", "provider.claim", "provider.result"]),
+                                             "cap.fenced", "provider.poll", "provider.claim", "provider.result", "cap.status"]),
                   "enroll-worker")
         self.call("cap.offer", dict(scope, capacity=1), "offer-lease", peer=True)
         runner.tick()
@@ -110,17 +131,16 @@ class RealLease(test_controller_authority.ControllerTests):
         self.assertEqual(lease["id"], acquire("lease-one")["id"])
         runner.tick()
         self.assertEqual([child], [row["Id"] for row in engine.containers(worker)])
-        self.call("cap.fenced", dict(provider=scope["provider"], lease=lease["id"],
-                                     generation=lease["generation"]), "fence-one", peer=True)
         self.call("cap.invoke", dict(lease=lease["id"], operation="container-system", inputs={},
                                      release_after_result=False), "submit-container-system")
-        custody = dict(provider=scope["provider"], operation="container-system", generation=lease["generation"])
-        self.call("provider.claim", custody, "claim-container-system", peer=True)
-        system = subprocess.check_output(["docker", "exec", child, "uname", "-s"], text=True).strip()
-        self.call("provider.result", dict(custody, state="succeeded", result={"system": system}),
-                  "return-container-system", peer=True)
+        def result_ready():
+            action = self.call("cap.status", dict(operation="container-system"), uuid.uuid4().hex)
+            return action.get("state") == "succeeded"
+
+        until(result_ready)
         receipt = self.call("cap.status", dict(operation="container-system"), "get-container-system")
-        self.assertEqual({"system": "Linux"}, receipt["result"])
+        self.assertEqual({"system": "Linux", "container": engine.inspect(child)["Config"]["Hostname"]},
+                         receipt["result"])
         self.call("cap.release", dict(lease=lease["id"]), "release-one")
         until(lambda: not engine.containers(worker) and not runner.pending_cleanup)
         assert_removed(child, volumes)

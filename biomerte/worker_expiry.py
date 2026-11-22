@@ -62,9 +62,12 @@ def live_ids(worker,inventory=None):
 def expire(worker,limit=8,after='',inventory=None):
     """Future/previously compacted records: genuine ACK, no remaining debug copy."""
     if type(limit) is not int or not 1<=limit<=64:raise ValueError('Bounded expiry page required')
-    db=worker.db;live=live_ids(worker,inventory)
+    db=worker.db
     rows=db.execute("SELECT a.id,a.signature,a.state,CASE WHEN a.result='{}' THEN '{}' ELSE NULL END,a.resource FROM result_acknowledged k "
         "JOIN actions a ON a.id=k.id WHERE k.id>? ORDER BY k.id LIMIT ?",(after,limit)).fetchall()
+    if not rows:
+        return {'deleted': [], 'protected': [], 'after': after, 'more': False}
+    live=live_ids(worker,inventory)
     deleted=[];protected=[]
     for row in rows:
         operation,signature,state,body,guard=row;after=operation

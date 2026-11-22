@@ -11,6 +11,34 @@ images = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(images)
 
 class ImageReleaseTests(unittest.TestCase):
+    def test_release_rejects_armv7_runtime_labeled_arm64_and_reclaims_inspection(self):
+        image = "sha256:" + "a" * 64
+        arm32 = bytearray(20)
+        arm32[:6] = b"\x7fELF\x01\x01"
+        arm32[18:20] = (40).to_bytes(2, "little")
+
+        def engine(argv):
+            if argv[1:3] == ["image", "inspect"]:
+                return json.dumps([{"Id": image, "Os": "linux", "Architecture": "arm64",
+                                    "Config": {"Entrypoint": ["python"]}}])
+            if argv[1] == "create":
+                return "test-inspection-container"
+            if argv[1] == "cp":
+                self.assertEqual("test-inspection-container:/usr/local/bin/python", argv[-2])
+                Path(argv[-1]).write_bytes(arm32)
+                return ""
+            self.assertEqual(["docker", "rm", "-v", "test-inspection-container"], argv)
+            return ""
+
+        with patch.object(images, "call", side_effect=engine) as invoke:
+            with self.assertRaisesRegex(ValueError, "does not match linux/arm64"):
+                images.inspect_image("docker", image, "linux/arm64")
+            self.assertEqual("rm", invoke.call_args.args[0][1])
+        images.validate_elf(arm32, "linux/arm/v7")
+        arm32[4] = 2
+        arm32[18:20] = (183).to_bytes(2, "little")
+        images.validate_elf(arm32, "linux/arm64")
+
     def sample(self, directory):
         artifact = directory / "service-linux-arm64.tar"
         artifact.write_bytes(b"verified native export")
