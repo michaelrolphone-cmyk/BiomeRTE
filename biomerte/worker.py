@@ -776,6 +776,9 @@ def reconcile_receipt(directory, remote, operation, state, outcome):
                 raise Fault('Conflicting expired result', 409)
             # Never submit a recovery summary as original provider output.
             result = a
+        elif confirms(a):
+            # The previous write committed before the transport lost its reply.
+            result = a
         else:
             result = remote.call('provider.result', {'provider': remote.node, 'operation': operation,
                                                      'generation': a['generation'], 'state': state, 'result': outcome})
