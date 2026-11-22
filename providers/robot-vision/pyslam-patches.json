@@ -50,9 +50,9 @@
     },
     {
       "original_sha256": "c60086bbbba82c233f687ce7f64c3918b18a8f09b5065e4f50ee3a50148c0753",
-      "patched_sha256": "95045f7d2c17277e3d0c6097eda8b0e0da0303a355c739605e00d15eb4a0bd85",
+      "patched_sha256": "8e321a024c7dd42b30593e24ce909d4d24e7e9ced703f216f1c9074560558005",
       "path": "pyslam/slam/relocalizer.py",
-      "reason": "Recheck live candidate membership without a check-then-lookup race after loop detection."
+      "reason": "Recheck live candidates, skip impossible support and evaluate the final PnP hypothesis."
     },
     {
       "original_sha256": "88bb7df68d64dce851d3dd3c3520a8f918627d01f7ac0660d48031938429d1aa",
@@ -65,6 +65,12 @@
       "patched_sha256": "26a3700e0294aee2ee8223913358a10e9bab5e54bae8dadae6421cff6bf38b71",
       "path": "pyslam/slam/keyframe.py",
       "reason": "Preserve deployed filtering of missing culled keyframe edges during restore."
+    },
+    {
+      "original_sha256": "a5c6aec08be5274049698834dd6d7299f623247db79c134f315b8b401e7e1bee",
+      "patched_sha256": "9874f49e15b5e0ccd55dc1bd8835213b959f2bc01f87e89fe2e01840f6eb8905",
+      "path": "cpp/modules/solvers/MLPnPsolver.cpp",
+      "reason": "Honor the native total and per-call RANSAC iteration budgets, including early success."
     }
   ],
   "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
