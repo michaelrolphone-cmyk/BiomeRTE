@@ -176,7 +176,7 @@ class Application:
                 actor = self.controller_actor_aliases.get(peer['id'], peer['id']) if operator_actor else peer['id']
                 ctx = Context(self, actor, realm, None if operator_actor else peer['scopes'])
                 if (self.controller_runtime and realm == 'site' and not cached and not operator_actor
-                        and name in ('cap.offer', 'provider.poll') and args.get('provider') == peer['id']):
+                        and name in ('cap.offer', 'cap.publish', 'provider.poll') and args.get('provider') == peer['id']):
                     ctx.authenticated_provider = peer['id']
                 if operator_actor:
                     ctx.authenticated_actor = peer['id']
