@@ -302,6 +302,9 @@ class ManagedEvents:
         finally:
             db.deferred=False
 
+    def active(self):
+        return any(store.active() for store in self.stores.values())
+
     def deliver(self):
         controllers=sorted(self.stores)
         controllers=controllers[self.delivery_offset:]+controllers[:self.delivery_offset]
