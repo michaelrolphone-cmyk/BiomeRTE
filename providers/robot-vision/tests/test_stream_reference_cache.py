@@ -7,13 +7,41 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stream_derivations import StreamDerivations
-from biome_provider import vision_service_has_custody
+from biome_provider import ServiceError, vision_service_has_custody, withdraw_unavailable_streams
 
 
 class StreamReferenceCacheTests(unittest.TestCase):
+    def test_adapter_shutdown_preserves_both_offers_while_producer_serves(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {"state": directory, "provider": "test", "resource": "vision", "slots": 1}
+            status = {"state": "switching_map", "streaming": {
+                "available": True, "lanes": ["vision", "map"], "rear_enabled": True}}
+            client = SimpleNamespace(query=Mock(return_value=status))
+            remote = Mock()
+            withdraw_unavailable_streams(remote, cfg, client)
+            remote.call.assert_not_called()
+
+    def test_adapter_shutdown_withdraws_both_offers_after_confirmed_producer_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = {"state": directory, "provider": "test", "resource": "vision", "slots": 1}
+            error = ServiceError("service_unavailable", "missing")
+            error.__cause__ = ConnectionRefusedError()
+            client = SimpleNamespace(query=Mock(side_effect=error))
+            remote = Mock()
+            with (Path(directory) / "service.lock").open("wb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                withdraw_unavailable_streams(remote, cfg, client)
+                remote.call.assert_not_called()
+            withdraw_unavailable_streams(remote, cfg, client)
+            published = [(args[0], args[1]["resource"], args[1]["state"])
+                         for args, kwargs in remote.call.call_args_list]
+            self.assertEqual(published, [("cap.offer", "vision", "offline"),
+                                         ("cap.offer", "vision.rear", "offline")])
+
     def test_socket_can_be_absent_while_the_vision_service_still_owns_state(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertFalse(vision_service_has_custody(directory))

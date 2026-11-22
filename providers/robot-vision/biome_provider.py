@@ -528,6 +528,52 @@ def stream_offer(cfg, status):
                         "buffer_depth": 8, "max_message_bytes": 2097152}})
 
 
+def stream_offers(cfg, status):
+    front = stream_offer(cfg, status)
+    rear = stream_offer(cfg, status)
+    rear["resource"] += ".rear"
+    rear["configuration"]["camera_id"] = "rear"
+    if not status.get("streaming", {}).get("rear_enabled"):
+        rear["state"] = "offline"
+    return front, rear
+
+
+def publish_stream_offer(remote, value, advertised, pending_offline):
+    """Confirm lost health before retiring a persistent reservation."""
+    resource = value["resource"]
+    if advertised.get(resource) == value:
+        pending_offline.discard(resource)
+        return
+    if value["state"] == "offline" and resource not in pending_offline:
+        pending_offline.add(resource)
+        return
+    remote.call("cap.offer", value)
+    advertised[resource] = value
+    pending_offline.discard(resource)
+
+
+def withdraw_unavailable_streams(remote, cfg, client):
+    """The producer, which can outlive the adapter, owns feed availability."""
+    unsafe = False
+    try:
+        status = client.query("robot.vision.status", {"provider_only": True})
+    except ServiceError as error:
+        if (not isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
+                and error.code != "unsafe_socket"):
+            return
+        unsafe = error.code == "unsafe_socket"
+        status = {}
+    if (not unsafe and not getattr(client, "host_io", None) and vision_service_has_custody(cfg["state"])
+            and not status.get("streaming", {}).get("available")):
+        return
+    for value in stream_offers(cfg, status):
+        if value["state"] == "offline":
+            try:
+                remote.call("cap.offer", value)
+            except Exception as exc:
+                print("Vision stream withdrawal failed:", type(exc).__name__, file=sys.stderr, flush=True)
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -560,6 +606,9 @@ def serve(cfg):
         def advertise():
             retired_withdrawn=set()
             relay_metadata_published = False
+            stream_definition_published = False
+            advertised_streams = {}
+            pending_stream_offline = set()
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
@@ -572,7 +621,7 @@ def serve(cfg):
                         # Only a confirmed missing endpoint or unsafe socket
                         # withdraws offers; explicit service status still governs.
                         missing = isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
-                        if missing and vision_service_has_custody(cfg["state"]):
+                        if missing and not client.host_io and vision_service_has_custody(cfg["state"]):
                             # Retain the acquisition while the native service drains its checkpoint.
                             raise
                         if missing or error.code == "unsafe_socket":
@@ -580,23 +629,25 @@ def serve(cfg):
                             ready = set()
                         else:
                             raise
+                    if not stream_definition_published:
+                        remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
+                            "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
+                        stream_definition_published = True
+                    if stopping.is_set():return
+                    owns_checkpoint = (status.get("state") == "stopping" and not client.host_io
+                                       and vision_service_has_custody(cfg["state"]))
+                    if not owns_checkpoint:
+                        for value in stream_offers(cfg, status):
+                            publish_stream_offer(remote, value, advertised_streams, pending_stream_offline)
                     if not relay_metadata_published:
                         for spec in json.loads((HERE / "rover-relay-contracts.json").read_text()):
                             remote.call("cap.define", spec)
                         relay_metadata_published = True
-                    remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
-                        "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
-                    if stopping.is_set():return
                     # Withdraw the retired RSSI/BLE implementations before advertising ToF.
                     for retired in {"robot.radio.status:1","robot.radio.localize:1","robot.map.radio.read:1"}-retired_withdrawn:
                         remote.call("cap.offer",dict(provider=cfg["provider"],contract=retired,
                             resource=cfg["resource"],service="robot-vision",capacity=cfg["slots"],state="offline"))
                         retired_withdrawn.add(retired)
-                    remote.call("cap.offer", stream_offer(cfg, status))
-                    rear_offer=stream_offer(cfg,status);rear_offer["resource"]=cfg["resource"]+".rear"
-                    rear_offer["configuration"]["camera_id"]="rear"
-                    if not status.get("streaming",{}).get("rear_enabled"):rear_offer["state"]="offline"
-                    remote.call("cap.offer",rear_offer)
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
@@ -631,12 +682,7 @@ def serve(cfg):
             stopping.set()
             publisher.join()
             try:
-                try:
-                    remote.call("cap.offer", stream_offer(cfg, {}))
-                    rear_offer=stream_offer(cfg,{});rear_offer["resource"]=cfg["resource"]+".rear"
-                    remote.call("cap.offer",rear_offer)
-                except Exception:
-                    pass
+                withdraw_unavailable_streams(remote, cfg, client)
                 for contract in sorted(defined):
                     try:
                         remote.call("cap.offer", offer(cfg, contract, "offline"))
