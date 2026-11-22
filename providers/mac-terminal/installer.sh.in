@@ -11,13 +11,20 @@ PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"
 APP="$HOME/.local/share/biome-mac-terminal"
 LABEL=org.biomerte.mac-terminal
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
+RECOVERY_LABEL=org.biomerte.terminal-receipt-recovery
+RECOVERY_PLIST="/Library/LaunchDaemons/$RECOVERY_LABEL.plist"
 MODE="${1:-install}"
 if [ "$MODE" = '--status' ]; then
   sudo launchctl print "system/$LABEL"
+  sudo launchctl print "system/$RECOVERY_LABEL"
   [ ! -f "$APP/health.json" ] || cat "$APP/health.json"
   exit 0
 fi
-if [ "$MODE" = '--stop' ]; then sudo launchctl bootout "system/$LABEL"; exit 0; fi
+if [ "$MODE" = '--stop' ]; then
+  sudo launchctl bootout "system/$RECOVERY_LABEL" 2>/dev/null || true
+  sudo launchctl bootout "system/$LABEL"
+  exit 0
+fi
 if [ "$MODE" != install ] && [ "$MODE" != '--reauthorize' ]; then echo 'Usage: bash install-biome-mac-terminal-v4.sh [--status|--stop|--reauthorize]'; exit 1; fi
 mkdir -p "$APP"
 chmod 700 "$APP"
@@ -26,6 +33,8 @@ sudo -v
 # Stop old v1/v2 login services and an existing boot service before touching OAuth or the ledger.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 sudo launchctl bootout "system/$LABEL" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/$RECOVERY_LABEL" 2>/dev/null || true
+sudo launchctl bootout "system/$RECOVERY_LABEL" 2>/dev/null || true
 "$PYTHON" - "$0" "$APP" <<'UNPACK'
 import base64, hashlib, io, json, os, pathlib, sys, zipfile
 source, app = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -52,9 +61,9 @@ if [ "$MODE" = '--reauthorize' ]; then "$PYTHON" "$APP/mac_provider.py" authoriz
 "$PYTHON" "$APP/mac_provider.py" setup
 echo 'Checking a real terminal command through BiomeRTE...'
 "$PYTHON" "$APP/mac_provider.py" verify
-"$PYTHON" - "$APP" "$PYTHON" "$(id -un)" "$HOME" "$LABEL" <<'PLIST_PY'
+"$PYTHON" - "$APP" "$PYTHON" "$(id -un)" "$HOME" "$LABEL" "$RECOVERY_LABEL" <<'PLIST_PY'
 import os, pathlib, plistlib, sys
-app, python, user, home, label = sys.argv[1:]
+app, python, user, home, label, recovery_label = sys.argv[1:]
 obj = {'Label': label, 'UserName': user,
        'ProgramArguments': ['/usr/bin/caffeinate', '-is', python, app + '/mac_provider.py', 'worker'],
        'WorkingDirectory': app, 'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 15,
@@ -62,10 +71,15 @@ obj = {'Label': label, 'UserName': user,
        'EnvironmentVariables': {'HOME': home, 'USER': user, 'LOGNAME': user, 'PATH': os.path.dirname(python) + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', 'PYTHONUNBUFFERED': '1'}}
 with open(app + '/service.plist', 'wb') as f:
     plistlib.dump(obj, f)
+recovery = dict(obj, Label=recovery_label, ProgramArguments=[python, app + '/terminal_receipt_recovery.py'],
+                StandardOutPath=app + '/receipt-recovery.log', StandardErrorPath=app + '/receipt-recovery-error.log')
+with open(app + '/receipt-recovery.plist', 'wb') as f:
+    plistlib.dump(recovery, f)
 PLIST_PY
 sudo install -o root -g wheel -m 644 "$APP/service.plist" "$PLIST"
+sudo install -o root -g wheel -m 644 "$APP/receipt-recovery.plist" "$RECOVERY_PLIST"
 sudo launchctl bootstrap system "$PLIST"
-sudo launchctl kickstart -k "system/$LABEL"
+sudo launchctl bootstrap system "$RECOVERY_PLIST"
 sudo launchctl print "system/$LABEL"
 echo
 echo 'Installed and terminal command verified. You can close Terminal and disconnect the display.'
