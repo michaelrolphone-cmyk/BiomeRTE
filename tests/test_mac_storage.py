@@ -53,6 +53,30 @@ class MacStorage(unittest.TestCase):
         target=self.root/'bad.sqlite'
         with self.assertRaises(OSError):backup.restore(target,g['id'],self.vault)
         self.assertFalse(target.exists())
+    def test_registration_resumes_the_same_definition_and_request_after_overload(self):
+        with mock.patch.dict(sys.modules, {'mac_provider': types.ModuleType('mac_provider')}):
+            provider = importlib.import_module('provider')
+        remote = mock.Mock()
+        errors = []
+        for status in (429, 503):
+            error = RuntimeError('controller admission failed')
+            error.status = status
+            errors.append(error)
+        remote.call.side_effect = [None, *errors, ConnectionError('lost reply'), None]
+        with mock.patch.object(provider.time, 'sleep') as sleep:
+            for definition in ({'name': 'first'}, {'name': 'second'}):
+                provider.register_definition(remote, definition)
+        calls = [call.args for call in remote.call.call_args_list]
+        self.assertEqual([args[1]['name'] for args in calls], ['first'] + ['second'] * 4)
+        self.assertEqual(len({args[2] for args in calls[1:]}), 1)
+        self.assertNotEqual(calls[0][2], calls[1][2])
+        self.assertEqual(sleep.call_args_list, [mock.call(2), mock.call(4), mock.call(8)])
+        forbidden = RuntimeError('forbidden')
+        forbidden.status = 403
+        remote.call.side_effect = forbidden
+        with self.assertRaisesRegex(RuntimeError, 'forbidden'), mock.patch.object(provider.time, 'sleep') as sleep:
+            provider.register_definition(remote, {'name': 'restricted'})
+        sleep.assert_not_called()
     def test_namespace_bound_paths_and_handles(self):
         with mock.patch.dict(sys.modules,{'mac_provider':types.ModuleType('mac_provider')}):
             p=importlib.import_module('provider')

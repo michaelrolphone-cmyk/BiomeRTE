@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
 from urllib.parse import quote
 from volumes import BASE,MOUNT,IMAGE,VAULT,WORKSPACE,SACRED,prepare,mounted
 from backup import HEALTH,entries
@@ -119,13 +120,28 @@ class Remote:
         self.suffix=terminal[:20]
     def call(self,name,args,rid=None):return gateway.invoke(name,args,rid,self.realm)
 
+def register_definition(remote, definition):
+    from biomerte.worker import unavailable_transport
+    request_id = uuid.uuid4().hex
+    delay = 2
+    while True:
+        try:
+            return remote.call('cap.define', definition, request_id)
+        except (ConnectionError, TimeoutError, RuntimeError) as error:
+            if not isinstance(error, (ConnectionError, TimeoutError)) and not unavailable_transport(error):
+                raise
+            print('Registration paused for', definition['name'], file=sys.stderr, flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 20)
+
 def serve():
     from biomerte.worker import Worker,ActionPool
     remote=Remote()
     prepare()
     offers=[]
     for op,name,version,fields,description,guide in definitions():
-        remote.call('cap.define',dict(name=name,version=version,inputs=fields,outputs=storage.OUTPUTS,description=description,usage=guide))
+        register_definition(remote, dict(name=name, version=version, inputs=fields,
+                                         outputs=storage.OUTPUTS, description=description, usage=guide))
         replica=op=='replica'
         config=dict(tier='sacred_replica' if replica else 'volatile_workspace',reserved_bytes=SACRED if replica else WORKSPACE,
                     namespace_required=not replica,replicated=replica,read_only=replica,host=socket.gethostname())
