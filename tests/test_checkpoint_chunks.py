@@ -1,4 +1,5 @@
 """Durability, corruption, bounded publication and transactional restore tests."""
+import asyncio
 import base64
 import copy
 import contextlib
@@ -522,6 +523,42 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         self.calls.clear()
         await publish_controller(self.daemon)
         self.assertEqual(["chunk_missing", "publish"], [operation for operation, unused in self.calls])
+
+    async def test_overlapping_block_uploads_finish_before_publishing_root(self):
+        for index in range(6):
+            self.add("key-" + str(index), "unique value " + str(index))
+        current = 0
+        peak = 0
+        saturated = asyncio.Event()
+        release = asyncio.Event()
+
+        async def helper(operation, **body):
+            nonlocal current, peak
+            if operation == "chunk_put":
+                current += 1
+                peak = max(peak, current)
+                if current == 4:
+                    saturated.set()
+                try:
+                    await release.wait()
+                    return await self.helper(operation, **body)
+                finally:
+                    current -= 1
+            if operation == "publish":
+                self.assertEqual(current, 0)
+            return await self.helper(operation, **body)
+
+        self.daemon.helper = helper
+        publication = asyncio.create_task(publish_controller(self.daemon))
+        try:
+            await asyncio.wait_for(saturated.wait(), 2)
+            self.assertFalse(publication.done())
+            self.assertFalse(any(operation == "publish" for operation, unused in self.calls))
+        finally:
+            release.set()
+            await publication
+        self.assertEqual(peak, 4)
+        self.assertEqual(self.calls[-1][0], "publish")
 
     async def test_cold_4050_shard_4405_block_root_uses_18_bounded_queries(self):
         # Use the real 256 KiB block size and generate large shard bodies on

@@ -6,6 +6,8 @@ import hashlib
 from .checkpoint_chunks import BLOCK_BYTES, STATE_FORMAT, describe_shard, state_blocks
 from .service_checkpoint import CheckpointError
 
+CHECKPOINT_UPLOAD_CONCURRENCY = 4
+
 
 async def read_shard(daemon, shard):
     raw = await asyncio.to_thread(daemon.authority.snapshot_chunk, shard["digest"])
@@ -13,6 +15,24 @@ async def read_shard(daemon, shard):
             hashlib.sha256(raw).hexdigest() != shard["digest"]):
         raise CheckpointError("Controller shard changed during publication")
     return raw
+
+
+async def upload_block(daemon, block, raw):
+    reply = await daemon.helper("chunk_put", block={
+        "digest": block["digest"], "data": base64.b64encode(raw).decode("ascii")})
+    if (reply.get("digest") != block["digest"] or reply.get("bytes") != block["bytes"]
+            or reply.get("durable") is not True):
+        raise CheckpointError("Helper did not durably acknowledge exact block")
+
+
+async def upload_batch(daemon, batch):
+    # Content-addressed blocks are independent. Finish all started writes
+    # before retrying an uncertain root and never publish on a partial ACK.
+    results = await asyncio.gather(*(upload_block(daemon, block, raw) for block, raw in batch),
+                                   return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
 
 async def publish_controller(daemon):
@@ -55,6 +75,7 @@ async def publish_controller(daemon):
 
         # Re-read only shards needed for an upload, and recheck their exact
         # identity before sending any bytes. Shared blocks upload only once.
+        batch = []
         for shard in shards:
             if not any(block["digest"] in missing for block in shard["blocks"]):
                 continue
@@ -62,16 +83,16 @@ async def publish_controller(daemon):
             for index, block in enumerate(shard["blocks"]):
                 if block["digest"] not in missing:
                     continue
-                value = raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES]
-                reply = await daemon.helper("chunk_put", block={
-                    "digest": block["digest"], "data": base64.b64encode(value).decode("ascii")})
-                if (reply.get("digest") != block["digest"] or
-                        reply.get("bytes") != block["bytes"] or reply.get("durable") is not True):
-                    raise CheckpointError("Helper did not durably acknowledge exact block")
+                batch.append((block, raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES]))
                 missing.remove(block["digest"])
+                if len(batch) == CHECKPOINT_UPLOAD_CONCURRENCY:
+                    await upload_batch(daemon, batch)
+                    batch.clear()
             del raw
         if missing:
             raise CheckpointError("Controller root still has unacknowledged blocks")
+        if batch:
+            await upload_batch(daemon, batch)
         result = await daemon.helper("publish", state=manifest)
         daemon._controller_shard_blocks = current
         return result
