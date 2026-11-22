@@ -9,8 +9,9 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from tests.run_live_provider_recovery import Site, timed_call
+from tests.run_live_provider_recovery import LOCAL, Site, release_binding, timed_call
 
 
 async def submit(site, operation):
@@ -77,16 +78,36 @@ async def qualify(site, run_id, progress_operation=None, progress_lease=None, st
     return report
 
 
+async def qualify_release(site, node, run_id, progress_operation, progress_lease):
+    from aiohttp import ClientError, ClientSession, ClientTimeout
+
+    origin = "https://" + urlsplit(node["stream_gateway_url"]).netloc
+    async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+        report = dict(run_id=run_id, passed=False)
+        try:
+            before = await release_binding(session, origin, node["node"])
+            report = await qualify(site, run_id, progress_operation, progress_lease)
+            report["placement"] = before
+            report["final_placement"] = await release_binding(session, origin, node["node"])
+            report["passed"] = report["passed"] and report["final_placement"] == before
+        except (ClientError, TimeoutError, ValueError) as error:
+            report.update(passed=False, placement_error=type(error).__name__)
+        return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gateway-home", type=Path, default=Path.home() / ".local/share/biome-mac-terminal")
+    parser.add_argument("--node-file", type=Path, default=LOCAL / "biomerte-controller/node.json")
     parser.add_argument("--run-id", default="signed-pressure-" + uuid.uuid4().hex)
     parser.add_argument("--progress-operation", help="Previously completed operation for the concurrent status read")
     parser.add_argument("--progress-lease", help="Its exact released lease")
     args = parser.parse_args()
     if bool(args.progress_operation) != bool(args.progress_lease):
         parser.error("--progress-operation and --progress-lease must be specified together")
-    report = asyncio.run(qualify(Site(args.gateway_home), args.run_id, args.progress_operation, args.progress_lease))
+    node = json.loads(args.node_file.read_text())
+    report = asyncio.run(qualify_release(Site(args.gateway_home), node, args.run_id,
+                                         args.progress_operation, args.progress_lease))
     print(json.dumps(report))
     return int(not report["passed"])
 

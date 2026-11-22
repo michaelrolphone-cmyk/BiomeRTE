@@ -1,7 +1,8 @@
 import asyncio
 import unittest
+from unittest.mock import AsyncMock, patch
 
-from tests.qualify_signed_submission_concurrency import qualify
+from tests.qualify_signed_submission_concurrency import qualify, qualify_release
 
 
 class SiteFixture:
@@ -50,3 +51,13 @@ class SignedConcurrencyQualification(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proof["submissions"][0]["error_category"], "Managed controller is busy")
         self.assertTrue(proof["readback"][0]["action"]["echo"])
         self.assertEqual(proof["readback"][0]["release"]["state"], "released")
+
+    async def test_placement_change_fails_a_successful_wave_and_preserves_its_evidence(self):
+        with patch("tests.qualify_signed_submission_concurrency.release_binding", new=AsyncMock(
+                side_effect=[{"grant_digest": "original"}, {"grant_digest": "successor"}])):
+            proof = await qualify_release(SiteFixture(), {"node": "fixture",
+                "stream_gateway_url": "wss://example.invalid"}, "run", None, None)
+        self.assertFalse(proof["passed"])
+        self.assertEqual(proof["placement"]["grant_digest"], "original")
+        self.assertEqual(proof["final_placement"]["grant_digest"], "successor")
+        self.assertEqual(len(proof["readback"]), 16)
