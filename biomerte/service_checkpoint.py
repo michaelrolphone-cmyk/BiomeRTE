@@ -322,6 +322,8 @@ class CheckpointStore:
 
     def generation_floors(self, resources):
         floors={resource:0 for resource in resources}
+        if not floors:
+            return floors
         with self.lock:
             for resource,generation in self.db.execute("SELECT resource,generation FROM floors"):
                 if resource in floors:

@@ -32,6 +32,15 @@ class Checkpoints(unittest.TestCase):
         self.assertEqual(self.store.packet(),packet)
         self.assertEqual(self.store.head(),checkpoint_ref(packet))
 
+    def test_no_physical_resources_skips_checkpoint_archive(self):
+        queries = []
+        self.store.db.set_trace_callback(queries.append)
+        try:
+            self.assertEqual({}, self.store.generation_floors([]))
+            self.assertEqual([], queries)
+        finally:
+            self.store.db.set_trace_callback(None)
+
     def test_signature_tampering_rejected(self):
         packet=copy.deepcopy(self.genesis)
         packet["payload"]["state"]={"rows":[["guards","relay",{"generation":1}]]}
