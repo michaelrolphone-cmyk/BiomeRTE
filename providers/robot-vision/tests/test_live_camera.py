@@ -247,6 +247,8 @@ class LiveCameraTests(unittest.TestCase):
                 binding, stop, received = recovery.grant(), threading.Event(), []
                 router = Session(binding)
                 class Wire:
+                    async def wait_closed(self):
+                        await asyncio.Future()
                     async def send(self, message):
                         router.check('provider', 'vision', message)
                         received.append(decode(message, 4194304))
@@ -257,7 +259,7 @@ class LiveCameraTests(unittest.TestCase):
                         return False
                 class Remote:
                     def call(self, *args):
-                        return {'url': 'ws://127.0.0.1:8751/session-a',
+                        return {**binding, 'url': 'ws://127.0.0.1:8751/session-a',
                                 'attachment_credential': 'fixture'}
                 publisher = VisionStreams(Remote(), 'fixture')
                 async def run():
