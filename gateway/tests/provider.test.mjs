@@ -71,6 +71,35 @@ test('signed withdrawal forwards the exact revisions only for the named provider
   const response=await waiting;assert.equal(response.status,200);assert.deepEqual(await response.json(),body);
  }finally{f.sql.close()}
 });
+test('signed registration lookup and restore preserve the exact enrolled batch',async()=>{
+ const f=fixture();
+ const contract='vision.status:1',registration='1'.repeat(32);
+ const scope={provider:actor,resource:'camera',service:'vision'};
+ const definition={name:'vision.status',version:1,inputs:{},outputs:{}};
+ const offer={contract,state:'ready',capacity:1};
+ const calls=[
+  ['cap.registrations',{...scope,contracts:[contract]},
+   {registrations:[{contract,status:'found',state:'offline',registration}]}],
+  ['cap.publish',{...scope,offers:[{definition,offer,expected_registration:registration}]},
+   {offers:[{contract,status:'published',state:'ready',registration:'2'.repeat(32)}]}],
+ ];
+ try{
+  for(const [operation,args,result] of calls){
+   const count=f.sql.prepare('SELECT count(*) AS n FROM bridge_jobs').get().n;
+   const denied=await f.send('/api/provider/call',packet(operation,{...args,provider:'b'.repeat(64)}));
+   assert.equal(denied.status,400);
+   assert.equal(f.sql.prepare('SELECT count(*) AS n FROM bridge_jobs').get().n,count);
+   const raw=JSON.stringify(packet(operation,args),null,2);
+   const waiting=f.send('/api/provider/call',raw),job=await f.next();
+   assert.equal(job.request.name,'signed_provider_call');
+   assert.equal(job.request.arguments.envelope,raw);
+   await f.complete(job,200,{result});
+   const reply=await waiting;
+   assert.equal(reply.status,200);
+   assert.deepEqual(await reply.json(),{result});
+  }
+ }finally{f.sql.close()}
+});
 test('public pairing forwards candidate and proof only; approval never exposed',async()=>{
  const f=fixture();
  assert.equal((await f.send('/api/provider/pair/approve',{fingerprint:actor})).status,404);
