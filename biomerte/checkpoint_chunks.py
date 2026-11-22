@@ -159,11 +159,12 @@ class ChunkStore:
                         output.flush()
                         os.fsync(output.fileno())
                     os.replace(temporary, self._path(key))
-                    self._sync_directory()
                 finally:
                     if os.path.exists(temporary):
                         os.unlink(temporary)
-            # Duplicate PUTs also certify the actual durable stored bytes.
+            # A previous writer may have failed or stopped between rename and
+            # directory fsync. Existing bytes alone cannot acknowledge that entry.
+            self._sync_directory()
             if not self.has(key, len(raw)):
                 raise ChunkError("Stored block did not verify")
         return {"digest": key, "bytes": len(raw), "durable": True}
@@ -182,9 +183,14 @@ class ChunkStore:
     def missing(self, digests):
         if not isinstance(digests, (list, tuple, dict)):
             raise ChunkError("Explicit block digest list required")
-        if isinstance(digests, dict):
-            return [key for key, size in digests.items() if not self.has(key, size)]
-        return [key for key in dict.fromkeys(digests) if not self.has(key)]
+        sizes = digests if isinstance(digests, dict) else dict.fromkeys(digests)
+        with self.lock:
+            absent = [key for key, size in sizes.items() if not self.has(key, size)]
+            if len(absent) < len(sizes):
+                # A reopened helper can discover renamed blocks from a failed
+                # writer. One barrier covers all positive observations on this page.
+                self._sync_directory()
+            return absent
 
     def require(self, state):
         refs = state_blocks(state)
