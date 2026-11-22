@@ -51,6 +51,67 @@ class BoundedLifecycle(unittest.TestCase):
             self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
         self.assertEqual(409, e.exception.status)
 
+    def test_uninvoked_command_releases_slot_after_idle_watch(self):
+        self.offer(watch_ttl_seconds=30)
+        first = self.acquire()
+        self.call('cap.fenced', provider='test', lease=first['id'], generation=first['generation'])
+        next_owner = self.acquire('next')
+        self.now += 31
+        self.app.tick('site')
+        self.assertEqual('released', self.call('cap.lease', lease=first['id'])['state'])
+        self.assertEqual('fencing', self.call('cap.lease', lease=next_owner['id'])['state'])
+
+    def test_legacy_empty_command_gets_one_grace_period_and_can_be_renewed(self):
+        self.offer(watch_ttl_seconds=30)
+        lease = self.acquire()
+        self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
+        def pre_upgrade(tx):
+            stored = tx.need('leases', lease['id'])
+            stored['lease_policy']['reservation_policy'].pop('idle_seconds', None)
+            tx.put('leases', lease['id'], stored)
+            tx.drop('_reservation_activity', lease['id'])
+        self.app.stores['site'].execute(pre_upgrade)
+        self.now += 86400
+        self.app.tick('site')
+        self.now += 25
+        self.assertEqual('bound', self.acquire()['state'])
+        self.now += 24
+        self.app.tick('site')
+        self.assertEqual('bound', self.call('cap.lease', lease=lease['id'])['state'])
+        self.now += 31
+        self.app.tick('site')
+        self.assertEqual('released', self.call('cap.lease', lease=lease['id'])['state'])
+
+    def test_unfenced_command_retains_full_fence_interval(self):
+        self.offer(watch_ttl_seconds=10, fence_ttl_seconds=60)
+        lease = self.acquire()
+        self.now += 30
+        self.app.tick('site')
+        self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
+        self.now += 9
+        self.app.tick('site')
+        self.assertEqual('bound', self.call('cap.lease', lease=lease['id'])['state'])
+
+    def test_stream_and_manually_retained_reservations_preserve_their_lifetime(self):
+        for configuration in ({'stream': {'enabled': True}},
+                              {'reservation_policy': {'release_after_result': False}}):
+            with self.subTest(configuration=configuration):
+                self.offer(**configuration)
+                lease = self.acquire()
+                self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
+                self.now += 86400
+                self.app.tick('site')
+                self.assertEqual('bound', self.call('cap.lease', lease=lease['id'])['state'])
+                self.call('cap.release', lease=lease['id'])
+
+    def test_explicit_unlimited_idle_reservation_is_preserved(self):
+        self.offer(reservation_policy={'idle_seconds': 0})
+        lease = self.acquire()
+        self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
+        self.now += 86400
+        self.app.tick('site')
+        self.assertEqual('bound', self.call('cap.lease', lease=lease['id'])['state'])
+
     def test_watch_progress_and_restart(self):
         lease, action = self.action()
         self.now += 100

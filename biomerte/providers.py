@@ -163,11 +163,20 @@ def active_on(tx, resource):
 
 
 def reservation_policy(tx, lease):
-    return lifecycle.policy(tx, lease)['reservation_policy']
+    configuration = lifecycle.policy(tx, lease)
+    policy = configuration['reservation_policy']
+    if ('idle_seconds' not in policy and lease['state'] == 'bound'
+            and configuration['lease_class'] != 'persistent' and policy['release_after_result']):
+        # A disconnected caller can disappear between fence acknowledgement and
+        # dispatch. Use the command's own watch interval for that empty slot.
+        from .shared_streams import enabled
+        if not enabled(tx.get('offers', lease.get('offer', ''), {})):
+            return dict(policy, idle_seconds=configuration['watch_ttl_seconds'])
+    return policy
 
 
 def touch_reservation(tx, lease):
-    # Only opt-in, pre-dispatch reservations have an idle clock. This is never
+    # Only pre-dispatch reservations have an idle clock. This is never
     # an operation deadline: queued/claimed/uncertain work retains its fence.
     if lease['state'] in ('fencing', 'bound') and reservation_policy(tx, lease).get('idle_seconds', 0) > 0:
         tx.put('_reservation_activity', lease['id'], {'generation': lease['generation'], 'at': time.time()})
@@ -310,6 +319,7 @@ def acquire(tx, ctx, task, contract, resource='', enqueue=True, reply_to='', pla
             if old.get('shared_owner_released') and old.get('owner') == ctx.actor:
                 old.pop('shared_owner_released')
                 tx.put('leases', old['id'], old)
+            touch_reservation(tx, old)
             return old
         if not release(tx, old):
             return old
@@ -359,7 +369,9 @@ def fenced(tx, ctx, provider, lease, generation):
     guard = tx.get('guards', l['guard'], {'holder':'','generation':0})
     if l['state'] not in ('bound', 'fencing') or (l['provider'], guard['holder'], guard['generation']) != (provider, lease, generation):
         raise Fault('Superseded fence', 409)
-    l['state'] = 'bound'
+    if l['state'] == 'fencing':
+        l['state'] = 'bound'
+        touch_reservation(tx, l)
     notify_bound(tx, ctx, l)
     return tx.put('leases', lease, l)
 
