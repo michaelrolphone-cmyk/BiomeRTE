@@ -85,6 +85,45 @@ class AsyncCheckpointTests(unittest.TestCase):
         self.assertEqual(list(service.store.checkpoint_dir.glob("*.partial")), [])
         self.process(service, self.frame(service, "after"))
 
+    def test_backend_not_ready_metadata_save_releases_frame_pipeline(self):
+        from slam_backend import BackendNotReady
+
+        service = self.make_service()
+        self.process(service, self.frame(service, "initializing"))
+        revision = service.revision
+        entered, release, scheduled = threading.Event(), threading.Event(), threading.Event()
+        results = []
+
+        def retire(*args, **kwargs):
+            entered.set()
+            release.wait(5)
+            return {"cleanup_errors": []}
+
+        def schedule():
+            results.append(service._schedule_checkpoint())
+            scheduled.set()
+
+        unavailable = BackendNotReady("map initialization pending")
+        with patch.object(service.backend, "capture_checkpoint", create=True, side_effect=unavailable), \
+             patch.object(service.backend, "checkpoint", side_effect=unavailable), \
+             patch.object(service.store, "retire_superseded_checkpoints", retire):
+            caller = threading.Thread(target=schedule)
+            caller.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(scheduled.wait(1), "Metadata-only retention blocked the frame pipeline")
+                self.assertIs(results[0], service._schedule_checkpoint())
+                self.process(service, self.frame(service, "while-saving"))
+            finally:
+                release.set()
+                caller.join(5)
+            saved = results[0].result(3)
+        self.assertEqual(revision, saved["map_revision"])
+        self.assertEqual("unavailable", saved["backend_artifact"]["availability"])
+        self.assertEqual(str(unavailable), saved["metadata"]["backend_checkpoint"]["reason"])
+        self.assertFalse(saved["metadata"]["geometry_matches_backend_state"])
+        self.assertEqual("available", service.store.get_checkpoint(saved["checkpoint_id"])["availability"])
+
     def test_artifact_copy_never_holds_live_store_lock(self):
         service = self.make_service()
         self.process(service, self.frame(service))

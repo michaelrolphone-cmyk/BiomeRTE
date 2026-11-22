@@ -842,12 +842,13 @@ class VisionService:
             try:
                 try:
                     ticket = self.backend.capture_checkpoint(target)
-                except BackendNotReady:
-                    # Preserve the existing metadata-only checkpoint behavior.
-                    return self._checkpoint(origin=origin)
-                geometry = ticket["geometry"]
-                changes = self._reconcile_changes(ticket["map_changes"], geometry)
-                self._commit_changes(changes, "checkpoint_reconciliation")
+                except BackendNotReady as exc:
+                    backend_metadata = {"availability": "unavailable", "reason": str(exc)}
+                else:
+                    changes = self._reconcile_changes(ticket["map_changes"], ticket["geometry"])
+                    self._commit_changes(changes, "checkpoint_reconciliation")
+                    backend_metadata = {"format": "pyslam-system-state",
+                                        "capture": "immutable_map_and_fifo_database_barrier"}
                 revision = self.revision
                 prepared = self.store.prepare_checkpoint(self.map_id, metadata={
                     "session_id": self.session_id,
@@ -855,9 +856,8 @@ class VisionService:
                     "checkpoint_origin": origin,
                     "backend_status": self._backend_status(),
                     "map_revision": revision,
-                    "geometry_matches_backend_state": True,
-                    "backend_checkpoint": {"format": "pyslam-system-state",
-                                           "capture": "immutable_map_and_fifo_database_barrier"},
+                    "geometry_matches_backend_state": ticket is not None,
+                    "backend_checkpoint": backend_metadata,
                 })
             except Exception as exc:
                 self._checkpoint_error = "checkpoint_failed:" + type(exc).__name__
@@ -887,8 +887,10 @@ class VisionService:
             def finish():
                 started = time.monotonic()
                 try:
-                    artifact = backend.write_checkpoint(ticket)
-                    saved = self.store.finish_checkpoint(prepared, artifact["path"])
+                    artifact_path = None
+                    if ticket is not None:
+                        artifact_path = backend.write_checkpoint(ticket)["path"]
+                    saved = self.store.finish_checkpoint(prepared, artifact_path)
                     self._last_checkpoint_revision = revision
                     self._checkpoint_error = None
                     self._checkpoint_cleanup_error = None
