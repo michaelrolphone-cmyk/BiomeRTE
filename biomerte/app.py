@@ -342,6 +342,17 @@ def cluster_status(tx, ctx):
     return {'mode': 'replicated', 'members': members, 'observations': observations, 'site_position': tx.db.execute('SELECT seq FROM position WHERE id=1').fetchone()[0]}
 
 
+@op('system.health', write=False)
+def system_health(tx, ctx):
+    """Read the controller, consumer progress and cluster in one transaction."""
+    for component in ('system.info', 'system.progress', 'cluster.status'):
+        if not ctx.allowed(component):
+            raise Fault('Permission denied', 403)
+    return {'node': ctx.app.node,
+            'health': {'realms': {ctx.scope: 'ready'}, 'consumer_health': discovery.progress(tx, ctx)},
+            'controller': info(tx, ctx), 'cluster': cluster_status(tx, ctx)}
+
+
 @op('system.snapshot', write=False)
 def snapshot(tx, ctx):
     return {'site': info(tx, ctx), 'work': work.listing(tx, ctx), 'process': process.listing(tx, ctx),

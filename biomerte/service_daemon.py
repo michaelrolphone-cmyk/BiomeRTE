@@ -1165,7 +1165,7 @@ class AuthorityDaemon:
         operation = envelope.get("operation", "")
         if message.get("type") == "inspect" or operation == "stream.inspect":
             return "inspection"
-        if operation in ("system.info", "cluster.status", "system.progress"):
+        if operation in ("system.health", "system.info", "cluster.status", "system.progress"):
             return "diagnostic"
         if operation in ("system.discovery", "bus.discover", "cap.discover"):
             return "discovery"
