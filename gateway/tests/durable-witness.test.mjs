@@ -103,3 +103,26 @@ test('expired lease cannot be renewed or commit and transport accepts no payload
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM service_witness_heads').get().n,0);
  }finally{f.sql.close()}
 });
+
+test('a retiring owner releases only its epoch and the successor still waits out child grants',async()=>{
+ const f=fixture();try{
+  const old=await f.acquire();f.ready();await f.commit(old,0,a,null);
+  const release=owner=>f.send({operation:'release',owner});
+  assert.equal((await release({...old,boot_id:'unrelated-boot-0000000000'})).status,409);
+  assert.equal((await release(old)).status,200);
+  assert.equal((await release(old)).status,200);
+  assert.equal((await f.send({operation:'acquire',boot_id:old.boot_id,lease_s:120,max_grant_s:30})).status,409);
+  assert.equal((await f.send({operation:'renew',owner:old,lease_s:120})).status,409);
+  const next=await f.acquire('next-boot-000000000000');
+  assert.equal(next.epoch,old.epoch+1);
+  assert.equal((await release(old)).status,409);
+  const observed=await f.send({operation:'renew',owner:next,lease_s:120});
+  assert.equal(observed.status,200);
+  assert.ok(observed.value.lease.ready_at-observed.value.lease.server_now>29);
+  assert.equal((await f.commit(next,1,b,{sequence:0,digest:a},a)).status,409);
+  assert.equal((await f.send({operation:'heads',owner:next})).value.heads[0].digest,a);
+  f.ready();
+  assert.equal((await f.commit(old,1,b,{sequence:0,digest:a},a)).status,409);
+  assert.equal((await f.commit(next,1,b,{sequence:0,digest:a},a)).status,200);
+ }finally{f.sql.close()}
+});
