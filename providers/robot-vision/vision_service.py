@@ -453,6 +453,7 @@ class VisionService:
         return result
 
     def start(self):
+        self.stream_derivations.start()
         self.applied_controls.start()
         self.metric.start_worker()
         self.atlas.start(self)
@@ -853,7 +854,7 @@ class VisionService:
         pose = pose or dict(unknown_localization('frame_processing_pending'),
                     frame_id=frame['frame_id'], map_id=binding['map_id'])
         motion = self._stream_motion_events(frame)
-        tof = self._read_tof()
+        tof = self.stream_derivations.capture_tof()
         pickup = motion.get('last_pickup_at')
         if isinstance(pickup, (int, float)) and isinstance(tof, dict):
             ground = (tof.get('ground_contact') or {}).copy()
@@ -1589,6 +1590,7 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        self.stream_derivations.close()
         if getattr(self,"camera_rig",None) is not None:self.camera_rig.close()
         self.sensor_ticks.close()
         if getattr(self,'lidar',None) is not None:self.lidar.close()

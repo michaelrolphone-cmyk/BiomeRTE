@@ -1,6 +1,7 @@
 """Canonical display derivations, calculated once at the provider for all subscribers."""
 import copy
 import json
+import logging
 import math
 from pathlib import Path
 import threading
@@ -112,20 +113,84 @@ def display_fit(tof):
 
 class StreamDerivations:
     def __init__(self, service):
-        self.service=service;self.lock=threading.RLock();self.stamps=None;self.baseline={};self.reference={}
+        self.service=service;self.lock=threading.RLock();self.stamps=None
+        self.reference_snapshot = ({}, {}, {})
+        self.reference_stop = threading.Event()
+        self.reference_thread = None
+        self.tof_snapshot = None
         self.previous=None;self.hits={};self.world=None;self.latest_tof=None;self.tof_at=0;self.latest_attitude=None;self.accepted_at=-math.inf;self.zero_id=None;self.attitude_at=-math.inf;self.orientation_world=None
 
-    def references(self):
+    def start(self):
+        if self.reference_thread is None:
+            self.reference_thread = threading.Thread(target=self._watch_references,
+                name="rover-stream-references", daemon=True)
+            self.reference_thread.start()
+
+    def close(self):
+        self.reference_stop.set()
+        if self.reference_thread is not None:
+            self.reference_thread.join()
+
+    def _watch_references(self):
+        last_report = -math.inf
+        while not self.reference_stop.is_set():
+            try:
+                self.refresh_references()
+                value = self.service._read_tof()
+            except Exception as error:
+                # An earlier reading retains its real age and still expires.
+                now = time.monotonic()
+                if now - last_report >= 30:
+                    logging.getLogger(__name__).warning("Deferred stream reference refresh: %s",
+                                                       type(error).__name__)
+                    last_report = now
+            else:
+                self.tof_snapshot = (time.monotonic(), value)
+            self.reference_stop.wait(.2)
+
+    def capture_tof(self):
+        snapshot = self.tof_snapshot
+        if snapshot is None:
+            return {"schema": "rover.tof.solution/1", "status": "collector_unavailable",
+                    "valid": False, "position": None, "navigation_usable": False}
+        started, supplied = snapshot
+        value = copy.deepcopy(supplied)
+        elapsed = time.monotonic() - started
+        age = value.get("collector_age_s")
+        if isinstance(age, (int, float)):
+            value["collector_age_s"] = age + elapsed
+            if value["collector_age_s"] > 5:
+                value.update(valid=False, status="collector_stale", position=None, position_hypotheses=[])
+        registration = value.get("registration") or {}
+        camera = registration.get("current_camera") or {}
+        if isinstance(camera.get("age_s"), (int, float)):
+            camera["age_s"] += elapsed
+        return value
+
+    def refresh_references(self):
+        """Replace survey and mounting references without blocking live readers."""
         root=Path(self.service.state_dir)
-        paths=[root/"survey-world.json",root/"attitude-world-reference.json"]
-        stamps=tuple((p.stat().st_mtime_ns,p.stat().st_size) if p.exists() else None for p in paths)
+        paths=[root/"survey-world.json",root/"attitude-world-reference.json",root/"robot-model.json"]
+        stamps=[]
+        for path in paths:
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                stamps.append(None)
+            except OSError:
+                return
+            else:
+                stamps.append((stat.st_ino, stat.st_mtime_ns, stat.st_size))
         if stamps!=self.stamps:
             values=[]
-            for p in paths:
-                try:values.append(json.loads(p.read_text()))
-                except (OSError,ValueError):values.append({})
-            self.baseline,self.reference=values;self.stamps=stamps
-        return self.baseline,self.reference
+            for path in paths[:2]:
+                try:value = json.loads(path.read_text())
+                except (FileNotFoundError,ValueError):value = {}
+                except OSError:return
+                values.append(value if isinstance(value, dict) else {})
+            definition = self.service._robot_model().get("definition", {})
+            self.reference_snapshot = (*values, definition)
+            self.stamps = stamps
 
     def attitude_observation(self,meta):
         now=time.monotonic();ahrs=meta.get("ahrs") or {};cache=ahrs.get("snapshot") or {}
@@ -262,7 +327,7 @@ class StreamDerivations:
         return {"schema":"rover.world.orientation/1","source":source,"age_s":age,"valid":True,
                 "world_id":world,"T_enu_body":T.tolist(),"pose":pose}
 
-    def project(self,meta,orientation):
+    def project(self,meta,orientation,definition):
         from lidar_fusion import zone_points
         lidar=meta.setdefault("lidar",{})
         if not isinstance(lidar,dict):meta["lidar"]=lidar={}
@@ -272,7 +337,6 @@ class StreamDerivations:
         if not orientation.get("valid"):
             lidar["world_hits"]=[];return
         T=matrix(orientation["T_enu_body"],4)
-        definition=self.service._robot_model().get("definition",{})
         front=matrix((definition.get("camera") or {}).get("T_robot_camera"),4)
         if front is None:lidar["world_hits"]=[];return
         world=orientation.get("world_id")
@@ -314,9 +378,9 @@ class StreamDerivations:
                 if isinstance(metadata["tof"].get("collector_age_s"),(int,float)):
                     metadata["tof"]["collector_age_s"]+=now-self.tof_at
             if not isinstance(metadata.get("tof"),dict):metadata["tof"]={}
-            baseline,reference=self.references()
+            baseline,reference,definition=self.reference_snapshot
             orientation=self.orientation(metadata,baseline,reference)
             metadata["world_orientation"]=orientation
             tof=metadata.setdefault("tof",{})
             if isinstance(tof,dict):tof["display_fit"]=display_fit(tof)
-            self.project(metadata,orientation)
+            self.project(metadata,orientation,definition)

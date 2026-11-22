@@ -278,6 +278,19 @@ def check_socket(path):
         raise ServiceError("unsafe_socket", "Vision socket and its directory must be owner-only.")
 
 
+def vision_service_has_custody(state):
+    """An owned service lock survives socket teardown until checkpointing finishes."""
+    try:
+        with (Path(state) / "service.lock").open("rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+    except FileNotFoundError:
+        pass
+    return False
+
+
 class VisionClient:
     def __init__(self, path, timeout=None, host_io_config=None):
         self.path, self.timeout = Path(path), timeout
@@ -558,8 +571,11 @@ def serve(cfg):
                         # A busy/late health reply is unknown, not provider loss.
                         # Only a confirmed missing endpoint or unsafe socket
                         # withdraws offers; explicit service status still governs.
-                        if (isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
-                                or error.code == "unsafe_socket"):
+                        missing = isinstance(error.__cause__, (FileNotFoundError, ConnectionRefusedError))
+                        if missing and vision_service_has_custody(cfg["state"]):
+                            # Retain the acquisition while the native service drains its checkpoint.
+                            raise
+                        if missing or error.code == "unsafe_socket":
                             status = {}
                             ready = set()
                         else:
