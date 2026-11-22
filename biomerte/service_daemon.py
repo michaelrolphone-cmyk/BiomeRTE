@@ -1018,7 +1018,7 @@ class AuthorityDaemon:
             self.maintenance_stage = "validate_tick"
             await self.transport.validate(self.binding,preparing=False)
             stages.mark("validate_tick")
-            if getattr(self,"events",None) is not None:
+            if getattr(self,"events",None) is not None and await asyncio.to_thread(self.events.active):
                 self.maintenance_stage = "event_delivery"
                 await asyncio.to_thread(self.events.deliver)
                 stages.mark("events")

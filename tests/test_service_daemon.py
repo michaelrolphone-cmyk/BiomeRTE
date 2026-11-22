@@ -60,6 +60,34 @@ class Clock:
 
 
 class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_event_stores_do_not_republish_an_already_validated_maintenance_tick(self):
+        from biomerte.controller_events import ManagedEvents
+        daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+        daemon.binding = {"boot_epoch": "current"}
+        daemon.config = {"authority_kind": "controller"}
+        daemon.lock = asyncio.Lock()
+        daemon.transport = Mock(validate=AsyncMock())
+        daemon.phase = AsyncMock(return_value={"phase": "active"})
+        daemon.publish = AsyncMock()
+        daemon.authority = Mock()
+        daemon.events = ManagedEvents.__new__(ManagedEvents)
+        store = Mock()
+        store.active.return_value = False
+        daemon.events.stores = {"one": store}
+        daemon.events.delivery_offset = 0
+        await daemon.maintain_once()
+        daemon.authority.maintain.assert_called_once()
+        store.deliver.assert_not_called()
+        self.assertEqual(daemon.publish.await_count, 2)
+        self.assertEqual(daemon.transport.validate.await_count, 2)
+        # An active subscription can advance a cursor without a posted callback.
+        store.active.return_value = True
+        store.deliver.return_value = 0
+        await daemon.maintain_once()
+        store.deliver.assert_called_once_with(max_callbacks=1)
+        self.assertEqual(daemon.publish.await_count, 5)
+        self.assertEqual(daemon.transport.validate.await_count, 5)
+
     async def test_slow_signed_batch_attributes_publication_time_without_exposing_envelopes(self):
         clock = Clock()
         daemon = AuthorityDaemon.__new__(AuthorityDaemon)
