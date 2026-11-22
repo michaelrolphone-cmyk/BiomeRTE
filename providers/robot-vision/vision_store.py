@@ -49,7 +49,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 
 
@@ -237,11 +237,27 @@ PRAGMA user_version=1;
             raise
 
     def _map_locked(self, map_id, revision=None):
-        row = self._db.execute("SELECT * FROM maps WHERE id=?", (map_id,)).fetchone()
+        return self._map_info(self._db, map_id, revision)
+
+    @contextmanager
+    def _map_reader(self):
+        # Admission is serialized with close(). Each admitted read owns its WAL
+        # snapshot and connection, even if the store closes before it finishes.
+        with self._lock:
+            self._open()
+        with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
+                                     uri=True, isolation_level=None)) as reader:
+            reader.row_factory = sqlite3.Row
+            reader.execute("BEGIN")
+            yield reader
+
+    @staticmethod
+    def _map_info(db, map_id, revision):
+        row = db.execute("SELECT * FROM maps WHERE id=?", (map_id,)).fetchone()
         if row is None:
             raise KeyError("unknown map_id: " + str(map_id))
         rev = row["revision"] if revision is None else _integer(revision, "revision")
-        item = self._db.execute(
+        item = db.execute(
             "SELECT * FROM map_revisions WHERE map_id=? AND revision=?",
             (map_id, rev)).fetchone()
         if item is None:
@@ -693,22 +709,21 @@ PRAGMA user_version=1;
         region = _bounds(bounds) if bounds is not None else None
         if kinds is not None:
             kinds = sorted({_id(kind, "kind") for kind in kinds})
-        with self._lock:
-            self._open()
-            info = self._map_locked(map_id, revision)
+        with self._map_reader() as reader:
+            info = self._map_info(reader, map_id, revision)
             query_key = {"map_id": map_id, "revision": info["revision"],
                          "bounds": list(region) if region is not None else None, "kinds": kinds}
             offset = self._cursor(cursor, query_key)
-            sql = (
-                "SELECT e.* FROM entity_versions e JOIN "
-                "(SELECT kind,entity_id,MAX(revision) revision FROM entity_versions "
-                "WHERE map_id=? AND revision<=? GROUP BY kind,entity_id) v "
-                "ON e.kind=v.kind AND e.entity_id=v.entity_id AND e.revision=v.revision "
-                "WHERE e.map_id=? AND e.deleted=0")
-            args = [map_id, info["revision"], map_id]
+            if kinds is not None and not kinds:
+                return {"map": info, "entities": [], "next_cursor": None}
+            # Walk the page in canonical order. A newer tombstone or an entity
+            # moved outside the bounds must still suppress an older matching row.
+            sql = ("SELECT e.* FROM entity_versions e INDEXED BY entity_history "
+                   "WHERE e.map_id=? AND e.revision<=? AND e.deleted=0 AND NOT EXISTS "
+                   "(SELECT 1 FROM entity_versions v WHERE v.map_id=e.map_id AND v.kind=e.kind "
+                   "AND v.entity_id=e.entity_id AND v.revision>e.revision AND v.revision<=?)")
+            args = [map_id, info["revision"], info["revision"]]
             if kinds is not None:
-                if not kinds:
-                    return {"map": info, "entities": [], "next_cursor": None}
                 sql += " AND e.kind IN (" + ",".join("?" for _ in kinds) + ")"
                 args.extend(kinds)
             if region is not None:
@@ -718,7 +733,7 @@ PRAGMA user_version=1;
                     sql += " AND e.min_z IS NOT NULL AND e.max_z>=? AND e.min_z<=?"
                     args.extend([region[2], region[5]])
             sql += " ORDER BY e.kind,e.entity_id LIMIT ? OFFSET ?"
-            rows = self._db.execute(sql, [*args, limit + 1, offset]).fetchall()
+            rows = reader.execute(sql, [*args, limit + 1, offset]).fetchall()
             more = len(rows) > limit
             return {"map": info, "entities": [self._entity(row) for row in rows[:limit]],
                     "region_excludes_unlocated_entities": region is not None,
