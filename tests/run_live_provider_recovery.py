@@ -114,6 +114,9 @@ async def monitor(args):
     latest = state / "latest.json"
     prior = json.loads(latest.read_text()) if latest.exists() else {}
     report = dict(started=time.time(), passed=False, failures=[], placement=None, evidence={})
+    measurement = state / "last-measurement.json"
+    if prior.get("evidence") and not measurement.exists():
+        save(measurement, prior)
     async with ClientSession(timeout=ClientTimeout(total=10)) as session:
         try:
             node = json.loads(args.node_file.read_text())
@@ -168,9 +171,15 @@ async def monitor(args):
             if await release_binding(session, origin, node["node"]) != placement:
                 report["failures"].append("active controller placement changed during observation")
         except Exception as error:
-            report["failures"].append("production observation failed (" + type(error).__name__ + ")")
+            if report["placement"] is None and prior:
+                save(state / "previous.json", prior)
+            status = getattr(error, "status", None)
+            category = "HTTP " + str(status) if type(status) is int else type(error).__name__
+            report["failures"].append("production observation failed (" + category + ")")
     report["finished"] = time.time()
     report["passed"] = not report["failures"]
+    if report["evidence"]:
+        save(measurement, report)
     save(latest, report)
     print(json.dumps(report))
     return int(not report["passed"])

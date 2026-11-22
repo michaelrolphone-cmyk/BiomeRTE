@@ -83,7 +83,8 @@ def feed_record(data, *, include_unidentified=False):
     if not isinstance(metadata, dict):
         return None
     kind = metadata.get("type")
-    source = metadata.get("camera") or metadata.get("camera_id") or metadata.get("source")
+    source = next((metadata[key] for key in ("camera_id", "camera", "source")
+                   if metadata.get(key) in ("front", "rear")), None)
     name = f"{kind}:{source}"
     if name not in FEEDS or (kind == "frame" and len(data) == end):
         return None
