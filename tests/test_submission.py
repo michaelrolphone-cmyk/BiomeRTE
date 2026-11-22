@@ -52,6 +52,27 @@ class SubmissionTests(unittest.TestCase):
         self.complete(second)
         self.assertEqual('succeeded', self.call('cap.submission', {'operation':'second'})['state'])
 
+    def test_missing_original_lease_and_action_never_replay_the_submission(self):
+        first = self.submit('interrupted')
+        def retained_submission_only(tx):
+            tx.drop('actions', first['id'])
+            tx.drop('guards', first['guard'])
+            tx.drop('leases', first['lease'])
+            tx.drop('_submission_leases', first['lease'])
+        self.app.stores['site'].execute(retained_submission_only)
+        self.app = Application(self.tmp.name)
+        self.app.tick('site')
+        result = self.submit('interrupted')
+        self.assertEqual('missing_unknown', result['state'])
+        self.assertEqual(first['lease'], result['lease'])
+        self.assertIs(result['replay_allowed'], False)
+        self.assertEqual(result, self.call('cap.submission', {'operation': 'interrupted'}))
+        self.assertFalse(self.call('provider.poll', {'provider': 'test-provider'})['fences'])
+        self.assertIsNone(self.app.stores['site'].execute(
+            lambda tx: tx.get('_submission_active', first['id']), read_only=True))
+        with self.assertRaises(Fault):
+            self.submit('interrupted', 'different')
+
     def test_conflicting_retry_never_replaces_encrypted_input(self):
         self.submit('same')
         with self.assertRaises(Fault):
