@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import pathlib
+import sqlite3
 import ssl
 import time
 import tempfile
@@ -273,6 +274,7 @@ class CheckpointHelper:
         self.lock = asyncio.Lock()
         self.connection = None
         self.replication = "unobserved"
+        self.health_proof = None
         self.replica_blocks = {}
         self.confirmed_controller_checkpoint = None
         self.controller_checkpoint_refresh_at = 0
@@ -571,16 +573,37 @@ class CheckpointHelper:
         await self.transport.validate(b,preparing=False)
         return await asyncio.to_thread(self.store.activate,body)
 
-    async def health(self,request):
-        head=await asyncio.to_thread(self.store.head)
-        complete = bool(head)
-        if head:
+    def verify_health_checkpoint(self):
+        packet = self.store.packet()
+        if packet is None:
+            return None
+        self.store.require_chunks(packet["payload"]["state"])
+        return checkpoint_ref(packet)
+
+    async def watch_checkpoint_health(self):
+        # A supervisor heartbeat must not compete for the database and every
+        # checkpoint block while the helper is preparing or publishing state.
+        # A recording of verified durable bytes is bounded by the helper's
+        # existing RPC budget. Operations still verify their exact root.
+        timeout = self.config.get("request_timeout_s", 15)
+        while True:
             try:
-                packet = await asyncio.to_thread(self.store.packet)
-                await asyncio.to_thread(self.store.require_chunks, packet["payload"]["state"])
+                head = await asyncio.to_thread(self.verify_health_checkpoint)
+                self.health_proof = (head, time.monotonic() + timeout) if head else None
+            except (CheckpointError, OSError, sqlite3.Error):
+                self.health_proof = None
+            await asyncio.sleep(timeout / 3)
+
+    async def health(self, request):
+        if self.config.get("authority_kind") == "controller":
+            proof = self.health_proof
+            head = proof[0] if proof and time.monotonic() < proof[1] else None
+        else:
+            try:
+                head = await asyncio.to_thread(self.verify_health_checkpoint)
             except CheckpointError:
-                complete = False
-        ready=bool(complete and self.connection)
+                head = None
+        ready=bool(head and self.connection)
         return web.json_response({"ready":ready,"checkpoint":head,
                                   "replication":self.replication},status=200 if ready else 503)
 
@@ -1283,6 +1306,8 @@ async def run(config,role):
         tasks=[asyncio.create_task(loop())]
         if role=="authority":
             tasks.append(asyncio.create_task(instance.maintenance_loop()))
+        elif config.get("authority_kind") == "controller":
+            tasks.append(asyncio.create_task(instance.watch_checkpoint_health()))
         try:
             await asyncio.gather(*tasks)
         finally:

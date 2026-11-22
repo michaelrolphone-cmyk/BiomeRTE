@@ -1,6 +1,7 @@
 """Service and supervisor binding is checked before any helper state access."""
 import asyncio
 import json
+import time
 import types
 import unittest
 from unittest.mock import AsyncMock, Mock
@@ -31,6 +32,22 @@ class HelperScopeTests(unittest.IsolatedAsyncioTestCase):
             binding=None, checkpoint=None)
         value.update(changes)
         return value
+
+    async def test_controller_heartbeat_reads_a_current_verified_proof_without_storage_io(self):
+        self.helper.config["authority_kind"] = "controller"
+        self.helper.connection = self.worker
+        self.helper.replication = "complete"
+        checkpoint = {"service_id": "controller", "sequence": 27, "digest": "known"}
+        self.helper.health_proof = (checkpoint, time.monotonic() + 1)
+        response = await self.helper.health(None)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.body)["checkpoint"], checkpoint)
+        self.helper.health_proof = (checkpoint, time.monotonic() - 1)
+        self.assertEqual((await self.helper.health(None)).status, 503)
+        self.helper.health_proof = (checkpoint, time.monotonic() + 1)
+        self.helper.connection = None
+        self.assertEqual((await self.helper.health(None)).status, 503)
+        self.assertEqual(self.helper.store.mock_calls, [])
 
     async def test_every_remote_operation_rejects_another_or_missing_service_before_io(self):
         for operation in ("checkpoint.status", "checkpoint.get", "checkpoint.put",
