@@ -1,4 +1,7 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import io
+import threading
 import json
 import struct
 import unittest
@@ -8,7 +11,7 @@ from unittest.mock import MagicMock, AsyncMock
 from aiohttp import WSMsgType
 from PIL import Image
 
-from tests.qualify_live_provider_recovery import CONSUMERS, FEEDS, assess, capture, feed_record
+from tests.qualify_live_provider_recovery import CONSUMERS, FEEDS, assess, capture, feed_record, gap_details
 
 
 class LiveProviderRecoveryQualification(unittest.TestCase):
@@ -26,6 +29,20 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
                                 "instrument_max_gap_seconds": {"imu.front" if feed.endswith("front") else "lidar.rear": 0.5}})} for feed in FEEDS}}
                 for consumer in CONSUMERS},
         }
+
+    def test_gap_evidence_preserves_edges_and_exact_internal_source_ids(self):
+        for arrivals, kind, bounds in (([], "empty", (0, 12)), ([8, 10], "initial", (0, 8)),
+                                      ([1, 10], "interior", (1, 10)), ([1, 2], "tail", (2, 12))):
+            with self.subTest(kind=kind):
+                events = [(at, f"camera-boot:{at}", .2) for at in arrivals]
+                gap, timing = gap_details(events, 12)
+                longest = timing["longest"]
+                self.assertEqual((gap, longest["kind"]), (bounds[1] - bounds[0], kind))
+                self.assertEqual((longest["from_seconds"], longest["to_seconds"]), bounds)
+                if kind == "interior":
+                    self.assertNotEqual(longest["before"]["source_sha256"], longest["after"]["source_sha256"])
+                    self.assertEqual(longest["before"]["delivery_age_seconds"], .2)
+                self.assertEqual(timing["first_seconds"], arrivals[0] if arrivals else None)
 
     def test_requires_successful_result_for_the_submitted_lease(self):
         self.assertEqual(assess(self.evidence, 80, 1, 1), [])
@@ -87,6 +104,34 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
 
 
 class RealFrameQualification(unittest.IsolatedAsyncioTestCase):
+    async def test_socket_keeps_reading_decoded_jpegs_with_all_default_io_workers_blocked(self):
+        default = ThreadPoolExecutor(max_workers=1)
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(default)
+        busy = asyncio.Event()
+        release = threading.Event()
+        def site_request():
+            loop.call_soon_threadsafe(busy.set)
+            release.wait(5)
+        pending = loop.run_in_executor(None, site_request)
+        await busy.wait()
+        try:
+            image = io.BytesIO()
+            Image.new("RGB", (4, 4)).save(image, "JPEG")
+            header = json.dumps(dict(type="frame", camera_id="front", frame_id="front-1")).encode()
+            wire = struct.pack("!I", len(header)) + header + image.getvalue()
+            socket = MagicMock()
+            socket.receive = AsyncMock(side_effect=[SimpleNamespace(type=WSMsgType.BINARY, data=wire),
+                                                    SimpleNamespace(type=WSMsgType.CLOSE)])
+            session = MagicMock()
+            session.ws_connect.return_value.__aenter__.return_value = socket
+            observation = await asyncio.wait_for(capture(session, "ws://localhost", "fixture", 2), .7)
+            self.assertEqual(observation["feeds"]["frame:front"]["decoded_frames"], 1)
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+            await pending
+
     async def test_corruption_does_not_mark_camera_capture_seen_before_valid_retry(self):
         def wire(frame_id, image):
             header = json.dumps({"type": "frame", "camera_id": "rear", "frame_id": frame_id}).encode()
