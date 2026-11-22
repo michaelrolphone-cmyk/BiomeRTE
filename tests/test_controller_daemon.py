@@ -545,6 +545,12 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 return self.daemon.authority_response(message, B)
             return await dispatch(message)
 
+        # The deployed reader receives already signed envelopes. Generate load
+        # before measuring admission; OpenSSL subprocess startup is client work.
+        inbox_messages = [call("inbox-" + str(n), "provider.poll", {"provider": "builtin"})
+                          for n in range(9)]
+        result_read = call("read-result", "cap.status", {"operation": "completed-echo"})
+
         class Socket:
             closed = False
 
@@ -553,11 +559,14 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                     return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
                 yield frame({"type": "call", "id": "unrelated", "binding": B})
                 await started.wait()
-                for n in range(9):
-                    yield frame(call("inbox-" + str(n), "provider.poll", {"provider": "builtin"}))
-                yield frame(call("read-result", "cap.status", {"operation": "completed-echo"}))
+                for message in inbox_messages:
+                    yield frame(message)
+                yield frame(result_read)
                 release.set()
                 await done.wait()
+                self.closed = True
+
+            async def close(self):
                 self.closed = True
 
             async def send_json(self, reply):
@@ -566,7 +575,13 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                     done.set()
 
         self.daemon.dispatch = suspend_first
-        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(Socket()))
+        try:
+            await asyncio.wait_for(done.wait(), 2)
+        finally:
+            release.set()
+            done.set()
+            await connection
         self.assertEqual(replies["inbox-8"]["status"], 429)
         self.assertEqual(replies["read-result"]["status"], 200)
         self.assertEqual(replies["read-result"]["result"]["result"], {"value": "verified"})
