@@ -55,6 +55,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.authority=self.authority
         self.daemon.witnessed_vision_inspections={}
         self.daemon.witnessed_provider_polls={}
+        self.daemon.witnessed_terminal_results={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
         self.validated=0
@@ -528,6 +529,75 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replies["inbox-8"]["status"], 429)
         self.assertEqual(replies["read-result"]["status"], 200)
         self.assertEqual(replies["read-result"]["result"]["result"], {"value": "verified"})
+
+    async def test_completed_result_is_delivered_while_another_command_waits_for_publication(self):
+        def call(rpc, operation, arguments):
+            message = self.message(request=rpc + "-request")
+            message["id"] = rpc
+            envelope = message["envelope"]
+            envelope.update(operation=operation, arguments=arguments)
+            envelope["auth"]["signature"] = sign(self.key, {
+                key: value for key, value in envelope.items() if key != "auth"})
+            return message
+
+        submission = call("submit", "cap.submit", {"contract": "core.echo:1",
+            "operation": "completed-echo", "inputs": {"value": "verified"}})
+        result = call("read-result", "cap.status", {"operation": "completed-echo"})
+        submitted, blocked, release, done = (asyncio.Event() for _ in range(4))
+        replies = {}
+        dispatch = self.daemon.dispatch
+
+        async def suspend_first(message):
+            if message["id"] == "unrelated":
+                blocked.set()
+                await release.wait()
+                return self.daemon.authority_response(message, B)
+            return await dispatch(message)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def frame(message):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                yield frame(submission)
+                await submitted.wait()
+                yield frame({"type": "call", "id": "unrelated", "binding": B})
+                await blocked.wait()
+                yield frame(result)
+                await release.wait()
+                self.closed = True
+
+            async def send_json(self, reply):
+                replies[reply["id"]] = reply
+                if reply["id"] == "submit":
+                    submitted.set()
+                elif reply["id"] == "read-result":
+                    done.set()
+
+        self.daemon.dispatch = suspend_first
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(Socket()))
+        try:
+            await asyncio.wait_for(done.wait(), 2)
+            self.assertEqual(replies["read-result"]["result"]["result"], {"value": "verified"})
+            self.assertNotIn("unrelated", replies)
+        finally:
+            release.set()
+            await connection
+
+        forged = dict(result, envelope=dict(result["envelope"], auth=submission["envelope"]["auth"]))
+        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(forged))
+        self.fail_validate = self.validated + 2
+        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(result))
+
+        def retire(tx):
+            action = tx.need("actions", "completed-echo")
+            action.pop("result")
+            action["result_expired"] = True
+            tx.put("actions", "completed-echo", action)
+
+        self.app.stores["site"].execute(retire)
+        self.assertIsNone(await self.daemon.recheck_witnessed_terminal_result(result))
 
     async def test_batched_submission_waits_for_publication_and_keeps_actor_checks(self):
         submission = self.message(request="submit-request")
