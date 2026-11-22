@@ -71,6 +71,12 @@
       "patched_sha256": "9874f49e15b5e0ccd55dc1bd8835213b959f2bc01f87e89fe2e01840f6eb8905",
       "path": "cpp/modules/solvers/MLPnPsolver.cpp",
       "reason": "Honor the native total and per-call RANSAC iteration budgets, including early success."
+    },
+    {
+      "original_sha256": "7516c2611f6dc51b372b86ffc1864621f51d7ea97ecb5685aa46b2fbb3d6d598",
+      "patched_sha256": "08eabeed31b8fe0969187da2753466f9789fdb2564e08df4ee95b683a7a60e2b",
+      "path": "pyslam/utilities/logging.py",
+      "reason": "Bound process-owned SLAM file loggers across runtime reconstruction and close replaced sinks."
     }
   ],
   "pyslam_commit": "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"

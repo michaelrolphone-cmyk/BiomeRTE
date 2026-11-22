@@ -406,7 +406,54 @@ def patch_keyframe_graph_restore(source):
     return source
 
 
+
+FILE_LOGGER_FACTORY = '''    # Named loggers outlive individual SLAM runtimes. Rebuilding a runtime must
+    # reuse its process-owned sink instead of adding another live file descriptor.
+    _file_logger_setup_lock = threading.RLock()
+
+    @staticmethod
+    def setup_file_logger(
+        name, log_file, level=logging.INFO, mode="+w", formatter=time_log_formatter
+    ):  # to file
+        """Configure one owned file sink without changing unrelated handlers."""
+        filename = os.path.abspath(os.fspath(log_file))
+        with Logging._file_logger_setup_lock:
+            logger = logging.getLogger(name)
+            owned = [
+                handler for handler in logger.handlers
+                if getattr(handler, "_pyslam_file_logger", False)
+            ]
+            handler = next((
+                candidate for candidate in owned
+                if candidate.baseFilename == filename and candidate.mode == mode
+                and candidate.stream is not None
+            ), None)
+            if handler is None:
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                # Open before replacing the old sink: a failed reconfiguration
+                # must leave the working destination available.
+                handler = logging.FileHandler(filename, mode=mode)
+                handler._pyslam_file_logger = True
+            for previous in owned:
+                if previous is not handler:
+                    logger.removeHandler(previous)
+                    previous.close()
+            handler.setFormatter(formatter)
+            logger.setLevel(level)
+            if handler not in logger.handlers:
+                logger.addHandler(handler)
+            return logger
+
+'''
+
+
+def patch_logging_file_handlers(source):
+    # Match the pinned factory exactly; keep other upstream logger types intact.
+    return replace_once(source, "    @staticmethod\n    def setup_file_logger(\n        name, log_file, level=logging.INFO, mode=\"+w\", formatter=time_log_formatter\n    ):  # to file\n        \"\"\"To setup as many loggers as you want with a selected formatter\"\"\"\n        if not os.path.exists(os.path.dirname(log_file)):\n            os.makedirs(os.path.dirname(log_file))\n        handler = logging.FileHandler(log_file, mode=mode)\n        handler.setFormatter(formatter)\n        logger = logging.getLogger(name)\n        logger.setLevel(level)\n        logger.addHandler(handler)\n        return logger\n\n", FILE_LOGGER_FACTORY)
+
+
 PATCHES = {
+    "pyslam/utilities/logging.py": patch_logging_file_handlers,
     "pyslam/slam/keyframe.py": patch_keyframe_graph_restore,
     "pyslam/slam/tracking.py": patch_tracking_continuity,
     "pyslam/slam/frame.py": patch_empty_frame_arrays,
@@ -521,7 +568,9 @@ class Installer:
             path.write_text(patched)
             manifest.append({"path": name, "original_sha256": sha_text(original),
                              "patched_sha256": sha_text(patched),
-                             "reason": ("Retain initialized geometry through tracking loss and allow ordered front frames across shared rig IDs."
+                             "reason": ("Bound process-owned SLAM file loggers across runtime reconstruction and close replaced sinks."
+                                        if name.endswith("/utilities/logging.py") else
+                                        "Retain initialized geometry through tracking loss and allow ordered front frames across shared rig IDs."
                                         if name.endswith("/tracking.py") else
                                         "Link the optional g2o OpenGL helper only when its target exists."
                                         if name.endswith("CMakeLists.txt") else
