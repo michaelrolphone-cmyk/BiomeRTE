@@ -90,7 +90,7 @@ def select_current(service_id, witness, heads, replicas, boot_epoch):
 class CheckpointStore:
     """Local SQLite is the durable authority for packets and adapter receipts."""
 
-    def __init__(self, path, service_id, scope_digest, key):
+    def __init__(self, path, service_id, scope_digest, key, *, rollback_journal=False):
         if not isinstance(key, bytes) or len(key) < 32:
             raise CheckpointError("Private checkpoint key must contain at least32 bytes")
         self.path, self.service_id = path, service_id
@@ -101,10 +101,16 @@ class CheckpointStore:
         os.makedirs(directory, mode=0o700, exist_ok=True)
         self.db = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         os.chmod(path, 0o600)
-        self.db.execute("PRAGMA journal_mode=WAL")
+        if rollback_journal:
+            self.db.execute("PRAGMA mmap_size=0")
+            if self.db.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+                self.db.close()
+                raise CheckpointError("Local checkpoint rollback journal unavailable")
+        else:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA wal_autocheckpoint=128")
+            self.db.execute("PRAGMA journal_size_limit=1048576")
         self.db.execute("PRAGMA synchronous=FULL")
-        self.db.execute("PRAGMA wal_autocheckpoint=128")
-        self.db.execute("PRAGMA journal_size_limit=1048576")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS packets (
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),

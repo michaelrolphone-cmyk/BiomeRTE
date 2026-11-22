@@ -43,6 +43,20 @@ class Blocks(unittest.TestCase):
         self.store = CheckpointStore(self.path, "controller", "scope", b"k" * 32)
         self.addCleanup(self.store.close)
 
+    def test_unmapped_checkpoint_store_reopens_the_same_witness(self):
+        path = os.path.join(self.directory.name, "unmapped-checkpoint.sqlite")
+        with contextlib.closing(CheckpointStore(path, "controller", "scope", b"k" * 32,
+                                                rollback_journal=True)) as store:
+            desc = shard(store.chunks)
+            packet = store.bootstrap(root([desc]), {"source_receipt": "fixture"})
+            self.assertEqual("delete", store.db.execute("PRAGMA journal_mode").fetchone()[0])
+            self.assertEqual(0, store.db.execute("PRAGMA mmap_size").fetchone()[0])
+        with contextlib.closing(CheckpointStore(path, "controller", "scope", b"k" * 32,
+                                                rollback_journal=True)) as reopened:
+            self.assertEqual(packet, reopened.packet())
+            reopened.require_chunks(packet["payload"]["state"])
+            self.assertFalse(os.path.exists(path + "-shm"))
+
     def test_partial_upload_never_acknowledges_a_root(self):
         raw = canonical([["artifacts", "artifact-1", "x" * (BLOCK_BYTES * 2)]])
         desc = describe_shard("artifacts", hashlib.sha256(b"artifact-1").hexdigest()[:2], raw)
@@ -259,6 +273,20 @@ class ControllerRestoreModes(unittest.TestCase):
                     "SELECT state,lease,expires_at,delivery FROM record_lifecycle").fetchall())
         finally:
             local.close()
+
+    def test_restore_keeps_host_shared_database_unmapped_for_fresh_and_warm_targets(self):
+        self.config["site_rollback_journal"] = True
+        original = [["artifacts", "old", "starting content"]]
+        observed = self.observe(self.packet(original))
+        self.assertEqual(("delete", 3), (observed["mode"], observed["synchronous"]))
+        self.assert_rows(original)
+        updated = [["artifacts", "new", "replacement content"], ["runs", "ready", {"state": "ready"}]]
+        observed = self.observe(self.packet(updated))
+        self.assertEqual(("delete", 2), (observed["mode"], observed["synchronous"]))
+        self.assert_rows(updated)
+        with contextlib.closing(self.database()) as db:
+            self.assertEqual("delete", db.execute("PRAGMA journal_mode").fetchone()[0])
+        self.assertFalse((self.home / "site.sqlite-shm").exists())
 
     def test_late_corruption_rolls_back_empty_target_and_retry_still_uses_fresh_path(self):
         rows = [["artifacts", "first", "accepted-before-error"],
