@@ -19,9 +19,15 @@ def _adapter(worker,row,historical=None):
     operation,signature,state,body,guard=row
     offers=[o for o in worker.offers if guard==o['resource'] or guard.startswith('!slot:'+o['resource']+':')]
     if not offers and len(worker.offers)==1:offers=worker.offers
-    if len(offers)>1 or (worker.offers and not offers):raise Fault('Ambiguous adapter expiry route',409)
-    argv=offers[0].get('acknowledge_argv') if offers else None
-    if not argv:return
+    if worker.offers and not offers:
+        raise Fault('Ambiguous adapter expiry route', 409)
+    # The ledger stores the physical guard, which can serve several contracts.
+    # Expire only when all matching contracts agree on the exact cleanup action.
+    argv = offers[0].get('acknowledge_argv') if offers else None
+    if any(offer.get('acknowledge_argv') != argv for offer in offers[1:]):
+        raise Fault('Ambiguous adapter expiry route', 409)
+    if argv is None:
+        return
     if not isinstance(argv,list) or not argv or not all(isinstance(a,str) for a in argv) or not os.path.isabs(argv[0]):raise Fault('Invalid adapter expiry argv')
     payload={'operation':operation,'expire':True}
     if historical is not None:payload['historical_result']=historical
