@@ -119,6 +119,15 @@ def validate_elf(header, platform):
         raise ValueError("Image runtime ELF {} does not match {}".format(actual, platform))
 
 
+def runtime_platform(args):
+    platform = "linux/arm64" if args.platform == "linux/arm64/v8" else args.platform
+    if platform not in PLATFORMS:
+        raise ValueError("Unsupported Docker target platform: " + str(platform))
+    with open(sys.executable, "rb") as handle:
+        validate_elf(handle.read(20), platform)
+    return {"runtime_platform": platform}
+
+
 def check_runtime(docker, image, config, platform):
     argv = (config.get("Entrypoint") or []) + (config.get("Cmd") or [])
     program = argv[0] if argv else "/bin/sh"
@@ -414,6 +423,9 @@ def render(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    p = commands.add_parser("runtime-platform", help="Check the running Python executable against the image target")
+    p.add_argument("--platform", required=True)
+    p.set_defaults(func=runtime_platform)
     p = commands.add_parser("build")
     p.add_argument("--repo", default=str(ROOT))
     p.add_argument("--revision", default="HEAD")

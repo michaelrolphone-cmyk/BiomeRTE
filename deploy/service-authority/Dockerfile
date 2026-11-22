@@ -1,5 +1,10 @@
 ARG PYTHON_IMAGE=python:3.11-alpine
-FROM ${PYTHON_IMAGE} AS authority-runtime
+FROM ${PYTHON_IMAGE} AS authority-platform
+ARG TARGETPLATFORM
+RUN --mount=type=bind,source=deploy/docker-services/images.py,target=/tmp/biomerte-build/images.py \
+    python /tmp/biomerte-build/images.py runtime-platform --platform "$TARGETPLATFORM"
+
+FROM authority-platform AS authority-runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     AIOHTTP_NO_EXTENSIONS=1 MULTIDICT_NO_EXTENSIONS=1 \
     YARL_NO_EXTENSIONS=1 FROZENLIST_NO_EXTENSIONS=1 PROPCACHE_NO_EXTENSIONS=1
