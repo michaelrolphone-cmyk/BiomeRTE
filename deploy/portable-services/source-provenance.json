@@ -93,16 +93,16 @@
     },
     {
       "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
-      "bytes": 17157,
-      "packaged_sha256": "7c4a996f47fe7106937a47662fec6e15483369fbb7cd108add0e1e57fa5d7fb1",
+      "bytes": 17277,
+      "packaged_sha256": "301b12c8040a6923af54f975fe6bb69906e6ed71e3e242313dfa3380da9109a9",
       "path": "rover_service.py",
       "sha256": "ddfed9386e80d0c9ba99ad7c40f95dfe3cda529bf936ad89282f9747c8fd6f75",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py"
     },
     {
       "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
-      "bytes": 16286,
-      "packaged_sha256": "2b3eedb1f0f353192f96e0bb4e27c5d690eef81c96f3ecfe5e6d51c816057bda",
+      "bytes": 22228,
+      "packaged_sha256": "e86ea014cc2992532c8ec5b271ad6cb14a6242d540b160f9e00a5c468ffcf634",
       "path": "rover_transport.py",
       "sha256": "443b5f50bea96d90876f4a3cbe3f05c1fd17ac36632eb9d63e1eb57a9ffb1d22",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_transport.py"

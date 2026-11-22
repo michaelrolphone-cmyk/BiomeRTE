@@ -356,7 +356,8 @@ class Ingress:
 
 
 class Outbound:
-    def __init__(self, public, local, secret, native_router=None, allowed_private_router_hosts=()):
+    def __init__(self, public, local, secret, native_router=None, allowed_private_router_hosts=(), *,
+                 shared_site_vision=False):
         self.public = public.rstrip('/')
         self.local = local.rstrip('/')
         self.headers = {'Authorization':'Bridge ' + derived(secret, 'rover-link')}
@@ -364,8 +365,12 @@ class Outbound:
         self.tasks = {}
         self.inspect_token = derived(secret,'router-inspect')
         self.native_router = local_router(native_router, allowed_private_router_hosts)
-        if self.native_router:
-            self.headers['X-Bridge-Capabilities'] = 'native_router,owner_inspect'
+        capabilities = ['native_router', 'owner_inspect'] if self.native_router else []
+        if shared_site_vision:
+            # Only the read-only Site vision route can share its upstream.
+            capabilities.append('shared_site_vision_v1')
+        if capabilities:
+            self.headers['X-Bridge-Capabilities'] = ','.join(capabilities)
 
     async def open_native(self, session, value):
         if not self.native_router or not re.fullmatch(r'/[a-f0-9]{32}/[a-z_]+', value['path']):
