@@ -1,5 +1,6 @@
 """Attach the existing live processing feed to native leased WebSockets."""
 import asyncio
+from concurrent.futures import Future
 import http.client
 import json
 import logging
@@ -40,10 +41,15 @@ def exact(source,size):
     return b''.join(parts)
 
 
+PUBLISHER_BINDING = ('id', 'authority', 'epoch', 'generation', 'contract', 'resource', 'provider')
+ADDITIONAL_BINDING = ('lease', 'server', 'realm', 'site')
+
+
 def publication_grant(hint, descriptor):
     """Use the deadline from the current authorized attachment."""
-    fields = ('id', 'authority', 'epoch', 'generation', 'contract', 'resource', 'provider')
-    if any(descriptor.get(field) != hint.get(field) for field in fields):
+    fields = PUBLISHER_BINDING + tuple(field for field in ADDITIONAL_BINDING if field in hint)
+    if descriptor.get('role', 'provider') != 'provider' or any(
+            descriptor.get(field) != hint.get(field) for field in fields):
         raise ValueError('Publisher attachment binding changed')
     deadline = descriptor.get('expires_at')
     if (type(deadline) not in (int, float) or not math.isfinite(deadline)
@@ -70,6 +76,32 @@ class VisionStreams:
         self.reported={}
         self.connections={}
         self.lane_tasks={}
+        self.attachment_lock = threading.Lock()
+        self.attachment_reads = {}
+
+    def read_attachment(self, grant):
+        # Vision and map run on separate event loops. The provider credential
+        # covers both lanes, and each WebSocket still validates its own attach.
+        binding = tuple(grant.get(field) for field in PUBLISHER_BINDING + ADDITIONAL_BINDING)
+        with self.attachment_lock:
+            read = self.attachment_reads.get(binding)
+            owner = read is None or read.done()
+            if owner:
+                read = self.attachment_reads[binding] = Future()
+        if not owner:
+            return read.result()
+        try:
+            descriptor = self.remote.call('stream.attach', {'session': grant['id'], 'role': 'provider'})
+        except BaseException as error:
+            read.set_exception(error)
+            raise
+        else:
+            read.set_result(descriptor)
+            return descriptor
+        finally:
+            with self.attachment_lock:
+                if self.attachment_reads.get(binding) is read:
+                    del self.attachment_reads[binding]
 
     def stop_lane(self, key, stop):
         stop.set()
@@ -110,7 +142,7 @@ class VisionStreams:
             disconnected=None
             stage='attachment'
             try:
-                descriptor=await asyncio.to_thread(self.remote.call,'stream.attach',{'session':grant['id'],'role':'provider'})
+                descriptor=await asyncio.to_thread(self.read_attachment,grant)
                 active=publication_grant(grant, descriptor)
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
