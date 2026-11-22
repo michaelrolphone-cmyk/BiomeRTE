@@ -29,6 +29,14 @@ def extracted_method(source, class_name, method_name, namespace):
     return namespace[method_name]
 
 
+class PatchInventoryTests(unittest.TestCase):
+    def test_checkout_contains_each_supported_native_transform(self):
+        path = Path(__file__).resolve().parents[1] / "pyslam-patches.json"
+        manifest = json.loads(path.read_text())
+        self.assertEqual(manifest["pyslam_commit"], PYSLAM_COMMIT)
+        self.assertCountEqual((entry["path"] for entry in manifest["patches"]), PATCHES.keys())
+
+
 class Point:
     def __init__(self):
         self.views = {}
