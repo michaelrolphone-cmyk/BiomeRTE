@@ -12,6 +12,8 @@ import threading
 import time
 
 BLOCK_BYTES = 256 * 1024
+UPLOAD_BATCH_BYTES = 4 * BLOCK_BYTES
+UPLOAD_BATCH_BLOCKS = 256
 STATE_FORMAT = "biomerte-controller-state/1"
 DIGEST = re.compile(r"[0-9a-f]{64}")
 PREFIX = re.compile(r"[0-9a-f]{2}")

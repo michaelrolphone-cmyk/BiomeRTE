@@ -541,6 +541,75 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         uploaded = [body["block"]["digest"] for operation, body in self.calls if operation == "chunk_put"]
         self.assertEqual([new["blocks"][0]["digest"]], uploaded)
 
+    async def test_negotiated_mixed_size_blocks_share_witness_checks_and_retain_exact_receipts(self):
+        from biomerte.service_daemon import CheckpointHelper
+        from unittest.mock import AsyncMock
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.store = types.SimpleNamespace(chunks=self.blocks)
+        helper.validate = AsyncMock()
+        self.daemon.checkpoint_bulk_upload = True
+        pages = []
+        async def adapter(operation, **body):
+            if operation == "chunk_put_many":
+                blocks = body["blocks"]
+                pages.append([len(base64.b64decode(b["data"])) for b in blocks])
+                return await helper.chunk_put_many(dict(body, binding=B))
+            return await self.helper(operation, **body)
+        self.daemon.helper = adapter
+        # The production 16-client workload changed 208 distinct small blocks.
+        prefixes = set()
+        index = 0
+        while len(prefixes) < 208:
+            key = str(index)
+            index += 1
+            prefix = hashlib.sha256(key.encode()).hexdigest()[:2]
+            if prefix not in prefixes:
+                prefixes.add(prefix)
+                self.add(key, "v" * 24000)
+        await publish_controller(self.daemon)
+        self.assertEqual(sum(map(len, pages)), 208)
+        self.assertEqual(len(pages), 5)
+        self.assertTrue(all(sum(page) <= 4 * BLOCK_BYTES for page in pages))
+        self.assertEqual(helper.validate.await_count, 2 * len(pages))
+        self.assertEqual([operation for operation, _ in self.calls], ["chunk_missing", "publish"])
+
+    async def test_bulk_ack_must_cover_every_exact_block_before_root_publication(self):
+        a = self.add("a", "first")["blocks"][0]
+        b = self.add("b", "second")["blocks"][0]
+        expected = [dict(block, durable=True) for block in (a, b)]
+        self.daemon.checkpoint_bulk_upload = True
+        for bad in [expected[:1], expected[::-1], [expected[0], dict(expected[1], durable=False)]]:
+            async def adapter(operation, **body):
+                if operation == "chunk_put_many":
+                    return {"receipts": bad}
+                return await self.helper(operation, **body)
+            self.daemon.helper = adapter
+            with self.assertRaises(CheckpointError):
+                await publish_controller(self.daemon)
+            self.assertNotIn("publish", [operation for operation, _ in self.calls])
+            self.assertEqual(self.daemon._controller_shard_blocks, {})
+
+    async def test_bulk_revocation_fences_ack_and_retry_reconciles_immutable_bytes(self):
+        from biomerte.service_daemon import CheckpointHelper
+        from biomerte.store import Fault
+        from unittest.mock import AsyncMock
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.store = types.SimpleNamespace(chunks=self.blocks)
+        helper.validate = AsyncMock(side_effect=[None, Fault("binding superseded", 409)])
+        self.daemon.checkpoint_bulk_upload = True
+        self.add("first", "data")
+        async def adapter(operation, **body):
+            if operation == "chunk_put_many":
+                return await helper.chunk_put_many(dict(body, binding=B))
+            return await self.helper(operation, **body)
+        self.daemon.helper = adapter
+        with self.assertRaisesRegex(Fault, "binding superseded"):
+            await publish_controller(self.daemon)
+        self.assertNotIn("publish", [op for op, _ in self.calls])
+        self.calls.clear()
+        await publish_controller(self.daemon)
+        self.assertEqual([op for op, _ in self.calls], ["chunk_missing", "publish"])
+
     async def test_lost_or_false_durable_ack_prevents_root_publication_and_retry_reconciles(self):
         self.add("one", "value")
         self.bad_ack = True

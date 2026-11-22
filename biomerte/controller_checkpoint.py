@@ -3,7 +3,8 @@ import asyncio
 import base64
 import hashlib
 
-from .checkpoint_chunks import BLOCK_BYTES, STATE_FORMAT, describe_shard, state_blocks
+from .checkpoint_chunks import (BLOCK_BYTES, STATE_FORMAT, UPLOAD_BATCH_BYTES, UPLOAD_BATCH_BLOCKS,
+                                describe_shard, state_blocks)
 from .service_checkpoint import CheckpointError
 
 CHECKPOINT_UPLOAD_CONCURRENCY = 4
@@ -17,15 +18,30 @@ async def read_shard(daemon, shard):
     return raw
 
 
-async def upload_block(daemon, block, raw):
-    reply = await daemon.helper("chunk_put", block={
-        "digest": block["digest"], "data": base64.b64encode(raw).decode("ascii")})
-    if (reply.get("digest") != block["digest"] or reply.get("bytes") != block["bytes"]
+def encoded_block(block, raw):
+    return {"digest": block["digest"], "data": base64.b64encode(raw).decode("ascii")}
+
+
+def check_receipt(block, reply):
+    if (not isinstance(reply, dict) or reply.get("digest") != block["digest"] or reply.get("bytes") != block["bytes"]
             or reply.get("durable") is not True):
         raise CheckpointError("Helper did not durably acknowledge exact block")
 
 
+async def upload_block(daemon, block, raw):
+    reply = await daemon.helper("chunk_put", block=encoded_block(block, raw))
+    check_receipt(block, reply)
+
+
 async def upload_batch(daemon, batch):
+    if getattr(daemon, "checkpoint_bulk_upload", False):
+        reply = await daemon.helper("chunk_put_many", blocks=[encoded_block(b, raw) for b, raw in batch])
+        receipts = reply.get("receipts") if isinstance(reply, dict) else None
+        if not isinstance(receipts, list) or len(receipts) != len(batch):
+            raise CheckpointError("Incomplete checkpoint block batch acknowledgement")
+        for (block, _), receipt in zip(batch, receipts):
+            check_receipt(block, receipt)
+        return
     # Content-addressed blocks are independent. Finish all started writes
     # before retrying an uncertain root and never publish on a partial ACK.
     results = await asyncio.gather(*(upload_block(daemon, block, raw) for block, raw in batch),
@@ -78,6 +94,9 @@ async def publish_controller(daemon):
         # Re-read only shards needed for an upload, and recheck their exact
         # identity before sending any bytes. Shared blocks upload only once.
         batch = []
+        batch_bytes = 0
+        bulk = getattr(daemon, "checkpoint_bulk_upload", False)
+        batch_limit = UPLOAD_BATCH_BLOCKS if bulk else CHECKPOINT_UPLOAD_CONCURRENCY
         for shard in shards:
             if not any(block["digest"] in missing for block in shard["blocks"]):
                 continue
@@ -85,11 +104,14 @@ async def publish_controller(daemon):
             for index, block in enumerate(shard["blocks"]):
                 if block["digest"] not in missing:
                     continue
-                batch.append((block, raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES]))
-                missing.remove(block["digest"])
-                if len(batch) == CHECKPOINT_UPLOAD_CONCURRENCY:
+                block_bytes = block["bytes"]
+                if batch and (len(batch) == batch_limit or batch_bytes + block_bytes > UPLOAD_BATCH_BYTES):
                     await upload_batch(daemon, batch)
                     batch.clear()
+                    batch_bytes = 0
+                batch.append((block, raw[index * BLOCK_BYTES:(index + 1) * BLOCK_BYTES]))
+                batch_bytes += block_bytes
+                missing.remove(block["digest"])
             del raw
         if missing:
             raise CheckpointError("Controller root still has unacknowledged blocks")
