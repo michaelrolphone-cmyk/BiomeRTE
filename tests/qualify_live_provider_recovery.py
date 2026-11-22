@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import hmac
 import io
 import json
@@ -219,6 +221,44 @@ def decodable_jpeg(payload):
         return False
 
 
+def gap_details(events, elapsed):
+    """Locate the original continuity maximum using offsets since socket upgrade."""
+    first = events[0][0] if events else None
+    last = events[-1][0] if events else None
+    empty = {"kind": "empty", "from_seconds": 0.0, "to_seconds": elapsed}
+    if not events:
+        return elapsed, dict(first_seconds=None, last_seconds=None, max_interior_seconds=None, longest=empty)
+    intervals = [("initial", None, events[0])]
+    intervals.extend(("interior", before, after) for before, after in zip(events, events[1:]))
+    intervals.append(("tail", events[-1], None))
+
+    def bounds(interval):
+        _, before, after = interval
+        return before[0] if before else 0.0, after[0] if after else elapsed
+
+    def duration(interval):
+        left, right = bounds(interval)
+        return right - left
+
+    biggest = max(intervals, key=duration)
+    start, end = bounds(biggest)
+    longest = dict(kind=biggest[0], from_seconds=start, to_seconds=end)
+    for side, event in zip(("before", "after"), biggest[1:]):
+        if event is not None:
+            _, identity, age = event
+            wire_id = json.dumps(identity, separators=(",", ":")).encode()
+            longest[side] = dict(source_sha256=hashlib.sha256(wire_id).hexdigest(), delivery_age_seconds=age)
+    return duration(biggest), dict(first_seconds=first, last_seconds=last,
+                                   max_interior_seconds=max(map(duration, intervals[1:-1]), default=None),
+                                   longest=longest)
+
+
+def timed_decode(payload):
+    started = time.monotonic()
+    valid = decodable_jpeg(payload)
+    return valid, started, time.monotonic() - started
+
+
 async def capture(session, url, token, window_seconds, ready=None):
     from aiohttp import ClientWSTimeout, WSMsgType
 
@@ -231,12 +271,19 @@ async def capture(session, url, token, window_seconds, ready=None):
     measurement_times = {}
     last_observed = {}
     ages = {feed: [] for feed in FEEDS}
-    observation = {"seconds": 0, "feeds": {}}
+    observation = {"seconds": 0, "feeds": {}, "connect_started_at": time.time(),
+                   "first_binary_seconds": None, "max_decode_wait_seconds": 0, "max_decode_seconds": 0}
+    connection_start = time.monotonic()
+    # The two sockets each get one sequential decoder. Signed HTTP requests
+    # may occupy every worker in the default asyncio executor during a burst.
+    decoder = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qualification-jpeg")
+    event_loop = asyncio.get_running_loop()
     try:
         async with session.ws_connect(url, headers={"Authorization": "Bearer " + token},
                                       timeout=ClientWSTimeout(ws_close=5),
                                       max_msg_size=0) as socket:
             start = time.monotonic()
+            observation.update(connected_at=time.time(), upgrade_seconds=start - connection_start)
             if ready is not None:
                 ready.set()
             while (remaining := window_seconds - (time.monotonic() - start)) > 0:
@@ -249,6 +296,8 @@ async def capture(session, url, token, window_seconds, ready=None):
                     break
                 if message.type == WSMsgType.BINARY:
                     received = time.monotonic()
+                    if observation["first_binary_seconds"] is None:
+                        observation["first_binary_seconds"] = received - start
                     header = wire_header(message.data)
                     if header is None:
                         continue
@@ -263,7 +312,11 @@ async def capture(session, url, token, window_seconds, ready=None):
                         received_counts[feed] += 1
                         if feed.startswith("frame:"):
                             payload = memoryview(message.data)[body_offset:]
-                            if not await asyncio.to_thread(decodable_jpeg, payload):
+                            queued = time.monotonic()
+                            valid, decoding_started, decode_seconds = await event_loop.run_in_executor(decoder, timed_decode, payload)
+                            observation["max_decode_wait_seconds"] = max(observation["max_decode_wait_seconds"], decoding_started - queued)
+                            observation["max_decode_seconds"] = max(observation["max_decode_seconds"], decode_seconds)
+                            if not valid:
                                 invalid_frames[feed] += 1
                                 continue
                         if fingerprint is None:
@@ -271,7 +324,9 @@ async def capture(session, url, token, window_seconds, ready=None):
                             continue
                         if fingerprint not in seen[feed]:
                             seen[feed].add(fingerprint)
-                            stamps[feed].append(received - start)
+                            age = received - processed if positive(processed) and processed <= received else None
+                            event = (received - start, fingerprint, age)
+                            stamps[feed].append(event)
                             if feed in instruments:
                                 packet = metadata.get("sensor_packet")
                                 for sensor, stamp in instrument_readings(feed.partition(":")[2], packet):
@@ -282,19 +337,19 @@ async def capture(session, url, token, window_seconds, ready=None):
                                         last_observed[key] = (stamp, count + 1)
                                         # At least two observations must advance within one device boot.
                                         instruments[feed][sensor] = max(instruments[feed][sensor], count + 1)
-                                        measurement_times.setdefault((feed, sensor), []).append(received - start)
-                            if positive(processed) and processed <= received:
-                                ages[feed].append(received - processed)
+                                        measurement_times.setdefault((feed, sensor), []).append(event)
+                            if age is not None:
+                                ages[feed].append(age)
             elapsed = time.monotonic() - start
             observation["seconds"] = elapsed
             for feed, times in stamps.items():
-                edges = [0.0, *times, elapsed]
+                gap, timing = gap_details(times, elapsed)
                 observation["feeds"][feed] = {
                     "records": len(times),
                     "received_records": received_counts[feed],
                     "unidentified_records": unidentified[feed],
                     "duplicate_records": received_counts[feed] - unidentified[feed] - invalid_frames[feed] - len(times),
-                    "max_gap_seconds": max(b - a for a, b in zip(edges, edges[1:])),
+                    "max_gap_seconds": gap, "gap_timing": timing,
                     "max_delivery_age_seconds": max(ages[feed], default=None),
                     "unclocked_records": len(times) - len(ages[feed]),
                 }
@@ -302,13 +357,14 @@ async def capture(session, url, token, window_seconds, ready=None):
                     observation["feeds"][feed].update(decoded_frames=len(times), invalid_frames=invalid_frames[feed])
                 else:
                     observation["feeds"][feed]["instrument_samples"] = instruments[feed]
-                    gaps = {}
+                    gaps, timings = {}, {}
                     for sensor in instruments[feed]:
-                        edges = [0.0, *measurement_times.get((feed, sensor), ()), elapsed]
-                        gaps[sensor] = max(b - a for a, b in zip(edges, edges[1:]))
-                    observation["feeds"][feed]["instrument_max_gap_seconds"] = gaps
+                        gaps[sensor], timings[sensor] = gap_details(measurement_times.get((feed, sensor), ()), elapsed)
+                    observation["feeds"][feed].update(instrument_max_gap_seconds=gaps, instrument_gap_timing=timings)
     except Exception as error:
         observation["error"] = getattr(error, "status", None) or type(error).__name__
+    finally:
+        decoder.shutdown(wait=False, cancel_futures=True)
     return observation
 
 
