@@ -51,3 +51,75 @@ class HealthEvidenceTests(unittest.TestCase):
                         adapter.serve(cfg)
                 self.assertEqual([pathlib.Path(folder)/'provider/stream-sequences.sqlite'],sequence_paths)
                 self.assertEqual(withdraws,bool(offline))
+
+    def test_unrelated_definition_does_not_block_healthy_query_offers(self):
+        cfg = {'provider':'provider', 'site':'site', 'resource':'camera', 'slots':1}
+        wanted = {'robot.vision.metadata:1', 'robot.vision.status:1'}
+        unrelated = next(k for k in sorted(adapter.CONTRACTS) if k not in wanted)
+        ready = wanted | {unrelated}
+        published = []
+        class Remote:
+            def call(self, name, args):
+                if name == 'cap.define' and args['name'] == adapter.CONTRACTS[unrelated]['name']:
+                    raise TimeoutError('unrelated definition')
+                if name == 'cap.offer':
+                    published.append((args['contract'], args['state']))
+                return {}
+        with tempfile.TemporaryDirectory() as temp:
+            registry = pathlib.Path(temp) / 'contract-cache'
+            known = set(ready)
+            registered, advertised = set(), {}
+            with patch('builtins.print'):
+                retry = adapter.reconcile_query_offers(Remote(), cfg, ready, registered, known,
+                                                       advertised, registry, threading.Event())
+            self.assertTrue(retry)
+            self.assertEqual(set(published), {(name,'ready') for name in wanted})
+            self.assertEqual(registered, wanted)
+            self.assertEqual(advertised, {k:'ready' for k in wanted})
+            ready.remove('robot.vision.status:1')
+            with patch('builtins.print'):
+                adapter.reconcile_query_offers(Remote(), cfg, ready, registered, known,
+                                               advertised, registry, threading.Event())
+            self.assertEqual(published[-1], ('robot.vision.status:1','offline'))
+
+    def test_real_advertisement_loop_restores_queries_when_relay_registry_is_unavailable(self):
+        advertised = threading.Event()
+        blocked_relay = threading.Event()
+        handlers = {}
+        target = 'robot.vision.metadata:1'
+        class Remote:
+            def __init__(self, cfg): pass
+            def call(self, name, args):
+                if name == 'cap.define' and args['name'] == 'relay.fixture':
+                    blocked_relay.set()
+                    raise TimeoutError('relay unavailable')
+                if name == 'cap.offer' and args['contract'] == target and args['state'] == 'ready':
+                    advertised.set()
+                return {}
+        class Client:
+            def __init__(self, *args): pass
+            def query(self, *args):
+                return {'state':'running','capabilities':[target],
+                        'streaming':{'available':True,'lanes':['vision','map'],'rear_enabled':True}}
+        class Worker:
+            def __init__(self,*args): self.db = types.SimpleNamespace(close=lambda:None)
+            def recover_result_acknowledgements(self,**kwargs): pass
+            def once(self,*args,**kwargs):
+                blocked_relay.wait(2)
+                handlers[adapter.signal.SIGTERM](None,None)
+        class Streams:
+            def __init__(self,*args,**kwargs): pass
+            def update(self,*args): pass
+            def close(self): pass
+        with tempfile.TemporaryDirectory() as folder:
+            root=pathlib.Path(folder)
+            (root/'rover-relay-contracts.json').write_text('[{"name":"relay.fixture","version":1}]')
+            cfg={'state':folder,'repo':str(pathlib.Path(__file__).resolve().parents[3]),
+                 'socket':'unused','provider':'provider','site':'site','slots':1,
+                 'resource':'camera','python':sys.executable}
+            with patch.object(adapter,'HERE',root),patch.object(adapter,'Remote',Remote), \
+                 patch.object(adapter,'VisionClient',Client), patch.object(adapter.signal,'signal',handlers.__setitem__), \
+                 patch('biomerte.worker.Worker',Worker),patch('leased_streams.VisionStreams',Streams),patch('builtins.print'):
+                adapter.serve(cfg)
+        self.assertTrue(blocked_relay.is_set())
+        self.assertTrue(advertised.is_set())
