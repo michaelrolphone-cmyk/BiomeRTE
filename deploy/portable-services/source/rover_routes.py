@@ -134,6 +134,10 @@ class ControllerRoutes:
                     self.operations.settled(command)
             binding = self.session_resources.get(session) or self.lease_resources.get(lease)
             if binding and operation in ('stream.attach', 'cap.lease', 'stream.open'):
+                # A transient controller outage says nothing about ownership.
+                if binding[0] == 'robot.vision.stream:1' and (
+                        not isinstance(error, HTTPError) or error.code not in (404, 409)):
+                    raise
                 try:
                     current = self.resolve(*binding)
                 except OSError:

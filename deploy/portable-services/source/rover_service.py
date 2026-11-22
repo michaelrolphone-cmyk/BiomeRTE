@@ -9,8 +9,10 @@ import os
 import pathlib
 import signal
 import sys
+import tempfile
 import time
 import urllib.request
+from urllib.error import HTTPError
 import uuid
 from aiohttp import web
 from portable_common import read_json
@@ -55,36 +57,181 @@ class RoutedRemote(ControllerRoutes):
         self.gateway_url = gateway_url or GATEWAY
         self.app, self.home = app, home
         self.identity = read_json(str(home/'node.json'))
+        self.vision_route = None
+        self.vision_scope = None
         self.service_resolver = resolver if resolver is not None else ServiceOwnerResolver(
             PUBLIC, declarations=lambda: read_json(str(home/'node.json')).get(
                 'service_authority_declarations', []))
         super().__init__(app.node, state_home or home, self.signed_request)
 
     def resolve_new(self, contract, resource):
+        if self.vision_scope is not None and (contract, resource) == self.vision_scope[:2]:
+            return self.app.node
         owner = self.service_resolver(resource)
         return owner if owner is not None else super().resolve_new(contract, resource)
 
-    def signed_request(self, controller, operation, arguments):
+    def vision_controller_path(self, controller):
+        request = urllib.request.Request(PUBLIC + '/api/service-authorities/resolve',
+            data=json.dumps({'controller': controller}).encode(),
+            headers={'Content-Type': 'application/json',
+                     'User-Agent': 'BiomeRTE-Rover-Server/1'})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            scope = json.load(response)
+        authority = scope.get('authority')
+        if (scope.get('authority_kind') != 'controller' or scope.get('effect_ready') is not True
+                or not isinstance(authority, str) or len(authority) != 64
+                or any(value not in '0123456789abcdef' for value in authority)
+                or controller not in (authority, *scope.get('controller_aliases', ()))):
+            raise ConnectionError('Existing vision lease authority is unavailable')
+        path = '/api/controller-runtimes/' + authority + '/call'
+        if scope.get('call_path') != path:
+            raise ConnectionError('Vision authority returned an invalid controller path')
+        return path
+
+    def resume_from_bootstrap(self, owner, path, contract, resource, task):
+        try:
+            prior = read_json(str(self.home / 'vision-stream-resume.json'))
+        except (OSError, ValueError):
+            return None
+        if (not isinstance(prior, dict)
+                or (prior.get('contract'), prior.get('resource'), prior.get('task')) != (contract, resource, task)
+                or not all(isinstance(prior.get(key), str) and prior[key] for key in ('session', 'lease'))):
+            return None
+        try:
+            descriptor = self.signed_request(owner, 'stream.attach',
+                {'session': prior['session'], 'role': 'server', 'lease': prior['lease']}, managed_path=path)
+        except HTTPError as error:
+            if error.code == 403:
+                return None
+            if error.code not in (404, 409, 410):
+                raise
+            # A stale stream hint can refer to an abandoned reservation after
+            # the provider briefly disappeared. Only a bound lease can reopen.
+            try:
+                current = self.signed_request(owner, 'cap.lease',
+                    {'lease': prior['lease']}, managed_path=path)
+            except HTTPError as lookup_error:
+                if lookup_error.code == 404:
+                    return None
+                raise
+            if current.get('state') != 'bound':
+                return None
+            try:
+                descriptor = self.signed_request(owner, 'stream.open',
+                    {'lease': prior['lease']}, managed_path=path)
+            except HTTPError as reopen_error:
+                if reopen_error.code in (404, 409, 410):
+                    return None
+                raise
+        return dict(descriptor, subscription_lease=prior['lease'])
+
+    def resume_vision(self, contract, resource, task):
+        owner = self.app.node
+        try:
+            path = self.vision_controller_path(owner)
+            self.vision_scope = (contract, resource, path)
+            descriptor = self.resume_from_bootstrap(owner, path, contract, resource, task)
+            if descriptor is None:
+                descriptor = self.signed_request(owner, 'stream.resume',
+                    {'contract': contract, 'resource': resource, 'task': task}, managed_path=path)
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        lease = descriptor['subscription_lease']
+        self.leases[lease] = owner
+        self.lease_resources[lease] = (contract, resource)
+        self.sessions[descriptor['id']] = owner
+        self.session_resources[descriptor['id']] = (contract, resource)
+        self.vision_route = (lease, descriptor['id'], path)
+        return {'id': lease}, descriptor
+
+    @staticmethod
+    def write_grant_reference(path, value):
+        try:
+            if read_json(str(path)) == value:
+                return
+        except (OSError, ValueError):
+            pass
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix='.vision-grant-', delete=False) as output:
+            temporary = pathlib.Path(output.name)
+            try:
+                json.dump(value, output)
+                output.flush()
+                os.fsync(output.fileno())
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def remember_vision_grant(self, descriptor, task):
+        if descriptor['contract'] != 'robot.vision.stream:1':
+            return
+        reference = {'session': descriptor['id'], 'lease': descriptor['subscription_lease'],
+                     'contract': descriptor['contract'], 'resource': descriptor['resource'],
+                     'task': task, 'generation': descriptor['generation']}
+        try:
+            self.write_grant_reference(self.home / 'vision-stream-resume.json', reference)
+        except OSError:
+            logging.warning('Could not record the Rover vision subscription reference')
+        # A colocated publisher can recover its grant even while its inbox is busy.
+        # An independently placed publisher still discovers grants via its inbox.
+        root = pathlib.Path(os.environ.get('ROVER_VISION_PROVIDER_STATE',
+                                          str(self.home.with_name('biome-robot-vision'))))
+        try:
+            provider = read_json(str(root / 'provider-manifest.json'))
+            if (provider.get('provider'), provider.get('resource')) == (descriptor['provider'], descriptor['resource']):
+                fields = ('id', 'epoch', 'authority', 'provider', 'lease', 'generation',
+                          'resource', 'contract', 'lanes', 'state', 'expires_at')
+                self.write_grant_reference(root / 'provider' / 'vision-stream-resume.json',
+                                           {key: descriptor[key] for key in fields})
+        except (OSError, ValueError):
+            logging.warning('Could not record the colocated vision publisher reference')
+
+    def signed_request(self, controller, operation, arguments, *, managed_path=None):
+        if managed_path is None and self.vision_scope is not None:
+            lease_id, session_id = arguments.get('lease'), arguments.get('session')
+            binding = self.session_resources.get(session_id) or self.lease_resources.get(lease_id)
+            if operation == 'cap.acquire':
+                binding = (arguments.get('contract'), arguments.get('resource'))
+            if binding == self.vision_scope[:2]:
+                managed_path = self.vision_scope[2]
+        if managed_path is None and self.vision_route is not None:
+            lease, session, path = self.vision_route
+            if arguments.get('lease') == lease or arguments.get('session') == session:
+                managed_path = path
         request_id = uuid.uuid4().hex
         envelope = dict(site=self.app.config['site'], realm='site', operation=operation,
                         arguments=arguments, id=request_id, controller=controller)
         auth = dict(actor=self.identity['node'],
                     signature=sign(str(self.home/'node.key'), envelope))
-        if controller == self.app.node:
-            result = self.app.call(operation, arguments, request_id, auth=auth,
-                                   realm='site', controller=controller)
-        else:
-            envelope['auth'] = auth
-            request = urllib.request.Request(self.gateway_url+'/v1/call',
-                data=json.dumps(envelope).encode(), headers={
-                'Content-Type':'application/json','User-Agent':'BiomeRTE-Rover-Server/1'})
-            with urllib.request.urlopen(request, timeout=20) as response:
-                value = json.load(response)
-            if 'error' in value:
-                raise ConnectionError('Controller rejected Rover request')
-            result = value['result']
-        return result
-
+        managed = managed_path is not None or controller in self.controllers
+        lifecycle = operation in ('cap.discover', 'cap.acquire', 'cap.lease',
+                                  'stream.open', 'stream.attach', 'stream.resume')
+        # A busy managed controller must not make a transient reply failure
+        # tear down a persistent reservation. Reuse the exact signed ID.
+        delays = iter((.5, 1., 2.5, 4.) if managed and lifecycle else ())
+        while True:
+            try:
+                if managed_path is None and controller == self.app.node:
+                    return self.app.call(operation, arguments, request_id, auth=auth,
+                                         realm='site', controller=controller)
+                envelope['auth'] = auth
+                endpoint = PUBLIC + managed_path if managed_path else self.gateway_url + '/v1/call'
+                request = urllib.request.Request(endpoint,
+                    data=json.dumps(envelope).encode(), headers={
+                    'Content-Type':'application/json','User-Agent':'BiomeRTE-Rover-Server/1'})
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    value = json.load(response)
+                if 'error' in value:
+                    raise ConnectionError('Controller rejected Rover request')
+                return value['result']
+            except (HTTPError, TimeoutError) as error:
+                if isinstance(error, HTTPError) and error.code not in (429, 502, 503, 504):
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
 
 class FreshRover(Rover):

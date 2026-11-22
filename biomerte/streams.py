@@ -61,8 +61,8 @@ def token(ctx, grant, role, consumer=''):
     return base64.urlsafe_b64encode(raw).decode().rstrip('=') + '.' + signature
 
 
-@op('stream.open', 'lease:str ttl_seconds?:int')
-def open_stream(tx, ctx, lease, ttl_seconds=3600):
+@op('stream.open', 'lease:str ttl_seconds?:int renew?:bool')
+def open_stream(tx, ctx, lease, ttl_seconds=3600, renew=False):
     secret, url = settings(ctx)
     if not 0 < ttl_seconds <= 86400:
         raise Fault('Invalid stream lifetime')
@@ -104,6 +104,11 @@ def open_stream(tx, ctx, lease, ttl_seconds=3600):
                                              if item != subscription['id']]
                 tx.put('_stream_grants', prior['id'], prior)
             member = shared_streams.consumer(tx, ctx, prior, subscription)
+            if renew:
+                deadline = time.time() + ttl_seconds
+                if deadline > prior['expires_at']:
+                    prior['expires_at'] = deadline
+                    tx.put('_stream_grants', prior['id'], prior)
             unused, prior_url = settings(ctx, prior['authority'])
             return dict(shared_streams.public(tx, prior), url=prior_url.rstrip('/') + '/' + prior['id'],
                         role='server', attachment_credential=token(ctx, prior, 'server', member['id']))
@@ -144,6 +149,27 @@ def attach(tx, ctx, session, role, lease=''):
     member = shared_streams.consumer(tx, ctx, grant, tx.need('leases', lease) if lease else None)['id'] if role == 'server' else ''
     return dict(shared_streams.public(tx, grant), url=url.rstrip('/') + '/' + session, role=role,
                 attachment_credential=token(ctx, grant, role, member))
+
+
+@op('stream.resume', 'task:str contract:str resource:str', False)
+def resume(tx, ctx, task, contract, resource):
+    # Use the same identity and ownership rules as cap.acquire. This
+    # read-only operation can restore a caller's existing subscription.
+    from .placement import identity, normalize
+    resource, selector = normalize(resource, None)
+    lease = tx.need('leases', identity(task, contract, resource, selector))
+    if ctx.permissions is not None and lease.get('owner') != ctx.actor:
+        raise Fault('Lease belongs to another task owner', 403)
+    root = shared_streams.root(tx, lease)
+    sessions = [grant for grant in tx.matching('_stream_grants', ('open',))
+                if grant['lease'] == root['id'] and grant['generation'] == root['generation']
+                and grant['expires_at'] > time.time()]
+    if not sessions:
+        raise Fault('No current stream for the server subscription', 404)
+    if len(sessions) != 1:
+        raise Fault('Ambiguous current stream for the server subscription', 409)
+    return dict(attach(tx, ctx, sessions[0]['id'], 'server', lease['id']),
+                subscription_lease=lease['id'])
 
 
 @op('stream.inspect', 'session:str', False)

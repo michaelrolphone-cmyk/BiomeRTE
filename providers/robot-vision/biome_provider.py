@@ -389,7 +389,27 @@ class Remote:
         self.gateway = gateway or load_gateway(cfg["gateway_state"])
 
     def call(self, name, args, rid=None):
-        return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        if name != "cap.fenced":
+            return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+        # The worker has already durably installed this generation. Retry the
+        # exact acknowledgement even when the next inbox poll is delayed.
+        if rid is None:
+            identity = json.dumps([args["lease"], args["generation"]], separators=(",", ":"))
+            rid = "vision-fence-" + hashlib.sha256(identity.encode()).hexdigest()
+        delays = iter((.5, 1.5, 3., 5.))
+        while True:
+            try:
+                return self.gateway.invoke_provider(name, args, rid, self.realm, self.node)
+            except RuntimeError as error:
+                message = str(error).lower()
+                if not any(reason in message for reason in (
+                        "managed controller is busy", "service authority is unavailable",
+                        "shared controller runtime is temporarily unavailable")):
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
 
 def offer(cfg, contract, state):
@@ -475,6 +495,22 @@ def stream_offer(cfg, status):
                         "buffer_depth": 8, "max_message_bytes": 2097152}})
 
 
+def publish_stream_offer(remote, value, advertised, pending_offline, *, stopping=False):
+    """Wait for a second health observation before discarding a live reservation."""
+    resource = value["resource"]
+    if advertised.get(resource) == value:
+        pending_offline.discard(resource)
+        return
+    if value["state"] == "offline" and not stopping and resource not in pending_offline:
+        # A local listener can briefly disappear while its service rebinds.
+        # Withdrawing an offer also abandons the controller's persistent lease.
+        pending_offline.add(resource)
+        return
+    remote.call("cap.offer", value)
+    advertised[resource] = value
+    pending_offline.discard(resource)
+
+
 def serve(cfg):
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
@@ -494,6 +530,26 @@ def serve(cfg):
         worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
                         cfg.get("worker_timeout_seconds"))
         worker.stream_handler = live_streams.update
+        resume_path = worker_state / "vision-stream-resume.json"
+        resumed_session = None
+
+        def resume_live_stream():
+            nonlocal resumed_session
+            # The hint carries identity only. The normal publisher still asks
+            # the authority for its signed attachment before any payload.
+            try:
+                grant = json.loads(resume_path.read_text())
+            except (OSError, ValueError):
+                return
+            if (isinstance(grant, dict) and grant.get("provider") == cfg["provider"]
+                    and grant.get("contract") == "robot.vision.stream:1"
+                    and grant.get("resource") == cfg["resource"]
+                    and all(isinstance(grant.get(key), str) and grant[key] for key in ("id", "authority", "epoch"))
+                    and type(grant.get("generation")) is int and grant["id"] != resumed_session):
+                live_streams.update([grant])
+                resumed_session = grant["id"]
+
+        resume_live_stream()
         pool = ActionPool(worker, cfg["slots"])
         registry = worker_state / "registered-contracts.json"
         advertised, registered = {}, set()
@@ -504,7 +560,23 @@ def serve(cfg):
             stopping.set()
 
         def advertise():
-            relay_metadata_published = False
+            published_definitions = set()
+            stream_offers = {}
+            stream_offline_confirmation = set()
+            relay_definitions = json.loads((HERE / "rover-relay-contracts.json").read_text())
+            stream_definition = {"name": "robot.vision.stream", "version": 1, "inputs": {}, "outputs": {},
+                "description": "Continuous processed frames, pose and telemetry under a persistent native lease"}
+
+            def define_once(spec):
+                key = (spec["name"], spec["version"])
+                if key not in published_definitions:
+                    remote.call("cap.define", spec)
+                    published_definitions.add(key)
+
+            def publish_stream(value, status):
+                publish_stream_offer(remote, value, stream_offers, stream_offline_confirmation,
+                    stopping=status.get("state") in ("stopping", "stopped"))
+
             # Registration and health may need remote round trips. They must
             # not block the worker inbox or an already leased live stream.
             while not stopping.is_set():
@@ -522,14 +594,14 @@ def serve(cfg):
                             ready = set()
                         else:
                             raise
-                    if not relay_metadata_published:
-                        for spec in json.loads((HERE / "rover-relay-contracts.json").read_text()):
-                            remote.call("cap.define", spec)
-                        relay_metadata_published = True
-                    remote.call("cap.define", {"name":"robot.vision.stream","version":1,"inputs":{},"outputs":{},
-                        "description":"Continuous processed frames, pose and telemetry under a persistent native lease"})
+                    # These records are durable. Separate health sampling from
+                    # writes so stable cameras don't contend for controller admission.
+                    define_once(stream_definition)
+                    for spec in relay_definitions:
+                        if stopping.is_set():return
+                        define_once(spec)
                     if stopping.is_set():return
-                    remote.call("cap.offer", stream_offer(cfg, status))
+                    publish_stream(stream_offer(cfg, status), status)
                     for contract in sorted(ready - registered):
                         if stopping.is_set():return
                         remote.call("cap.define", CONTRACTS[contract])
@@ -547,14 +619,30 @@ def serve(cfg):
                     print("Vision advertisement retry:", type(exc).__name__, file=sys.stderr, flush=True)
                     stopping.wait(5)
 
+        def reconcile_receipts():
+            # A timeout for an old result must not delay polling a current
+            # vision fence or joining a live stream. Use this thread's own DB
+            # connection and let the main worker run durable cleanup jobs.
+            recovery_worker = Worker(str(worker_state / "worker.sqlite"), remote, local,
+                                     cfg.get("worker_timeout_seconds"))
+            try:
+                while not stopping.is_set():
+                    recovery_worker.recover_result_acknowledgements(limit=1, cleanup=False)
+                    stopping.wait(cfg.get("poll_seconds", 2))
+            finally:
+                recovery_worker.db.close()
+
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         publisher = threading.Thread(target=advertise, name="vision-advertisement", daemon=True)
+        recovery = threading.Thread(target=reconcile_receipts, name="vision-receipt-recovery", daemon=True)
         publisher.start()
+        recovery.start()
         try:
             while not stopping.is_set():
                 try:
-                    worker.once(pool)
+                    resume_live_stream()
+                    worker.once(pool, reconcile_receipts=False)
                     stopping.wait(cfg.get("poll_seconds", 2))
                 except Exception as exc:
                     # Request/image bytes and gateway credential errors never enter logs.
@@ -563,6 +651,7 @@ def serve(cfg):
         finally:
             stopping.set()
             publisher.join()
+            recovery.join()
             try:
                 try:
                     remote.call("cap.offer", stream_offer(cfg, {}))

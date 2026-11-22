@@ -43,8 +43,24 @@ class StreamWire(unittest.IsolatedAsyncioTestCase):
         return base64.urlsafe_b64encode(raw).decode().rstrip('=')+'.'+hmac.new(b'secret',raw,hashlib.sha256).hexdigest()
 
     async def attach(self,role,lane):
-        return await connect('ws://127.0.0.1:%d/%s/%s'%(self.port,self.grant['id'],lane),
+        session_id = self.grant['id']
+
+        def attachments():
+            session = self.router.sessions.get(session_id)
+            return {key for key in session.peers if key[:2] == (role, lane)} if session else set()
+
+        previous = attachments()
+        socket = await connect('ws://127.0.0.1:%d/%s/%s'%(self.port,session_id,lane),
             additional_headers={'Authorization':'Stream '+self.token(role)})
+        self.addAsyncCleanup(socket.close)
+
+        async def registered():
+            while not attachments() - previous:
+                await asyncio.sleep(.001)
+
+        # The upgrade precedes authority validation and router registration.
+        await asyncio.wait_for(registered(), 2)
+        return socket
 
     async def asyncTearDown(self):
         for session in list(self.router.sessions.values()):await session.close()

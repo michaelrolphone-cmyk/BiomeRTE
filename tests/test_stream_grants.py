@@ -21,6 +21,22 @@ class StreamGrants(BoundedLifecycle):
         with self.assertRaises(Fault):
             self.call('stream.inspect',session=stream['id'])
 
+    def test_explicit_renewal_preserves_the_stream_epoch(self):
+        from unittest.mock import patch
+        self.offer('persistent', stream={'enabled': True, 'lanes': ['vision', 'map']})
+        lease = self.acquire()
+        self.call('cap.fenced', provider='test', lease=lease['id'], generation=lease['generation'])
+        with patch('biomerte.streams.time.time', return_value=1000):
+            stream = self.call('stream.open', lease=lease['id'], ttl_seconds=60)
+        with patch('biomerte.streams.time.time', return_value=1040):
+            self.assertEqual(1060, self.call('stream.open', lease=lease['id'])['expires_at'])
+            renewed = self.call('stream.open', lease=lease['id'], renew=True, ttl_seconds=60)
+        for key in ('id', 'epoch', 'lease', 'generation'):
+            self.assertEqual(stream[key], renewed[key])
+        self.assertEqual(1100, renewed['expires_at'])
+        with patch('biomerte.streams.time.time', return_value=1070):
+            self.assertEqual(stream['id'], self.call('stream.inspect', session=stream['id'])['id'])
+
     def test_command_lease_cannot_open_stream(self):
         lease, action=self.action()
         with self.assertRaises(Fault):

@@ -3,6 +3,7 @@ import asyncio
 import http.client
 import json
 import logging
+import math
 import socket
 import struct
 import threading
@@ -37,6 +38,23 @@ def exact(source,size):
         if not value:raise EOFError()
         parts.append(value);size-=len(value)
     return b''.join(parts)
+
+
+def publication_grant(hint, descriptor):
+    """Use the deadline from the current authorized attachment."""
+    fields = ('id', 'authority', 'epoch', 'generation', 'contract', 'resource', 'provider')
+    if any(descriptor.get(field) != hint.get(field) for field in fields):
+        raise ValueError('Publisher attachment binding changed')
+    deadline = descriptor.get('expires_at')
+    if (type(deadline) not in (int, float) or not math.isfinite(deadline)
+            or deadline <= time.time()):
+        raise ValueError('Expired publisher attachment')
+    return dict(hint, expires_at=deadline)
+
+
+async def abort_on_wire_close(wire, local):
+    await wire.wait_closed()
+    local.abort()
 
 
 class VisionStreams:
@@ -74,9 +92,13 @@ class VisionStreams:
         while not stop.is_set():
             local=None
             response=None
+            active=None
+            expiry=None
+            disconnected=None
             stage='attachment'
             try:
                 descriptor=await asyncio.to_thread(self.remote.call,'stream.attach',{'session':grant['id'],'role':'provider'})
+                active=publication_grant(grant, descriptor)
                 headers={'Authorization':'Stream '+descriptor['attachment_credential']}
                 stage='public_socket'
                 url=(self.local_router_url+'/'+grant['id'] if self.local_router_url else descriptor['url'])
@@ -86,6 +108,9 @@ class VisionStreams:
                     local=LocalConnection(self.socket_path)
                     self.connections[key]=local
                     if stop.is_set():return
+                    deadline=active['expires_at']
+                    expiry=asyncio.get_running_loop().call_later(max(0,deadline-time.time()),local.abort)
+                    disconnected=asyncio.create_task(abort_on_wire_close(wire,local))
                     await asyncio.to_thread(local.request,'GET','/v1/live'+('/map' if grant['lane']=='map' else ''))
                     response=await asyncio.to_thread(local.getresponse)
                     if response.status!=200:raise RuntimeError('live_feed_unavailable')
@@ -99,7 +124,9 @@ class VisionStreams:
                         # A slow transport resumes at fresh input rather than
                         # draining old images buffered before reconnection.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
-                        sequence=self.sequences.next(grant)
+                        stage='sequence'
+                        if time.time()>=deadline:break
+                        sequence=self.sequences.next(active)
                         # Reserving a new range may wait for durable storage.
                         if grant['lane']=='vision' and time.monotonic()-metadata['processed_monotonic']>1:continue
                         metadata.update(authority=grant['authority'],generation=grant['generation'],
@@ -108,6 +135,8 @@ class VisionStreams:
                         stage='publish'
                         await asyncio.wait_for(wire.send(frame(metadata,image)),1)
             except Exception as error:
+                if active is not None and time.time()>=active['expires_at']:
+                    continue
                 report_key=grant['lane']
                 now=time.monotonic()
                 if now-self.reported.get(report_key,-100)>30:
@@ -117,8 +146,12 @@ class VisionStreams:
                     logging.warning('Vision live lane %s stage=%s failed: %s status=%s',grant['lane'],stage,type(error).__name__,status)
                 await asyncio.sleep(.5)
             finally:
-                if response is not None:response.close()
+                if expiry is not None:expiry.cancel()
+                if disconnected is not None:
+                    disconnected.cancel()
+                    await asyncio.gather(disconnected,return_exceptions=True)
                 if local:local.abort()
+                if response is not None:response.close()
                 if self.connections.get(key) is local:self.connections.pop(key,None)
 
     def close(self):

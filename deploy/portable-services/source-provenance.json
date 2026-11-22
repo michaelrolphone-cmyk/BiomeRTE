@@ -27,7 +27,7 @@
     {
       "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
       "bytes": 17205,
-      "packaged_sha256": "31f008c215180cde59741b4a063b9946e8d4784801fae8cbff42e1ba5cf7d726",
+      "packaged_sha256": "92f3cf25cc554d1f795d79f2387be4d0cf90c7ede443833cdfba4909196b06ff",
       "path": "biomerte/rover.py",
       "sha256": "9a47811b473fa385a724d910024ac319010b7ef43b259859ebb2b2c93bda3af1",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/biomerte/rover.py"
@@ -61,15 +61,17 @@
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_inspection.py"
     },
     {
-      "bytes": 25165,
-      "packaged_sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
+      "adaptations": "Share concurrent authority reads and hold telemetry sockets without payload during transient validation failures.",
+      "bytes": 26851,
+      "packaged_sha256": "977a23971cc8770f2e98cb78e0627ee70314c0b72759ab0c2026a6568b04236a",
       "path": "biomerte/stream_router.py",
       "sha256": "f57c3ba0a57e7c7d33557bfbb4a9eb40d49e2d7d48679a31c1fd3abffc488f43",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/stream_router.py"
     },
     {
-      "bytes": 2483,
-      "packaged_sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
+      "adaptations": "Share concurrent authority reads and hold telemetry sockets without payload during transient validation failures.",
+      "bytes": 2600,
+      "packaged_sha256": "1ef31d9910ac93a8073707e79e6abb4f0067740a0b30fdf45882d64cd51f26f2",
       "path": "biomerte/vision_mailbox.py",
       "sha256": "9a83a082aad4e7e90d40a7214e17640e06d485761d74b220a5702b3dc5282c86",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/router/biomerte/vision_mailbox.py"
@@ -84,15 +86,15 @@
     },
     {
       "bytes": 7296,
-      "packaged_sha256": "5be5e76617c4c0f91ef3d165e391cbb57e942d67da20d995e1fb82c6464ec733",
+      "packaged_sha256": "e95f86fd2d59e43f2d9ba2412e0858036fcf4486845892479644fc70df15319c",
       "path": "rover_routes.py",
       "sha256": "5be5e76617c4c0f91ef3d165e391cbb57e942d67da20d995e1fb82c6464ec733",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_routes.py"
     },
     {
       "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
-      "bytes": 8951,
-      "packaged_sha256": "be5116b4a2d7dab9e075b09423963ae07a33571a640e83ef7c05d49a5e07fa82",
+      "bytes": 17157,
+      "packaged_sha256": "6d8a48a5d8e73cee34bc1ce2ebfe7c6a93f437fa9494b902a104137b046df92e",
       "path": "rover_service.py",
       "sha256": "ddfed9386e80d0c9ba99ad7c40f95dfe3cda529bf936ad89282f9747c8fd6f75",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py"

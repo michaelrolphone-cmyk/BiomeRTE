@@ -11,6 +11,8 @@ try:
 except ModuleNotFoundError as error:
     raise unittest.SkipTest("Controller daemon boundary tests require aiohttp") from error
 
+from aiohttp import WSMsgType
+
 from biomerte.app import Application, initialize
 from biomerte.controller_authority import ControllerAuthority
 from biomerte.identity import generate, fingerprint, sign
@@ -51,6 +53,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.daemon.binding=B
         self.daemon.app=self.app
         self.daemon.authority=self.authority
+        self.daemon.witnessed_vision_inspections={}
         self.daemon.lock=asyncio.Lock()
         self.published=0
         self.validated=0
@@ -68,6 +71,9 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 raise Fault("Missing replica acknowledgement",503)
             return {"checkpoint":"fixture"}
         async def phase():
+            # The real private adapter validates the binding before returning
+            # its phase. Revocation on the final fence must still hide a result.
+            await validate(B)
             return {"phase":self.current_phase}
         self.daemon.transport=types.SimpleNamespace(validate=validate)
         self.daemon.publish=publish
@@ -85,6 +91,310 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
     def document(self,key="boundary"):
         return self.app.stores["site"].execute(lambda tx: tx.get("documents",key),read_only=True)
+
+    def test_managed_store_can_use_unmapped_full_durability_rollback_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = initialize(directory, "controller-rollback-journal")
+            config = dict(self.config, authority_id=identity["node"],
+                          site=identity["site"], site_rollback_journal=True)
+            app = Application(directory, controller_runtime=config)
+            try:
+                site = app.stores["site"]
+                local = app.stores["local"]
+                with site.connection() as db:
+                    self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+                    self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 2)
+                    self.assertEqual(db.execute("PRAGMA mmap_size").fetchone()[0], 0)
+                with local.connection() as db:
+                    self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+                authority = ControllerAuthority(app,config,B)
+                site.execute(lambda tx:tx.put("documents","persistent",{"id":"persistent"}))
+                snapshot = authority.snapshot()
+                for shard in snapshot["shards"]:
+                    self.assertIsInstance(authority.snapshot_chunk(shard["digest"]), bytes)
+                self.assertFalse(os.path.exists(site.path+"-shm"))
+            finally:
+                for store in app.stores.values():
+                    store.close()
+
+    async def test_managed_health_requires_exact_active_phase_and_registered_link(self):
+        self.daemon.connected = True
+        self.current_phase = "prepared"
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+        self.current_phase = "active"
+        before = self.validated
+        self.assertEqual((await self.daemon.health(None)).status, 200)
+        self.assertEqual(self.validated-before, 1)
+        self.fail_validate = self.validated+1
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+        self.daemon.connected = False
+        self.assertEqual((await self.daemon.health(None)).status, 503)
+
+    async def test_read_batch_verifies_each_actor_and_shares_publication(self):
+        import copy
+        signed = self.message()["envelope"]
+        signed["operation"] = "cap.discover"
+        signed["arguments"] = {}
+        body = {key:value for key,value in signed.items() if key != "auth"}
+        signed["auth"]["signature"] = sign(self.key, body)
+        denied = copy.deepcopy(signed)
+        denied["auth"]["signature"] = self.message("different")["envelope"]["auth"]["signature"]
+        messages = [dict(self.message(), envelope=value, id=str(i))
+                    for i,value in enumerate((signed, denied))]
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [200,400])
+        self.assertEqual(self.published, 2)
+        self.assertNotIn("result", replies[1])
+        self.fail_validate = self.validated+2
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [503,503])
+        self.assertTrue(all("result" not in row for row in replies))
+
+    async def test_registry_batch_does_not_expose_result_before_acknowledgement(self):
+        messages = []
+        for i in range(2):
+            message = self.message(request="definition-" + str(i))
+            message["id"] = "rpc-" + str(i)
+            envelope = message["envelope"]
+            envelope["operation"] = "cap.define"
+            envelope["arguments"] = dict(name="diagnostic_fixture_" + str(i),
+                version=1, inputs={}, outputs={})
+            envelope["auth"]["signature"] = sign(self.key, {
+                key:value for key,value in envelope.items() if key != "auth"})
+            messages.append(message)
+        self.fail_publish = 2
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [503,503])
+        self.assertTrue(all("result" not in row for row in replies))
+        replies = await self.daemon.dispatch_managed_reads(messages)
+        self.assertEqual([row["status"] for row in replies], [200,200])
+
+    async def test_only_current_unchanged_witnessed_vision_inspection_uses_fast_path(self):
+        authority = self.config["authority_id"]
+        grant = dict(id="vision", authority=authority, contract="robot.vision.stream:1",
+                     state="open", generation=2, consumers=["viewer"])
+        message = dict(type="inspect", id="rpc", authority=authority, session=grant["id"], binding=B)
+        self.authority.inspect = lambda session, issuer: dict(grant)
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        self.daemon.remember_vision_inspection(message, dict(status=200, grant=dict(grant)))
+        self.assertEqual((await self.daemon.recheck_witnessed_vision_inspection(message))["grant"], grant)
+        self.assertEqual(self.published, 0)
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(
+            dict(message, preparation=True)))
+        self.current_phase = "prepared"
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        self.current_phase = "active"
+        grant["consumers"] = ["replacement"]
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        grant["consumers"] = ["viewer"]
+        self.fail_validate = self.validated+2
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+
+    async def test_witnessed_vision_attach_checks_signed_call_without_caching_credential(self):
+        authority = self.config["authority_id"]
+        grant = dict(id="vision", authority=authority, contract="robot.vision.stream:1",
+                     state="open", generation=2, consumers=["viewer"])
+        descriptor = dict(grant, role="provider", url="wss://example.test/vision",
+                          attachment_credential="fresh-credential")
+        message = self.message()
+        envelope = message["envelope"]
+        envelope["operation"] = "stream.attach"
+        envelope["arguments"] = {"session": "vision", "role": "provider"}
+        self.daemon.remember_vision_inspection(
+            dict(message, envelope=dict(envelope, operation="stream.open")),
+            dict(status=200, result=descriptor))
+        self.assertEqual(self.daemon.witnessed_vision_inspections[(authority, "vision")], grant)
+        def attach(received, preparing):
+            self.assertIs(received, envelope)
+            self.assertFalse(preparing)
+            return descriptor
+        self.authority.call = attach
+        reply = await self.daemon.recheck_witnessed_vision_inspection(message)
+        self.assertEqual(reply["result"], descriptor)
+        self.assertEqual(self.published, 0)
+        descriptor["generation"] += 1
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+        def reject(received, preparing):
+            raise Fault("Revoked credential",403)
+        self.authority.call = reject
+        self.assertIsNone(await self.daemon.recheck_witnessed_vision_inspection(message))
+
+    async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
+        started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        processed, replies = [], []
+
+        async def dispatch(message):
+            processed.append(message["id"])
+            started.set()
+            await release.wait()
+            return {"id": message["id"], "type": "call_result", "status": 200}
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                for message in ({"type": "registered"}, {"type": "call", "id": "first"}):
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+                await started.wait()
+                for name in ("waiting", "excess"):
+                    yield types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
+                        {"type": "pair", "id": name}))
+                await rejected.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies.append(response)
+                rejected.set()
+
+        self.daemon.dispatch = dispatch
+        socket = Socket()
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(socket))
+        try:
+            await asyncio.wait_for(rejected.wait(), 1)
+            self.assertFalse(connection.done())
+            self.assertEqual(replies, [{"id": "excess", "type": "pair_result",
+                "binding": B, "status": 429, "error": "Managed controller is busy"}])
+        finally:
+            release.set()
+            await connection
+        self.assertEqual(processed, ["first"])
+
+    async def test_lifecycle_request_is_admitted_during_registration_burst(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        processed = []
+
+        async def dispatch(message):
+            processed.append(message["id"])
+            started.set()
+            if message["id"] == "running":
+                await release.wait()
+            return {"id": message["id"], "type": "call_result", "status": 200}
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(name, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(
+                        {"type": "call", "id": name, "envelope": {"operation": operation}}))
+
+                yield call("running", "cap.offer")
+                await started.wait()
+                yield call("registration", "cap.define")
+                yield call("diagnostic", "system.info")
+                yield call("lifecycle", "provider.poll")
+                yield call("lease-poll", "cap.lease")
+                yield call("attachment", "stream.open")
+                yield call("inspection", "stream.inspect")
+                yield call("resume", "stream.resume")
+                yield call("acquire-after-status", "cap.acquire")
+                yield call("confirm-installed-fence", "cap.fenced")
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                if response["id"] == "confirm-installed-fence":
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(processed, ["running", "diagnostic", "attachment", "lifecycle", "inspection",
+                                     "lease-poll", "resume", "registration",
+                                     "acquire-after-status", "confirm-installed-fence"])
+
+    async def test_discovery_and_grok_are_admitted_with_a_full_general_queue(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = {}
+
+        async def dispatch(message):
+            if message["id"] == "running":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(request_id, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "id": request_id,
+                        "envelope": {"operation": operation},
+                    }))
+
+                yield call("running", "cap.invoke")
+                await started.wait()
+                yield call("general", "cap.invoke")
+                yield call("excess", "cap.invoke")
+                yield call("poll", "provider.poll")
+                yield call("catalog", "system.discovery")
+                yield call("grok-list", "gateway.events.grok")
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies[response["id"]] = response["status"]
+                if len(replies) == 6:
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(replies, {"running": 200, "general": 200, "excess": 429,
+                                   "poll": 200, "catalog": 200, "grok-list": 200})
+
+    async def test_provider_can_advance_a_lease_with_the_general_queue_full(self):
+        started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = {}
+        calls = {
+            "waiting": "cap.invoke",
+            "excess": "cap.invoke",
+            "submit": "cap.submit",
+            "claim": "provider.claim",
+            "heartbeat": "cap.heartbeat",
+            "result": "provider.result",
+            "reconcile": "provider.reconcile",
+        }
+
+        async def dispatch(message):
+            if message["id"] == "running":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        async def dispatch_batch(messages):
+            return [await dispatch(message) for message in messages]
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def call(request_id, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({
+                        "type": "call", "id": request_id,
+                        "envelope": {"operation": operation},
+                    }))
+
+                yield call("running", "cap.invoke")
+                await started.wait()
+                for request_id, operation in calls.items():
+                    yield call(request_id, operation)
+                release.set()
+                await completed.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies[response["id"]] = response["status"]
+                if len(replies) == len(calls) + 1:
+                    completed.set()
+
+        self.daemon.dispatch = dispatch
+        self.daemon.dispatch_managed_reads = dispatch_batch
+        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 1)
+        self.assertEqual(replies, {"running": 200, "waiting": 200, "excess": 429,
+                                   "submit": 200, "claim": 200, "heartbeat": 200,
+                                   "result": 200, "reconcile": 200})
 
     async def test_no_new_transaction_before_previous_state_is_published(self):
         self.fail_publish=1
@@ -110,6 +420,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         result=await self.daemon.dispatch(self.message())
         self.assertEqual(result["status"],503)
         self.assertNotIn("result",result)
+        self.assertIsNotNone(self.document())
+        self.assertEqual(self.published,2)
 
     async def test_preparation_never_admits_site_commands(self):
         self.current_phase="prepared"

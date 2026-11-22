@@ -35,13 +35,16 @@ class StreamSequences:
             db.execute('BEGIN IMMEDIATE')
             db.execute('CREATE TABLE IF NOT EXISTS stream_sequences '
                        '(binding TEXT PRIMARY KEY, highwater INTEGER NOT NULL, expires_at REAL NOT NULL)')
-            db.execute('DELETE FROM stream_sequences WHERE expires_at<=?', (time.time(),))
-            row = db.execute('SELECT highwater FROM stream_sequences WHERE binding=?',
+            # Renewal preserves the same namespace, even if the previous
+            # deadline passed while the publisher was reconnecting.
+            db.execute('DELETE FROM stream_sequences WHERE expires_at<=? AND binding!=?',
+                       (time.time(), binding))
+            row = db.execute('SELECT highwater,expires_at FROM stream_sequences WHERE binding=?',
                              (binding,)).fetchone()
             previous = max(previous, row[0] if row else 0)
             end = previous + self.block_size
             db.execute('INSERT OR REPLACE INTO stream_sequences VALUES(?,?,?)',
-                       (binding, end, expires_at))
+                       (binding, end, max(expires_at, row[1] if row else 0)))
             # Commit custody before returning any number in this range.
             db.commit()
             return previous + 1, end
@@ -60,10 +63,11 @@ class StreamSequences:
         binding = self.binding(grant)
         with self.lock:
             current = self.ranges.get(binding)
-            if current is None or current[0] >= current[1]:
+            if current is None or current[0] >= current[1] or expires_at > current[2]:
                 for old, value in list(self.ranges.items()):
-                    if value[2] <= now:
+                    if old != binding and value[2] <= now:
                         self.ranges.pop(old)
+                expires_at = max(expires_at, current[2]) if current else expires_at
                 start, end = self.reserve(binding, expires_at, current[1] if current else 0)
                 current = [start - 1, end, expires_at]
                 self.ranges[binding] = current

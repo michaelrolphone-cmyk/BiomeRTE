@@ -133,19 +133,32 @@ class Rover:
             descriptor = None
             lanes = []
             try:
-                lease = await self.call('cap.acquire', contract=contract, resource=resource,
-                                        task=self.task+':'+contract)
-                while lease['state'] != 'bound':
-                    if lease['state'] not in ('queued', 'fencing'):
-                        raise ConnectionError('Lease unavailable')
-                    await asyncio.sleep(.5)
-                    lease = await self.call('cap.lease', lease=lease['id'])
-                # Reattach without closing another shared subscription.
-                descriptor = await self.call('stream.open', lease=lease['id'])
+                task = self.task + ':' + contract
+                resume = getattr(self.remote, 'resume_vision', None)
+                if contract == 'robot.vision.stream:1' and resume is not None:
+                    resumed = await asyncio.to_thread(resume, contract, resource, task)
+                    if resumed:
+                        lease, descriptor = resumed
+                        descriptor['resume_attachment'] = True
+                if descriptor is None:
+                    lease = await self.call('cap.acquire', contract=contract, resource=resource, task=task)
+                    while lease['state'] != 'bound':
+                        if lease['state'] not in ('queued', 'fencing'):
+                            raise ConnectionError('Lease unavailable')
+                        await asyncio.sleep(.5)
+                        lease = await self.call('cap.lease', lease=lease['id'])
+                    # Reattach without closing another shared subscription.
+                    descriptor = await self.call('stream.open', lease=lease['id'])
                 descriptor['subscription_lease'] = lease['id']
+                remember = getattr(self.remote, 'remember_vision_grant', None)
+                renew = contract == 'robot.vision.stream:1' and remember is not None
+                if renew:
+                    await asyncio.to_thread(remember, descriptor, task)
                 self.descriptors[contract] = descriptor
                 lanes = [asyncio.create_task(self.maintain_lane(descriptor, lane))
                          for lane in descriptor['lanes']]
+                if renew:
+                    lanes.append(asyncio.create_task(self.renew_vision_grant(descriptor, task)))
                 await asyncio.gather(*lanes)
             except asyncio.CancelledError:
                 raise
@@ -161,14 +174,17 @@ class Rover:
                         self.map_head = None
                         self.bootstrap.clear()
                         self.broadcast('map', json.dumps({'type':'snapshot_required'}))
-                if descriptor is not None:
+                # This native identity keeps its vision reservation across
+                # transient router errors and replacement stream epochs.
+                keep_vision = contract == 'robot.vision.stream:1' and resume is not None
+                if descriptor is not None and not keep_vision:
                     try:
                         await self.call('stream.close', session=descriptor['id'], lease=lease['id'])
                     except Exception:
                         pass
                 # Also release queued/fencing leases on shutdown or failed startup.
                 # A retry must not queue behind capacity retained by this owner.
-                if lease is not None:
+                if lease is not None and not keep_vision:
                     try:
                         await self.call('cap.release', lease=lease['id'])
                     except Exception:
@@ -176,15 +192,36 @@ class Rover:
             if not self.closed:
                 await asyncio.sleep(.5)
 
+    async def renew_vision_grant(self, descriptor, task):
+        # The stream has a bounded lifetime even while the lease is held.
+        # Refresh it before expiry without changing the current attachment epoch.
+        while not self.closed:
+            try:
+                current = await self.call('stream.open', lease=descriptor['subscription_lease'], renew=True)
+                current['subscription_lease'] = descriptor['subscription_lease']
+                await asyncio.to_thread(self.remote.remember_vision_grant, current, task)
+                if current['id'] != descriptor['id']:
+                    return
+                delay = max(5, current['expires_at'] - time.time() - 300)
+            except asyncio.CancelledError:
+                raise
+            except (OSError, TimeoutError):
+                delay = 5
+            await asyncio.sleep(delay)
+
     async def maintain_lane(self, descriptor, lane):
         # A transport outage is not a release of a persistent resource. Mint a
         # fresh attachment credential and reconnect this lane under its existing
         # epoch. Other lanes keep running. Only authoritative rejection returns
         # to the owner lifecycle to close the superseded session.
+        initial = descriptor if descriptor.get('resume_attachment') else None
         while not self.closed:
             attached = False
             try:
-                current = await self.call('stream.attach', session=descriptor['id'], role='server')
+                if initial is not None:
+                    current, initial = initial, None
+                else:
+                    current = await self.call('stream.attach', session=descriptor['id'], role='server')
                 attached = True
                 await self.lane(current, lane)
             except asyncio.CancelledError:

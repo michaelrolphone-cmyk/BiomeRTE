@@ -61,5 +61,10 @@ class VisionMailbox:
             self.ready.clear()
             await self.ready.wait()
 
+    def discard_pending(self):
+        self.controls.clear()
+        self.latest.clear()
+        self.ready.clear()
+
     def full(self):
         return False
