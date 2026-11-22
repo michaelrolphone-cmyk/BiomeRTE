@@ -154,6 +154,34 @@ class SonarTests(unittest.TestCase):
             self.assertEqual(len(store.read('map',scale_m_per_map_unit=1,revision=3)['rays']),2)
             store.close()
 
+    def test_world_only_skips_unalignable_rays_and_preserves_local_observations(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            store = SonarObstacleMap(Path(directory)/'rays', estimated_rover_mounts())
+            self.addCleanup(store.close)
+            store.record('map', 'one', sonar_observations(frame(1)), lambda *_: None,
+                         metric_pose_at=lambda *_: pose(), local_frame_id='local')
+            with patch('multisensor_mapping.json.loads', side_effect=AssertionError('decoded unalignable ray')):
+                self.assertEqual([], store.read('map', world_rays_only=True)['rays'])
+            full = store.read('map')['rays']
+            self.assertEqual(1, len(full))
+            for index in range(4):
+                store.offer_alignment('map', str(index), 'local', pose(index), pose(index))
+            self.assertEqual(full, store.read('map', world_rays_only=True)['rays'])
+
+    def test_world_projection_preserves_endpoints_without_computing_free_space(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            store = SonarObstacleMap(Path(directory)/'rays', estimated_rover_mounts())
+            self.addCleanup(store.close)
+            store.record('map', 'one', sonar_observations(frame(1)), lambda *_: pose(), revision=1)
+            store.record('map', 'two', sonar_observations(frame(2)), lambda *_: pose(), revision=2)
+            full = store.read('map', scale_m_per_map_unit=2, revision=1)
+            self.assertTrue(full['obstacles'])
+            with patch('multisensor_mapping.np.arange', side_effect=AssertionError('voxelized world points')):
+                projected = store.read('map', scale_m_per_map_unit=2, revision=1, world_rays_only=True)
+            self.assertEqual(full['rays'], projected['rays'])
+
     def test_anchor_reprojection_and_scale_do_not_scale_sonar_range(self):
         with tempfile.TemporaryDirectory() as directory:
             store = SonarObstacleMap(Path(directory)/'rays',{'front': {'origin_camera_m':[0,0,0], 'direction_camera':[1,0,0]}})

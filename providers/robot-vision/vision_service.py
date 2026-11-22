@@ -655,7 +655,7 @@ class VisionService:
             if not cursor:
                 return None
 
-    def _read_obstacles(self, map_id, revision=None, include_rays=True):
+    def _read_obstacles(self, map_id, revision=None, include_rays=True, *, world_rays_only=False):
         scale = self.metric.attachment_status(map_id, revision=revision)
         if not include_rays:
             return {**self.obstacle_map.summary(map_id,
@@ -670,7 +670,7 @@ class VisionService:
             return anchors[identifier]
         result = self.obstacle_map.read(map_id,
             scale_m_per_map_unit=scale.get("scale_m_per_map_unit") if scale.get("availability") == "available" else None,
-            resolve_anchor=resolve, revision=revision)
+            resolve_anchor=resolve, revision=revision, world_rays_only=world_rays_only)
         result["metric_scale"] = scale
         if not include_rays:
             result["ray_count"] = len(result.pop("rays"))
@@ -679,7 +679,7 @@ class VisionService:
 
     def _sonar_entities(self, map_id, revision):
         import numpy as np
-        result = self._read_obstacles(map_id, revision)
+        result = self._read_obstacles(map_id, revision, world_rays_only=True)
         scale = result["metric_scale"].get("scale_m_per_map_unit")
         alignments = {}
         anchors = {}

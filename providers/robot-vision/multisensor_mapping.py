@@ -15,6 +15,7 @@ import threading
 import uuid
 import itertools
 from collections import deque
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -595,13 +596,34 @@ class SonarObstacleMap:
                 'pose_pairs':len(pairs),'qualification':'estimated_sonar_visual_alignment',
                 'source':'timestamp_matched_visual_and_sonar_metric_poses'}
 
-    def read(self, map_id, *, scale_m_per_map_unit=None, resolve_anchor=None, revision=None):
+    def _world_ray_rows(self, map_id, scale):
+        # World points need a visual pose with scale or a fitted local alignment.
+        # Use the stored pose payloads so legacy rows with default flags still work.
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True)) as reader:
+            reader.execute('BEGIN')
+            has_pairs = reader.execute(
+                'SELECT 1 FROM alignment_pairs WHERE map_id=? LIMIT 1 OFFSET 3', (map_id,)
+            ).fetchone()
+            conditions = []
+            if scale is not None:
+                conditions.append("json_type(data,'$.T_map_camera') != 'null'")
+            if has_pairs:
+                conditions.append("json_type(data,'$.T_local_metric_camera') != 'null'")
+            if conditions:
+                sql = 'SELECT data FROM rays WHERE map_id=? AND (' + ' OR '.join(conditions) + ') ORDER BY id'
+                yield from reader.execute(sql, (map_id,))
+
+    def read(self, map_id, *, scale_m_per_map_unit=None, resolve_anchor=None, revision=None,
+             world_rays_only=False):
         rays, cells, free_cells, unresolved = [], {}, {}, 0
         scale = scale_m_per_map_unit
         if scale is not None and (type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0):
             raise ValueError('invalid_metric_scale')
-        with self.lock:
-            rows = self.db.execute('SELECT data FROM rays WHERE map_id=? ORDER BY id', (map_id,)).fetchall()
+        if world_rays_only:
+            rows = self._world_ray_rows(map_id, scale)
+        else:
+            with self.lock:
+                rows = self.db.execute('SELECT data FROM rays WHERE map_id=? ORDER BY id', (map_id,)).fetchall()
         for (raw,) in rows:
             item = json.loads(raw)
             if revision is not None and item.get('recorded_revision', 0) > revision:
@@ -642,6 +664,8 @@ class SonarObstacleMap:
                    'lateral_uncertainty_m': math.tan(math.radians(beam))*item['distance_m'],
                    'units': 'm', 'coordinate_frame': frame_name,'local_frame_id':local_frame_id}
             rays.append(ray)
+            if world_rays_only:
+                continue
             key = (frame_name,local_frame_id,*np.floor(endpoint/self.resolution).astype(int))
             cell = cells.setdefault(key, {'hits': 0, 'sensor_ids': set()})
             cell['hits'] += 1
