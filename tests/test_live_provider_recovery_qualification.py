@@ -51,6 +51,18 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
 
         self.assertIsNone(feed_record(packet({"type": "sensor_manifest", "camera": "front"})))
         self.assertIsNone(feed_record(packet({"type": "frame", "camera": "front"})))
-        frame = packet({"type": "frame", "camera": "front"}, b"image")
+        self.assertIsNone(feed_record(packet({"type": "frame", "camera": "front"}, b"anonymous")))
+        frame = packet({"type": "frame", "camera": "front", "frame_id": "front-boot-1"}, b"image")
         self.assertEqual(feed_record(frame)[0], "frame:front")
         self.assertEqual(feed_record(frame), feed_record(frame))
+
+    def test_rewrapping_one_camera_or_sensor_observation_does_not_advance_the_feed(self):
+        def identity(metadata, image=b""):
+            data = json.dumps(metadata).encode()
+            return feed_record(struct.pack("!I", len(data)) + data + image)[1]
+        frame = {"type": "frame", "camera": "front", "frame_id": "camera-boot:12"}
+        self.assertEqual(identity(frame, b"raw"), identity(dict(frame, sequence=95, processed_monotonic=320), b"reencoded"))
+        tick = {"type": "sensor_tick", "camera": "rear", "sensor_packet":
+                {"boot_id": "boot", "receiver_id": "rear-device", "capture_monotonic_us": 100}}
+        self.assertEqual(identity(tick), identity(dict(tick, frame_id="adapter:99", sequence=99, processed_monotonic=340)))
+        self.assertNotEqual(identity(tick), identity(dict(tick, sensor_packet=dict(tick["sensor_packet"], boot_id="new-boot"))))

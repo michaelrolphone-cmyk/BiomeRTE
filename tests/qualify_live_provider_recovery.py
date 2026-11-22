@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import hashlib
 import hmac
 import json
 import math
@@ -70,7 +69,7 @@ def assess(evidence, window_seconds, max_gap_seconds, max_delivery_age_seconds):
     return failures
 
 
-def feed_record(data):
+def feed_record(data, *, include_unidentified=False):
     if len(data) < 4:
         return None
     header_size = struct.unpack_from("!I", data)[0]
@@ -88,13 +87,25 @@ def feed_record(data):
     name = f"{kind}:{source}"
     if name not in FEEDS or (kind == "frame" and len(data) == end):
         return None
-    return name, hashlib.sha256(data).digest(), metadata.get("processed_monotonic")
+    packet = metadata.get("sensor_packet")
+    if isinstance(packet, dict):
+        capture = packet.get("capture_monotonic_us")
+        boot, receiver = packet.get("boot_id"), packet.get("receiver_id")
+        if (type(capture) is int and capture >= 0 and isinstance(boot, str) and boot
+                and isinstance(receiver, str) and receiver):
+            return name, (receiver, boot, capture), metadata.get("processed_monotonic")
+    frame = metadata.get("frame_id")
+    if kind == "frame" and isinstance(frame, str) and frame:
+        return name, frame, metadata.get("processed_monotonic")
+    return (name, None, metadata.get("processed_monotonic")) if include_unidentified else None
 
 
-async def capture(session, url, token, window_seconds):
+async def capture(session, url, token, window_seconds, ready=None):
     from aiohttp import ClientWSTimeout, WSMsgType
 
     stamps = {feed: [] for feed in FEEDS}
+    received_counts = dict.fromkeys(FEEDS, 0)
+    unidentified = dict.fromkeys(FEEDS, 0)
     seen = {feed: set() for feed in FEEDS}
     ages = {feed: [] for feed in FEEDS}
     observation = {"seconds": 0, "feeds": {}}
@@ -103,6 +114,8 @@ async def capture(session, url, token, window_seconds):
                                       timeout=ClientWSTimeout(ws_close=5),
                                       max_msg_size=0) as socket:
             start = time.monotonic()
+            if ready is not None:
+                ready.set()
             while (remaining := window_seconds - (time.monotonic() - start)) > 0:
                 try:
                     message = await socket.receive(timeout=remaining)
@@ -112,9 +125,13 @@ async def capture(session, url, token, window_seconds):
                     observation["error"] = message.type.name
                     break
                 if message.type == WSMsgType.BINARY:
-                    record = feed_record(message.data)
+                    record = feed_record(message.data, include_unidentified=True)
                     if record is not None:
                         feed, fingerprint, processed = record
+                        received_counts[feed] += 1
+                        if fingerprint is None:
+                            unidentified[feed] += 1
+                            continue
                         if fingerprint not in seen[feed]:
                             seen[feed].add(fingerprint)
                             received = time.monotonic()
@@ -127,6 +144,9 @@ async def capture(session, url, token, window_seconds):
                 edges = [0.0, *times, elapsed]
                 observation["feeds"][feed] = {
                     "records": len(times),
+                    "received_records": received_counts[feed],
+                    "unidentified_records": unidentified[feed],
+                    "duplicate_records": received_counts[feed] - unidentified[feed] - len(times),
                     "max_gap_seconds": max(b - a for a, b in zip(edges, edges[1:])),
                     "max_delivery_age_seconds": max(ages[feed], default=None),
                     "unclocked_records": len(times) - len(ages[feed]),
@@ -136,7 +156,7 @@ async def capture(session, url, token, window_seconds):
     return observation
 
 
-async def observe_streams(public, bridge, node_file, window_seconds):
+async def observe_streams(public, bridge, node_file, window_seconds, ready=None):
     from aiohttp import ClientSession, ClientTimeout
 
     external, local = urlsplit(public), urlsplit(bridge)
@@ -152,11 +172,13 @@ async def observe_streams(public, bridge, node_file, window_seconds):
     token = hmac.new(config["stream_router_secret"].encode(), b"rover-site", "sha256").hexdigest()
     async with ClientSession(timeout=ClientTimeout(total=None, sock_connect=10)) as session:
         # Keep observation time independent of the peer's close handshake.
-        async def collect(url):
+        async def collect(label, url):
             async with asyncio.timeout(window_seconds + 15):
-                return await capture(session, url, token, window_seconds)
+                signal = None if ready is None else ready[label]
+                return await capture(session, url, token, window_seconds, signal)
 
-        values = await asyncio.gather(*(collect(url) for url in (public, bridge)), return_exceptions=True)
+        values = await asyncio.gather(*(collect(label, url) for label, url in zip(CONSUMERS, (public, bridge))),
+                                      return_exceptions=True)
     return {key: {"seconds": 0, "error": type(value).__name__} if isinstance(value, Exception) else value
             for key, value in zip(CONSUMERS, values)}
 
