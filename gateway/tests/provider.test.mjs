@@ -55,6 +55,22 @@ test('exact signed JSON survives transport and each retry rechecks live authoriz
  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM bridge_jobs').get().n,2);
  f.sql.close();
 });
+test('signed withdrawal forwards the exact revisions only for the named provider',async()=>{
+ const f=fixture();
+ try{
+  const args={provider:actor,resource:'camera',service:'vision',registrations:{'vision.status:1':'1'.repeat(32)}};
+  const rejected=await f.send('/api/provider/call',packet('cap.withdraw',{...args,provider:'b'.repeat(64)}));
+  assert.equal(rejected.status,400);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM bridge_jobs').get().n,0);
+  const raw=JSON.stringify(packet('cap.withdraw',args));
+  const waiting=f.send('/api/provider/call',raw),job=await f.next();
+  assert.equal(job.request.name,'signed_provider_call');
+  assert.deepEqual(job.request.arguments,{envelope:raw});
+  const body={result:{withdrawn:['vision.status:1'],superseded:[]}};
+  await f.complete(job,200,body);
+  const response=await waiting;assert.equal(response.status,200);assert.deepEqual(await response.json(),body);
+ }finally{f.sql.close()}
+});
 test('public pairing forwards candidate and proof only; approval never exposed',async()=>{
  const f=fixture();
  assert.equal((await f.send('/api/provider/pair/approve',{fingerprint:actor})).status,404);
