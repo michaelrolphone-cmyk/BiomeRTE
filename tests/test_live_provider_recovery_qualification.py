@@ -21,7 +21,9 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
             "streams": {consumer: {"seconds": 80, "feeds": {
                 feed: {"records": 80, "max_gap_seconds": 0.9,
                        "max_delivery_age_seconds": 0.5, "unclocked_records": 0,
-                       **({"decoded_frames": 80, "invalid_frames": 0} if feed.startswith("frame:") else {})} for feed in FEEDS}}
+                       **({"decoded_frames": 80, "invalid_frames": 0} if feed.startswith("frame:")
+                          else {"instrument_samples": {"imu.front" if feed.endswith("front") else "lidar.rear": 80},
+                                "instrument_max_gap_seconds": {"imu.front" if feed.endswith("front") else "lidar.rear": 0.5}})} for feed in FEEDS}}
                 for consumer in CONSUMERS},
         }
 
@@ -70,9 +72,10 @@ class LiveProviderRecoveryQualification(unittest.TestCase):
         frame = {"type": "frame", "camera": "front", "frame_id": "camera-boot:12"}
         self.assertEqual(identity(frame, b"raw"), identity(dict(frame, sequence=95, processed_monotonic=320), b"reencoded"))
         tick = {"type": "sensor_tick", "camera": "rear", "sensor_packet":
-                {"boot_id": "boot", "receiver_id": "rear-device", "capture_monotonic_us": 100}}
+                {"boot_id": "boot", "receiver_id": "rear-device", "capture_monotonic_us": 100,
+                 "schema": "biome.sensor_tick.v1", "capture_clock": "esp_timer", "frame_id": "boot:100", "lidar": {"sensors": []}}}
         self.assertEqual(identity(tick), identity(dict(tick, frame_id="adapter:99", sequence=99, processed_monotonic=340)))
-        self.assertNotEqual(identity(tick), identity(dict(tick, sensor_packet=dict(tick["sensor_packet"], boot_id="new-boot"))))
+        self.assertNotEqual(identity(tick), identity(dict(tick, sensor_packet=dict(tick["sensor_packet"], boot_id="new-boot", frame_id="new-boot:100"))))
 
     def test_camera_descriptor_does_not_mask_the_wire_camera_id(self):
         metadata = {"type": "frame", "camera": {"lens": "calibrated"},
