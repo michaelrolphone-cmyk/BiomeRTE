@@ -240,14 +240,26 @@ class QueryPublications:
                         continue
                     self.unclaimed.discard(name)
                     entries.append(self.make_entry(name,desired,revision))
-                if not entries:
-                    continue
-                intent = "vision-query-" + uuid.uuid4().hex
-                args=dict(self.scope,offers=entries,publication_id=intent)
-                plan=dict(id=intent,arguments=args,absent=absent)
-                path=self.directory/(intent+".json")
-                self.save(path,plan)
-                self.apply(path,plan,states,remember,stopping,rows)
+                # Existing offers use one conditional write. First enrollment
+                # requires its own definition and create-if-absent write. Keep
+                # that work independent, including after a failed definition.
+                known = [entry for entry in entries if entry["offer"]["contract"] not in absent]
+                groups = [known] if known else []
+                groups.extend([entry] for entry in entries if entry["offer"]["contract"] in absent)
+                for group in groups:
+                    if stopping.is_set():
+                        break
+                    intent = "vision-query-" + uuid.uuid4().hex
+                    args = dict(self.scope, offers=group, publication_id=intent)
+                    missing = [entry["offer"]["contract"] for entry in group if entry["offer"]["contract"] in absent]
+                    plan = dict(id=intent, arguments=args, absent=missing)
+                    path = self.directory / (intent + ".json")
+                    self.save(path, plan)
+                    try:
+                        self.apply(path, plan, states, remember, stopping, rows)
+                    except Exception as error:
+                        print("Vision query registration group:", self.diagnostic(error), file=sys.stderr, flush=True)
+                        retry = True
             except Exception as error:
                 print("Vision query registration page:", self.diagnostic(error),file=sys.stderr,flush=True)
                 retry = True
