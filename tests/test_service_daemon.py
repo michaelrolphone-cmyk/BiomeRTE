@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 try:
     from aiohttp import ClientSession, ClientConnectorCertificateError, TCPConnector, web
+    from aiohttp.test_utils import TestServer
 except ModuleNotFoundError as error:
     raise unittest.SkipTest(
         'Optional companion integration requires aiohttp; install the companion '
@@ -57,6 +58,43 @@ class Clock:
 
 
 class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_start_fences_checks_exact_controller_grant_once_per_attempt(self):
+        grant = dict(service_id="controller", manifest_revision="revision", worker_id="mac",
+                     worker_incarnation="incarnation", boot_epoch="epoch", grant_token="token")
+        coordinator = Mock(validate=AsyncMock())
+        helper = CheckpointHelper.__new__(CheckpointHelper)
+        helper.config = dict(authority_kind="controller", service_id="controller", worker_id="mac")
+        helper.transport, helper.token, helper.replication = coordinator, "helper-token", "complete"
+        helper.store = Mock()
+        helper.store.phase.return_value = dict(binding=grant, phase="prepared", checkpoint="root")
+        helper.store.generation_floors.return_value = {}
+        app = web.Application()
+        app.router.add_post("/adapter", helper.handle)
+        async with TestServer(app) as server, ClientSession() as session:
+            daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+            daemon.config, daemon.session, daemon.binding = helper.config, session, grant
+            daemon.url, daemon.token = str(server.make_url("/adapter")), helper.token
+            daemon.transport, daemon.lock = coordinator, asyncio.Lock()
+            daemon.authority, daemon.publish = Mock(), AsyncMock()
+            with patch.dict(os.environ, BIOME_SERVICE_CHECKPOINT="root"):
+                await daemon.start_fences()
+                coordinator.validate.assert_awaited_once_with(grant)
+                daemon.authority.prepare_fences.assert_called_once_with("root", {})
+                daemon.publish.assert_awaited_once()
+
+                for expected_status in (503, 409):
+                    with self.subTest(expected_status=expected_status):
+                        coordinator.validate.reset_mock()
+                        coordinator.validate.side_effect = (Fault("Revoked grant", 503)
+                                                            if expected_status == 503 else None)
+                        helper.store.phase.return_value = dict(binding=dict(grant, boot_epoch="old"))
+                        with self.assertRaises(Fault) as failure:
+                            await daemon.start_fences()
+                        self.assertEqual(failure.exception.status, expected_status)
+                        coordinator.validate.assert_awaited_once_with(grant)
+                        self.assertEqual(daemon.authority.prepare_fences.call_count, 1)
+                        self.assertEqual(daemon.publish.await_count, 1)
+
     async def test_maintenance_reports_the_failing_stage_and_status_without_data(self):
         daemon = AuthorityDaemon.__new__(AuthorityDaemon)
         daemon.config, daemon.binding = {}, {"test": "binding"}
