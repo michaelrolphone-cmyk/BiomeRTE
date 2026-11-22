@@ -87,6 +87,36 @@ class Blocks(unittest.TestCase):
         with self.assertRaises(ChunkError):
             list(iter_records(state, self.store.chunks.get))
 
+    def test_same_filesystem_timestamp_cannot_certify_changed_block_bytes(self):
+        chunks = self.store.chunks
+        key = chunks.put(b"first")["digest"]
+        path = pathlib.Path(chunks.directory) / key
+        unchanged_stat = path.stat()
+        with patch("biomerte.checkpoint_chunks.os.stat", return_value=unchanged_stat):
+            self.assertTrue(chunks.has(key))
+            path.write_bytes(b"other")
+            self.assertEqual([key], chunks.missing([key]))
+            with self.assertRaises(ChunkError):
+                chunks.get(key)
+
+    def test_old_unchanged_block_reuses_verified_identity_after_an_observed_clock_tick(self):
+        chunks = self.store.chunks
+        first = chunks.put(b"first")["digest"]
+        later = chunks.put(b"later")["digest"]
+        real_stat = os.stat
+        def tick(path, **kwargs):
+            st = real_stat(path, **kwargs)
+            return types.SimpleNamespace(st_mode=st.st_mode, st_dev=st.st_dev, st_ino=st.st_ino,
+                st_size=st.st_size, st_ctime_ns=100 if str(path).endswith(first) else 200,
+                st_mtime_ns=100 if str(path).endswith(first) else 200)
+        reopened = ChunkStore(chunks.directory)
+        with patch("biomerte.checkpoint_chunks.os.stat", side_effect=tick):
+            self.assertTrue(reopened.has(first))
+            self.assertTrue(reopened.has(later))
+            self.assertTrue(reopened.has(first))
+            with patch("builtins.open", side_effect=AssertionError("unchanged older block was reread")):
+                self.assertTrue(reopened.has(first))
+
     def test_upload_digest_mismatch_and_oversize_are_refused(self):
         with self.assertRaises(ChunkError):
             self.store.chunks.put(b"wrong", "a" * 64)

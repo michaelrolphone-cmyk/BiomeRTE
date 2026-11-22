@@ -96,6 +96,7 @@ class ChunkStore:
         os.chmod(self.directory, 0o700)
         self.lock = threading.RLock()
         self.verified = {}
+        self.latest_ctime_ns = {}
 
     def _path(self, key):
         return os.path.join(self.directory, valid_digest(key))
@@ -121,6 +122,8 @@ class ChunkStore:
                 if not 0 < st.st_size <= BLOCK_BYTES or (size is not None and st.st_size != size):
                     return False
                 identity = self._identity(st)
+                latest = max(st.st_ctime_ns, self.latest_ctime_ns.get(st.st_dev, st.st_ctime_ns))
+                self.latest_ctime_ns[st.st_dev] = latest
                 if self.verified.get(key) == identity:
                     return True
                 with open(path, "rb") as source:
@@ -131,7 +134,11 @@ class ChunkStore:
                 # A concurrent external rewrite is not a verification receipt.
                 if self._identity(os.stat(path, follow_symlinks=False)) != identity:
                     return False
-                self.verified[key] = identity
+                # Within a filesystem clock tick a same-size in-place write
+                # can have identical metadata. Cache only after observing a
+                # later ctime on this device and verifying the bytes again.
+                if st.st_ctime_ns < latest:
+                    self.verified[key] = identity
                 return True
             except FileNotFoundError:
                 self.verified.pop(key, None)
