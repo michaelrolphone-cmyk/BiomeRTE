@@ -62,5 +62,33 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install numpy opencv-python-headless websockets aiohttp
       - run: python -m unittest discover -s providers/robot-vision/tests -v
+      - name: Read the native source pin and patch paths
+        id: native-source
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path('providers/robot-vision/pyslam-patches.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('commit=' + manifest['pyslam_commit'], file=output)
+              print('paths<<NATIVE_PATHS', file=output)
+              for patch in manifest['patches']:
+                  print(patch['path'], file=output)
+              print('NATIVE_PATHS', file=output)
+      - uses: actions/checkout@v4
+        with:
+          repository: luigifreda/pyslam
+          ref: ${{ steps.native-source.outputs.commit }}
+          path: .ci/pyslam
+          sparse-checkout: ${{ steps.native-source.outputs.paths }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Verify native transforms against the pinned upstream files
+        env:
+          PYSLAM_TEST_SOURCE: .ci/pyslam
+          PYTHONPATH: providers/robot-vision:providers/robot-vision/tests
+        run: python -m unittest test_radio_relocalization_prior.RadioRelocalizationPriorTests.test_manifest_matches_exact_transforms_and_other_native_files_unchanged -v
       - run: python -m unittest tests.test_stream_wire_integration tests.test_shared_streams tests.test_stream_payload_errors tests.test_rover_subscription_owner tests.test_portable_services -v
       - run: python -m compileall -q biomerte providers/robot-vision
