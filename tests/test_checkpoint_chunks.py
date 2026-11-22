@@ -606,8 +606,7 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         expected_root = root(expected)
         refs = state_blocks(expected_root)
         self.assertEqual(len(refs), 4405)
-        self.manifest = root([{k: v for k, v in desc.items() if k != "blocks"}
-                              for desc in expected])
+        self.manifest = expected_root
         def read(key):
             self.reads.append(key)
             return raw_for(indexes[key])
@@ -629,11 +628,11 @@ class Publisher(unittest.IsolatedAsyncioTestCase):
         asked = [key for query in queries for key in query]
         self.assertEqual(len(asked), len(set(asked)))
         self.assertEqual(set(asked), set(refs))
-        self.assertEqual(len(self.reads), 4050)
+        self.assertEqual(self.reads, [])
         self.assertEqual([operation for operation, unused in self.calls].count("publish"), 1)
         self.calls.clear()
         await publish_controller(self.daemon)
-        self.assertEqual(len(self.reads), 4050)
+        self.assertEqual(self.reads, [])
         self.assertEqual(["publish"], [operation for operation, unused in self.calls])
 
     async def test_missing_subset_and_shared_blocks_upload_once_across_shards(self):
