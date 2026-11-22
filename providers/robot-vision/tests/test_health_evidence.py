@@ -90,6 +90,10 @@ class HealthEvidenceTests(unittest.TestCase):
         class Remote:
             def __init__(self, cfg): pass
             def call(self, name, args):
+                if name == 'cap.registrations':
+                    error = RuntimeError('Unknown operation')
+                    error.status = 404
+                    raise error
                 if name == 'cap.define' and args['name'] == 'relay.fixture':
                     blocked_relay.set()
                     raise TimeoutError('relay unavailable')
