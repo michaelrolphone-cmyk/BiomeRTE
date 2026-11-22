@@ -963,18 +963,27 @@ class AuthorityDaemon:
             return web.json_response({"ready":False},status=503)
 
     async def maintain_once(self):
+        self.maintenance_stage = "validate_binding"
         await self.transport.validate(self.binding,preparing=False)
+        self.maintenance_stage = "read_phase"
         phase=await self.phase()
         if phase["phase"]!="active":
             return
         async with self.lock:
+            self.maintenance_stage = "publish_before_tick"
             await self.publish()
+            self.maintenance_stage = "authority_tick"
             await asyncio.to_thread(self.authority.maintain)
+            self.maintenance_stage = "publish_tick"
             await self.publish()
+            self.maintenance_stage = "validate_tick"
             await self.transport.validate(self.binding,preparing=False)
             if getattr(self,"events",None) is not None:
+                self.maintenance_stage = "event_delivery"
                 await asyncio.to_thread(self.events.deliver)
+                self.maintenance_stage = "publish_events"
                 await self.publish()
+                self.maintenance_stage = "validate_events"
                 await self.transport.validate(self.binding,preparing=False)
 
     async def maintenance_loop(self):
@@ -987,7 +996,9 @@ class AuthorityDaemon:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                LOG.warning("Service lifecycle retry: %s",type(error).__name__)
+                status = getattr(error, "status", None)
+                LOG.warning("Service lifecycle retry: %s stage=%s status=%s", type(error).__name__,
+                            self.maintenance_stage, status if type(status) is int else None)
             await asyncio.sleep(interval)
 
     @staticmethod

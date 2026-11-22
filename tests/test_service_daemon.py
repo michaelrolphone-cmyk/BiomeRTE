@@ -57,6 +57,23 @@ class Clock:
 
 
 class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_maintenance_reports_the_failing_stage_and_status_without_data(self):
+        daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+        daemon.config, daemon.binding = {}, {"test": "binding"}
+        daemon.lock = asyncio.Lock()
+        daemon.transport = Mock(validate=AsyncMock())
+        daemon.phase = AsyncMock(return_value={"phase": "active"})
+        daemon.publish = AsyncMock()
+        daemon.authority = Mock()
+        daemon.events = Mock()
+        daemon.events.deliver.side_effect = Fault("private callback payload", 409)
+        with self.assertLogs("biomerte.service", level="WARNING") as logs, \
+             patch("biomerte.service_daemon.asyncio.sleep", side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await daemon.maintenance_loop()
+        self.assertIn("stage=event_delivery status=409", " ".join(logs.output))
+        self.assertNotIn("private callback payload", " ".join(logs.output))
+
     async def test_live_publication_without_standby_avoids_full_status_probe(self):
         helper = CheckpointHelper.__new__(CheckpointHelper)
         helper.config = {"authority_kind": "controller", "worker_id": "mac",
