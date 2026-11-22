@@ -74,6 +74,39 @@ class Blocks(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_directory_sync_failure_blocks_duplicate_and_reopened_root_until_recovery(self):
+        raw = canonical([["artifacts", "artifact-1", "value"]])
+        desc = describe_shard("artifacts", hashlib.sha256(b"artifact-1").hexdigest()[:2], raw)
+        key = desc["blocks"][0]["digest"]
+        chunks = self.store.chunks
+        with patch.object(ChunkStore, "_sync_directory", side_effect=OSError("directory fsync")):
+            with self.assertRaisesRegex(OSError, "directory fsync"):
+                chunks.put(raw, key)
+            # File bytes were synced and renamed before the directory failed.
+            self.assertEqual((pathlib.Path(chunks.directory) / key).read_bytes(), raw)
+            with self.assertRaisesRegex(OSError, "directory fsync"):
+                chunks.put(raw, key)
+            with self.assertRaisesRegex(OSError, "directory fsync"):
+                ChunkStore(chunks.directory).missing([key])
+            with self.assertRaisesRegex(OSError, "directory fsync"):
+                self.store.bootstrap(root([desc]), {"source_receipt": "fixture"})
+            self.assertIsNone(self.store.head())
+
+        self.assertEqual(ChunkStore(chunks.directory).missing([key]), [])
+        self.assertTrue(chunks.put(raw, key)["durable"])
+        packet = self.store.bootstrap(root([desc]), {"source_receipt": "fixture"})
+        self.assertEqual(self.store.head(), checkpoint_ref(packet))
+
+    def test_one_directory_barrier_covers_all_present_digests_in_a_query(self):
+        chunks = self.store.chunks
+        keys = [chunks.put(str(i).encode())["digest"] for i in range(16)]
+        missing = "f" * 64
+        with patch.object(chunks, "_sync_directory", wraps=chunks._sync_directory) as sync:
+            self.assertEqual(chunks.missing([missing, missing]), [missing])
+            sync.assert_not_called()
+            self.assertEqual(chunks.missing([*keys, missing]), [missing])
+            sync.assert_called_once_with()
+
     def test_same_length_corruption_is_detected_after_verified_upload(self):
         desc = shard(self.store.chunks)
         state = root([desc])
