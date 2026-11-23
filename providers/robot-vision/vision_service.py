@@ -1359,6 +1359,11 @@ class VisionService:
                     "streaming": {"available": not self._stop.is_set(),
                                   "lanes": ["vision", "map"],
                                   "rear_enabled": bool(getattr(self,"camera_rig",None) and self.camera_rig.config["rear"]["enabled"])}}
+        # Internal raw-receiver health must not wait for map or publisher locks.
+        if (operation == "robot.vision.status" and len(inputs) == 1 and
+                inputs.get("receiver_only") is True):
+            from raw_receiver_status import receiver_status
+            return receiver_status(self)
         if inputs.get("camera_id")=="front":inputs={k:v for k,v in inputs.items() if k!="camera_id"}
         return dispatch(self, operation, inputs, self._query_core)
 
