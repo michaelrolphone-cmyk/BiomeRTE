@@ -11,12 +11,14 @@ def transform(rotation, position):
 
 def configured_sensors(service):
     rig=service.lidar
-    with rig.lock:
+    with rig.config_lock:
         stamp=(rig.path.stat().st_mtime_ns,rig.path.stat().st_size) if rig.path.exists() else None
         if stamp!=getattr(rig,"_manifest_rig_stamp",None) and stamp is not None:
             from lidar_fusion import validate_config
-            rig.config=validate_config(json.loads(rig.path.read_text()))
+            updated=validate_config(json.loads(rig.path.read_text()))
+            with rig.lock:rig.config=updated
         rig._manifest_rig_stamp=stamp
+        with rig.lock:config=copy.deepcopy(rig.config)
         if True:  # Native entries are projections of the current rig, never stale copies.
             model=service._robot_model().get("definition",{})
             front=np.array(model.get("camera",{}).get("T_robot_camera",np.eye(4)))
@@ -30,7 +32,7 @@ def configured_sensors(service):
             add("camera.front","camera","front",front.tolist(),service.config["camera"].get("expected_fps",5))
             if rear["enabled"]:
                 add("camera.rear","camera","rear",(front@np.array(rear["T_front_camera_rear_camera_m"])).tolist(),rear["camera"].get("expected_fps",5))
-            for name,mount in rig.config.get("lidar",{}).items():
+            for name,mount in config.get("lidar",{}).items():
                 add("lidar."+name,"lidar",name,(front@np.array(mount["T_front_camera_sensor_m"])).tolist(),
                     mount.get("rate_hz"),"lidar.latest.sensors")
             for name,mount in model.get("sonar_poses",{}).items():
@@ -43,17 +45,18 @@ def configured_sensors(service):
                 add(kind+".front",kind,"front",mount,None,"ahrs.sensors."+("attitude" if kind=="ahrs" else kind),{"path":"ahrs.sensors."+("attitude" if kind=="ahrs" else kind)})
             add("tof.front","tof","front",front.tolist(),None,"tof",{"path":"tof"})
             for row in rows:row["native"]=True
-            custom=[row for row in rig.config.get("sensors",[]) if not row.get("native")]
+            custom=[row for row in config.get("sensors",[]) if not row.get("native")]
             by_id={row["id"]:row for row in rows}
             for row in custom:
                 if row.get("enabled") is False:by_id.pop(row["id"],None)
                 else:by_id[row["id"]]=row
             rows=list(by_id.values())
-            if rig.config.get("sensors")!=rows:
-                rig.config["sensors"]=rows
+            if config.get("sensors")!=rows:
+                config["sensors"]=rows
                 from vision_config import atomic_json
-                atomic_json(rig.path,rig.config)
-        return copy.deepcopy(rig.config["sensors"])
+                atomic_json(rig.path,config)
+                with rig.lock:rig.config=config
+        return copy.deepcopy(config["sensors"])
 
 def manifest(service, observations):
     from datetime import datetime,timezone
