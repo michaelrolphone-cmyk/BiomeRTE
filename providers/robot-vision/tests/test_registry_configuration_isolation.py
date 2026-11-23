@@ -81,6 +81,7 @@ class RegistryConfigurationIsolationTests(unittest.TestCase):
         config = copy.deepcopy(DEFAULT_CONFIG)
         config["camera"]["url"] = "fixture://no-network"
         config["calibration"] = calibration()
+        config["tof"]["state_path"] = str(Path(directory) / "unused-tof.json")
         camera = Camera()
         service = VisionService(config, directory, camera=camera, detector=FakeDetector(),
                                 backend_factory=BackendFactory())
@@ -295,7 +296,6 @@ class RegistryConfigurationIsolationTests(unittest.TestCase):
                 self.assertNotEqual(fusion.config["sensors"][0]["role"], "caller-mutated")
                 # Actual packet processing sees the same hot-reloaded mounts/revision.
                 fusion.survey_landmarks = None
-                fusion.service.backend = None
                 fusion.process(sensor_packet(13), [1., 1.01], service.map_id)
                 self.assertEqual(fusion.latest["rig_revision"], 9)
                 self.assertEqual(fusion.latest["sensors"][0]["mount"]["T_front_camera_sensor_m"][0][3], .125)
