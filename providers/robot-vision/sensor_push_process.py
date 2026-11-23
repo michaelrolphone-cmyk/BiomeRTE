@@ -1,4 +1,5 @@
 """Keep sensor transport responsive while SLAM owns the parent interpreter."""
+import copy
 import logging
 import multiprocessing
 import queue
@@ -9,8 +10,8 @@ from types import SimpleNamespace
 from sensor_delivery import RecentReadings, freshness_window
 
 class _QueueSink:
-    def __init__(self, state_dir, delivery, images, window):
-        self.service=SimpleNamespace(state_dir=Path(state_dir))
+    def __init__(self, state_dir, delivery, images, window, config):
+        self.service=SimpleNamespace(state_dir=Path(state_dir), config=config)
         self.delivery=delivery
         self.readings=RecentReadings(window)
         self.writer=threading.Thread(target=self._write, name='sensor-ingress-mailbox', daemon=True)
@@ -50,9 +51,9 @@ class _QueueSink:
     def ingress_metrics(self, metrics):
         self.readings.put(time.monotonic(), ('metrics',dict(metrics)))
 
-def _receiver_process(state_dir, delivery, stop, images, window):
+def _receiver_process(state_dir, delivery, stop, images, window, config):
     from sensor_push import SensorPushReceiver
-    receiver=SensorPushReceiver(_QueueSink(state_dir,delivery,images,window))
+    receiver=SensorPushReceiver(_QueueSink(state_dir,delivery,images,window,config))
     receiver.stop=stop
     receiver.metrics.update(execution='independent_process',worker_pid=multiprocessing.current_process().pid)
     try:
@@ -108,8 +109,12 @@ def start_isolated_receiver(receiver):
     receiver.delivery_window=freshness_window(receiver.stream.service)
     receiver._delivery_queue=context.Queue(maxsize=1)
     receiver._images=context.Queue(maxsize=1)
+    # The child serves the same camera contract, including optional radio fields.
+    # Carry the effective service settings across spawn rather than rebuilding a
+    # partial service object that loses camera validation configuration.
+    service_config=copy.deepcopy(receiver.stream.service.config)
     receiver.process=context.Process(target=_receiver_process,
-        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images,receiver.delivery_window),
+        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images,receiver.delivery_window,service_config),
         name='sensor-websocket-ingress',daemon=True)
     receiver.process.start()
     receiver._image_thread=threading.Thread(target=_deliver_images,args=(receiver,),name='pushed-camera-delivery',daemon=True)
