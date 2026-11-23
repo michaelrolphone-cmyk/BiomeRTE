@@ -152,10 +152,12 @@ class VisionStore:
         self.checkpoint_dir.mkdir(exist_ok=True)
         self.db_path = self.data_dir / "vision.sqlite3"
         self._lock = threading.RLock()
+        self._reader_admission = threading.RLock()
         self._closed = False
-        # Serialize checkpoint packages and integrity-cache updates. Acquire this
-        # lock before the SQLite lock when an operation needs both.
+        # Serialize checkpoint mutations, not independent read-only validation.
+        # Acquire this lock before the SQLite writer lock when both are needed.
         self._checkpoint_lock = threading.RLock()
+        self._checkpoint_integrity_lock = threading.Lock()
         self._checkpoint_integrity = {}
         self._checkpoint_readers = {}
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False,
@@ -311,10 +313,11 @@ PRAGMA user_version=1;
     def _snapshot_reader(self):
         # Admission is serialized with close(). Each admitted read owns its WAL
         # snapshot and connection, even if the store closes before it finishes.
-        with self._lock:
+        with self._reader_admission:
             self._open()
-        with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
-                                     uri=True, isolation_level=None)) as reader:
+            connection = sqlite3.connect(self.db_path.as_uri() + "?mode=ro",
+                                         uri=True, isolation_level=None)
+        with closing(connection) as reader:
             reader.row_factory = sqlite3.Row
             reader.execute("BEGIN")
             yield reader
@@ -620,14 +623,15 @@ PRAGMA user_version=1;
                 except OSError:
                     pass
 
-    def _snapshot_locked(self, snapshot_id=None, session_id=None, map_id=None):
+    def _snapshot_locked(self, snapshot_id=None, session_id=None, map_id=None, reader=None):
         query = "SELECT payload FROM snapshots WHERE 1=1"
         args = []
         for column, value in (("id", snapshot_id), ("session_id", session_id), ("map_id", map_id)):
             if value is not None:
                 query += " AND " + column + "=?"
                 args.append(value)
-        row = self._db.execute(query + " ORDER BY serial DESC LIMIT 1", args).fetchone()
+        database = self._db if reader is None else reader
+        row = database.execute(query + " ORDER BY serial DESC LIMIT 1", args).fetchone()
         if row is None:
             return {"availability": "unavailable",
                     "reason": "snapshot_not_retained_or_unknown" if snapshot_id else "no_observation",
@@ -635,14 +639,12 @@ PRAGMA user_version=1;
         return json.loads(row["payload"])
 
     def latest_snapshot(self, session_id=None, map_id=None):
-        with self._lock:
-            self._open()
-            return self._snapshot_locked(session_id=session_id, map_id=map_id)
+        with self._snapshot_reader() as reader:
+            return self._snapshot_locked(session_id=session_id, map_id=map_id, reader=reader)
 
     def get_snapshot(self, snapshot_id):
-        with self._lock:
-            self._open()
-            return self._snapshot_locked(snapshot_id=_id(snapshot_id, "snapshot_id"))
+        with self._snapshot_reader() as reader:
+            return self._snapshot_locked(snapshot_id=_id(snapshot_id, "snapshot_id"), reader=reader)
 
     def _frame_locked(self, frame_id, include_data=False):
         row = self._db.execute("SELECT * FROM frames WHERE id=?", (frame_id,)).fetchone()
@@ -1111,13 +1113,13 @@ PRAGMA user_version=1;
             if reference:
                 if result.get("database_sha256") is not None:
                     raise ValueError("revision_reference_must_not_claim_database_hash")
-                with self._lock:
-                    if not self._db.execute(
+                with self._snapshot_reader() as reader:
+                    if not reader.execute(
                             "SELECT 1 FROM map_revisions WHERE map_id=? AND revision=?",
                             (result["map_id"], result["map_revision"])).fetchone():
                         raise ValueError("checkpoint_revision_not_retained")
                     calibration = result.get("metadata", {}).get("calibration_id")
-                    if calibration and not self._db.execute(
+                    if calibration and not reader.execute(
                             "SELECT 1 FROM calibrations WHERE id=?", (calibration,)).fetchone():
                         raise ValueError("checkpoint_calibration_not_retained")
             expected = [] if reference else [(database, None, result["database_sha256"]) ]
@@ -1151,7 +1153,9 @@ PRAGMA user_version=1;
                 fingerprint.append((str(path), stat.st_dev, stat.st_ino, stat.st_size,
                                     stat.st_mtime_ns, stat.st_ctime_ns))
             fingerprint = tuple(fingerprint)
-            if self._checkpoint_integrity.get(result["checkpoint_id"]) != fingerprint:
+            with self._checkpoint_integrity_lock:
+                verified_fingerprint = self._checkpoint_integrity.get(result["checkpoint_id"])
+            if verified_fingerprint != fingerprint:
                 for path, size, digest in expected:
                     if (size is not None and path.stat().st_size != size) or _file_digest(path) != digest:
                         raise ValueError("checkpoint_integrity_error")
@@ -1171,11 +1175,25 @@ PRAGMA user_version=1;
                         raise ValueError("checkpoint_backend_map_mismatch")
                     if calibration_id and native.get("calibration", {}).get("calibration_id") != calibration_id:
                         raise ValueError("checkpoint_backend_calibration_mismatch")
+            # Retirement or compaction may race a read-only validation. Never
+            # publish a digest result for a package that changed during the read.
+            for original in fingerprint:
+                path = Path(original[0])
+                stat = path.stat()
+                current = (str(path), stat.st_dev, stat.st_ino, stat.st_size,
+                           stat.st_mtime_ns, stat.st_ctime_ns)
+                if current != original or not path.is_file():
+                    raise ValueError("checkpoint_changed_during_verification")
+            with self._checkpoint_integrity_lock:
                 self._checkpoint_integrity[result["checkpoint_id"]] = fingerprint
             return {**result, "availability": "available"}
         except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
-            self._checkpoint_integrity.pop(result.get("checkpoint_id"), None)
+            self._forget_checkpoint_integrity(result.get("checkpoint_id"))
             return self._checkpoint_unavailable(result, "checkpoint_integrity_or_availability_error")
+
+    def _forget_checkpoint_integrity(self, checkpoint_id):
+        with self._checkpoint_integrity_lock:
+            self._checkpoint_integrity.pop(checkpoint_id, None)
 
     def reconcile_checkpoint_inventory(self):
         """Adopt complete orphan publications; never promote partial/retired state."""
@@ -1247,7 +1265,7 @@ PRAGMA user_version=1;
                         os.fsync(stream.fileno())
                     temp.replace(manifest)
                     _sync_directory(folder)
-                    self._checkpoint_integrity.pop(row["id"], None)
+                    self._forget_checkpoint_integrity(row["id"])
                     if self._verified_checkpoint(candidate)["availability"] != "available":
                         raise ValueError("replacement_reference_unavailable")
                     with self._lock, self._transaction():
@@ -1263,7 +1281,7 @@ PRAGMA user_version=1;
                         os.fsync(stream.fileno())
                     temp.replace(manifest)
                     _sync_directory(folder)
-                    self._checkpoint_integrity.pop(row["id"], None)
+                    self._forget_checkpoint_integrity(row["id"])
                     errors.append({"checkpoint_id": row["id"], "error": type(exc).__name__})
                     continue
                 size = database.stat().st_size
@@ -1360,7 +1378,7 @@ PRAGMA user_version=1;
                         shutil.rmtree(folder)
                         _sync_directory(self.checkpoint_dir)
                         removed.append(identifier)
-                    self._checkpoint_integrity.pop(identifier, None)
+                    self._forget_checkpoint_integrity(identifier)
                 except (OSError, ValueError) as exc:
                     errors.append({"checkpoint_id": identifier, "error": type(exc).__name__})
             return {"policy": "current_and_rollback_per_map_plus_explicit",
@@ -1369,15 +1387,20 @@ PRAGMA user_version=1;
 
 
     def get_checkpoint(self, checkpoint_id):
-        with self._checkpoint_lock:
-            with self._lock:
-                self._open()
-                row = self._db.execute("SELECT payload FROM checkpoints WHERE id=?",
-                                       (checkpoint_id,)).fetchone()
-            if row is None:
-                return {"availability": "unavailable", "checkpoint_id": checkpoint_id,
-                        "reason": "checkpoint_not_found"}
-            return self._verified_checkpoint(json.loads(row["payload"]))
+        with self._snapshot_reader() as reader:
+            row = reader.execute("SELECT payload FROM checkpoints WHERE id=?",
+                                 (checkpoint_id,)).fetchone()
+        if row is None:
+            return {"availability": "unavailable", "checkpoint_id": checkpoint_id,
+                    "reason": "checkpoint_not_found"}
+        record = json.loads(row["payload"])
+        result = self._verified_checkpoint(record)
+        with self._snapshot_reader() as reader:
+            current = reader.execute("SELECT payload FROM checkpoints WHERE id=?",
+                                     (checkpoint_id,)).fetchone()
+        if current is None or current["payload"] != row["payload"]:
+            return self._checkpoint_unavailable(record, "checkpoint_changed_during_read")
+        return result
 
 
     def latest_checkpoint(self, map_id):
@@ -1387,42 +1410,50 @@ PRAGMA user_version=1;
         return self._latest_verified_checkpoint(map_id, require_backend=True)
 
     def _latest_verified_checkpoint(self, map_id, *, require_backend):
-        with self._checkpoint_lock:
-            with self._lock:
-                self._open()
-                self._map_locked(map_id)
-                # Materialize only IDs. A large map can have thousands of manifests.
-                rows = self._db.execute(
-                    "SELECT id FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC",
-                    (map_id,)).fetchall()
-            for row in rows:
-                with self._lock:
-                    payload = self._db.execute(
-                        "SELECT payload FROM checkpoints WHERE id=?", (row[0],)).fetchone()[0]
-                record = json.loads(payload)
-                if require_backend and record.get("backend_artifact", {}).get("availability") != "available":
-                    continue
-                result = self._verified_checkpoint(record)
-                if result["availability"] == "available":
+        with self._snapshot_reader() as reader:
+            self._map_info(reader, map_id, None)
+            # Materialize only IDs. A large map can have thousands of manifests.
+            rows = reader.execute(
+                "SELECT id FROM checkpoints WHERE map_id=? ORDER BY created_at DESC,id DESC",
+                (map_id,)).fetchall()
+        for row in rows:
+            with self._snapshot_reader() as reader:
+                payload = reader.execute(
+                    "SELECT payload FROM checkpoints WHERE id=?", (row[0],)).fetchone()
+            if payload is None:
+                continue
+            record = json.loads(payload[0])
+            if require_backend and record.get("backend_artifact", {}).get("availability") != "available":
+                continue
+            result = self._verified_checkpoint(record)
+            if result["availability"] == "available":
+                with self._snapshot_reader() as reader:
+                    current = reader.execute(
+                        "SELECT payload FROM checkpoints WHERE id=?", (row[0],)).fetchone()
+                if current is not None and current[0] == payload[0]:
                     return result
-            reason = "backend_checkpoint_not_found" if require_backend else "checkpoint_not_found"
-            return {"availability": "unavailable", "map_id": map_id, "reason": reason}
+        reason = "backend_checkpoint_not_found" if require_backend else "checkpoint_not_found"
+        return {"availability": "unavailable", "map_id": map_id, "reason": reason}
 
     def _checkpoint_storage_status(self):
         folders = [path for path in self.checkpoint_dir.iterdir() if path.is_dir() and not path.is_symlink()]
+        logical_bytes = 0
+        for folder in folders:
+            for path in folder.rglob("*"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        logical_bytes += path.stat().st_size
+                except FileNotFoundError:
+                    continue  # Concurrent retirement may remove a package.
         return {"policy": "current_and_rollback_per_map_plus_explicit",
                 "retained_packages": sum(not path.name.endswith(".partial") for path in folders),
                 "partial_packages": sum(path.name.endswith(".partial") for path in folders),
-                "logical_bytes": sum(path.stat().st_size for folder in folders
-                                     for path in folder.rglob("*") if path.is_file() and not path.is_symlink()),
+                "logical_bytes": logical_bytes,
                 "legacy_retention": "preserved_until_explicit_recovery_audit",
                 "routine_database_mode": "revision_reference",
                 "full_database_copies": sum((folder / "vision.sqlite3").is_file() for folder in folders)}
 
     def status(self):
-        with self._checkpoint_lock:
-            self._open()
-            storage = self._checkpoint_storage_status()
         with self._snapshot_reader() as reader:
             counts = {}
             for name in ("maps", "sessions", "frames", "snapshots", "observations",
@@ -1432,6 +1463,7 @@ PRAGMA user_version=1;
                 "SELECT total FROM entity_version_count WHERE id=1").fetchone()[0]
             maps = [self._map_info(reader, row[0], None)
                     for row in reader.execute("SELECT id FROM maps")]
+        storage = self._checkpoint_storage_status()
         image_bytes = image_count = 0
         for path in self.blob_dir.glob("*.blob"):
             try:
@@ -1449,7 +1481,7 @@ PRAGMA user_version=1;
             "estimation": "store_only; no sensor or estimator values are fabricated"}
 
     def close(self):
-        with self._checkpoint_lock, self._lock:
+        with self._checkpoint_lock, self._lock, self._reader_admission:
             readers = list(self._checkpoint_readers.values())
             self._checkpoint_readers.clear()
             if not self._closed:
