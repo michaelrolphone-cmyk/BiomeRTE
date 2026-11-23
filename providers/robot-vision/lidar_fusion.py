@@ -7,6 +7,7 @@ Mounts and zone orientation are configurable; initial mounts are provisional.
 import copy, hashlib, json, math, sqlite3, threading, time
 from collections import deque
 import numpy as np
+import publication_trace
 from navigation_frames import rigid_transform
 from vision_config import atomic_json
 
@@ -342,8 +343,12 @@ class LidarFusion:
         self.processed+=1;self.error=None
         with self.lock:self.latest=live
     def status(self):
-        with self.lock:
-            latest=copy.deepcopy(self.latest);configuration=copy.deepcopy(self.config);raw=copy.deepcopy(self.raw_latest)
+        with publication_trace.span("lidar.status.wait", lock=self.lock) as waiting:
+            with self.lock:
+                waiting.finish()
+                with publication_trace.span("lidar.status.held", lock=self.lock, held=True):
+                    with publication_trace.span("lidar.status.copy"):
+                        latest=copy.deepcopy(self.latest);configuration=copy.deepcopy(self.config);raw=copy.deepcopy(self.raw_latest)
         if raw:
             packet,interval,received=raw
             latest=latest or {}

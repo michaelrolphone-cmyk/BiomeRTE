@@ -24,6 +24,7 @@ from pathlib import Path
 
 from camera_source import CameraSource, utc_now
 from receiver_thread_stacks import thread_stack_snapshot
+import publication_trace
 from detector import ObjectDetector
 from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
@@ -287,9 +288,11 @@ class VisionService:
         backend = self.backend_factory(cfg, self.state_dir)
         try:
             if recovery_error is None:
-                backend.start(map_id, checkpoint=artifact)
+                with publication_trace.span("backend.start", {"map_id": map_id}):
+                    backend.start(map_id, checkpoint=artifact)
         except Exception as exc:
-            backend.close()
+            with publication_trace.span("backend.close", {"map_id": map_id}):
+                backend.close()
             if not allow_load_failure:
                 raise
             LOG.exception("Backend initialization failed; preserving map and observation service")
@@ -411,7 +414,8 @@ class VisionService:
             self._lifecycle_state = "switching_submap"
         prepared = None
         try:
-            old_backend.close()
+            with publication_trace.span("backend.close", {"map_id": previous}):
+                old_backend.close()
             if self._stop.is_set():
                 return
             if revisit:
@@ -870,57 +874,62 @@ class VisionService:
         return snapshot
 
     def _prepare_stream(self, metadata, image):
-        if not isinstance(metadata.get("lidar"),dict) or metadata["lidar"].get("latest") is None:
-            metadata["lidar"] = self.lidar.status()
-        self.stream_derivations.enrich(metadata, image)
-        self.inventory.observe(metadata, image)
+        with publication_trace.span("prepare", metadata):
+            if not isinstance(metadata.get("lidar"),dict) or metadata["lidar"].get("latest") is None:
+                with publication_trace.span("prepare.lidar"):
+                    metadata["lidar"] = self.lidar.status()
+            with publication_trace.span("prepare.enrich"):
+                self.stream_derivations.enrich(metadata, image)
+            with publication_trace.span("prepare.inventory"):
+                self.inventory.observe(metadata, image)
 
     def _raw_live_metadata(self, captured, previous):
         """Live pixels and sensors; older analysis keeps its own frame identity."""
-        frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
-        auto_calibration = self._automatic_gyro_calibration(frame,captured.image)
-        self.metric_worker.offer(frame,captured.image)
-        binding = {key: previous.get(key, fallback) for key, fallback in (
-            ('map_id', self.map_id), ('map_revision', self.revision),
-            ('session_id', self.session_id),
-            ('calibration_revision', self.calibration['calibration_id']))}
-        same_frame = previous.get('frame_id') == frame['frame_id']
-        pose = previous.get('pose') if same_frame else None
-        pose = pose or dict(unknown_localization('frame_processing_pending'),
-                    frame_id=frame['frame_id'], map_id=binding['map_id'])
-        motion = self._stream_motion_events(frame)
-        tof = self.stream_derivations.capture_tof()
-        pickup = motion.get('last_pickup_at')
-        if isinstance(pickup, (int, float)) and isinstance(tof, dict):
-            ground = (tof.get('ground_contact') or {}).copy()
-            if pickup > (ground.get('last_pickup_at') or 0):
-                ground['last_pickup_at'] = pickup
-                if pickup >= (ground.get('confirmed_at') or 0):
-                    ground['active'] = False
-                tof = dict(tof, ground_contact=ground)
-        return dict(binding, frame_id=frame['frame_id'], auto_gyro_calibration=auto_calibration,
-                    source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
-                    source_timestamp_status=frame.get('capture_time_status', 'unknown'),
-                    receive_decode_timestamp=frame.get('receive_decode_time'),
-                    processing_timestamp=previous.get('processing_timestamp') if same_frame else None,
-                    # The v1 sender uses this field to reject stale images.
-                    # Its camera-lane watermark must never become the time a
-                    # slow estimator eventually finished an older capture.
-                    processed_monotonic=captured.decoded_monotonic,
-                    processed_monotonic_basis='camera_receive_decode_time',
-                    processing_state='complete' if same_frame else 'pending',
-                    camera_delivery='independent_capture',
-                    last_processed_frame_id=previous.get('frame_id'),
-                    analysis={key: previous.get(key) for key in (
-                        'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
-                        'map_id', 'map_revision', 'pose')},
-                    detections=previous.get('detections', []) if same_frame else [], pose=pose,
-                    tof=tof, ahrs=self._stream_ahrs(frame),
-                    lidar=self.lidar.status() if getattr(self,'lidar',None) else None,
-                    motion_events=motion,
-                    **self._drive_response_telemetry(),
-                    ultrasonic=self._stream_ultrasonic(),
-                    map_snapshot_required_on_revision_gap=True)
+        with publication_trace.span("front.raw_metadata", captured.metadata):
+            frame = dict(captured.metadata, receive_decode_monotonic_s=captured.decoded_monotonic)
+            auto_calibration = self._automatic_gyro_calibration(frame,captured.image)
+            self.metric_worker.offer(frame,captured.image)
+            binding = {key: previous.get(key, fallback) for key, fallback in (
+                ('map_id', self.map_id), ('map_revision', self.revision),
+                ('session_id', self.session_id),
+                ('calibration_revision', self.calibration['calibration_id']))}
+            same_frame = previous.get('frame_id') == frame['frame_id']
+            pose = previous.get('pose') if same_frame else None
+            pose = pose or dict(unknown_localization('frame_processing_pending'),
+                        frame_id=frame['frame_id'], map_id=binding['map_id'])
+            motion = self._stream_motion_events(frame)
+            tof = self.stream_derivations.capture_tof()
+            pickup = motion.get('last_pickup_at')
+            if isinstance(pickup, (int, float)) and isinstance(tof, dict):
+                ground = (tof.get('ground_contact') or {}).copy()
+                if pickup > (ground.get('last_pickup_at') or 0):
+                    ground['last_pickup_at'] = pickup
+                    if pickup >= (ground.get('confirmed_at') or 0):
+                        ground['active'] = False
+                    tof = dict(tof, ground_contact=ground)
+            return dict(binding, frame_id=frame['frame_id'], auto_gyro_calibration=auto_calibration,
+                        source_timestamp=frame.get('source_timestamp', frame.get('capture_time')),
+                        source_timestamp_status=frame.get('capture_time_status', 'unknown'),
+                        receive_decode_timestamp=frame.get('receive_decode_time'),
+                        processing_timestamp=previous.get('processing_timestamp') if same_frame else None,
+                        # The v1 sender uses this field to reject stale images.
+                        # Its camera-lane watermark must never become the time a
+                        # slow estimator eventually finished an older capture.
+                        processed_monotonic=captured.decoded_monotonic,
+                        processed_monotonic_basis='camera_receive_decode_time',
+                        processing_state='complete' if same_frame else 'pending',
+                        camera_delivery='independent_capture',
+                        last_processed_frame_id=previous.get('frame_id'),
+                        analysis={key: previous.get(key) for key in (
+                            'frame_id', 'receive_decode_timestamp', 'processing_timestamp', 'processed_monotonic',
+                            'map_id', 'map_revision', 'pose')},
+                        detections=previous.get('detections', []) if same_frame else [], pose=pose,
+                        tof=tof, ahrs=self._stream_ahrs(frame),
+                        lidar=self.lidar.status() if getattr(self,'lidar',None) else None,
+                        motion_events=motion,
+                        **self._drive_response_telemetry(),
+                        ultrasonic=self._stream_ultrasonic(),
+                        map_snapshot_required_on_revision_gap=True)
 
     def _stream_motion_events(self,frame):
         detector=getattr(self,'motion_events',None)
@@ -1333,6 +1342,8 @@ class VisionService:
 
     def query(self, operation, inputs=None):
         inputs = inputs or {}
+        if operation == "robot.vision.trace":
+            return publication_trace.command(inputs)
         # Explicit local diagnostics must not touch receiver or publication locks.
         if (operation == "robot.vision.status" and len(inputs) == 2 and
                 inputs.get("receiver_only") is True and inputs.get("thread_stacks") is True):
@@ -1657,6 +1668,7 @@ class VisionService:
                 "map_revision": self.revision, "backend": self._backend_status()}
 
     def close(self):
+        publication_trace.shutdown()
         self.stream_derivations.close()
         if getattr(self,"camera_rig",None) is not None:self.camera_rig.close()
         self.sensor_ticks.close()
@@ -1775,6 +1787,10 @@ def handler_for(service):
                 body = json.loads(self.rfile.read(size))
                 if not isinstance(body, dict) or not isinstance(body.get("inputs", {}), dict):
                     raise ValueError("invalid_request")
+                if (body.get("operation") == "robot.vision.trace" and
+                        self.connection.family != socket.AF_UNIX):
+                    self._respond(403, {"error": {"code": "local_trace_only"}})
+                    return
                 result = service.query(body["operation"], body.get("inputs", {}))
                 self._respond(200, result)
             except KeyError as exc:

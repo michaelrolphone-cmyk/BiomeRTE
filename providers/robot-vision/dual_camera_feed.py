@@ -2,6 +2,7 @@
 import contextlib,queue,threading,time
 from collections import OrderedDict
 from leased_publish import LiveFrames,packet
+import publication_trace
 
 class LatestPerSource:
     def __init__(self):self.values=OrderedDict();self.condition=threading.Condition()
@@ -42,13 +43,18 @@ class DualCameraFrames(LiveFrames):
             with self.lock:self.subscribers.discard(inbox)
     def publish(self,metadata,image):
         metadata=dict(metadata,camera_id=metadata.get("camera_id","front"))
-        if self.observe is not None:self.observe(metadata,image)
-        key=(metadata["camera_id"],"image" if image else "sensors")
-        with self.lock:
-            if not self.subscribers:return
-        value=packet(metadata,image)
-        with self.lock:
-            for inbox in self.subscribers:inbox.put(key,value)
+        with publication_trace.span("publish", metadata):
+            if self.observe is not None:
+                with publication_trace.span("publish.observe"):
+                    self.observe(metadata,image)
+            key=(metadata["camera_id"],"image" if image else "sensors")
+            with self.lock:
+                if not self.subscribers:return
+            with publication_trace.span("publish.serialize"):
+                value=packet(metadata,image)
+            with publication_trace.span("publish.fanout"):
+                with self.lock:
+                    for inbox in self.subscribers:inbox.put(key,value)
 class RearCameraFrames(DualCameraFrames):
     def __init__(self,shared):super().__init__();self.shared=shared
     def publish(self,metadata,image):

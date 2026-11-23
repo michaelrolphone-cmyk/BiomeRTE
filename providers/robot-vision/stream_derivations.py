@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 import time
 import numpy as np
+import publication_trace
 
 def matrix(value, n):
     try:
@@ -369,18 +370,25 @@ class StreamDerivations:
         lidar["world_hits"]=[hit for _,hits in self.hits.values() for hit in hits]
 
     def enrich(self,metadata,image):
-        with self.lock:
-            now=time.monotonic()
-            if isinstance(metadata.get("tof"),dict) and metadata["tof"].get("schema")=="rover.tof.solution/1":
-                self.latest_tof=copy.deepcopy(metadata["tof"]);self.tof_at=now
-            elif self.latest_tof is not None:
-                metadata["tof"]=copy.deepcopy(self.latest_tof)
-                if isinstance(metadata["tof"].get("collector_age_s"),(int,float)):
-                    metadata["tof"]["collector_age_s"]+=now-self.tof_at
-            if not isinstance(metadata.get("tof"),dict):metadata["tof"]={}
-            baseline,reference,definition=self.reference_snapshot
-            orientation=self.orientation(metadata,baseline,reference)
-            metadata["world_orientation"]=orientation
-            tof=metadata.setdefault("tof",{})
-            if isinstance(tof,dict):tof["display_fit"]=display_fit(tof)
-            self.project(metadata,orientation,definition)
+        with publication_trace.span("enrich.wait", metadata, lock=self.lock) as waiting:
+            with self.lock:
+                waiting.finish()
+                with publication_trace.span("enrich.held", metadata, lock=self.lock, held=True):
+                    with publication_trace.span("enrich.tof_copy"):
+                        now=time.monotonic()
+                        if isinstance(metadata.get("tof"),dict) and metadata["tof"].get("schema")=="rover.tof.solution/1":
+                            self.latest_tof=copy.deepcopy(metadata["tof"]);self.tof_at=now
+                        elif self.latest_tof is not None:
+                            metadata["tof"]=copy.deepcopy(self.latest_tof)
+                            if isinstance(metadata["tof"].get("collector_age_s"),(int,float)):
+                                metadata["tof"]["collector_age_s"]+=now-self.tof_at
+                        if not isinstance(metadata.get("tof"),dict):metadata["tof"]={}
+                    baseline,reference,definition=self.reference_snapshot
+                    with publication_trace.span("enrich.orientation"):
+                        orientation=self.orientation(metadata,baseline,reference)
+                    metadata["world_orientation"]=orientation
+                    tof=metadata.setdefault("tof",{})
+                    with publication_trace.span("enrich.display_fit"):
+                        if isinstance(tof,dict):tof["display_fit"]=display_fit(tof)
+                    with publication_trace.span("enrich.project"):
+                        self.project(metadata,orientation,definition)
