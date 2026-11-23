@@ -357,6 +357,13 @@ class CheckpointHelper:
         _, linked = await self.status(observation)
         return linked
 
+    async def _chunk_call(self, operation, *args):
+        # Resolving the chunks property takes the checkpoint-store mutex.
+        # Move that lookup into the worker too, so pruning or fsync cannot
+        # block HTTP health and grant handling on the event loop.
+        return await asyncio.to_thread(
+            lambda: getattr(self.store.chunks, operation)(*args))
+
     async def chunk_missing(self, body):
         b = binding(body.get("binding"))
         await self.validate(b)
@@ -365,7 +372,7 @@ class CheckpointHelper:
             raise CheckpointError("At most 256 exact block digests required")
         for key in keys:
             valid_digest(key)
-        missing = await asyncio.to_thread(self.store.chunks.missing, keys)
+        missing = await self._chunk_call("missing", keys)
         await self.validate(b)
         return {"missing": missing}
 
@@ -431,7 +438,7 @@ class CheckpointHelper:
                         len(missing) != len(set(missing)) or not set(missing).issubset(asked)):
                     raise Fault("Invalid replica missing-block receipt", 503)
                 for key in missing:
-                    raw = await asyncio.to_thread(self.store.chunks.get, key)
+                    raw = await self._chunk_call("get", key)
                     reply = await self.transport.request("/api/service-checkpoints/chunk-put", {
                         "service_id": self.config["service_id"], "worker": target, "binding": b,
                         "chunk": {"digest": key, "data": base64.b64encode(raw).decode("ascii")}})
@@ -445,7 +452,7 @@ class CheckpointHelper:
         refs = state_blocks(packet["payload"]["state"])
         if refs is None:
             return
-        missing = await asyncio.to_thread(self.store.chunks.missing, refs)
+        missing = await self._chunk_call("missing", refs)
         if missing and source is None:
             raise Fault("Current controller blocks are unavailable", 503)
         for key in missing:
@@ -461,7 +468,7 @@ class CheckpointHelper:
                 raw = base64.b64decode(value["data"], validate=True)
             except (ValueError, TypeError):
                 raise CheckpointError("Source returned invalid block encoding")
-            await asyncio.to_thread(self.store.chunks.put, raw, key)
+            await self._chunk_call("put", raw, key)
         await self.validate(b)
 
     async def publish_packet(self,b,packet,workers=None,require_all=False):
@@ -598,8 +605,9 @@ class CheckpointHelper:
             await self.validate(b)
             await asyncio.to_thread(self.store.select_witnessed,ref)
             await self.publish_packet(b,packet,workers,require_all=selected["reestablish"])
-            await asyncio.to_thread(restore_state,self.config["authority_home"],
-                                    self.config["private_dir"],packet,self.config,self.store.chunks.get)
+            await asyncio.to_thread(lambda: restore_state(
+                self.config["authority_home"], self.config["private_dir"],
+                packet, self.config, self.store.chunks.get))
             await self.validate(b)
             return await asyncio.to_thread(self.store.prepare,request,ref)
 
@@ -754,11 +762,11 @@ class CheckpointHelper:
                             len(block["data"]) > ((BLOCK_BYTES + 2) // 3) * 4):
                         raise CheckpointError("Invalid bounded block upload")
                     raw = base64.b64decode(block["data"], validate=True)
-                    reply["result"] = await asyncio.to_thread(
-                        self.store.chunks.put, raw, valid_digest(block.get("digest")))
+                    reply["result"] = await self._chunk_call(
+                        "put", raw, valid_digest(block.get("digest")))
                 elif message["type"] == "checkpoint.chunk.get":
                     key = valid_digest(message.get("chunk", {}).get("digest"))
-                    raw = await asyncio.to_thread(self.store.chunks.get, key)
+                    raw = await self._chunk_call("get", key)
                     reply["result"] = {"digest": key, "bytes": len(raw),
                         "data": base64.b64encode(raw).decode("ascii")}
                 else:
@@ -767,7 +775,7 @@ class CheckpointHelper:
                         raise CheckpointError("Bounded missing-block query required")
                     for key in keys:
                         valid_digest(key)
-                    reply["result"] = {"missing": await asyncio.to_thread(self.store.chunks.missing, keys)}
+                    reply["result"] = {"missing": await self._chunk_call("missing", keys)}
                 await self.transport.validate(binding(b))
             elif message["type"]=="checkpoint.published":
                 await self.transport.validate(binding(b))
