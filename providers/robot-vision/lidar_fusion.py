@@ -95,6 +95,9 @@ class LidarFusion:
         self.service=service;self.path=service.state_dir/"sensor-rig.json"
         self.config=validate_config(json.loads(self.path.read_text())) if self.path.exists() else defaults()
         self.stamp=None;self.lock=threading.RLock();self.event=threading.Event();self.stop=threading.Event()
+        # SQLite transactions/reads may block on storage; raw state must not.
+        # Never hold this lock and the state lock at the same time.
+        self.db_lock=threading.Lock()
         self.pending=None;self.latest=None;self.raw_latest=None;self.visual=deque(maxlen=128);self.scale=None;self.error=None
         from local_lidar_slam import LocalLidarSlam
         self.local_slam=LocalLidarSlam(service,self.survey_landmarks)
@@ -297,11 +300,12 @@ class LidarFusion:
                             camera=M[:3,:3]@point["xyz_sensor_m"]+M[:3,3]
                             local=T[:3,:3]@(camera/factor)+T[:3,3]
                             records.append((str(anchor["keyframe_id"]),local,row["sensor_id"],point["zone"]))
-                    with self.lock,self.db:
+                    with self.lock:rig_revision=self.config["revision"]
+                    with self.db_lock,self.db:
                         for key,point,sensor,zone in records:
                             voxel=json.dumps(np.floor(point*factor/.05).astype(int).tolist())
                             value={"xyz_keyframe":point.tolist(),"sensor_id":sensor,"zone":zone,
-                                   "rig_revision":self.config["revision"],"recorded_revision":self.service.revision+1,"scale_m_per_map_unit":factor}
+                                   "rig_revision":rig_revision,"recorded_revision":self.service.revision+1,"scale_m_per_map_unit":factor}
                             self.db.execute("INSERT OR IGNORE INTO voxels VALUES(?,?,?,?)",(map_id,key,voxel,json.dumps(value)))
                     # Real range residuals refine native visual landmarks, using
                     # the same pose/map and retained metric scale. This is not a second SLAM map.
@@ -345,7 +349,7 @@ class LidarFusion:
     def entities(self,map_id,revision=None):
         backend=self.service.backend
         if backend is None:return []
-        with self.lock:rows=self.db.execute("SELECT anchor_id,voxel,data FROM voxels WHERE map_id=?",(map_id,)).fetchall()
+        with self.db_lock:rows=self.db.execute("SELECT anchor_id,voxel,data FROM voxels WHERE map_id=?",(map_id,)).fetchall()
         anchors={};out=[]
         for key,voxel,raw in rows:
             if key not in anchors:
@@ -363,4 +367,4 @@ class LidarFusion:
     def close(self):
         self.stop.set();self.event.set()
         if self.thread:self.thread.join()
-        self.db.close()
+        with self.db_lock:self.db.close()
