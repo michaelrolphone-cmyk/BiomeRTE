@@ -212,12 +212,10 @@ class LidarFusion:
                 if A is not None and B is not None:return interpolate_pose(A,B,(t-a[0])/(b[0]-a[0]))
         return None
     def _run(self):
-        refresh=0.
         while not self.stop.is_set():
             self.event.wait(.2);self.event.clear()
             with self.lock:item=self.pending;self.pending=None
-            if self.survey_landmarks and time.monotonic()>=refresh:
-                refresh=time.monotonic()+2.
+            if self.survey_landmarks:
                 try:self.local_slam.bootstrap()
                 except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
             if not item:continue
