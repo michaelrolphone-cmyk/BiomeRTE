@@ -1439,12 +1439,15 @@ PRAGMA user_version=1;
         folders = [path for path in self.checkpoint_dir.iterdir() if path.is_dir() and not path.is_symlink()]
         logical_bytes = 0
         for folder in folders:
-            for path in folder.rglob("*"):
-                try:
-                    if path.is_file() and not path.is_symlink():
-                        logical_bytes += path.stat().st_size
-                except FileNotFoundError:
-                    continue  # Concurrent retirement may remove a package.
+            try:
+                for path in folder.rglob("*"):
+                    try:
+                        if path.is_file() and not path.is_symlink():
+                            logical_bytes += path.stat().st_size
+                    except FileNotFoundError:
+                        continue  # A file can disappear during compaction.
+            except FileNotFoundError:
+                continue  # The rglob iterator can lose a retired directory.
         return {"policy": "current_and_rollback_per_map_plus_explicit",
                 "retained_packages": sum(not path.name.endswith(".partial") for path in folders),
                 "partial_packages": sum(path.name.endswith(".partial") for path in folders),

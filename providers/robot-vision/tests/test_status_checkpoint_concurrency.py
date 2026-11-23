@@ -177,5 +177,33 @@ class StatusCheckpointConcurrencyTests(unittest.TestCase):
         self.checkpoint_read_during_retirement(keep_files=False)
 
 
+    def test_full_status_survives_folder_retired_during_inventory(self):
+        service, saved = self.populated_service()
+        target = service.store._checkpoint_folder(saved[0]["checkpoint_id"])
+        entered, release = threading.Event(), threading.Event()
+        original = Path._scandir
+
+        def paused_scan(path):
+            if (path == target and
+                    threading.current_thread().name.startswith("status-client")):
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("inventory scan was never released")
+            return original(path)
+
+        with patch.object(Path, "_scandir", paused_scan), \
+             ThreadPoolExecutor(1, thread_name_prefix="status-client") as clients:
+            query = clients.submit(service.query, "robot.vision.status", {})
+            try:
+                self.assertTrue(entered.wait(2))
+                retired = service.store.retire_superseded_checkpoints(map_id=service.map_id)
+                self.assertIn(saved[0]["checkpoint_id"], retired["retired"])
+                self.assertFalse(target.exists())
+            finally:
+                release.set()
+            status = query.result(2)
+        self.assert_current_status(status, service, saved[-1])
+
+
 if __name__ == "__main__":
     unittest.main()
