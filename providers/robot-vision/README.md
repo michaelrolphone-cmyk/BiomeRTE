@@ -1069,3 +1069,35 @@ arrays. The native persistence qualifier includes a real blank input before
 saving, checks that its identity and empty arrays survive restore, and then
 requires a real non-keyframe image to relocalize. An empty image never supplies
 a current pose or deletes the initialized map.
+
+## Local Python thread snapshots
+
+An explicit local Unix RPC may request code locations with
+`robot.vision.status` and exactly
+`{"receiver_only":true,"thread_stacks":true}`. Both values must be literal
+booleans and no extra keys are accepted by this diagnostic branch. The
+existing `receiver_only` response and ordinary status dispatch are unchanged.
+
+The snapshot bypasses receiver, mapping, checkpoint, and publication calls.
+It records process/thread identity, thread name, and innermost-first
+filename/function/line locations only. It does not read frame locals,
+arguments, source files, images, or sensor values, and releases its frame
+references before returning. Limits are 64 threads, 32 frames per thread,
+and 65,536 JSON bytes; omitted frames/threads and clipped strings are explicit.
+Names and code locations may still identify local paths, so retain output
+privately.
+
+This uses `sys._current_frames()`, without a signal, debugger, privilege
+change, profiler, or background sampler in the service. The interpreter must
+be able to execute the request. A delayed or timed-out RPC cannot by itself
+distinguish GIL contention from scheduling or transport delay, and Python
+locations do not reveal native C stacks. These observations are not health
+verdicts.
+
+`sample_thread_stacks.py` is a separately invoked local diagnostic client.
+It requires expected source hashes and PID, validates the response allowlist,
+creates a new mode-0600 output, and buffers up to 100 samples. Sampling is
+bounded to 20 seconds at no more than 5 Hz, with one request at a time; the
+first timeout or invalid response ends sampling instead of queuing retries.
+Connection cleanup and final private-file serialization occur after the
+bounded request interval. No service is started or modified by the sampler.
