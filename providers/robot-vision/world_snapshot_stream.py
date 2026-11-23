@@ -62,7 +62,8 @@ class WorldSnapshotFeed:
         key = self.version()
         if key == self.key:
             return
-        message = snapshot_message(self.service.query)
+        with self.service.atlas.snapshot_reads():
+            message = snapshot_message(self.service.query)
         if (message["map_id"], message["revision"]) != key[:2]:
             return
         # A survey edit need not advance the visual atlas clock.

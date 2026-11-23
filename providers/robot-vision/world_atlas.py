@@ -5,6 +5,7 @@ by VisionStore. An unaligned submap never contributes invented world coordinates
 """
 import base64
 import copy
+from contextlib import contextmanager
 import hashlib
 import hmac
 import secrets
@@ -138,6 +139,7 @@ class WorldAtlas:
         from world_import import WorldImportQueue
         self.imports = WorldImportQueue(Path(path).parent)
         self.lock = threading.RLock()
+        self._snapshot_local = threading.local()
         self.db = sqlite3.connect(str(path),check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
@@ -313,6 +315,31 @@ class WorldAtlas:
                 "error":self.error,"storage":"membership_and_transforms_only",
                 "unlocalized_rule":"Local geometry is retained but not placed in world coordinates."}
 
+    @contextmanager
+    def snapshot_reads(self):
+        """Reuse sonar reconstruction across pages of one synchronous snapshot.
+
+        Each thread owns its scope. Keep only the current submap's result, and
+        release it on success or failure; a later snapshot always reads afresh.
+        """
+        previous = getattr(self._snapshot_local, "sonar", None)
+        self._snapshot_local.sonar = {}
+        try:
+            yield
+        finally:
+            self._snapshot_local.sonar = previous
+
+    def _sonar_entities_for_page(self, map_id, revision):
+        cache = getattr(getattr(self, "_snapshot_local", None), "sonar", None)
+        if cache is None:
+            return self.sonar_entities(map_id, revision)
+        key = (map_id, revision)
+        if cache.get("key") != key:
+            rows = self.sonar_entities(map_id, revision)
+            cache.clear()
+            cache.update(key=key, rows=rows)
+        return cache["rows"]
+
     def read(self, cursor=None, limit=500):
         limit = max(1,min(500,int(limit)))
         if cursor:
@@ -348,7 +375,7 @@ class WorldAtlas:
             t=np.asarray(item["T_world_map"])
             local_entities = list(page["entities"])
             if not page.get("next_cursor") and getattr(self, "sonar_entities", None):
-                sonar = self.sonar_entities(item["map_id"], item["revision"])
+                sonar = self._sonar_entities_for_page(item["map_id"], item["revision"])
                 offset = state.get("sonar_offset", 0)
                 room = limit-len(entities)-len(local_entities)
                 local_entities.extend(sonar[offset:offset+room])
