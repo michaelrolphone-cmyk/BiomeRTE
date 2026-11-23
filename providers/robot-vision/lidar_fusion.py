@@ -98,6 +98,9 @@ class LidarFusion:
         # SQLite transactions/reads may block on storage; raw state must not.
         # Never hold this lock and the state lock at the same time.
         self.db_lock=threading.Lock()
+        # Serialize configuration I/O separately from raw state. If both are
+        # needed, acquire config_lock before the short-lived state lock.
+        self.config_lock=threading.Lock()
         self.pending=None;self.latest=None;self.raw_latest=None;self.visual=deque(maxlen=128);self.scale=None;self.error=None
         from local_lidar_slam import LocalLidarSlam
         self.local_slam=LocalLidarSlam(service,self.survey_landmarks)
@@ -111,9 +114,11 @@ class LidarFusion:
         self.thread=threading.Thread(target=self._run,name="slam-lidar-fusion",daemon=True);self.thread.start();return self
     def configure(self,value):
         config=validate_config(value)
-        with self.lock:
-            config["revision"]=max(self.config["revision"]+1,config["revision"])
-            atomic_json(self.path,config);self.config=config;self.scale=None
+        with self.config_lock:
+            with self.lock:
+                config["revision"]=max(self.config["revision"]+1,config["revision"])
+            atomic_json(self.path,config)
+            with self.lock:self.config=config;self.scale=None
         return self.status()
     def enqueue(self,packet,interval):
         if not packet.get("lidar"):return
@@ -222,25 +227,32 @@ class LidarFusion:
             try:self.process(*item)
             except Exception as exc:self.error=type(exc).__name__+":"+str(exc)[:120]
     def process(self,packet,interval,map_id):
-        stamp=self.path.stat().st_mtime_ns if self.path.exists() else None
-        if stamp!=self.stamp:
-            if stamp is not None:self.config=validate_config(json.loads(self.path.read_text()))
-            self.stamp=stamp
+        with self.config_lock:
+            stamp=self.path.stat().st_mtime_ns if self.path.exists() else None
+            if stamp!=self.stamp:
+                if stamp is not None:
+                    updated=validate_config(json.loads(self.path.read_text()))
+                    with self.lock:self.config=updated
+                self.stamp=stamp
+            with self.lock:
+                config_source=self.config
+                config=copy.deepcopy(config_source)
+                scale=copy.deepcopy(self.scale)
         identity=(packet.get("receiver_id"),packet.get("boot_id"),packet.get("stream_sequence"))
         if identity==self.last_key:return
         self.last_key=identity
         capture=packet["capture_monotonic_us"];rows=[]
         for row in packet["lidar"].get("sensors",[]):
-            mount=self.config["lidar"].get(row.get("id"))
+            mount=config["lidar"].get(row.get("id"))
             if not mount:continue
             points=zone_points(row,mount,capture)
             rows.append({"sensor_id":row["id"],"valid":bool(points),"points":points,"raw":copy.deepcopy(row),"mount":copy.deepcopy(mount)})
         live={"schema":"rover.lidar-fusion/1","received_monotonic":time.monotonic(),"capture_host_interval_s":interval,
               "receiver_id":packet["receiver_id"],"boot_id":packet["boot_id"],"map_id":map_id,
-              "packet_id":packet["frame_id"],"sensors":rows,"rig_revision":self.config["revision"],"units":"m",
+              "packet_id":packet["frame_id"],"sensors":rows,"rig_revision":config["revision"],"units":"m",
               "mounts_qualification":"provisional_until_owner_measurements","pose_available":False}
         if self.survey_landmarks is not None:
-            self.survey_landmarks.observe(rows,packet,interval,self.config["revision"])
+            self.survey_landmarks.observe(rows,packet,interval,config["revision"])
             try:self.local_slam.observe(rows,packet,interval,map_id)
             except Exception as exc:self.local_slam.state["error"]=str(exc)[:180]
         pose=self._pose(sum(interval)/2,map_id)
@@ -263,7 +275,7 @@ class LidarFusion:
                     q=(xyz-pose[:3,3])@pose[:3,:3]
                     geometry_epoch=backend._last_loop_id
             matches=[]
-            prior=(self.scale or {}).get("scale_m_per_map_unit") if (self.scale or {}).get("map_id")==map_id else None
+            prior=(scale or {}).get("scale_m_per_map_unit") if (scale or {}).get("map_id")==map_id else None
             supported=0
             for row in rows:
                 depths,hits=self.survey_landmarks.visual_depths(packet["frame_id"],row) if self.survey_landmarks else (row["points"],0)
@@ -276,18 +288,22 @@ class LidarFusion:
                 inliers=np.abs(factors-median)<=.12*median
                 if inliers.sum()>=6 and len({matches[i][2] for i in np.flatnonzero(inliers)})>=4:
                     scatter=float(np.median(np.abs(factors[inliers]-median))/median)
-                    self.scale={"availability":"available","map_id":map_id,"scale_m_per_map_unit":median,
-                                "source":"lidar_visual_landmark_depth_correspondence","relative_mad":scatter,
-                                "inliers":int(inliers.sum()),"rig_revision":self.config["revision"],
-                                "qualification":"estimated_with_provisional_sensor_mounts"}
+                    scale={"availability":"available","map_id":map_id,"scale_m_per_map_unit":median,
+                           "source":"lidar_visual_landmark_depth_correspondence","relative_mad":scatter,
+                           "inliers":int(inliers.sum()),"rig_revision":config["revision"],
+                           "qualification":"estimated_with_provisional_sensor_mounts"}
+                    with self.lock:
+                        if self.config is config_source:self.scale=scale
             attachment=self.service.metric.attachment_status(map_id)
             factor=attachment.get("scale_m_per_map_unit") if attachment.get("availability")=="available" else None
-            if factor is None and self.scale and self.scale["map_id"]==map_id:factor=self.scale["scale_m_per_map_unit"]
+            if factor is None and scale and scale["map_id"]==map_id:factor=scale["scale_m_per_map_unit"]
             if getattr(backend,"_native_birth",None):
                 factor=1.
-                self.scale={"map_id":map_id,"availability":"available","scale_m_per_map_unit":1.,
-                            "source":"native_lidar_visual_initialization"}
-            live["scale"]=copy.deepcopy(self.scale);live["mapping_available"]=bool(factor)
+                scale={"map_id":map_id,"availability":"available","scale_m_per_map_unit":1.,
+                       "source":"native_lidar_visual_initialization"}
+                with self.lock:
+                    if self.config is config_source:self.scale=scale
+            live["scale"]=copy.deepcopy(scale);live["mapping_available"]=bool(factor)
             if factor:
                 anchor=backend.rig_anchor(pose)
                 if anchor:
@@ -298,7 +314,7 @@ class LidarFusion:
                             camera=M[:3,:3]@point["xyz_sensor_m"]+M[:3,3]
                             local=T[:3,:3]@(camera/factor)+T[:3,3]
                             records.append((str(anchor["keyframe_id"]),local,row["sensor_id"],point["zone"]))
-                    with self.lock:rig_revision=self.config["revision"]
+                    rig_revision=config["revision"]
                     with self.db_lock,self.db:
                         for key,point,sensor,zone in records:
                             voxel=json.dumps(np.floor(point*factor/.05).astype(int).tolist())
@@ -321,7 +337,7 @@ class LidarFusion:
                                 self.service._commit_changes(backend._diff(backend._read_entities()),"lidar_depth_constraints")
                     if records:
                         with self.service._pipeline_lock:
-                            self.service._commit_changes([{"op":"upsert","kind":"lidar_state","entity_id":"ledger","data":{"source":"lidar","rig_revision":self.config["revision"],"zones":len(records)}}],"lidar_observations")
+                            self.service._commit_changes([{"op":"upsert","kind":"lidar_state","entity_id":"ledger","data":{"source":"lidar","rig_revision":config["revision"],"zones":len(records)}}],"lidar_observations")
                     live["native_landmarks_refined"]=updates;live["mapped_zones"]=len(records)
         self.processed+=1;self.error=None
         with self.lock:self.latest=live
