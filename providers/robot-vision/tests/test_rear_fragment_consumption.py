@@ -13,8 +13,6 @@ from rear_transport_preview import messages_with_idle_recovery
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 
-from websockets.asyncio.client import connect
-from websockets.asyncio.server import serve
 async def buffered_trial(reader):
  # Buffer real WebSocket fragments before measuring; no network delay is charged.
  # A bounded competing callback models work scheduled between consumer turns.
