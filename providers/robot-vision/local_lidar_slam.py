@@ -129,7 +129,7 @@ class LocalLidarSlam:
 
     def observe(self, rows, packet, interval, map_id):
         self.bootstrap()
-        if self.map_id!=map_id or not self.cells:return
+        if self.map_id!=map_id or not self.cells or not self.reference:return
         current=self.seed.current(time.time())
         if not current:return
         nav,survey,zero,published=current
