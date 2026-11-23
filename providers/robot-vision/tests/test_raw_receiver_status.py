@@ -139,6 +139,7 @@ class RawReceiverStatusTests(unittest.TestCase):
                 worker = Work(lambda: service.query("robot.vision.status", {"receiver_only": True}))
                 try:
                     self.assert_raw(service, worker.value())
+                    worker.thread.join(1)
                     self.assertFalse(worker.thread.is_alive())
                 finally:
                     locks.close()
