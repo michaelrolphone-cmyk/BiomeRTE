@@ -117,3 +117,18 @@ jobs:
         run: python -m unittest test_radio_relocalization_prior.RadioRelocalizationPriorTests.test_manifest_matches_exact_transforms_and_other_native_files_unchanged -v
       - run: python -m unittest tests.test_stream_wire_integration tests.test_shared_streams tests.test_stream_payload_errors tests.test_rover_subscription_owner tests.test_portable_services -v
       - run: python -m compileall -q biomerte providers/robot-vision
+
+  rear-fragment-consumption:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The deployed receiver uses Python 3.11; wait_for schedules an
+          # additional task there, unlike the implementation in Python 3.12.
+          python-version: '3.11'
+      - run: python -m pip install websockets==15.0.1
+      - name: Preserve fragment throughput, idle recovery and cancellation
+        env:
+          PYTHONPATH: providers/robot-vision:providers/robot-vision/tests
+        run: python -m unittest test_rear_fragment_recovery test_rear_fragment_consumption test_rear_preview_delivery -v

@@ -66,12 +66,12 @@ async def messages_with_idle_recovery(socket, idle_seconds):
         fragments = socket.recv_streaming()
         chunks = []
         try:
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(anext(fragments), idle_seconds)
-                except StopAsyncIteration:
-                    break
-                chunks.append(chunk)
+            # On Python 3.11, wait_for adds a task and scheduling round trip
+            # even when a fragment is already buffered. Stay in this task.
+            async with asyncio.timeout(idle_seconds) as deadline:
+                async for chunk in fragments:
+                    chunks.append(chunk)
+                    deadline.reschedule(asyncio.get_running_loop().time() + idle_seconds)
         except ConnectionClosedOK:
             return
         except asyncio.TimeoutError as error:
