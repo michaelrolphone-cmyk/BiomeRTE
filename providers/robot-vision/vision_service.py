@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from camera_source import CameraSource, utc_now
+from receiver_thread_stacks import thread_stack_snapshot
 from detector import ObjectDetector
 from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
@@ -1332,6 +1333,10 @@ class VisionService:
 
     def query(self, operation, inputs=None):
         inputs = inputs or {}
+        # Explicit local diagnostics must not touch receiver or publication locks.
+        if (operation == "robot.vision.status" and len(inputs) == 2 and
+                inputs.get("receiver_only") is True and inputs.get("thread_stacks") is True):
+            return thread_stack_snapshot()
         if operation == "robot.map.snapshot":
             from rover_wire import map_snapshot
             return map_snapshot(self.query, inputs.get("map_id"), inputs.get("revision"))
