@@ -1,8 +1,8 @@
 """Metric-calibration persistence in the vision store's checkpointed database.
 
-This extension deliberately shares VisionStore's lock, transaction and SQLite
-connection so an ordinary map checkpoint includes calibration sessions, exact
-frame evidence and applied references. It never changes native map coordinates.
+Writes share VisionStore's transaction and SQLite connection so an ordinary map
+checkpoint includes calibration sessions, exact frame evidence and references.
+Read-only queries use committed WAL snapshots without waiting for map writes. It never changes native map coordinates.
 """
 from __future__ import annotations
 
@@ -56,13 +56,12 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
         return value
 
     def get_session(self, session_id=None, map_id=None):
-        with self.store._lock:
-            self.store._open()
+        with self.store._snapshot_reader() as reader:
             if session_id is not None:
-                row = self.store._db.execute(
+                row = reader.execute(
                     "SELECT payload FROM metric_sessions WHERE id=?", (session_id,)).fetchone()
             else:
-                row = self.store._db.execute(
+                row = reader.execute(
                     "SELECT payload FROM metric_sessions WHERE map_id=? "
                     "ORDER BY created_at DESC,id DESC LIMIT 1", (map_id,)).fetchone()
             if row is None:
@@ -73,9 +72,8 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
             return value
 
     def sessions(self):
-        with self.store._lock:
-            self.store._open()
-            return [json.loads(row[0]) for row in self.store._db.execute(
+        with self.store._snapshot_reader() as reader:
+            return [json.loads(row[0]) for row in reader.execute(
                 "SELECT payload FROM metric_sessions ORDER BY created_at,id")]
 
     def enqueue(self, session, snapshot, *, role=None, label=None):
@@ -110,8 +108,7 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
         return job
 
     def jobs(self, session_id=None, state=None):
-        with self.store._lock:
-            self.store._open()
+        with self.store._snapshot_reader() as reader:
             sql, args = "SELECT rowid,payload FROM metric_jobs WHERE 1=1", []
             if session_id is not None:
                 sql += " AND session_id=?"
@@ -119,7 +116,7 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
             if state is not None:
                 sql += " AND state=?"
                 args.append(state)
-            return [json.loads(row["payload"]) for row in self.store._db.execute(
+            return [json.loads(row["payload"]) for row in reader.execute(
                 sql + " ORDER BY rowid", args)]
 
     def finish_job(self, job, sample=None):
@@ -145,9 +142,8 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
             self.store._delete_blobs(expired)
 
     def samples(self, session_id):
-        with self.store._lock:
-            self.store._open()
-            return [json.loads(row[0]) for row in self.store._db.execute(
+        with self.store._snapshot_reader() as reader:
+            return [json.loads(row[0]) for row in reader.execute(
                 "SELECT payload FROM metric_samples WHERE session_id=? ORDER BY rowid",
                 (session_id,))]
 
@@ -220,13 +216,12 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
 
     def resolve_keyframes(self, map_id, samples, revision=None):
         """Resolve every exact source keyframe against one immutable map revision."""
-        with self.store._lock:
-            self.store._open()
-            info = self.store._map_locked(map_id, revision)
+        with self.store._snapshot_reader() as reader:
+            info = self.store._map_info(reader, map_id, revision)
             resolved, missing = [], []
             for original in samples:
                 sample = _copy(original)
-                row = self.store._db.execute(
+                row = reader.execute(
                     "SELECT * FROM entity_versions WHERE map_id=? AND kind='keyframe' "
                     "AND entity_id=? AND revision<=? ORDER BY revision DESC LIMIT 1",
                     (map_id, sample["keyframe_id"], info["revision"])).fetchone()
@@ -242,7 +237,7 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
 
     def resolve_keyframes_for_fit(self, map_id, samples, revision=None, *, exclude_deleted=False):
         """Exclude only proven deleted anchor incarnations from checkerboard fits."""
-        with self.store._lock:
+        with self.store._snapshot_reader() as reader:
             info, resolved, missing = self.resolve_keyframes(map_id, samples, revision)
             if not exclude_deleted or not missing:
                 return info, resolved, missing, []
@@ -282,22 +277,22 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
                         source_revision > info["revision"]):
                     continue
                 keyframe_id = sample["keyframe_id"]
-                deletion = self.store._db.execute(
+                deletion = reader.execute(
                     latest_sql, (map_id, keyframe_id, info["revision"])).fetchone()
                 if (deletion is None or not deletion["deleted"] or
                         deletion["revision"] <= source_revision):
                     continue
                 try:
-                    source_map = self.store._map_locked(map_id, source_revision)
+                    source_map = self.store._map_info(reader, map_id, source_revision)
                 except (KeyError, ValueError):
                     continue
                 if source_map["metadata"].get("calibration_id") != calibration_id:
                     continue
-                original = self.store._db.execute(
+                original = reader.execute(
                     latest_sql, (map_id, keyframe_id, source_revision)).fetchone()
                 if not same_image(original, frame_id):
                     continue
-                history = self.store._db.execute(
+                history = reader.execute(
                     "SELECT deleted,payload FROM entity_versions WHERE map_id=? AND kind='keyframe' "
                     "AND entity_id=? AND revision>? AND revision<? ORDER BY revision",
                     (map_id, keyframe_id, source_revision, deletion["revision"])).fetchall()
@@ -337,8 +332,7 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
         return attachment
 
     def attachment(self, map_id, attachment_id=None, session_id=None):
-        with self.store._lock:
-            self.store._open()
+        with self.store._snapshot_reader() as reader:
             sql, args = "SELECT payload FROM metric_attachments WHERE map_id=?", [map_id]
             if attachment_id is not None:
                 sql += " AND id=?"
@@ -346,6 +340,6 @@ CREATE INDEX IF NOT EXISTS metric_attachments_map ON metric_attachments(map_id,c
             if session_id is not None:
                 sql += " AND session_id=?"
                 args.append(session_id)
-            row = self.store._db.execute(
+            row = reader.execute(
                 sql + " ORDER BY created_at DESC,id DESC LIMIT 1", args).fetchone()
             return json.loads(row[0]) if row else None
