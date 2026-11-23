@@ -373,7 +373,7 @@ class StreamDerivations:
         with publication_trace.span("enrich.wait", metadata, lock=self.lock) as waiting:
             with self.lock:
                 waiting.finish()
-                with publication_trace.span("enrich.held", lock=self.lock, held=True):
+                with publication_trace.span("enrich.held", metadata, lock=self.lock, held=True):
                     with publication_trace.span("enrich.tof_copy"):
                         now=time.monotonic()
                         if isinstance(metadata.get("tof"),dict) and metadata["tof"].get("schema")=="rover.tof.solution/1":

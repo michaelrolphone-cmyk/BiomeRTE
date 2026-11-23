@@ -97,7 +97,7 @@ class _Span:
             self.owner._record_error()
 
     def __exit__(self, kind, _value, _tb):
-        self.finish(kind.__name__ if kind else None)
+        self.finish(kind.__name__[:MAX_ID_CHARS] if kind else None)
         return False
 
 
