@@ -174,7 +174,7 @@ class LidarDatabaseIsolationTests(unittest.TestCase):
             reader = Work(lambda: fusion.entities(service.map_id))
             try:
                 self.assertTrue(barrier.entered.wait(1), "real SELECT did not reach fetchall")
-                ingress = SimpleNamespace(service=service, _stop=threading.Event(),
+                ingress = SimpleNamespace(service=service, stop=threading.Event(),
                                           _preview_identity=None, _pending_preview=None,
                                           _preview_task=None)
                 with service.live_frames.subscribe() as inbox:
@@ -243,6 +243,7 @@ class LidarDatabaseIsolationTests(unittest.TestCase):
             service = SimpleNamespace(
                 state_dir=Path(directory), atlas=None, backend=backend,
                 map_id="map-captured", revision=7, _pipeline_lock=threading.RLock(),
+                camera_rig=SimpleNamespace(config={"rear": {"max_pose_gap_s": 2.}}),
                 metric=SimpleNamespace(attachment_status=lambda map_id: {
                     "availability": "available", "scale_m_per_map_unit": 1.}),
                 _commit_changes=lambda changes, origin: commits.append((changes, origin)),
