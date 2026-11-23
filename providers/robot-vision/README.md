@@ -24,6 +24,42 @@ unavailable. Read robot.vision.calibration and robot.vision.status for the activ
 installation: a validated calibration can already be preserved and applied.
 An unknown pose is never an identity matrix or a zero-position estimate.
 
+## Optional rear TCP return-path experiment
+
+The rear listener supports a default-off `return_path_cs5_trial` boolean in
+`STATE/rear-sensor-push.json`. Only literal JSON `true` enables it. On each
+authenticated rear `/camera` or `/sensors` connection, the existing full packet
+validator must accept the configured receiver and rear role before the accepted
+IPv4 socket is given `IP_TOS=0xa0` (DSCP CS5). Camera preview and aligned-delivery
+callbacks share one attempt. Handshakes and traffic before that first validated
+packet retain their prior options. Front, viewer, listener, IPv6 and unmatched
+connections are untouched.
+
+The receiver immediately reads the stored option back. Its existing
+`sensor_push.return_path_cs5_trial` status holds an enabled flag, attempt count
+and only the latest result per lane: requested/previous/readback TOS, local/peer
+ports, monotonic observation time and an explicit outcome. A missing socket,
+unsupported option, exception or mismatched readback leaves delivery functional,
+with no retry on that connection. Exception text and payloads are not recorded.
+The helper runs on the socket event loop before the unchanged worker dispatch;
+it does not change framing, rates, compression, clock handling or acknowledgement
+rules. The locally modified deployed `camera_push.py` is not replaced.
+
+This is a controlled trial of the observed ESP CS5 / Mac TOS0 asymmetry, not an
+established throughput fix. Socket readback proves a stored request, not emitted
+DSCP or a Wi-Fi access category. Darwin may prioritize pure TCP ACKs separately,
+and interface policy may rewrite the marking. Qualification must therefore
+verify subsequent Mac-to-rear packet TOS on both flows and compare unchanged
+delivery thresholds, with the same firmware and front control.
+
+Enable only through the managed deployment lifecycle with a private config
+backup and exact source guards. The flag is read when a connection is created;
+removing it or setting it false does not undo an option on an already accepted
+socket. Roll back by disabling it and replacing the connections through the
+managed service lifecycle (or restoring the previous listener source), preserving
+the existing camera callback and fragment-consumption fix. This change does not
+enable the experiment in any deployed configuration.
+
 ## Runtime layout
 
 - STATE defaults to ~/.local/share/biome-robot-vision.

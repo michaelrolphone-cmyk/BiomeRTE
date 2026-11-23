@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from http import HTTPStatus
+from rear_return_path import RearReturnPathCS5
 
 class ClockAlignment:
     def __init__(self):
@@ -103,6 +104,8 @@ class RearSensorIngress:
         self.ranging_error=None
         self.expired_packets=0
         self.connection_closes=0
+        self.return_path_cs5_attempts=0
+        self.return_path_cs5_last={}
         path=self.service.state_dir/"rear-sensor-push.json"
         try:
             if path.exists():
@@ -238,19 +241,37 @@ class RearSensorIngress:
         worker=threading.Thread(target=deliver, name="rear-sensor-delivery",daemon=True)
         worker.start()
         async def receive(socket):
-            if getattr(getattr(socket,'request',None),'path',None) == '/camera':
+            role = {"/camera": "camera", "/sensors": "sensors"}.get(
+                getattr(getattr(socket, "request", None), "path", None))
+            return_path = RearReturnPathCS5(enabled=self.config.get("return_path_cs5_trial"),
+                                            receiver_id=self.config["receiver_id"], role=role)
+            def after_validated(packet):
+                evidence = return_path.after_validated_packet(socket, packet)
+                if evidence is not None:
+                    with self.lock:
+                        self.return_path_cs5_attempts += 1
+                        self.return_path_cs5_last[role] = evidence
+            if role == "camera":
                 from camera_push import receive_camera
                 def deliver(packet,jpeg,interval,received):
                     camera=self.rig.camera
                     if camera is not None:
                         camera.push_jpeg(packet,jpeg,interval,received)
                 from rear_transport_preview import publish_image
+                # receive_camera validates identity and the JPEG before either
+                # callback. Apply the opt-in socket option on this event loop.
+                def deliver_validated(packet, *args):
+                    after_validated(packet)
+                    return asyncio.to_thread(deliver, packet, *args)
+                def preview_validated(packet, *args):
+                    after_validated(packet)
+                    return asyncio.to_thread(publish_image, self, packet, *args)
                 # A slow JPEG consumer can hold up its own acknowledgement only.
                 await receive_camera(socket, self.config['receiver_id'], 'rear', ClockAlignment(),
-                    lambda *args: asyncio.to_thread(deliver, *args),
+                    deliver_validated,
                     messages=messages_with_idle_recovery(socket, idle_seconds),
                     boot_hint=lambda: getattr(self, 'last_wire_boot', None),
-                    preview=lambda *args: asyncio.to_thread(publish_image, self, *args))
+                    preview=preview_validated)
                 return
             clock=ClockAlignment()
             # Prior bounds are usable across TCP reconnects for the same device boot.
@@ -282,6 +303,7 @@ class RearSensorIngress:
                             with self.lock:self.clock_snapshot=(clock.boot,tuple(clock.bounds),clock.observed)
                         continue
                     validate_packet(packet,self.config["receiver_id"])
+                    after_validated(packet)
                     self.last_wire_tick=time.monotonic()
                     self.last_wire_boot=packet["boot_id"]
                     peer=getattr(socket,"remote_address",None)
@@ -365,6 +387,9 @@ class RearSensorIngress:
     def status(self):
         with self.lock:
             latest=copy.deepcopy(self.latest)
+            return_path_cs5={"enabled":bool(self.config and self.config.get("return_path_cs5_trial") is True),
+                             "attempts":self.return_path_cs5_attempts,
+                             "last":copy.deepcopy(self.return_path_cs5_last)}
         now=time.monotonic()
         return {"configured":self.config is not None,"packets":self.packets,"gaps":self.gaps,
             "error":self.error,"ranging_error":self.ranging_error,"device_setup_error":self.device_error,
@@ -374,7 +399,7 @@ class RearSensorIngress:
             "last_wire_boot":getattr(self,"last_wire_boot",None),"delivery_mode":getattr(self,"last_delivery_mode",None),"clock_round_trip_s":getattr(self,"clock_round_trip_s",None),
             "last_capture_age_upper_s":getattr(self,"last_capture_age_s",None),
             "last_receive_age_s":None if latest is None else now-latest["received"],
-            "latest":latest,"camera_id":"rear"}
+            "latest":latest,"camera_id":"rear","return_path_cs5_trial":return_path_cs5}
 
     def close(self):
         self.stop.set()
