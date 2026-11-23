@@ -237,6 +237,7 @@ class LidarFusion:
             with self.lock:
                 config_source=self.config
                 config=copy.deepcopy(config_source)
+                scale=copy.deepcopy(self.scale)
         identity=(packet.get("receiver_id"),packet.get("boot_id"),packet.get("stream_sequence"))
         if identity==self.last_key:return
         self.last_key=identity
@@ -274,7 +275,7 @@ class LidarFusion:
                     q=(xyz-pose[:3,3])@pose[:3,:3]
                     geometry_epoch=backend._last_loop_id
             matches=[]
-            prior=(self.scale or {}).get("scale_m_per_map_unit") if (self.scale or {}).get("map_id")==map_id else None
+            prior=(scale or {}).get("scale_m_per_map_unit") if (scale or {}).get("map_id")==map_id else None
             supported=0
             for row in rows:
                 depths,hits=self.survey_landmarks.visual_depths(packet["frame_id"],row) if self.survey_landmarks else (row["points"],0)
@@ -295,14 +296,14 @@ class LidarFusion:
                         if self.config is config_source:self.scale=scale
             attachment=self.service.metric.attachment_status(map_id)
             factor=attachment.get("scale_m_per_map_unit") if attachment.get("availability")=="available" else None
-            if factor is None and self.scale and self.scale["map_id"]==map_id:factor=self.scale["scale_m_per_map_unit"]
+            if factor is None and scale and scale["map_id"]==map_id:factor=scale["scale_m_per_map_unit"]
             if getattr(backend,"_native_birth",None):
                 factor=1.
                 scale={"map_id":map_id,"availability":"available","scale_m_per_map_unit":1.,
                        "source":"native_lidar_visual_initialization"}
                 with self.lock:
                     if self.config is config_source:self.scale=scale
-            live["scale"]=copy.deepcopy(self.scale);live["mapping_available"]=bool(factor)
+            live["scale"]=copy.deepcopy(scale);live["mapping_available"]=bool(factor)
             if factor:
                 anchor=backend.rig_anchor(pose)
                 if anchor:
