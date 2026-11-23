@@ -279,10 +279,10 @@ class PublicationTraceTests(unittest.TestCase):
 
     def test_actual_publication_bytes_and_four_lane_delivery_unchanged(self):
         image = b"\xff\xd8fixture-jpeg\xff\xd9"
-        heads = [dict(id=name, valid=True, ready=True, resolution=8, sequence=17,
+        heads = [dict(id=name, valid=True, ready=True, resolution=64, sequence=17,
                       observed_monotonic_us=1234, distance_mm=list(range(64)),
                       target_status=[5]*64) for name in ("front", "rear")]
-        def run(enabled):
+        def run():
             service = service_fixture()
             feed = DualCameraFrames(service._prepare_stream)
             rear = RearCameraFrames(feed)
@@ -307,10 +307,9 @@ class PublicationTraceTests(unittest.TestCase):
                         self.assertEqual(decoded["sensor_packet"]["ahrs"]["present"], False)
                         self.assertEqual(value[8+size:], b"" if sensors else image)
             return packets
-        with patch.object(stream_derivations.time, "monotonic", return_value=100.):
-            disabled = run(False)
-            self.command("arm")
-            enabled = run(True)
+        disabled = run()
+        self.command("arm")
+        enabled = run()
         self.assertEqual(disabled, enabled)
         snapshot = self.command("freeze")
         self.assertEqual(snapshot["stage_stats"]["prepare"]["count"], 4)

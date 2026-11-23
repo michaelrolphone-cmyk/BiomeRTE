@@ -2,6 +2,7 @@
 import asyncio
 import errno
 import json
+import logging
 import socket
 import tempfile
 import unittest
@@ -257,11 +258,24 @@ class ListenerReturnPathTests(unittest.IsolatedAsyncioTestCase):
         for payload in (self.camera_wire()[:-1], self.camera_wire(camera_id="front"),
                         self.camera_wire(receiver_id="unmatched")):
             with self.subTest(payload=payload[:4]), self.assertLogs("websockets.server", level="ERROR"):
-                async with self.connect("/camera") as ws:
-                    await self.receive_type(ws, "clock")
-                    await ws.send(payload)
-                    with self.assertRaises(ConnectionClosed):
-                        await asyncio.wait_for(ws.recv(), 2)
+                # Client closure can precede the server's exception log. Wait
+                # for that actual log before ending its assertion context.
+                logged = asyncio.Event()
+                loop = asyncio.get_running_loop()
+                logger = logging.getLogger("websockets.server")
+                handler = logging.Handler(level=logging.ERROR)
+                handler.emit = lambda _record: loop.call_soon_threadsafe(logged.set)
+                logger.addHandler(handler)
+                try:
+                    async with self.connect("/camera") as ws:
+                        await self.receive_type(ws, "clock")
+                        await ws.send(payload)
+                        with self.assertRaises(ConnectionClosed):
+                            await asyncio.wait_for(ws.recv(), 2)
+                    await asyncio.wait_for(logged.wait(), 2)
+                finally:
+                    logger.removeHandler(handler)
+                    handler.close()
             self.assertEqual(self.evidence()["attempts"], 0)
 
 
