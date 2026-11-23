@@ -71,6 +71,8 @@ class LocalLidarSlam:
         self.state={}
         self.map_id=None
         self.last=0.
+        self._bootstrap_map_id=None
+        self._next_bootstrap=0.
         self.last_pose_publish=0.
         self.seen={}
         self.cells={}
@@ -82,6 +84,12 @@ class LocalLidarSlam:
         if self.seed is None:return
         service=self.service
         map_id=service.map_id
+        now=time.monotonic()
+        if self._bootstrap_map_id==map_id and now<self._next_bootstrap:return
+        # One attempt clock for the worker and packet paths. Record it before
+        # I/O so empty results or errors cannot turn retries into per-packet work.
+        self._bootstrap_map_id=map_id
+        self._next_bootstrap=now+2.
         if self.map_id!=map_id:
             self.map_id=map_id;self.cells={};self.seeded=set();self.seen={};self.candidates.clear()
             self.reference=None;self.state={}
@@ -120,7 +128,7 @@ class LocalLidarSlam:
                           survey_seed_points=len(self.seeded),coordinate_frame='survey_enu',units='m')
 
     def observe(self, rows, packet, interval, map_id):
-        if self.map_id!=map_id or not self.reference or time.monotonic()-self.last>2:self.bootstrap()
+        self.bootstrap()
         if self.map_id!=map_id or not self.cells:return
         current=self.seed.current(time.time())
         if not current:return
