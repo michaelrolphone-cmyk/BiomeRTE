@@ -52,6 +52,64 @@ export async function controllerRuntimeConfig(env){
  const value={...declared,site:config.site,origin:serviceOrigin(env)};
  configured.set(env,{raw,value});return value;
 }
+
+const statusFields=(value,fields)=>Object.fromEntries(fields.filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]]));
+// Independent owner recovery read. The coordinator credential stays inside the
+// gateway; this path cannot select another service or perform a coordinator write.
+export async function controllerRuntimeStatus(env,args){
+ try{
+  if(typeof env.maintenanceActor!=='string'||!env.maintenanceActor)
+   throw fault('Owner sign-in required',403);
+  if(args.controller!==undefined||args.provider_context!==undefined||
+     (args.realm??'site')!=='site'||!object(args.arguments)||Object.keys(args.arguments).length)
+   throw fault('Controller runtime status accepts empty arguments in the site realm and no selector',400);
+  const config=await controllerRuntimeConfig(env);
+  if(!config)throw fault('Controller runtime is not configured');
+  if(typeof env.STREAM_ROUTER_SECRET!=='string'||!env.STREAM_ROUTER_SECRET)
+   throw fault('Controller runtime coordinator authentication unavailable');
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(env.STREAM_ROUTER_SECRET),
+   {name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const signature=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode('biomerte/service-coordinator/v1'));
+  const credential=Array.from(new Uint8Array(signature),byte=>byte.toString(16).padStart(2,'0')).join('');
+  let response;
+  try{response=await fetch(config.origin+'/api/service-coordinator/status',{
+   method:'GET',headers:{Authorization:'Bearer '+credential},redirect:'manual',
+   signal:AbortSignal.timeout(30000)
+  })}catch{throw fault('Controller runtime coordinator status unavailable')}
+  if(response.status!==200)throw fault('Controller runtime coordinator returned HTTP '+response.status);
+  let status;
+  try{status=await response.json()}catch{throw fault('Invalid controller runtime coordinator status')}
+  if(!object(status)||status.protocol!=='biomerte-service-coordinator/1'||!object(status.services))
+   throw fault('Invalid controller runtime coordinator status');
+  const row=Object.hasOwn(status.services,config.service_id)?status.services[config.service_id]:null;
+  if(row!==null&&(!object(row)||row.service_id!==config.service_id||!hash(row.manifest_revision)||
+     !Array.isArray(row.candidates)||!Array.isArray(row.conflicting_revisions)||
+     !(row.owner===null||object(row.owner))||
+     !(row.desired_manifest===null||object(row.desired_manifest))))
+   throw fault('Invalid controller runtime coordinator status');
+  const manifest=row?.desired_manifest;
+  if(manifest&&(manifest.id!==config.service_id||manifest.revision!==row.manifest_revision||
+     manifest.authority?.kind!=='controller'||manifest.authority?.id!==config.authority))
+   throw fault('Controller runtime coordinator identity mismatch');
+  const coordinator=statusFields(status,['protocol','authority_mode','boot_epoch','max_lease_ttl_s',
+   'boot_grace_remaining_s','supported_features','durable_witness_ready']);
+  coordinator.authority_transport=object(status.authority_transport)?
+   statusFields(status.authority_transport,['registration_timeout_s','rpc_timeout_s']):null;
+  let service=null;
+  if(row){
+   service=statusFields(row,['service_id','manifest_revision','state','conflicting_revisions','desired_manifest']);
+   service.owner=row.owner===null?null:statusFields(row.owner,['worker_id','worker_incarnation','lease_ttl_s','draining']);
+   service.candidates=row.candidates.map(candidate=>{
+    if(!object(candidate))throw fault('Invalid controller runtime coordinator status');
+    return {...statusFields(candidate,['worker_id','worker_incarnation','reason']),
+     checkpoint:object(candidate.checkpoint)?
+      statusFields(candidate.checkpoint,['service_id','sequence','digest','boot_epoch']):null};
+   });
+  }
+  return success({service_id:config.service_id,authority:config.authority,coordinator,service});
+ }catch(error){return failure(error)}
+}
+
 function addresses(config,controller){
  return controller===undefined||controller===config.authority||config.controller_aliases.includes(controller);
 }

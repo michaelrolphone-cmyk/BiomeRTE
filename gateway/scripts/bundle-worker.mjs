@@ -7,7 +7,7 @@ for(const file of modules){
  source=source.replace(/^import .* from .*$/gm,'');
  if(isolated.has(file)){
   const names=[...source.matchAll(/^export (?:async )?function ([A-Za-z_$][\w$]*)/gm)].map(x=>x[1]);
-  const expected=file==='lib/durable-witness.mjs'?1:file==='lib/controller-runtime.mjs'?6:file==='lib/controller-event-auth.mjs'?1:file==='lib/controller-network.mjs'?3:['lib/console-read.mjs','lib/console-metrics.mjs','lib/service-authorities.mjs'].includes(file)?1:file==='lib/capability-map.mjs'?4:file==='lib/provider-topology.mjs'?6:5;
+  const expected=file==='lib/durable-witness.mjs'?1:file==='lib/controller-runtime.mjs'?7:file==='lib/controller-event-auth.mjs'?1:file==='lib/controller-network.mjs'?3:['lib/console-read.mjs','lib/console-metrics.mjs','lib/service-authorities.mjs'].includes(file)?1:file==='lib/capability-map.mjs'?4:file==='lib/provider-topology.mjs'?6:5;
   if(names.length!==expected||new Set(names).size!==names.length)throw new Error('Review ownership exports before bundling');
   source=source.replace(/^export /gm,'');
   if(/^export /m.test(source))throw new Error('Unsupported ownership export');
