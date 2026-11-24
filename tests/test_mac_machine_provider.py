@@ -108,6 +108,32 @@ class MacMachineProvider(unittest.TestCase):
         self.assertEqual(delivered[0], delivered[1])
         self.assertEqual(result['provider'], self.provider)
 
+    def test_scoped_provider_restores_existing_publication_and_dependency_definition(self):
+        candidate = self.client.prepare_machine_key(self.provider)
+        dependent = {'name': 'existing.dependency', 'inputs': {}, 'outputs': {}}
+        self.app.call('cap.define', dependent, 'define-dependency')
+        self.admin('peer.bind_provider_key', dict(public_key=candidate['public_key'], provider=self.provider,
+                   resources=[self.resource], contracts=[self.contract], definitions=['existing.dependency:1']))
+        scope = dict(provider=self.provider, resource=self.resource, service='')
+        with mock.patch.object(self.client, 'request', side_effect=self.forward):
+            self.client.activate_machine_key(self.provider, candidate['actor'])
+
+            def call(operation, arguments):
+                return self.client.invoke_provider(operation, arguments, provider=self.provider)
+
+            reply = call('cap.registrations', dict(scope, contracts=[self.contract]))
+            receipt = reply['registrations'][0]['registration']
+            call('cap.withdraw', dict(scope, registrations={self.contract: receipt}))
+            reply = call('cap.registrations', dict(scope, contracts=[self.contract]))
+            receipt = reply['registrations'][0]['registration']
+            entries = [dict(definition={'name': 'storage.test', 'inputs': {}, 'outputs': {}},
+                            offer={'contract': self.contract, 'state': 'ready'}, expected_registration=receipt)]
+            restored = call('cap.publish', dict(scope, offers=entries))
+            self.assertEqual(restored['offers'][0]['status'], 'published')
+            self.assertEqual(call('cap.define', dependent)['id'], 'existing.dependency:1')
+            with self.assertRaises(self.client.ControllerOperationError):
+                call('cap.offer', dict(scope, contract='existing.dependency:1'))
+
     def test_legacy_refresh_journal_clears_only_after_replacement_is_durable(self):
         previous = 'mock-original-refresh'
         marker = self.client.ROOT / 'refresh-pending.json'

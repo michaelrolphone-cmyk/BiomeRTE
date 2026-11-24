@@ -15,8 +15,8 @@ PROVIDER_OPERATIONS = frozenset((
 ))
 
 
-@op('peer.bind_provider_key', 'public_key:str provider:str resources:list contracts:list')
-def bind(tx, ctx, public_key, provider, resources, contracts):
+@op('peer.bind_provider_key', 'public_key:str provider:str resources:list contracts:list definitions?:list')
+def bind(tx, ctx, public_key, provider, resources, contracts, definitions=None):
     """Bind a verified machine key to an existing provider and its offer scope."""
     if ctx.scope != 'site' or not re.fullmatch('[a-f0-9]{64}', provider):
         raise Fault('Expected an existing site provider identity')
@@ -29,14 +29,20 @@ def bind(tx, ctx, public_key, provider, resources, contracts):
     offers = [offer for offer in tx.rows('offers') if offer['provider'] == provider]
     if set(resources) != {o['resource'] for o in offers} or set(contracts) != {o['contract'] for o in offers}:
         raise Fault('Machine key scope does not match the existing provider registrations', 403)
+    definitions = definitions or []
+    if any(not isinstance(name, str) or not tx.get('contracts', name) for name in definitions):
+        raise Fault('Definition-only grants must be existing contract identifiers', 403)
     value = dict(key=public_key, provider=provider, resources=resources,
                  contracts=contracts, offers=sorted({o['resource'] + '/' + o['contract'] for o in offers}),
                  enabled=True)
+    if definitions:
+        value['definitions'] = sorted(set(definitions))
     prior = tx.get('_provider_machine_keys', key)
     if prior and prior != value:
         raise Fault('Machine key was bound or revoked with different authority', 409)
     tx.put('_provider_machine_keys', key, value)
-    return dict(actor=key, provider=provider, resources=resources, contracts=contracts, enabled=True)
+    return dict(actor=key, provider=provider, resources=resources, contracts=contracts,
+                definitions=sorted(set(definitions)), enabled=True)
 
 
 @op('peer.revoke_provider_key', 'actor:str')
@@ -65,14 +71,15 @@ def authorize(app, realm, key, signature, envelope, binding):
         raise Fault('Operation outside machine provider grant', 403)
     if name == 'cap.define':
         contract = '{}:{}'.format(args.get('name'), args.get('version', 1))
-        if contract not in contracts:
+        if contract not in contracts and contract not in binding.get('definitions', ()):
             raise Fault('Contract outside machine provider grant', 403)
     if name == 'cap.discover' and args.get('contract') not in contracts:
         raise Fault('Contract outside machine provider grant', 403)
     if name == 'cap.offer' and '{}/{}'.format(args.get('resource'), args.get('contract')) not in binding['offers']:
         raise Fault('Offer outside machine provider grant', 403)
     if name == 'cap.publish' and isinstance(args.get('offers'), list):
-        for offer in args['offers']:
+        for entry in args['offers']:
+            offer = entry.get('offer') if isinstance(entry, dict) else None
             if isinstance(offer, dict) and '{}/{}'.format(args.get('resource'), offer.get('contract')) not in binding['offers']:
                 raise Fault('Offer outside machine provider grant', 403)
     if name == 'stream.attach' and args.get('role') != 'provider':
