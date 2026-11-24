@@ -88,7 +88,7 @@ class Remote:
     def __init__(self, cfg):
         self.node, self.site = cfg['provider'], cfg['site']
     def call(self, name, args, rid=None):
-        return gateway.invoke(name, args, rid, self.realm)
+        return gateway.invoke_provider(name, args, rid, self.realm, self.node)
 class PrivateWorker(Worker):
     """Disk ledger retains hashes and state only; response retries live in RAM."""
     def __init__(self, *args, handler=None):

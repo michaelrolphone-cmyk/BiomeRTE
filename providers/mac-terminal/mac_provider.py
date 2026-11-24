@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Outbound OAuth MCP transport for the existing BiomeRTE durable worker."""
+"""Outbound BiomeRTE transport for enrolled Mac providers."""
 import base64
 import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -23,6 +24,7 @@ CREDS = ROOT / 'oauth.json'
 class HTTPFailure(RuntimeError):
     def __init__(self, status, body):
         self.status = status
+        self.error = body.get('error') if isinstance(body, dict) else None
         # Never echo token response bodies or credentials to persistent logs.
         super().__init__('Gateway HTTP %s (%s)' % (status, body.get('error', 'request rejected') if isinstance(body, dict) else 'non-JSON response'))
 
@@ -31,6 +33,10 @@ class ControllerOperationError(RuntimeError):
         super().__init__(detail[:500])
         status = structured.get('status') if isinstance(structured, dict) else None
         self.status = status if type(status) is int and 400 <= status < 600 else None
+
+
+class OAuthAuthorizationLost(RuntimeError):
+    pass
 
 def request(url, obj=None, form=False, headers=None):
     if urllib.parse.urlsplit(url).scheme != 'https' or urllib.parse.urlsplit(url).netloc != urllib.parse.urlsplit(ORIGIN).netloc:
@@ -104,17 +110,167 @@ def authorize():
 def credentials(force=False):
     with open(ROOT / 'oauth.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        c = json.loads(CREDS.read_text())
-        if (ROOT / 'refresh-pending.json').exists():
-            raise RuntimeError('A refresh reply was lost. Re-run installer with --reauthorize to restore access without replaying a spent token.')
+        try:
+            c = json.loads(CREDS.read_text())
+        except FileNotFoundError as error:
+            raise OAuthAuthorizationLost('Legacy OAuth credential is missing') from error
+        pending = ROOT / 'refresh-pending.json'
+        if pending.exists():
+            prior = json.loads(pending.read_text()).get('refresh_sha256')
+            current = hashlib.sha256(c['refresh_token'].encode()).hexdigest()
+            if prior is None or prior == current:
+                raise OAuthAuthorizationLost('Legacy OAuth refresh outcome is uncertain')
+            pending.unlink()  # The replacement was already committed before restart.
         if force or time.time() >= c['expires_at']:
             # Rotating refresh tokens must never be blindly replayed after a lost reply.
-            save_json(ROOT / 'refresh-pending.json', {'started_at': time.time()})
-            token = request(ORIGIN + '/oauth/token', dict(grant_type='refresh_token', client_id=c['client_id'], refresh_token=c['refresh_token'], resource=RESOURCE), form=True)
+            save_json(pending, {'started_at': time.time(), 'refresh_sha256': hashlib.sha256(c['refresh_token'].encode()).hexdigest()})
+            try:
+                token = request(ORIGIN + '/oauth/token', dict(grant_type='refresh_token', client_id=c['client_id'], refresh_token=c['refresh_token'], resource=RESOURCE), form=True)
+            except HTTPFailure as error:
+                if error.error in ('invalid_grant', 'invalid_client'):
+                    raise OAuthAuthorizationLost('Legacy OAuth grant has expired or been revoked') from error
+                raise
             c.update(refresh_token=token['refresh_token'], access_token=token['access_token'], expires_at=time.time() + int(token['expires_in']) - 90)
             save_json(CREDS, c)
-            (ROOT / 'refresh-pending.json').unlink()
+            pending.unlink()
         return c
+
+
+def machine_identity(provider):
+    path = ROOT / 'machine-providers.json'
+    try:
+        document = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    entry = document['providers'].get(provider)
+    if entry is None:
+        return None
+    actor = entry['actor']
+    if not re.fullmatch('[a-f0-9]{64}', actor):
+        raise ValueError('Invalid machine provider key identity')
+    key = ROOT / 'machine-keys' / (actor + '.pem')
+    if not key.is_file() or key.stat().st_mode & 0o077:
+        raise RuntimeError('Machine provider key is missing or not private')
+    return document['site'], actor, key
+
+
+def prepare_machine_key(provider):
+    """Generate once per pending enrollment, returning only the public key."""
+    keys = ROOT / 'machine-keys'
+    keys.mkdir(mode=0o700, exist_ok=True)
+    candidate_path = keys / (provider + '.candidate.json')
+    with open(keys / 'configuration.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if candidate_path.is_file():
+            candidate = json.loads(candidate_path.read_text())
+            if (keys / (candidate['actor'] + '.pem')).is_file():
+                return candidate
+        private = subprocess.check_output(['/usr/bin/openssl', 'genrsa', '2048'], stderr=subprocess.PIPE)
+        public = subprocess.check_output(['/usr/bin/openssl', 'pkey', '-pubout'], input=private)
+        der = subprocess.check_output(['/usr/bin/openssl', 'pkey', '-pubin', '-outform', 'DER'], input=public)
+        actor = hashlib.sha256(der).hexdigest()
+        with open(keys / (actor + '.pem'), 'xb', opener=lambda path, flags: os.open(path, flags, 0o600)) as out:
+            out.write(private)
+            out.flush()
+            os.fsync(out.fileno())
+        candidate = dict(actor=actor, provider=provider, public_key=public.decode('ascii'))
+        save_json(candidate_path, candidate)
+        return candidate
+
+
+def activate_machine_key(provider, actor):
+    """Switch the provider only after the candidate proves its live enrollment."""
+    if not re.fullmatch('[a-f0-9]{64}', actor):
+        raise ValueError('Expected the enrolled machine key fingerprint')
+    site = json.loads((ROOT / 'terminal-manifest.json').read_text())['site']
+    keys = ROOT / 'machine-keys'
+    config_path = ROOT / 'machine-providers.json'
+    with open(keys / 'configuration.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            config = json.loads(config_path.read_text())
+        except FileNotFoundError:
+            config = dict(site=site, providers={})
+        if config['site'] != site:
+            raise RuntimeError('Machine provider configuration belongs to another site')
+        candidate_path = keys / (provider + '.candidate.json')
+        existing = config['providers'].get(provider, {})
+        if existing.get('actor') != actor and json.loads(candidate_path.read_text())['actor'] != actor:
+            raise RuntimeError('Machine key is not the pending provider candidate')
+        key = keys / (actor + '.pem')
+        if not key.is_file() or key.stat().st_mode & 0o077:
+            raise RuntimeError('Machine provider key is missing or not private')
+        expected = dict(provider=provider, actor=actor, authentication='machine_key')
+        receipt = invoke_machine(provider, 'provider.auth_status', {}, uuid.uuid4().hex, (site, actor, key))
+        if receipt != expected:
+            raise RuntimeError('Gateway did not confirm the exact machine provider enrollment')
+        config['providers'][provider] = dict(actor=actor)
+        save_json(config_path, config)
+        if candidate_path.is_file() and json.loads(candidate_path.read_text())['actor'] == actor:
+            candidate_path.unlink()
+        return receipt
+
+
+def machine_health(provider, state):
+    try:
+        path = ROOT / ('machine-auth-' + provider + '.json')
+        try:
+            previous = json.loads(path.read_text())
+        except (OSError, ValueError):
+            previous = {}
+        now = time.time()
+        if previous.get('state') != state or now - previous.get('observed_at', 0) >= 30:
+            save_json(path, dict(provider=provider, authentication='machine_key', state=state, observed_at=now))
+    except OSError:
+        # Diagnostic state must never prevent deliberate command recovery.
+        pass
+
+
+def invoke_machine(provider, operation, arguments, rid, identity, controller=None):
+    site, actor, key = identity
+    envelope = dict(site=site, realm='site', id=rid, operation=operation, arguments=arguments)
+    if controller is not None:
+        envelope['controller'] = controller
+    canonical = json.dumps(envelope, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    signature = subprocess.run(['/usr/bin/openssl', 'dgst', '-sha256', '-sign', str(key)],
+                               input=canonical, capture_output=True)
+    if signature.returncode:
+        machine_health(provider, 'key_unavailable')
+        raise RuntimeError('Machine provider could not sign its request')
+    envelope['auth'] = dict(actor=actor, signature=base64.b64encode(signature.stdout).decode())
+    # Preserve exact actor, envelope and request ID on ambiguous delivery.
+    for attempt in range(6):
+        try:
+            response = request(ORIGIN + '/v1/call', envelope)
+            value = response['result']
+            machine_health(provider, 'authorized')
+            return value
+        except HTTPFailure as error:
+            if operation == 'stream.attach' or error.status not in (408, 429, 500, 502, 503, 504):
+                if error.status == 401 or error.error in (
+                        'Machine provider credential revoked or outside its site',
+                        'Revoked credential', 'OpenSSL operation failed', 'Unknown peers ' + actor):
+                    machine_health(provider, 'authorization_lost')
+                raise ControllerOperationError(str(error), {'status': error.status}) from error
+        except (ConnectionError, subprocess.TimeoutExpired):
+            pass
+        if attempt < 5:
+            time.sleep(min(2 ** attempt, 15))
+    machine_health(provider, 'gateway_unavailable')
+    raise ConnectionError('Gateway unavailable; signed provider request identity retained')
+
+
+def machine_probe(provider):
+    identity = machine_identity(provider)
+    if identity is None:
+        state = 'legacy_oauth'
+        if not CREDS.exists() or (ROOT / 'refresh-pending.json').exists():
+            state = 'authorization_lost'
+        elif json.loads(CREDS.read_text()).get('expires_at', 0) <= time.time():
+            state = 'oauth_refresh_due'
+        return dict(provider=provider, authentication='oauth', state=state)
+    return invoke_machine(provider, 'provider.auth_status', {}, uuid.uuid4().hex, identity)
+
 
 _persistent = None
 _persistent_after = 0
@@ -168,12 +324,24 @@ def invoke(operation, arguments=None, rid=None, realm='site', provider_context=N
             time.sleep(min(2 ** attempt, 15))
     raise ConnectionError('Gateway unavailable; request identity retained by worker')
 
-def invoke_provider(operation, arguments=None, rid=None, realm='site', provider=None):
+def invoke_provider(operation, arguments=None, rid=None, realm='site', provider=None, controller=None):
     """Report provider locality; the gateway assigns an available controller."""
     if provider is None:
         provider = (arguments or {}).get('provider')
-    if not isinstance(provider, str) or len(provider) != 64:
+    if not isinstance(provider, str) or not re.fullmatch('[a-f0-9]{64}', provider):
         raise ValueError('Provider identity required for gateway placement')
+    try:
+        identity = machine_identity(provider)
+    except (OSError, ValueError, KeyError, RuntimeError):
+        machine_health(provider, 'key_unavailable')
+        raise
+    if identity is not None:
+        if realm != 'site':
+            raise ValueError('Machine provider transport requires the site realm')
+        return invoke_machine(provider, operation, arguments or {}, rid or uuid.uuid4().hex, identity, controller)
+    if controller is not None:
+        return invoke('controller.invoke', dict(controller=controller, operation=operation,
+                                                arguments=arguments or {}), rid, realm)
     return invoke(operation, arguments, rid, realm,
                   provider_context={'provider': provider, 'host': socket.gethostname()})
 
@@ -266,18 +434,36 @@ if __name__ == '__main__':
     os.umask(0o077)
     mode = sys.argv[1] if len(sys.argv) > 1 else ''
     if mode == 'setup':
-        if not CREDS.exists():
-            authorize()
-        configure()
+        node_path = ROOT / 'identity/node.json'
+        provider_id = json.loads(node_path.read_text())['node'] if node_path.is_file() else None
+        if provider_id and machine_identity(provider_id):
+            print(json.dumps(machine_probe(provider_id)))
+        else:
+            if not CREDS.exists():
+                authorize()
+            configure()
     elif mode == 'authorize':
         authorize()
     elif mode == 'worker':
         worker()
     elif mode == 'verify':
         verify()
+    elif mode in ('auth-status', 'prepare-machine-key', 'activate-machine-key'):
+        provider_id = sys.argv[2] if len(sys.argv) > 2 else json.loads((ROOT / 'identity/node.json').read_text())['node']
+        if not re.fullmatch('[a-f0-9]{64}', provider_id):
+            raise SystemExit('Expected a provider identity')
+        if mode == 'prepare-machine-key':
+            result = prepare_machine_key(provider_id)
+        elif mode == 'activate-machine-key':
+            if len(sys.argv) != 4:
+                raise SystemExit('Expected the provider identity and enrolled key fingerprint')
+            result = activate_machine_key(provider_id, sys.argv[3])
+        else:
+            result = machine_probe(provider_id)
+        print(json.dumps(result))
     elif mode == 'probe':
         r = request(ORIGIN + '/oauth/register', dict(client_name='Mac terminal transport probe', redirect_uris=['https://127.0.0.1:17349/biomerte-callback']))
         print('Gateway registration transport: OK' if r.get('client_id') else 'FAILED')
     else:
-        raise SystemExit('Expected setup, authorize, worker, or probe')
+        raise SystemExit('Expected setup, authorize, worker, verify, auth-status, prepare-machine-key, activate-machine-key, or probe')
 

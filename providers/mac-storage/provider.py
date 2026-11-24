@@ -118,7 +118,7 @@ class Remote:
         self.site=json.loads((TERMINAL/'terminal-manifest.json').read_text())['site']
         self.node=hashlib.sha256(('biomerte/mac/storage/v1/'+terminal).encode()).hexdigest()
         self.suffix=terminal[:20]
-    def call(self,name,args,rid=None):return gateway.invoke(name,args,rid,self.realm)
+    def call(self,name,args,rid=None):return gateway.invoke_provider(name,args,rid,self.realm,self.node)
 
 def register_definition(remote, definition):
     from biomerte.worker import unavailable_transport

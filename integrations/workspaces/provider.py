@@ -25,7 +25,7 @@ def main():
   cfg=m.read(m.ROOT/'provider.json');g=m.gateway()
   class Remote:
    site=cfg['site'];realm='site';node=m.read(m.ROOT/'identity.json')['node']
-   def call(self,name,args,rid=None):return g.invoke(name,args,rid,self.realm)
+   def call(self,name,args,rid=None):return g.invoke_provider(name,args,rid,self.realm,self.node)
   run_worker(str(m.ROOT),Remote(),cfg,False);return
  if mode=='adapter':
   payload=json.load(sys.stdin)
