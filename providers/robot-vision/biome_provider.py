@@ -515,12 +515,28 @@ def write_registry_json(path, value):
             os.unlink(temporary)
 
 
+def runtime_config(cfg):
+    """Keep a bundled provider and its core on the same selected release.
+
+    A persisted manifest can outlive the launch target during an upgrade. A
+    standalone copied adapter still uses its explicitly configured core.
+    """
+    selected = dict(cfg)
+    source = Path(__file__).resolve()
+    repo = source.parent.parent.parent
+    if (source == repo / "providers/robot-vision/biome_provider.py"
+            and all((repo / relative).is_file() for relative in (
+                "biomerte/__init__.py", "biomerte/worker.py", "biomerte/stream_router.py"))):
+        selected["repo"] = str(repo)
+    return selected
+
+
 def load_config(state):
     state = Path(state).expanduser().resolve()
     cfg = json.loads((state / "provider-manifest.json").read_text())
     if Path(cfg["state"]).resolve() != state:
         raise RuntimeError("Provider manifest belongs to another state directory.")
-    return cfg
+    return runtime_config(cfg)
 
 
 def worker_offers(cfg):
@@ -698,6 +714,7 @@ def reconcile_query_offers(remote, cfg, ready, registered, defined, advertised, 
 
 
 def serve(cfg):
+    cfg = runtime_config(cfg)
     os.umask(0o077)
     sys.path.insert(0, cfg["repo"])
     from biomerte.worker import ActionPool, Worker
