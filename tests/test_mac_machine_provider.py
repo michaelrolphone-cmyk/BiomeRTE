@@ -134,6 +134,19 @@ class MacMachineProvider(unittest.TestCase):
             with self.assertRaises(self.client.ControllerOperationError):
                 call('cap.offer', dict(scope, contract='existing.dependency:1'))
 
+    def test_controller_receipt_retirement_is_visible_to_existing_reconcilers(self):
+        candidate = self.client.prepare_machine_key(self.provider)
+        self.bind(candidate)
+        with mock.patch.object(self.client, 'request', side_effect=self.forward):
+            self.client.activate_machine_key(self.provider, candidate['actor'])
+        message = 'Receipt result retired; request will not execute again'
+        error = self.client.HTTPFailure(410, {'error': message})
+        with mock.patch.object(self.client, 'request', side_effect=error):
+            with self.assertRaises(self.client.ControllerOperationError) as failure:
+                self.client.invoke_provider('cap.offer', {}, provider=self.provider)
+        self.assertEqual(failure.exception.status, 410)
+        self.assertEqual(str(failure.exception), message)
+
     def test_legacy_refresh_journal_clears_only_after_replacement_is_durable(self):
         previous = 'mock-original-refresh'
         marker = self.client.ROOT / 'refresh-pending.json'

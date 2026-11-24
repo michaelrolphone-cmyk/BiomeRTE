@@ -251,7 +251,8 @@ def invoke_machine(provider, operation, arguments, rid, identity, controller=Non
                         'Machine provider credential revoked or outside its site',
                         'Revoked credential', 'OpenSSL operation failed', 'Unknown peers ' + actor):
                     machine_health(provider, 'authorization_lost')
-                raise ControllerOperationError(str(error), {'status': error.status}) from error
+                detail = error.error if isinstance(error.error, str) else str(error)
+                raise ControllerOperationError(detail, {'status': error.status}) from error
         except (ConnectionError, subprocess.TimeoutExpired):
             pass
         if attempt < 5:
