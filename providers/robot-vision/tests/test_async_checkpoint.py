@@ -69,6 +69,33 @@ class AsyncCheckpointTests(unittest.TestCase):
         self.assertTrue(Path(saved["database_path"]).is_file())
         self.assertEqual(service.store.get_checkpoint(saved["checkpoint_id"])["availability"], "available")
 
+    def test_routine_checkpoints_reference_live_database_by_default(self):
+        service = self.make_service()
+        self.process(service, self.frame(service))
+        synchronous = service._checkpoint()
+        _, release = self.asynchronous_backend(service)
+        release.set()
+        asynchronous = service._schedule_checkpoint().result(3)
+
+        for saved in (synchronous, asynchronous):
+            self.assertEqual(saved["publication"], "revision_reference_v3")
+            self.assertEqual(Path(saved["database_path"]), service.store.db_path)
+            checkpoint = service.store.checkpoint_dir / saved["checkpoint_id"]
+            self.assertFalse((checkpoint / "vision.sqlite3").exists())
+            self.assertEqual(service.store.get_checkpoint(saved["checkpoint_id"])["availability"],
+                             "available")
+
+    def test_configured_interval_preserves_standalone_database_backups(self):
+        service = self.make_service()
+        service.config["database_backup_interval_s"] = 3600.0
+        self.process(service, self.frame(service))
+        saved = service._checkpoint()
+        self.assertEqual(saved["publication"], "complete_v2")
+        self.assertNotEqual(Path(saved["database_path"]), service.store.db_path)
+        self.assertTrue(Path(saved["database_path"]).is_file())
+        self.assertEqual(service.store.get_checkpoint(saved["checkpoint_id"])["availability"],
+                         "available")
+
     def test_failed_background_save_retains_last_usable_checkpoint_and_frames(self):
         service = self.make_service()
         self.process(service, self.frame(service, "before"))

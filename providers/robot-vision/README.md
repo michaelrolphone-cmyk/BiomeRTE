@@ -280,14 +280,16 @@ the current view while retaining historical revisions.
 
 ### Checkpoint retention
 
-Automatic and recovery saves retain the newest verified database backup and
-two complete backend generations per preserved map: current and rollback.
+Automatic and recovery saves reference the committed map revision in the live
+observation database and retain two verified backend generations per preserved
+map: current and rollback. Set `database_backup_interval_s` to opt in to
+periodic standalone SQLite backups.
 Explicit `robot.map.checkpoint` saves remain retained. Older unclassified
 checkpoints are preserved unless a deliberate legacy audit retires them using
 the same integrity and replacement checks.
 
 Backend staging is temporary. A checkpoint becomes available only after its
-files, database backup and manifest are complete. Superseded automatic copies
+backend files, database reference or backup, and manifest are complete. Superseded automatic copies
 are marked retired before their files are removed; a retired checkpoint reports
 unavailable with reason `checkpoint_retired`. Retention does not delete maps,
 calibration records or historical map revisions. Complete orphan publications
