@@ -33,6 +33,10 @@ atomically switches only that provider. A worker using the updated transport
 picks up the selection on its next provider call. Run `auth-status PROVIDER` to
 verify it independently of the worker inbox.
 
+When the provider republishes an existing contract owned by a separate service,
+include that contract ID in the operator's optional `definitions` list. This
+permits schema registration while retaining the original offer owner.
+
 The provider signs again on reconnect using the same private key. An interrupted
 reply retries the same signed request and operation ID. The machine transport
 never refreshes OAuth. Its private status file distinguishes authentication
