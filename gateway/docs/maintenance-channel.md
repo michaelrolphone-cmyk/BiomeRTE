@@ -52,6 +52,38 @@ Commands have no software execution deadline or CPU-time cap. Output is retained
 without software truncation; hosting, filesystem and memory capacity remain real
 physical constraints. Maintenance is not a substitute for normal workflow dispatch.
 
+## Repair an already enrolled Mac
+
+Run `gateway/recovery/Repair-Biome-Maintenance.command` as the enrolled Mac user.
+This local bootstrap does not enroll or revoke a host, use the Decisions app,
+import the normal controller, or depend on its command queue. It reads the Python
+interpreter and home from the existing `org.biomerte.maintenance` LaunchAgent.
+A missing enrollment, unsupported service configuration, wrong interpreter or
+unloaded service produces an explicit failure without replacing the agent.
+
+The script carries the exact standalone agent and its SHA256 pin. It checks and
+compiles that payload, preserves a private copy of the previous agent, replaces
+only `agent.py` atomically, and runs `launchctl kickstart -k` for that existing
+maintenance service. It preserves the plist, configuration, device credential,
+SQLite ledger and command output directories. It does not restart another service.
+Existing running ledger rows retain the agent's documented restart behavior:
+they become uncertain and are not executed again. Other recorded IDs are also
+never replayed.
+
+A successful script reports the preserved previous-agent path and the requested
+service restart. Verify actual recovery with a fresh owner-authenticated
+maintenance command and its completed result; service restart alone is not
+completion evidence. If restart fails after replacement, the verified agent and
+previous-agent backup remain available and the script reports failure.
+
+The installer and repair payloads must match `maintenance_agent.py` byte for byte.
+Offline tests cover payload parity, durable directory/thread-start failure
+results, duplicate/uncertain execution fences, preserved enrollment and ledger,
+atomic replacement failure and fixed-label service restart. They simulate
+launchd and command processes and run under the existing Linux/macOS CI discovery:
+
+    python3 -m unittest tests.test_maintenance_recovery -v
+
 Local service recovery: `launchctl kickstart -k gui/$(id -u)/org.biomerte.maintenance`.
 Local removal: boot out that service, remove its LaunchAgent plist, and revoke the
 host through `maintenance.revoke`. Preserve its ledger until uncertain commands

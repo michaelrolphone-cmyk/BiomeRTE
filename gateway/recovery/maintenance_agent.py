@@ -35,8 +35,8 @@ def exchange(body):
 
 def execute(job):
     directory = HOME / 'commands' / hashlib.sha256(job['id'].encode()).hexdigest()
-    directory.mkdir(parents=True, exist_ok=True)
     try:
+        directory.mkdir(parents=True, exist_ok=True)
         with (directory/'stdout').open('wb') as stdout, (directory/'stderr').open('wb') as stderr:
             process = subprocess.Popen(job['argv'], cwd=job.get('cwd') or None,
                                        stdout=stdout, stderr=stderr, start_new_session=True)
@@ -49,10 +49,30 @@ def execute(job):
     except Exception as error:
         result = {'state':'failed','error':type(error).__name__ + ': ' + str(error),
                   'output_directory':str(directory)}
+    save_result(job['id'], result)
+
+
+def save_result(identifier, result):
     with LOCK:
         DB.execute('UPDATE commands SET state=?,result=? WHERE id=?',
-                   (result['state'],json.dumps(result),job['id']))
+                   (result['state'],json.dumps(result),identifier))
         DB.commit()
+
+
+def start_job(job):
+    with LOCK:
+        known = DB.execute('SELECT state FROM commands WHERE id=?',(job['id'],)).fetchone()
+        if known:
+            return False
+        DB.execute("INSERT INTO commands VALUES(?,'running',NULL)",(job['id'],))
+        DB.commit()
+    try:
+        threading.Thread(target=execute,args=(job,),daemon=True).start()
+    except Exception as error:
+        save_result(job['id'], {'state':'failed',
+                    'error':'Maintenance worker could not start: ' + type(error).__name__})
+        return False
+    return True
 
 
 while True:
@@ -66,13 +86,7 @@ while True:
                 DB.commit()
         jobs = exchange({'operation':'poll'})['jobs']
         for job in jobs:
-            with LOCK:
-                known = DB.execute('SELECT state FROM commands WHERE id=?',(job['id'],)).fetchone()
-                if known:
-                    continue
-                DB.execute("INSERT INTO commands VALUES(?,'running',NULL)",(job['id'],))
-                DB.commit()
-            threading.Thread(target=execute,args=(job,),daemon=True).start()
+            start_job(job)
     except Exception as error:
         # Never print credentials, request bodies or command output to launchd logs.
         print('maintenance transport retry: '+type(error).__name__,flush=True)
