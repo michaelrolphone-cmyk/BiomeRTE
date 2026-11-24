@@ -100,9 +100,12 @@ def validate_install(cfg, home=None):
     for relative in ("providers/robot-vision/vision_service.py", "providers/robot-vision/biome_provider.py"):
         if not (Path(cfg["repo"]) / relative).is_file():
             raise RuntimeError("The selected repository is missing " + relative)
-    for relative in ("mac_provider.py", "oauth.json"):
-        if not (Path(cfg["gateway_state"]) / relative).is_file():
-            raise RuntimeError("An authorized mac-terminal gateway installation is required.")
+    gateway = Path(cfg["gateway_state"])
+    machine = gateway / "machine-providers.json"
+    machine_providers = json.loads(machine.read_text())["providers"] if machine.is_file() else {}
+    if not (gateway / "mac_provider.py").is_file() or (
+            cfg["provider"] not in machine_providers and not (gateway / "oauth.json").is_file()):
+        raise RuntimeError("The Mac gateway transport and an enrolled provider identity are required.")
     if cfg.get("service_mode", "python") == "macos-app":
         launch_agent_spec(
             Path(cfg["state"]),

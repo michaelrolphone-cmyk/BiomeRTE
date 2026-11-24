@@ -31,9 +31,7 @@ class Remote:
         self.controller = cfg.get('controller')
 
     def call(self, name, args, rid=None):
-        if self.controller:
-            return gateway.invoke('controller.invoke', dict(controller=self.controller, operation=name, arguments=args), rid, self.realm)
-        return gateway.invoke(name, args, rid, self.realm)
+        return gateway.invoke_provider(name, args, rid, self.realm, self.node, controller=self.controller)
 
 
 def offer(cfg, state):

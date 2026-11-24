@@ -15,7 +15,7 @@ from .gateway_journal import GatewayJournal
 from .identity import secret, write_private, generate, fingerprint, verify
 from . import knowledge, work, process, providers, exchange, extensions, decisions, authorization, assistant_support, discovery
 from . import streams
-from . import retention, session_api
+from . import provider_keys, retention, session_api
 from .release import identity as release_identity
 assistant_support.install_hooks()
 
@@ -164,13 +164,16 @@ class Application:
         def authorize(tx):
             ctx = Context(self, scope=realm)
             if auth is not None:
-                peer = tx.need('peers', auth['actor'])
-                if not peer['enabled']:
-                    raise Fault('Revoked credential', 403)
                 envelope = {'site': self.site, 'realm': realm,
                             'operation': name, 'arguments': args, 'id': request_id}
                 if controller is not None:
                     envelope['controller'] = controller
+                binding = tx.get('_provider_machine_keys', auth['actor'])
+                if binding is not None:
+                    return provider_keys.authorize(self, realm, auth['actor'], auth['signature'], envelope, binding)
+                peer = tx.need('peers', auth['actor'])
+                if not peer['enabled']:
+                    raise Fault('Revoked credential', 403)
                 verify(peer['key'], auth['signature'], envelope)
                 operator_actor = realm == 'site' and peer['id'] in self.controller_operator_actors
                 actor = self.controller_actor_aliases.get(peer['id'], peer['id']) if operator_actor else peer['id']
