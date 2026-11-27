@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 import ssl
 from urllib.parse import urlparse
@@ -490,29 +491,45 @@ class Worker:
             self.db.rollback()
             raise
 
-    def cleanup_results(self, operation=None):
+    def cleanup_results(self, operation=None, stopping=None):
         """Retry acknowledged, idempotent adapter cleanup without replaying effects."""
+        import logging
         query = ('SELECT c.id,c.argv,c.payload FROM result_cleanup c '
                  'CROSS JOIN result_retention_eligible e ON e.id=c.id '
                  'CROSS JOIN actions a ON a.id=e.id AND a.signature=e.signature')
-        rows = self.db.execute(query + (' WHERE c.id=?' if operation else ' ORDER BY c.id LIMIT 8'),
-                               (operation,) if operation else ()).fetchall()
+        if operation:
+            rows = self.db.execute(query + ' WHERE c.id=?', (operation,)).fetchall()
+        else:
+            page = query + ' WHERE c.id>? ORDER BY c.id LIMIT 8'
+            after = getattr(self, '_result_cleanup_after', '')
+            rows = self.db.execute(page, (after,)).fetchall()
+            if not rows and after:
+                rows = self.db.execute(page, ('',)).fetchall()
         for identifier, argv, payload in rows:
-            proc = subprocess.Popen(json.loads(argv), stdin=subprocess.PIPE,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if stopping is not None and stopping.is_set():
+                return
+            if not operation:
+                self._result_cleanup_after = identifier
             try:
-                proc.communicate(payload.encode('utf-8'),
-                                 timeout=30 if self.timeout is None else min(self.timeout, 30))
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-                raise Fault('Acknowledged result cleanup timed out; cleanup remains pending', 503)
-            if proc.returncode:
-                raise Fault('Acknowledged result cleanup failed; cleanup remains pending', 503)
-            self.db.execute('DELETE FROM result_cleanup WHERE id=? AND argv=? AND payload=?',
-                            (identifier, argv, payload))
+                proc = subprocess.Popen(json.loads(argv), stdin=subprocess.PIPE,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    proc.communicate(payload.encode('utf-8'),
+                                     timeout=30 if self.timeout is None else min(self.timeout, 30))
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    raise Fault('Acknowledged result cleanup timed out; cleanup remains pending', 503)
+                if proc.returncode:
+                    raise Fault('Acknowledged result cleanup failed; cleanup remains pending', 503)
+                self.db.execute('DELETE FROM result_cleanup WHERE id=? AND argv=? AND payload=?',
+                                (identifier, argv, payload))
+            except (Fault, OSError, ValueError) as error:
+                if operation:
+                    raise
+                logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
 
-    def recover_result_acknowledgements(self, limit=8, *, cleanup=True):
+    def recover_result_acknowledgements(self, limit=8, *, cleanup=True, stopping=None):
         """Confirm bounded new terminal receipts whose delivery ACK was lost."""
         import logging
         after = getattr(self, '_result_recovery_after', '')
@@ -524,9 +541,13 @@ class Worker:
         if not rows and after:
             rows = self.db.execute(query, ('', limit)).fetchall()
         for operation, signature, state, body in rows:
+            if stopping is not None and stopping.is_set():
+                return
             self._result_recovery_after = operation
             try:
                 action = self.remote.call('cap.status', {'operation': operation, 'recovery': True})
+                if stopping is not None and stopping.is_set():
+                    return
                 if (action.get('id') != operation or action.get('provider') != self.remote.node or
                         action.get('state') != state):
                     continue
@@ -547,19 +568,21 @@ class Worker:
                 # A failing receipt must not starve other receipts or execution.
                 logging.warning('Result acknowledgement recovery pending: %s', type(error).__name__)
 
-    def once(self, pool=None, *, reconcile_receipts=True):
+    def once(self, pool=None, *, reconcile_receipts=True, receipt_maintenance=None):
         import logging
-        try:
-            self.cleanup_results()
-        except Exception as error:
-            # A filesystem cleanup failure cannot requeue the physical effect.
-            logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
+        if receipt_maintenance is not None:
+            receipt_maintenance.start()
+        else:
+            try:
+                self.cleanup_results()
+            except Exception as error:
+                logging.warning('Acknowledged result cleanup pending: %s', type(error).__name__)
         from .supervised_commands import cleanup_expired
         try:
             cleanup_expired(self)
         except Exception as error:
             logging.warning('Runner receipt expiry pending: %s', type(error).__name__)
-        if reconcile_receipts:
+        if reconcile_receipts and receipt_maintenance is None:
             self.recover_result_acknowledgements()
         queue = self.remote.call('provider.poll', dict(self.lease_binding, provider=self.remote.node))
         try:
@@ -692,6 +715,48 @@ def unavailable_transport(error):
                 'the shared controller runtime is temporarily unavailable'))
 
 
+class ReceiptMaintenance:
+    """Reconcile and clean historical results independently of the live inbox."""
+    def __init__(self, worker, interval):
+        self.worker = worker
+        self.interval = interval
+        self.stopping = threading.Event()
+        self.thread = None
+
+    def start(self):
+        import logging
+        if self.stopping.is_set() or (self.thread and self.thread.is_alive()):
+            return
+        thread = threading.Thread(target=self.run, name='biome-receipt-recovery', daemon=True)
+        try:
+            thread.start()
+        except RuntimeError as error:
+            logging.warning('Result recovery thread could not start (%s)', type(error).__name__)
+            return  # Retry on a later poll without delaying work admission.
+        self.thread = thread
+
+    def run(self):
+        import logging
+        worker = self.worker
+        if self.stopping.is_set():
+            return
+        try:
+            recovery = Worker(worker.path, worker.remote, worker.offers, worker.timeout)
+            try:
+                while not self.stopping.is_set():
+                    recovery.recover_result_acknowledgements(cleanup=False, stopping=self.stopping)
+                    recovery.cleanup_results(stopping=self.stopping)
+                    self.stopping.wait(self.interval)
+            finally:
+                recovery.db.close()
+        except Exception as error:
+            logging.warning('Result recovery paused (%s)', type(error).__name__)
+
+    def close(self):
+        # An outstanding status read cannot delay shutdown or start more work.
+        self.stopping.set()
+
+
 def run_worker(directory, remote, cfg, once):
     import fcntl
     import inspect
@@ -706,6 +771,8 @@ def run_worker(directory, remote, cfg, once):
                    remote, cfg['offers'], cfg.get('timeout', 30))
         parallelism = cfg.get('parallelism', 1)
         pool = ActionPool(w, parallelism) if parallelism > 1 else None
+        poll_seconds = cfg.get('poll_seconds', 2)
+        maintenance = ReceiptMaintenance(w, poll_seconds) if not once else None
         try:
             if once:
                 w.advertise()
@@ -731,7 +798,7 @@ def run_worker(directory, remote, cfg, once):
                 # The provider still owns its existing grants when registration
                 # is partially acknowledged or a new offer is waiting to retry.
                 try:
-                    count = w.once(pool)
+                    count = w.once(pool, receipt_maintenance=maintenance)
                 except (OSError, ValueError, Fault, RuntimeError) as err:
                     if isinstance(err, RuntimeError) and not unavailable_transport(err):
                         raise
@@ -739,8 +806,10 @@ def run_worker(directory, remote, cfg, once):
                     time.sleep(retry)
                 else:
                     registering = pending and pending[0][2] <= time.monotonic()
-                    time.sleep(.1 if count or registering else cfg.get('poll_seconds', 2))
+                    time.sleep(.1 if count or registering else poll_seconds)
         finally:
+            if maintenance is not None:
+                maintenance.close()
             if pool is not None:
                 pool.executor.shutdown(wait=True)
             w.db.close()

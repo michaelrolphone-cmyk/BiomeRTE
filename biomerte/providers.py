@@ -913,7 +913,9 @@ def status(tx, ctx, operation, recovery=False):
 
 @op('cap.leases', 'task?:str', False)
 def leases(tx, ctx, task=''):
-    return [l for l in tx.rows('leases') if not task or l['task'] == task]
+    if task:
+        return tx.matching('leases', 'task', (task,))
+    return tx.rows('leases')
 
 
 def start_submission(tx, ctx, lease):

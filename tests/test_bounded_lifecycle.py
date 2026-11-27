@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from biomerte.app import Application, initialize
-from biomerte.store import Fault, uid
+from biomerte.store import Fault, Records, encode, uid
 
 
 class BoundedLifecycle(unittest.TestCase):
@@ -36,6 +36,29 @@ class BoundedLifecycle(unittest.TestCase):
         action = self.call('cap.invoke', lease=lease['id'], inputs={}, operation='one')
         self.call('provider.claim', provider='test', operation='one', generation=lease['generation'])
         return lease, action
+
+    def test_task_lease_lookup_skips_the_full_inventory_and_reads_dirty_records(self):
+        def seed(tx):
+            for key, task in (('a', 'wanted'), ('b', 'other'), ('c', 'wanted')):
+                tx.put('leases', key, dict(id=key, task=task, state='released'))
+            tx.db.execute('UPDATE records SET value=? WHERE kind=? AND id=?',
+                          (encode(dict(id='b', task='wanted', state='released')), 'leases', 'b'))
+            tx.db.execute('UPDATE records SET value=? WHERE kind=? AND id=?',
+                          (encode(dict(id='c', task='other', state='released')), 'leases', 'c'))
+
+        self.app.stores['site'].execute(seed)
+        original = Records.rows
+
+        def no_full_scan(tx, kind):
+            if kind == 'leases':
+                self.fail('a task-scoped read scanned unrelated lease history')
+            return original(tx, kind)
+
+        with patch.object(Records, 'rows', no_full_scan):
+            self.assertEqual(['a', 'b'], [row['id'] for row in self.call('cap.leases', task='wanted')])
+            self.assertEqual(['c'], [row['id'] for row in self.call('cap.leases', task='other')])
+            self.assertEqual([], self.call('cap.leases', task='absent'))
+        self.assertEqual(['a', 'b', 'c'], [row['id'] for row in self.call('cap.leases')])
 
     def test_fence_timeout_abandons_queued_action_and_promotes_without_caller(self):
         self.offer('persistent')
