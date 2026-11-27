@@ -381,6 +381,51 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             await connection
         self.assertEqual(processed, ["first"])
 
+    async def test_expired_waiter_does_not_block_live_attachment_or_stop_running_effect(self):
+        started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        clock = [100.0]
+        processed, replies = [], {}
+
+        async def dispatch(message):
+            processed.append(message["id"])
+            if message["id"] == "running":
+                started.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def frame(message):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
+
+                yield frame({"type": "registered", "rpc_limit": 2, "rpc_timeout_s": 5})
+                yield frame({"type": "call", "id": "running"})
+                await started.wait()
+                yield frame({"type": "call", "id": "expired"})
+                clock[0] += 6
+                yield frame({"type": "call", "id": "live", "envelope": {"operation": "stream.attach"}})
+                release.set()
+                await done.wait()
+                self.closed = True
+
+            async def close(self):
+                self.closed = True
+
+            async def send_json(self, reply):
+                replies[reply["id"]] = reply
+                if {"running", "live"} <= replies.keys():
+                    done.set()
+
+        self.daemon.dispatch = dispatch
+        with patch("biomerte.service_daemon.time", types.SimpleNamespace(monotonic=lambda: clock[0])):
+            await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        self.assertEqual(processed, ["running", "live"])
+        self.assertEqual(replies["expired"]["status"], 503)
+        self.assertEqual(replies["running"]["status"], 200)
+        self.assertEqual(replies["live"]["status"], 200)
+
     async def test_lifecycle_request_is_admitted_during_registration_burst(self):
         started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
         processed = []
