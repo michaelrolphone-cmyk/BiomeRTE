@@ -179,10 +179,25 @@ void clearImu(bool present) {
     portEXIT_CRITICAL(&readingLock);
 }
 
+bool imuRespondsToReset() {
+    digitalWrite(pins::imuReset, LOW);
+    delay(10);
+    digitalWrite(pins::imuReset, HIGH);
+    // Avoid entering the SH-2 library's blocking request path with no device.
+    const uint32_t started = millis();
+    while (digitalRead(pins::imuInt) && millis() - started < 500) delay(5);
+    return digitalRead(pins::imuInt) == LOW;
+}
+
 void imuWorker(void*) {
+    pinMode(pins::imuInt, INPUT_PULLUP);
+    pinMode(pins::imuCs, OUTPUT);
+    digitalWrite(pins::imuCs, HIGH);
+    pinMode(pins::imuReset, OUTPUT);
+    digitalWrite(pins::imuReset, HIGH);
     imuSpi.begin(pins::imuSck, pins::imuMiso, pins::imuMosi, pins::imuCs);
     for (;;) {
-        const bool present = imu.begin_SPI(pins::imuCs, pins::imuInt, &imuSpi);
+        const bool present = imuRespondsToReset() && imu.begin_SPI(pins::imuCs, pins::imuInt, &imuSpi);
         clearImu(present);
         if (present && enableImuReports()) {
             int64_t lastReport = esp_timer_get_time();
@@ -199,6 +214,7 @@ void imuWorker(void*) {
                 delay(2);
             }
         }
+        if (present) sh2_close();
         clearImu(false);
         delay(2000);
     }
