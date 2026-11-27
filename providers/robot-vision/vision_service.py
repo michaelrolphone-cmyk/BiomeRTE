@@ -10,6 +10,7 @@ import fcntl
 import json
 import logging
 import os
+import selectors
 import signal
 import shutil
 import socket
@@ -1761,7 +1762,8 @@ def handler_for(service):
             try:
                 feed=(service.live_maps if self.path.endswith('/map') else
                       service.rear_live_frames if self.path.endswith('/rear') else service.live_frames)
-                with feed.subscribe() as inbox:
+                with feed.subscribe() as inbox, selectors.DefaultSelector() as peer:
+                    peer.register(self.connection, selectors.EVENT_READ)
                     self.send_response(200)
                     self.send_header("Content-Type", "application/octet-stream")
                     self.send_header("Cache-Control", "no-store")
@@ -1770,6 +1772,10 @@ def handler_for(service):
                         try:
                             value=inbox.get(timeout=1)
                         except __import__('queue').Empty:
+                            # Idle feeds may never write again. Retire clients
+                            # that disconnected while their queue was empty.
+                            if peer.select(timeout=0) and not self.connection.recv(1, socket.MSG_PEEK):
+                                return
                             continue
                         if not write_live_frame(self.connection, value, service._stop, feed.closed):
                             return
