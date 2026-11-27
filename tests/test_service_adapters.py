@@ -13,7 +13,7 @@ from biomerte import service_adapters as sa
 from tests.test_docker_services import (
     BOOT_EPOCH, GRANT_TOKEN, IMAGE, INCARNATION, WORKER_ID,
     Clock, FakeCoordinator, FakeDocker, InlineThread, JsonReply,
-    RecordingEngine, RunnerCase, manifest,
+    RecordingEngine, RunnerCase, fail_thread_start, manifest,
 )
 
 REAL_THREAD = threading.Thread
@@ -123,6 +123,30 @@ class StagedCase(RunnerCase):
 
 
 class PreparationTests(StagedCase):
+    def test_failed_staged_fence_thread_retries_before_activation(self):
+        self.step()
+        with fail_thread_start("_fence"), \
+                mock.patch.object(sa.AdapterClient, "call", side_effect=self.adapter), \
+                mock.patch.object(ds, "urlopen", side_effect=self.fence) as sink:
+            self.runner.accept(self.response(self.grant()), self.clock())
+        sink.assert_not_called()
+        self.assertEqual({}, self.runner.fence_jobs)
+        self.assertEqual({}, self.runner.fence_acks)
+        self.assertIsNone(self.runner.advertisements()[0]["healthy"])
+        self.step()
+        self.assertEqual(CHECKPOINT, self.runner.fence_acks[self.value["id"]]["checkpoint"])
+        self.step(self.grant(state="starting", effect_ready=True))
+        self.assertTrue(self.runner.advertisements()[0]["healthy"])
+
+    def test_failed_adapter_thread_remains_eligible_for_state_preparation(self):
+        with fail_thread_start("_adapter_job"):
+            self.runner.accept(self.response(self.grant()), self.clock())
+        self.assertEqual({}, self.runner.adapter_jobs)
+        self.assertFalse(self.runner.advertisements()[0]["state_ready"])
+        self.assertEqual([], self.engine.created)
+        self.step()
+        self.assertTrue(self.runner.advertisements()[0]["state_ready"])
+
     def test_state_proof_precedes_inert_child_and_normal_health_waits_activation(self):
         before = self.runner.advertisements()[0]
         self.assertFalse(before["state_ready"])
