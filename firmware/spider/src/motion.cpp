@@ -16,22 +16,26 @@ int8_t trims[8] = {};
 spider::MotionEngine motion;
 spider::Decoder decoder;
 uint32_t lastWrite;
+uint32_t lastSample;
+uint32_t boot;
+uint8_t targets[spider::jointCount];
 
 void writeServo(size_t channel) {
     const int angle = constrain(int(motion.angles()[channel]) + trims[channel], 1, 180);
+    targets[channel] = angle;
     servos[channel].writeMicroseconds(map(angle, 1, 180, pulseMinUs, pulseMaxUs));
 }
 
-void acknowledge(uint32_t sequence) {
+void send(const spider::Message& message) {
     uint8_t bytes[spider::maxWireSize];
-    const auto size = spider::encode(
-        {spider::Kind::Status, motion.action(), sequence, uint16_t(motion.state())}, bytes);
+    const auto size = spider::encode(message, bytes);
     if (Serial.availableForWrite() >= int(size)) Serial.write(bytes, size);
 }
 
 }  // namespace
 
 void setup() {
+    boot = RANDOM_REG32;
     WiFi.mode(WIFI_OFF);
     Serial.begin(spider::uartBaud);
     EEPROM.begin(512);  // Same offsets 0–7 as the factory sketch. Never commit here.
@@ -48,17 +52,26 @@ void setup() {
 }
 
 void loop() {
-    const uint32_t now = millis();
-    motion.tick(now);
     for (int count = 0; count < 64 && Serial.available(); ++count) {
         spider::Message command{};
         if (decoder.feed(Serial.read(), command) && motion.command(command, millis())) {
-            acknowledge(command.sequence);
+            send({spider::Kind::Status, motion.action(), command.sequence, uint16_t(motion.state())});
         }
     }
+    const uint32_t now = millis();
+    motion.tick(now);
     if (now - lastWrite >= updateMs) {
         lastWrite = now;
         for (size_t i = 0; i < sizeof(trims); ++i) writeServo(i);
+        if (now - lastSample >= spider::jointPeriodMs) {
+            lastSample = now;
+            spider::Message sample{spider::Kind::JointSample, motion.action(), now,
+                uint16_t(uint16_t(motion.keyframe()) << 8 | uint16_t(motion.state()))};
+            memcpy(sample.angles, targets, sizeof(targets));
+            sample.stance = motion.stance();
+            sample.boot = boot;
+            send(sample);
+        }
     }
     yield();
 }

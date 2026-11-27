@@ -35,6 +35,8 @@ public:
     const uint8_t* angles() const { return angles_; }
     State state() const { return state_; }
     Action action() const { return action_; }
+    uint8_t stance() const { return stance_; }
+    uint8_t keyframe() const { return active_.length ? frame_ : 255; }
 
     bool command(const Message& message, uint32_t now) {
         if (!isCommand(message)) return false;
@@ -52,6 +54,12 @@ public:
                 if (action_ != message.action || (state_ != State::Idle && state_ != State::Posing)) {
                     start(message.action, State::Posing, now);
                 }
+                break;
+            case Kind::JointPose:
+                memcpy(custom_.angles, message.angles, jointCount);
+                custom_.durationMs = message.value;
+                start(Action::Custom, State::Posing, now);
+                stance_ = message.stance;
                 break;
             case Kind::Stop:
                 stop(now);
@@ -99,7 +107,8 @@ private:
     void start(Action action, State state, uint32_t now) {
         action_ = action;
         state_ = state;
-        active_ = programFor(action);
+        active_ = action == Action::Custom ? Program{&custom_, 1} : programFor(action);
+        stance_ = inferStance;
         frame_ = 0;
         beginFrame(now);
     }
@@ -110,6 +119,8 @@ private:
         }
     }
 
+    Keyframe custom_{};
+    uint8_t stance_ = inferStance;
     uint8_t angles_[8] = {};
     uint8_t origin_[8] = {};
     Program active_{nullptr, 0};

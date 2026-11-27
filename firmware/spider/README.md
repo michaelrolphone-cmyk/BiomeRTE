@@ -92,3 +92,37 @@ c++ -std=c++11 -Wall -Wextra -Werror -pedantic -I src tests/protocol_motion.cpp 
 Before ground operation, support the chassis and verify the pinout and trim. With the Rover socket connected, check for complete JPEGs and valid, current ToF/IMU readings. Send a stand, walk renewal and stop over the sensor lane. Confirm that UART acknowledgement tracks the commands. Disconnect Wi-Fi and UART in separate trials during a supported walk and verify the return to stand.
 
 For an isolated bench socket, install `websockets>=14` in the host's Python environment, set `SPIDER_ROVER_SENSOR_TOKEN` and run `python tests/rover_peer.py`. Point the camera at that host and port. The peer prints live JPEG, ToF, BNO085 and UART observations. With the chassis supported, set `SPIDER_ROVER_CONTROL_SECRET` and add `--action stand` to send one signed pose and check its UART acknowledgement. A walking action sends a single 400 ms lease.
+
+## Joint tracking and servo-only odometry
+
+The ESP8266 samples all eight **trimmed PWM targets** at 50 Hz and sends them with the actuator boot ID, uptime, motion state, and current keyframe. The S3 integrates these samples locally and publishes the latest state on the 20 Hz sensor lane under `spider_motion`. The stock servos do not expose their measured joint angle or load.
+
+| Field | Meaning |
+| --- | --- |
+| `joints` | Eight transmitted targets in factory GPIO order, actuator uptime and boot, camera receipt time, and motion keyframe. Keyframe 255 means idle. |
+| `legs_body_mm` | Hip, lift joint, and foot coordinates for each leg. The body frame starts at the chassis center with X forward, Y left, and Z up. |
+| `servo_odometry` | Pose `x_mm`, `y_mm`, and `heading_rad` relative to the origin, integrated path length, straight-line displacement, assumed support masks, fit residual and continuity. Heading is positive counterclockwise from above. |
+
+Copy `include/leg_calibration.example.h` to `include/leg_calibration.h` and enter the geometry of the assembled chassis before building the camera. Use the center of the chassis as the origin and mark which end is forward. For each leg, measure the hip pivot and both shaft-axis directions in the body frame. At the chosen reference PWM targets, measure the vector from the hip pivot to the lift shaft, then from that shaft to the rubber contact point. Record the reference **trimmed** targets and the sign of each servo rotation about its axis. Use a unit vector for each axis. A calibration revision identifies that linkage setup. The firmware sends raw targets before these measurements and withholds metric coordinates until the calibration is valid.
+
+The estimator aligns the same two or more presumed planted feet between samples. It uses the lowest modeled feet as candidates unless a custom pose or optional calibrated factory phase supplies the stance mask. To define factory masks, use six rows in forward, backward, shift-left, shift-right, turn-left, turn-right order. Each row has eleven entries, one per target keyframe. The entry describes support during the transition **to** that keyframe. Use 255 for the height-based default and mask bits 1, 2, 4, and 8 for front right, rear right, front left, and rear left. The last three columns of each turn row are unused.
+
+Too few shared feet, inconsistent fitted foot positions, gaps, and actuator reboots break continuity. Subsequent valid samples can resume accumulation, with `continuous_from_origin` remaining false until reset. The residual tests consistency among feet. It cannot detect feet that slide together, servo stalls, or actual ground contact. This is planar dead reckoning using commanded geometry. Confirm the geometry against foot marks with the robot supported, then compare repeated straight runs, side steps, in-place turns, and return-to-origin paths on the intended floor before relying on accumulated distance. The latest valid increment is also available in the preceding body frame under `latest_body_delta`. The Rover sensor lane can skip intermediate actuator samples, so use the cumulative pose, origin epoch and rejection count for interval comparison. Camera, LiDAR, and IMU readings remain available for a future correction layer.
+
+Send the signed command `mode=origin, action=zero` to reset the odometry reference without actuating the servos. The bench peer accepts `--action zero_origin`. This is distinct from `mode=pose, action=zero`, which moves the legs to the assembly-calibration pose.
+
+## Authoring poses
+
+Add named poses to a JSON file like [poses.example.json](tests/poses.example.json). The eight angles are in factory GPIO order. Each command interpolates to the target in 400–5,000 ms and holds the completed position. The ESP8266 checks each axis against the existing factory gait and pose envelope. A pose can declare which feet are expected to support the body during the move and final hold. Omit `stance_mask` or use 0 when support is unknown. A manipulation routine can send successive poses to approach, reach and retract without adding firmware actions.
+
+```sh
+python tests/rover_peer.py --pose-file tests/poses.example.json --pose low_stance
+python tests/rover_peer.py --action zero_origin
+```
+
+For a custom target set `mode=joint_pose` and `action=custom` on the sensor socket. Include `duration_ms`, `stance_mask`, and `angles_deg`. Append those same values to the signed message as three additional LF-separated lines in that order. Sign the duration and mask as decimal integers and the angles as eight comma-separated decimal integers with no spaces or trailing LF. New authored poses can be used without reflashing either board. Flash both updated targets once to enable the new joint reports and custom pose commands.
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -pedantic -I src tests/leg_odometry.cpp -o /tmp/spider-odometry-test
+/tmp/spider-odometry-test
+```

@@ -21,20 +21,45 @@ from sensor_push import ClockAlignment
 
 WALKS = ("forward", "backward", "shift_left", "shift_right", "turn_left", "turn_right")
 POSES = ("stand", "lie", "sleep", "zero")
+JOINT_MIN = (30, 39, 45, 45, 45, 45, 45, 30)
+JOINT_MAX = (135, 135, 141, 150, 150, 135, 135, 135)
 
 
-def signed_command(packet, action, secret):
+def load_pose(path, name):
+    pose = json.loads(path.read_text())[name]
+    angles = pose["angles_deg"]
+    duration = pose["duration_ms"]
+    stance = pose.get("stance_mask", 0)
+    if (not isinstance(angles, list) or len(angles) != 8 or
+            any(type(a) is not int or not lo <= a <= hi
+                for a, lo, hi in zip(angles, JOINT_MIN, JOINT_MAX)) or
+            type(duration) is not int or not 400 <= duration <= 5000 or
+            type(stance) is not int or not 0 <= stance <= 15):
+        raise ValueError("pose outside firmware limits")
+    return {"angles_deg": angles, "duration_ms": duration, "stance_mask": stance}
+
+
+def signed_command(packet, action, secret, pose=None):
     motion = packet["spider_motion"]
     sequence = motion["last_accepted_sequence"] + 1
     issued = packet["capture_monotonic_us"]
-    mode = "walk" if action in WALKS else "stop" if action == "stop" else "pose"
-    name = "none" if mode == "stop" else action
+    if pose:
+        mode, name = "joint_pose", "custom"
+    elif action == "zero_origin":
+        mode, name = "origin", "zero"
+    elif action == "stop":
+        mode, name = "stop", "none"
+    else:
+        mode, name = ("walk" if action in WALKS else "pose"), action
     fields = ("spider_command.v1", motion["session"], packet["receiver_id"],
               sequence, mode, name, issued, issued + 400000)
-    signature = hmac.new(secret, "\n".join(map(str, fields)).encode(), hashlib.sha256).hexdigest()
-    return dict(zip(("type", "session", "receiver_id", "sequence", "mode", "action",
-                     "issued_monotonic_us", "expires_monotonic_us", "signature"),
-                    (*fields, signature)))
+    canonical = fields
+    if pose:
+        canonical += (pose["duration_ms"], pose["stance_mask"], ",".join(map(str, pose["angles_deg"])))
+    signature = hmac.new(secret, "\n".join(map(str, canonical)).encode(), hashlib.sha256).hexdigest()
+    return {**dict(zip(("type", "session", "receiver_id", "sequence", "mode", "action",
+                       "issued_monotonic_us", "expires_monotonic_us", "signature"),
+                      (*fields, signature))), **(pose or {})}
 
 
 async def run(args, token, secret):
@@ -103,15 +128,22 @@ async def run(args, token, secret):
                     last_report = now
                     grids = sum(row["valid"] for row in packet["lidar"]["sensors"])
                     imu = packet["bno085"]["game_rotation_wxyz"]["valid"]
-                    print(f"ToF grids {grids}, BNO085 rotation {imu}, UART {motion['uart_ready']}",
-                          flush=True)
+                    odom = motion.get("servo_odometry", {})
+                    print(f"ToF grids {grids}, BNO085 rotation {imu}, UART {motion['uart_ready']}, "
+                          f"odometry {odom.get('status', 'unavailable')}", flush=True)
                 if sent_sequence is not None and motion["last_acknowledged_sequence"] == sent_sequence:
                     print(f"ESP8266 acknowledged sequence {sent_sequence}, action {motion['action']}",
                           flush=True)
                     sent_sequence = None
-                if (args.action and not action_sent and motion["enabled"] and motion["uart_ready"]
+                if sent_sequence is not None and motion.get("last_origin_sequence") == sent_sequence:
+                    print(f"Odometry origin reset for sequence {sent_sequence}", flush=True)
+                    sent_sequence = None
+                pose = getattr(args, "pose", None)
+                ready = ((args.action == "zero_origin" or motion["uart_ready"]) and
+                         (not pose or motion.get("joint_pose_available")))
+                if ((args.action or pose) and not action_sent and motion["enabled"] and ready
                         and now - interval[0] < 0.15):
-                    command = signed_command(packet, args.action, secret)
+                    command = signed_command(packet, args.action, secret, pose)
                     action_sent = True
                     sent_sequence = command["sequence"]
                     await socket.send(json.dumps(command))
@@ -130,12 +162,22 @@ def main():
     parser.add_argument("--listen", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9877)
     parser.add_argument("--receiver", default="spider-camera")
-    parser.add_argument("--action", choices=(*WALKS, *POSES, "stop"),
-                        help="Send one command. Use with the chassis supported.")
+    commands = parser.add_mutually_exclusive_group()
+    commands.add_argument("--action", choices=(*WALKS, *POSES, "stop", "zero_origin"),
+                          help="Send one command. Use with the chassis supported.")
+    commands.add_argument("--pose", metavar="NAME", help="Send one named pose from --pose-file.")
+    parser.add_argument("--pose-file", type=Path)
     args = parser.parse_args()
+    if args.pose:
+        if not args.pose_file:
+            parser.error("--pose requires --pose-file")
+        try:
+            args.pose = load_pose(args.pose_file, args.pose)
+        except (OSError, KeyError, ValueError, TypeError) as error:
+            parser.error(f"Invalid pose file: {error}")
     token = os.environ.get("SPIDER_ROVER_SENSOR_TOKEN", "")
     secret = os.environ.get("SPIDER_ROVER_CONTROL_SECRET", "").encode()
-    if len(token) < 32 or (args.action and len(secret) < 32):
+    if len(token) < 32 or ((args.action or args.pose) and len(secret) < 32):
         parser.error("Set SPIDER_ROVER_SENSOR_TOKEN and, for motion, SPIDER_ROVER_CONTROL_SECRET")
     try:
         asyncio.run(run(args, token, secret))

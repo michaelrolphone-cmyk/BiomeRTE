@@ -9,6 +9,11 @@
 
 #include "camera_config.h"
 #include "control.h"
+#if __has_include("leg_calibration.h")
+#include "leg_calibration.h"
+#else
+#include "leg_calibration.example.h"
+#endif
 #include "sensors.h"
 
 namespace {
@@ -31,6 +36,7 @@ static_assert(sizeof(receiverId) > 1 && sizeof(receiverId) <= 65,
 
 HardwareSerial motionSerial(1);
 Decoder decoder;
+LegTracker legTracker(legCalibration);
 char bootId[17];
 char authHeader[256];
 
@@ -44,6 +50,11 @@ struct SharedControl {
     State state = State::Idle;
     Action action = Action::None;
     bool socketConnected = false;
+    uint32_t originRequest = 0;
+    uint32_t lastOrigin = 0;
+    int64_t jointsUs = 0;
+    Message joints{};
+    Odometry odometry{};
 };
 
 SharedControl motion;
@@ -72,6 +83,98 @@ bool constantTimeHexMatch(const char* signature, const uint8_t* digest, size_t s
         diff |= signature[2 * i + 1] ^ hex[digest[i] & 15];
     }
     return diff == 0;
+}
+
+const char* trackingName(Tracking tracking) {
+    switch (tracking) {
+        case Tracking::Reference: return "origin";
+        case Tracking::Estimated: return "estimated";
+        case Tracking::Gap: return "sample_gap";
+        case Tracking::NoSupport: return "insufficient_support";
+        case Tracking::Inconsistent: return "inconsistent_support";
+        default: return "uncalibrated";
+    }
+}
+
+void appendPoint(JsonObject leg, const char* key, Vec3 position) {
+    auto row = leg[key].to<JsonArray>();
+    row.add(position.x);
+    row.add(position.y);
+    row.add(position.z);
+}
+
+void appendJointTracking(JsonObject status, const SharedControl& state, int64_t tick) {
+    const bool available = state.jointsUs > 0 && state.jointsUs <= tick;
+    const bool fresh = available && tick - state.jointsUs <= 100000;
+    status["joint_pose_available"] = fresh;
+    status["last_origin_sequence"] = state.lastOrigin;
+    auto joints = status["joints"].to<JsonObject>();
+    joints["fresh"] = fresh;
+    joints["position_source"] = "trimmed_pwm_target";
+    if (available) {
+        joints["actuator_boot"] = state.joints.boot;
+        joints["actuator_uptime_ms"] = state.joints.sequence;
+        joints["received_monotonic_us"] = state.jointsUs;
+        joints["keyframe"] = state.joints.value >> 8;
+        joints["state"] = state.joints.value & 255;
+        joints["action"] = actionName(state.joints.action);
+        auto targets = joints["targets_deg"].to<JsonArray>();
+        for (auto angle : state.joints.angles) targets.add(angle);
+    }
+    const auto& result = state.odometry;
+    auto odom = status["servo_odometry"].to<JsonObject>();
+    odom["source"] = "servo_targets_assumed_stance";
+    const bool calibrationValid = legTracker.calibrated();
+    odom["calibration_valid"] = calibrationValid;
+    if (!calibrationValid) odom["status"] = "uncalibrated";
+    else if (!available || result.tracking == Tracking::Uncalibrated) odom["status"] = "waiting_for_sample";
+    else odom["status"] = fresh ? trackingName(result.tracking) : "stale";
+    odom["origin_epoch"] = result.epoch;
+    odom["continuous_from_origin"] = fresh && result.continuous;
+    if (!available || result.tracking == Tracking::Uncalibrated) return;
+    odom["calibration_revision"] = legCalibration.revision;
+    const char* supportSource = "foot_height";
+    if (result.supportSource == SupportSource::FactoryPhase) supportSource = "factory_phase";
+    if (result.supportSource == SupportSource::CustomPose) supportSource = "authored";
+    odom["support_source"] = supportSource;
+    odom["assumed_support_mask"] = result.support;
+    odom["shared_support_mask"] = result.sharedSupport;
+    odom["rejected_steps"] = result.rejected;
+    if (result.tracking == Tracking::Estimated || result.tracking == Tracking::Inconsistent) {
+        odom["fit_residual_mm"] = result.residualMm;
+    }
+    if (fresh && result.tracking == Tracking::Estimated) {
+        auto delta = odom["latest_body_delta"].to<JsonObject>();
+        delta["x_mm"] = result.stepXMm;
+        delta["y_mm"] = result.stepYMm;
+        delta["yaw_rad"] = result.stepYawRad;
+    }
+    odom["x_mm"] = result.xMm;
+    odom["y_mm"] = result.yMm;
+    odom["heading_rad"] = result.yawRad;
+    odom["displacement_mm"] = hypotf(result.xMm, result.yMm);
+    odom["integrated_travel_mm"] = result.travelMm;
+    auto legs = status["legs_body_mm"].to<JsonObject>();
+    constexpr const char* names[] = {"front_right", "rear_right", "front_left", "rear_left"};
+    for (size_t i = 0; i < legCount; ++i) {
+        auto leg = legs[names[i]].to<JsonObject>();
+        appendPoint(leg, "hip", result.legs[i].hip);
+        appendPoint(leg, "lift_joint", result.legs[i].lift);
+        appendPoint(leg, "foot", result.legs[i].foot);
+    }
+}
+
+bool readCustomPose(const JsonDocument& request, Message& pose) {
+    const auto angles = request["angles_deg"].as<JsonArrayConst>();
+    if (angles.size() != jointCount ||
+        !request["duration_ms"].is<uint16_t>() || !request["stance_mask"].is<uint8_t>()) return false;
+    pose = {Kind::JointPose, Action::Custom, 0, request["duration_ms"].as<uint16_t>()};
+    pose.stance = request["stance_mask"].as<uint8_t>();
+    for (size_t i = 0; i < jointCount; ++i) {
+        if (!angles[i].is<uint8_t>()) return false;
+        pose.angles[i] = angles[i].as<uint8_t>();
+    }
+    return validJointPose(pose);
 }
 
 class RoverSocket {
@@ -180,6 +283,7 @@ private:
         status["last_acknowledged_sequence"] = state.lastAcknowledged;
         status["state"] = unsigned(state.state);
         status["action"] = actionName(state.action);
+        appendJointTracking(status, state, tick);
     }
 
     void routeCommand(JsonDocument& request, int64_t now) {
@@ -195,26 +299,42 @@ private:
         if (!strcmp(mode, "walk")) kind = Kind::Walk;
         else if (!strcmp(mode, "pose")) kind = Kind::Pose;
         else if (!strcmp(mode, "stop") && !strcmp(name, "none")) kind = Kind::Stop;
+        else if (!strcmp(mode, "joint_pose") && !strcmp(name, "custom")) kind = Kind::JointPose;
+        else if (!strcmp(mode, "origin") && !strcmp(name, "zero")) kind = Kind::Origin;
         else return;
         const Action action = parseAction(name);
         if (kind != Kind::Stop && action == Action::None) return;
-        const Intent intent{kind, action, request["sequence"].as<uint32_t>(),
+        Intent intent{kind, action, request["sequence"].as<uint32_t>(),
                             request["issued_monotonic_us"].as<int64_t>(),
                             request["expires_monotonic_us"].as<int64_t>()};
+        if (kind == Kind::JointPose && !readCustomPose(request, intent.pose)) return;
         char message[256];
-        const int size = snprintf(message, sizeof(message), "spider_command.v1\n%s\n%s\n%lu\n%s\n%s\n%lld\n%lld",
+        int size = snprintf(message, sizeof(message), "spider_command.v1\n%s\n%s\n%lu\n%s\n%s\n%lld\n%lld",
             session_, receiverId, (unsigned long)intent.sequence, mode, name,
             (long long)intent.issuedUs, (long long)intent.expiresUs);
+        if (size <= 0 || size >= int(sizeof(message))) return;
+        if (kind == Kind::JointPose) {
+            const auto& a = intent.pose.angles;
+            const int written = snprintf(message + size, sizeof(message) - size,
+                "\n%u\n%u\n%u,%u,%u,%u,%u,%u,%u,%u", unsigned(intent.pose.value), unsigned(intent.pose.stance),
+                unsigned(a[0]), unsigned(a[1]), unsigned(a[2]), unsigned(a[3]), unsigned(a[4]),
+                unsigned(a[5]), unsigned(a[6]), unsigned(a[7]));
+            if (written <= 0 || written >= int(sizeof(message)) - size) return;
+            size += written;
+        }
         uint8_t digest[32];
-        if (size <= 0 || size >= int(sizeof(message)) ||
-            mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+        if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                            reinterpret_cast<const uint8_t*>(controlKey), sizeof(controlKey) - 1,
                            reinterpret_cast<const uint8_t*>(message), size, digest) != 0 ||
             !constantTimeHexMatch(request["signature"] | "", digest, sizeof(digest)) ||
             !gate_.accept(intent, now)) return;
         portENTER_CRITICAL(&motionLock);
-        motion.intent = intent;
-        ++motion.update;
+        if (kind == Kind::Origin) {
+            motion.originRequest = intent.sequence;
+        } else {
+            motion.intent = intent;
+            ++motion.update;
+        }
         portEXIT_CRITICAL(&motionLock);
         acceptedSequence_ = intent.sequence;
     }
@@ -235,6 +355,7 @@ private:
                 ++motion.update;
                 motion.intent = {};
                 motion.lastForwarded = motion.lastAcknowledged = 0;
+                motion.originRequest = motion.lastOrigin = 0;
                 motion.socketConnected = connected_;
                 portEXIT_CRITICAL(&motionLock);
             }
@@ -354,10 +475,11 @@ uint32_t uartSequence = 0;
 int64_t lastUartSendUs = 0;
 SentCommand sent[8] = {};
 
-bool sendUart(Kind kind, Action action, uint16_t value, uint32_t sequence, uint32_t generation) {
+bool sendUart(Message message, uint32_t sequence, uint32_t generation) {
     const uint32_t next = uartSequence + 1;
+    message.sequence = next;
     uint8_t bytes[maxWireSize];
-    const size_t length = encode({kind, action, next, value}, bytes);
+    const size_t length = encode(message, bytes);
     if (motionSerial.availableForWrite() < int(length)) return false;
     if (motionSerial.write(bytes, length) != length) return false;
     uartSequence = next;
@@ -371,11 +493,31 @@ bool sendUart(Kind kind, Action action, uint16_t value, uint32_t sequence, uint3
     return true;
 }
 
+void observeJoints(const Message& sample) {
+    if (sample.action > Action::Custom || (sample.value & 255) > uint16_t(State::Returning) ||
+        (sample.stance != inferStance && sample.stance > 15)) return;
+    for (auto angle : sample.angles) {
+        if (angle < 1 || angle > 180) return;
+    }
+    const int64_t now = esp_timer_get_time();
+    legTracker.sample(sample, now);
+    portENTER_CRITICAL(&motionLock);
+    motion.jointsUs = now;
+    motion.joints = sample;
+    motion.odometry = legTracker.state();
+    portEXIT_CRITICAL(&motionLock);
+}
+
 void readUart() {
     for (int count = 0; count < 96 && motionSerial.available(); ++count) {
         Message reply{};
-        if (!decoder.feed(motionSerial.read(), reply) || reply.kind != Kind::Status ||
-            reply.value > uint16_t(State::Returning) || reply.action > Action::Zero) continue;
+        if (!decoder.feed(motionSerial.read(), reply)) continue;
+        if (reply.kind == Kind::JointSample) {
+            observeJoints(reply);
+            continue;
+        }
+        if (reply.kind != Kind::Status || reply.value > uint16_t(State::Returning) ||
+            reply.action > Action::Custom) continue;
         const auto& command = sent[reply.sequence % 8];
         if (!reply.sequence || command.uartSequence != reply.sequence) continue;
         portENTER_CRITICAL(&motionLock);
@@ -396,6 +538,15 @@ void driveUart() {
     static Intent desired{};
     static bool poseActive = false;
     static bool stopPending = false;
+    portENTER_CRITICAL(&motionLock);
+    const uint32_t reset = motion.originRequest;
+    if (reset) {
+        motion.originRequest = 0;
+        legTracker.zero();
+        motion.odometry = legTracker.state();
+        motion.lastOrigin = reset;
+    }
+    portEXIT_CRITICAL(&motionLock);
     readUart();
     const int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&motionLock);
@@ -424,7 +575,7 @@ void driveUart() {
     }
     if (stopPending || desired.kind == Kind::Stop) {
         const uint32_t sequence = desired.kind == Kind::Stop ? desired.sequence : 0;
-        if (sendUart(Kind::Stop, Action::None, 0, sequence, state.generation)) {
+        if (sendUart({Kind::Stop, Action::None}, sequence, state.generation)) {
             stopPending = false;
             if (sequence) desired = {};
         }
@@ -435,20 +586,23 @@ void driveUart() {
         desired = {};
         poseActive = false;
     }
-    if (desired.kind == Kind::Pose && !poseActive) {
-        if (!uartReady || desired.expiresUs <= now) {
+    const bool jointPose = desired.kind == Kind::JointPose;
+    const bool jointsFresh = state.jointsUs && now - state.jointsUs <= 100000;
+    if ((desired.kind == Kind::Pose || jointPose) && !poseActive) {
+        if (!uartReady || (jointPose && !jointsFresh) || desired.expiresUs <= now) {
             desired = {};
         } else {
-            poseActive = sendUart(Kind::Pose, desired.action, 0, desired.sequence, state.generation);
+            const Message command = jointPose ? desired.pose : Message{Kind::Pose, desired.action};
+            poseActive = sendUart(command, desired.sequence, state.generation);
         }
     }
     if (desired.kind == Kind::Walk) {
         if (now - lastUartSendUs >= uartRefreshUs || state.lastForwarded != desired.sequence) {
             const uint16_t remaining = (desired.expiresUs - now) / 1000;
-            sendUart(Kind::Walk, desired.action, remaining, desired.sequence, state.generation);
+            sendUart({Kind::Walk, desired.action, 0, remaining}, desired.sequence, state.generation);
         }
     } else if (now - lastUartSendUs >= uartRefreshUs) {
-        sendUart(Kind::Probe, Action::None, 0, 0, state.generation);
+        sendUart({Kind::Probe, Action::None}, 0, state.generation);
     }
 }
 
