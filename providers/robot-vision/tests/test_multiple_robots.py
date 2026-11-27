@@ -157,6 +157,52 @@ class MultipleRobotTest(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_spider_rearward_grid_maps_without_a_rear_camera(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "spider"
+            config = make_spider(state)
+            config["calibration"] = calibration("opposed-grids-fixture")
+            service = VisionService(config, state, camera=FakeCamera(),
+                                    detector=FakeDetector(), backend_factory=BackendFactory())
+            try:
+                lidar = service.lidar
+                front = {**defaults()["lidar"]["front"], "validated": True,
+                         "T_front_camera_sensor_m": np.eye(4).tolist()}
+                rear_matrix = np.diag([-1., 1., -1., 1.])
+                rear = {**front, "projection_camera_id": None,
+                        "T_front_camera_sensor_m": rear_matrix.tolist()}
+                rig = {"schema": "rover.sensor-rig/1", "robot_id": "spider", "revision": 2,
+                       "lidar": {"spider-tof-0": front, "spider-tof-1": rear}}
+                lidar.configure(rig)
+                t = 1000000
+                row = packet(t, 1)
+                row["lidar"] = {"sensors": [sample_grid(name, t, 1300) for name in rig["lidar"]]}
+                now = time.monotonic()
+                interval = [now, now]
+                image = {"sensor_packet": row, "capture_monotonic_us": t}
+                lidar.enqueue(row, interval)
+                result = lidar.for_camera(image, "front", service.calibration)
+                self.assertEqual(result["sensor_id"], "spider-tof-0")
+                self.assertIsNone(lidar.for_camera(image, "rear", service.calibration))
+                lidar.process(row, interval, service.map_id)
+                mapped = lidar.latest["sensors"]
+                self.assertEqual([scan["sensor_id"] for scan in mapped], list(rig["lidar"]))
+                for scan, sign in zip(mapped, (1, -1)):
+                    optical = scan["points"][0]["xyz_sensor_m"]
+                    front_axes = np.asarray(scan["mount"]["T_front_camera_sensor_m"]) @ [*optical, 1.]
+                    self.assertGreater(sign * front_axes[2], 0.)
+
+                # An independently calibrated rear camera can use the rear
+                # depth grid without changing either grid's acquisition peer.
+                rear["projection_camera_id"] = "rear"
+                lidar.configure(rig)
+                lidar.enqueue(row, interval)
+                depth = lidar.for_camera(image, "rear", service.calibration, rear_matrix)
+                self.assertEqual(depth["sensor_id"], "spider-tof-1")
+                self.assertGreater(depth["depth"].max(), 0.)
+            finally:
+                service.close()
+
 
 class MotionRouteTest(unittest.IsolatedAsyncioTestCase):
     async def test_signed_motion_uses_the_bound_spawned_socket(self):

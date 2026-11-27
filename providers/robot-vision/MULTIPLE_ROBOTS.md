@@ -61,14 +61,21 @@ to qualify servo-based foot positions and displacement.
    `robot.vision.rig.configure:1` or write `STATE/sensor-rig.json` with schema
    `rover.sensor-rig/1`, the instance's `robot_id`, a positive `revision`, and
    a `lidar` dictionary keyed by `spider-tof-0` and `spider-tof-1`. For each
-   measured mount, set its `camera_id` (normally `front`), `validated`,
-   `T_front_camera_sensor_m`, horizontal and vertical field of view,
+   measured mount, set its `camera_id` to `front`, since both sensors report
+   through the same ESP32-S3. Set `projection_camera_id` to `front` for the
+   forward-facing grid and to `null` for the rearward grid with the
+   single-camera configuration. The rearward grid still contributes to the
+   LiDAR map when it has a qualified pose. If a rear camera is added and
+   calibrated, set `projection_camera_id` to `rear` for the rearward grid.
+   Set `validated`, `T_front_camera_sensor_m`, horizontal and vertical field of view,
    `flip_x`, `flip_y`, `valid_statuses` and `distance_semantics`. Each
    transform maps the sensor's right/down/forward optical axes into the front
    camera's optical axes. For body-frame LiDAR poses, also supply the measured
    `camera.T_robot_camera` in the body model. Raw grids remain visible before
-   calibration. Once calibrated, both sensors can provide timestamp-matched
-   depth to the same visual tracker.
+   calibration. The body model assigns `spider-tof-0` to forward and
+   `spider-tof-1` to rearward. Check the multiplexer wiring against those IDs
+   when calibrating. Each grid can supply depth to its matching optical view
+   and contribute points behind or ahead of the robot to the same map.
 
 ## Send a walk or pose
 

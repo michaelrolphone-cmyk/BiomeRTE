@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile": "lafvin-spider",
   "model_id": "lafvin-b0h699465l-quadruped",
-  "revision": 1,
+  "revision": 2,
   "qualification_status": "documented_topology_nominal_geometry_mounts_unmeasured",
   "coordinate_frame": {
     "name": "robot_body",
@@ -51,6 +51,22 @@
   "floor_contact": {"always_on_floor": false, "caller_confirmation_required": true},
   "camera": {"T_robot_camera": null, "mounting_qualification": "add_on_mount_unmeasured"},
   "sensor_ids": {"camera_roles": ["front"], "lidar": ["spider-tof-0", "spider-tof-1"], "imu": ["bno085"]},
+  "lidar_mounts": {
+    "spider-tof-0": {
+      "direction": "forward",
+      "nominal_axis_body": [1, 0, 0],
+      "ingress_camera_id": "front",
+      "projection_camera_id": "front",
+      "T_robot_sensor": null
+    },
+    "spider-tof-1": {
+      "direction": "rearward",
+      "nominal_axis_body": [-1, 0, 0],
+      "ingress_camera_id": "front",
+      "projection_camera_id": null,
+      "T_robot_sensor": null
+    }
+  },
   "control": {
     "actuation": "uart_position_servos",
     "transport": "spider_command.v1",

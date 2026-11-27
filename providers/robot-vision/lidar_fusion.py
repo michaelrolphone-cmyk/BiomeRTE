@@ -37,6 +37,8 @@ def validate_config(value, robot_id=None):
             raise ValueError("invalid_lidar_mount")
         if robot_id is not None and (row.get("camera_id") not in ("front", "rear") or row.get("validated") is not True):
             raise ValueError("calibrated_lidar_mount_required")
+        if "projection_camera_id" in row and row["projection_camera_id"] not in (None, "front", "rear"):
+            raise ValueError("invalid_lidar_projection_camera")
         rigid_transform(row["T_front_camera_sensor_m"])
         for key in ("fov_horizontal_deg","fov_vertical_deg"):
             if type(row.get(key)) not in (int,float) or not 0<row[key]<180:raise ValueError(key)
@@ -173,7 +175,7 @@ class LidarFusion:
         with self.lock:
             config = self.config
             sensors = [sensor for sensor, mount in sorted(config["lidar"].items())
-                       if mount.get("camera_id", sensor) == name]
+                       if mount.get("projection_camera_id", mount.get("camera_id", sensor)) == name]
         observations = []
         for index, sensor in enumerate(sensors):
             result = self._for_sensor(frame, sensor, name, cal, camera_mount)
