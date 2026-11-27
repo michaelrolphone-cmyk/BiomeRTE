@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "profile": "lafvin-spider",
+  "model_id": "lafvin-b0h699465l-quadruped",
+  "revision": 1,
+  "qualification_status": "documented_topology_nominal_geometry_mounts_unmeasured",
+  "coordinate_frame": {
+    "name": "robot_body",
+    "axes": ["forward", "left", "up"],
+    "origin": "chassis_center",
+    "units": "m"
+  },
+  "geometry": {
+    "catalog_envelope_m": [0.170, 0.160, 0.090],
+    "catalog_envelope_qualification": "listing_dimensions_pose_and_axis_assignment_unspecified",
+    "drawing_estimates": {
+      "qualification": "nominal_projection_scaled_from_vendor_render_for_visualization_only",
+      "body_plate_length_m": 0.112,
+      "body_plate_width_m": 0.083,
+      "hip_spacing_fore_aft_m": 0.085,
+      "hip_spacing_lateral_m": 0.071,
+      "hip_to_lift_lateral_projection_m": 0.032,
+      "lift_to_foot_lateral_projection_m": 0.038,
+      "body_reference_pixels": {
+        "servo_mount_tab_envelope": 240,
+        "hip_spacing_x": 522,
+        "hip_spacing_y": 629,
+        "plate_width": 613,
+        "plate_length": 827
+      },
+      "side_reference_pixels": {
+        "servo_case_length": 129,
+        "hip_to_lift_horizontal": 180,
+        "lift_to_foot_horizontal": 215
+      }
+    },
+    "leg_count": 4,
+    "servos_per_leg": 2,
+    "servo_model": "MG90S",
+    "nominal_servo_case_m": [0.0228, 0.0122, 0.0285],
+    "nominal_servo_flange_span_m": 0.0325,
+    "body_standoff_length_m": 0.025,
+    "leg_joints": {
+      "front_right": {"swing_gpio": 12, "lift_gpio": 14},
+      "rear_right": {"swing_gpio": 13, "lift_gpio": 15},
+      "front_left": {"swing_gpio": 5, "lift_gpio": 16},
+      "rear_left": {"swing_gpio": 4, "lift_gpio": 2}
+    },
+    "calibrated_kinematics": null
+  },
+  "floor_contact": {"always_on_floor": false, "caller_confirmation_required": true},
+  "camera": {"T_robot_camera": null, "mounting_qualification": "add_on_mount_unmeasured"},
+  "sensor_ids": {"camera_roles": ["front"], "lidar": ["spider-tof-0", "spider-tof-1"], "imu": ["bno085"]},
+  "control": {
+    "actuation": "uart_position_servos",
+    "transport": "spider_command.v1",
+    "contract": "robot.motion.command:1",
+    "modes": {
+      "walk": ["forward", "backward", "shift_left", "shift_right", "turn_left", "turn_right"],
+      "pose": ["stand", "lie", "sleep", "zero"],
+      "joint_pose": ["custom"],
+      "stop": ["none"],
+      "origin": ["zero"]
+    },
+    "joint_pose": {
+      "gpio_order": [14, 12, 13, 15, 16, 5, 4, 2],
+      "min_deg": [30, 39, 45, 45, 45, 45, 45, 30],
+      "max_deg": [135, 135, 141, 150, 150, 135, 135, 135],
+      "duration_ms": [400, 5000]
+    }
+  },
+  "sources": {
+    "assembly": "https://lafvin-quadruped-spider-robot.readthedocs.io/en/latest/AssemblyTutorial.html",
+    "assembly_revision": "724820c657a9176f916d16ad2cc902fe5d925903",
+    "orthographic_views": ["5.body.png", "19.触角3.png"],
+    "catalog": "https://device.report/asin/B0H699465L",
+    "servo_mechanics": "https://towerpro.com.tw/product/mg90s-3/",
+    "servo_reference_qualification": "manufacturer_nominal_for_type_exact_kit_supplier_unverified",
+    "firmware_contract": "https://github.com/michaelrolphone-cmyk/BiomeRTE/pull/262"
+  }
+}

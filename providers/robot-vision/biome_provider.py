@@ -43,8 +43,12 @@ def contract_definitions():
         ("robot.vision.rig.configure", {"configuration":field("obj",True)}, "Save and hot-reload rear-camera source, intrinsics and rigid mount without reflashing. Both views contribute to the existing shared map."),
         ("robot.camera.exposure.status", {}, "Read live camera auto-exposure, auto-gain and manual driver control values; first-DMA capture stamps are not calibrated photon exposure times."),
         ("robot.camera.exposure.set", {"auto_exposure":field("bool"),"auto_exposure_dsp":field("bool"),"auto_gain":field("bool"),"exposure_value":field("int"),"exposure_level":field("int"),"gain":field("int")}, "Partial camera exposure/gain update. Auto modes are Boolean; exposure_value 9..1200 sensor-driver units (not microseconds); exposure_level -2..2; gain 0..30. Settings are RAM-only. Inspect unknown outcomes before retry."),
-        ("robot.body.model", {}, "Metric body dimensions, wheelbase, track, camera/sonar/AHRS rigid mounts and always-on-floor invariant."),
-        ("robot.control.model", {}, "Relay motion map: 1 forward, 2 back, 3 left, 4 right. Binary on/off, no PWM; speed depends on continuous on-duration; curve not yet calibrated."),
+        ("robot.body.model", {}, "Geometry and calibrated sensor mounts for this robot resource, with qualification."),
+        ("robot.control.model", {}, "Control inputs and limits for this robot resource."),
+        ("robot.motion.status", {}, "Read the latest fresh spider motion and actuator acknowledgements."),
+        ("robot.motion.command", {"robot_id": field("str", True), "mode": field("str", True),
+            "action": field("str", True), "angles_deg": field("list"), "duration_ms": field("int"),
+            "stance_mask": field("int")}, "Queue a short-lived signed command for the named spider robot."),
         ("robot.sonar.snapshot", {}, "Latest four fused body-mounted sonar ranges in meters with per-reading age, validity, freshness, sensor poses and polling update rate."),
         ("robot.metric.status", {}, "Available metric geometry, sonar units and separately scoped native-map scale attachment and provenance."),
         ("robot.vision.snapshot", {"snapshot_id": field("str"), "include_frame": field("bool")},
@@ -157,7 +161,7 @@ CONTRACTS = {item["name"] + ":" + str(item["version"]): item for item in contrac
 
 
 MUTATING_CONTRACTS = frozenset({
-    "robot.video.import.write:1",
+    "robot.video.import.write:1", "robot.motion.command:1",
     "robot.vision.rig.configure:1",
     "robot.camera.exposure.set:1",
     "robot.map.create:1", "robot.map.open:1", "robot.map.checkpoint:1",
@@ -467,6 +471,11 @@ def offer(cfg, contract, state):
         usage[name] += " " + guidance
     usage.update(LEGACY_GUIDANCE.get(contract, {}))
     usage.update(CONTRACTS[contract].get("usage", {}))
+    if cfg.get("robot_id") not in (None, "rover"):
+        usage["before"] = ("Send this query to the resource for robot " + cfg["robot_id"] + ". "
+                           + usage["before"])
+        if contract == "robot.vision.project_ground:1":
+            usage["before"] = "Use confirmed_floor_contact only for a known floor pixel and a qualified current camera-to-floor pose."
     return dict(provider=cfg["provider"], contract=contract, resource=cfg["resource"],
                 service="robot-vision", capacity=cfg["slots"], state=state, usage=usage)
 
@@ -475,8 +484,11 @@ def supported_contracts(status):
     if not isinstance(capabilities, list):
         return set()
     names = {name for name in capabilities if isinstance(name, str)}
-    return {contract for contract, spec in CONTRACTS.items()
-            if contract in names or spec["name"] in names}
+    supported = {contract for contract, spec in CONTRACTS.items()
+                 if contract in names or spec["name"] in names}
+    if status.get("robot_id") not in (None, "rover"):
+        supported.discard("robot.vision.project_ground:2")
+    return supported
 
 
 def read_registrations(path, cfg):
@@ -554,10 +566,11 @@ def stream_offer(cfg, status):
     available = (status.get("state") not in ("stopping", "stopped") and
                  live.get("available") is True and
                  set(live.get("lanes", [])) >= {"vision", "map"})
+    identity = {key: cfg[key] for key in ("robot_id", "model") if key in cfg}
     return dict(provider=cfg["provider"], contract="robot.vision.stream:1",
                 resource=cfg["resource"], service="robot-vision", capacity=cfg["slots"],
                 state="ready" if available else "offline",
-                configuration={"lease_class": "persistent", "stream_only": True,
+                configuration={**identity, "lease_class": "persistent", "stream_only": True,
                     "stream": {"enabled": True, "direction": "provider_to_server",
                         "delivery": "supersedable", "lanes": ["vision", "map"],
                         "policies": {"vision": "supersedable", "map": "ordered"},

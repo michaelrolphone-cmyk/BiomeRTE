@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from setup_macos_app import launch_agent_spec
+from robot_profiles import robot_identity, bind_robot_state
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_STATE = Path.home() / ".local/share/biome-robot-vision"
@@ -32,17 +33,27 @@ def make_config(repo, state, gateway, terminal_manifest, terminal_identity, slot
         raise ValueError("Expected 1–16 concurrent query slots.")
     repo, state, gateway = [Path(p).expanduser().resolve() for p in (repo, state, gateway)]
     site, host_node = terminal_manifest["site"], terminal_identity["node"]
-    provider = hashlib.sha256(("biomerte/mac/robot-vision/v1/" + host_node).encode()).hexdigest()
-    resource = "robotvision.mac." + host_node[:20]
+    config_path = state / "config.json"
+    identity = robot_identity(json.loads(config_path.read_text()) if config_path.exists() else {})
+    robot = identity["robot_id"]
+    suffix = "" if robot == "rover" else "." + robot
+    provider = hashlib.sha256(("biomerte/mac/robot-vision/v1/" + host_node + suffix).encode()).hexdigest()
+    resource = "robotvision.mac." + host_node[:20] + suffix
     if previous and (previous.get("site") != site or previous.get("provider") != provider or
                      previous.get("resource") != resource):
         raise ValueError("Existing provider identity changed; preserve and reconcile its ledger first.")
-    return dict(version=1, site=site, provider=provider, resource=resource,
+    return dict(version=1, site=site, provider=provider, resource=resource, **identity,
                 host=socket.gethostname(), repo=str(repo), state=str(state),
                 gateway_state=str(gateway), socket=str(state / "vision.sock"),
                 python=str(state / "env/bin/python"), slots=slots, service_mode=service_mode,
                 query_timeout_seconds=None, worker_timeout_seconds=None, health_timeout_seconds=5,
                 poll_seconds=2, health_seconds=10)
+
+
+def job_labels(cfg):
+    robot = cfg.get("robot_id", "rover")
+    suffix = "" if robot == "rover" else "." + robot
+    return SERVICE_LABEL + suffix, PROVIDER_LABEL + suffix
 
 
 def launch_agents(cfg, home=None):
@@ -53,10 +64,11 @@ def launch_agents(cfg, home=None):
         "PATH": str(state / "env/bin") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         "PYTHONUNBUFFERED": "1",
     }
+    service_label, provider_label = job_labels(cfg)
     programs = [
-        (SERVICE_LABEL, [cfg["python"], str(repo / "providers/robot-vision/vision_service.py"),
+        (service_label, [cfg["python"], str(repo / "providers/robot-vision/vision_service.py"),
                          "--state", str(state)], "vision"),
-        (PROVIDER_LABEL, [cfg["python"], str(repo / "providers/robot-vision/biome_provider.py"),
+        (provider_label, [cfg["python"], str(repo / "providers/robot-vision/biome_provider.py"),
                           "serve", "--state", str(state)], "provider"),
     ]
     jobs = {
@@ -69,9 +81,9 @@ def launch_agents(cfg, home=None):
     }
     mode = cfg.get("service_mode", "python")
     if mode == "macos-app":
-        jobs[SERVICE_LABEL] = launch_agent_spec(
+        jobs[service_label] = launch_agent_spec(
             state, app_path=home / "Applications/Biome Robot Vision.app",
-            label=SERVICE_LABEL, require_installed=False)
+            label=service_label, require_installed=False)
     elif mode != "python":
         raise ValueError("service_mode must be python or macos-app")
     return jobs
@@ -110,7 +122,7 @@ def validate_install(cfg, home=None):
         launch_agent_spec(
             Path(cfg["state"]),
             app_path=Path(home or Path.home()) / "Applications/Biome Robot Vision.app",
-            label=SERVICE_LABEL, require_installed=True)
+            label=job_labels(cfg)[0], require_installed=True)
 
 
 def install(cfg, start=False, home=None):
@@ -118,6 +130,8 @@ def install(cfg, start=False, home=None):
     validate_install(cfg, home=home)
     home, state = Path(home or Path.home()), Path(cfg["state"])
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if "robot_id" in cfg:
+        bind_robot_state(state, {"robot_id": cfg["robot_id"], "model": cfg["model"]})
     state.chmod(0o700)
     (state / "provider").mkdir(mode=0o700, exist_ok=True)
     (state / "provider").chmod(0o700)
@@ -131,7 +145,7 @@ def install(cfg, start=False, home=None):
     if start:
         target = "gui/" + str(os.getuid())
         subprocess.run(["/bin/launchctl", "print", target], capture_output=True, check=True)
-        for label in (SERVICE_LABEL, PROVIDER_LABEL):
+        for label in jobs:
             job = target + "/" + label
             replacing = subprocess.run(["/bin/launchctl", "print", job], capture_output=True).returncode == 0
             if replacing:
@@ -150,12 +164,16 @@ def install(cfg, start=False, home=None):
             "labels": list(jobs), "state": cfg["state"]}
 
 
-def stop():
+def stop(state=DEFAULT_STATE):
     if sys.platform != "darwin":
         raise RuntimeError("This command requires macOS.")
     target = "gui/" + str(os.getuid())
     stopped = []
-    for label in (PROVIDER_LABEL, SERVICE_LABEL):
+    path = Path(state).expanduser() / "provider-manifest.json"
+    if not path.is_file() and path.parent.resolve() != DEFAULT_STATE.resolve():
+        return {"stopped": stopped}
+    cfg = json.loads(path.read_text()) if path.exists() else {}
+    for label in reversed(job_labels(cfg)):
         job = target + "/" + label
         if subprocess.run(["/bin/launchctl", "print", job], capture_output=True).returncode == 0:
             subprocess.run(["/bin/launchctl", "bootout", job], capture_output=True, check=True)
@@ -179,7 +197,7 @@ def main(argv=None):
     if args.start and not args.install:
         parser.error("--start requires --install")
     if args.stop:
-        print(json.dumps(stop(), indent=2))
+        print(json.dumps(stop(args.state), indent=2))
         return 0
     state, gateway = Path(args.state).expanduser().resolve(), Path(args.gateway_state).expanduser().resolve()
     manifest_path = state / "provider-manifest.json"

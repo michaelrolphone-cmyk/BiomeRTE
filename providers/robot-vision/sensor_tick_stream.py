@@ -77,6 +77,9 @@ class SensorTickStream:
         if getattr(self.service,'lidar',None) is not None:
             self.service.lidar.enqueue(packet,interval)
             metadata['lidar']=self.service.lidar.status()
+        for field in ("spider_motion", "bno085"):
+            if isinstance(packet.get(field), dict):
+                metadata[field] = packet[field]
         if capture_interval is not None and isinstance(packet.get('ftm'),dict):
             # Preserve the device capture interval for local and remote ranging solvers.
             metadata['ranging_observation']={

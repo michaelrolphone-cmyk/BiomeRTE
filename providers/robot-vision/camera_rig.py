@@ -19,8 +19,10 @@ DEFAULT={"schema":"rover.camera-rig/1","revision":1,"rear":{"enabled":False,
  "max_clock_uncertainty_s":.05,"max_pose_gap_s":.6,"num_features":1600}}
 def validate(value):
  if not isinstance(value,dict) or value.get("schema")!="rover.camera-rig/1":raise ValueError("rig_schema")
- rear=value["rear"];rigid_transform(rear["T_front_camera_rear_camera_m"])
+ rear=value["rear"]
  if type(rear.get("enabled")) is not bool:raise ValueError("rear_enabled_boolean")
+ if rear["enabled"] or rear.get("T_front_camera_rear_camera_m") is not None:
+  rigid_transform(rear["T_front_camera_rear_camera_m"])
  if rear["enabled"] and not rear.get("camera",{}).get("url"):raise ValueError("rear_camera_url_required")
  for key in ("max_clock_uncertainty_s","max_pose_gap_s"):
   if not math.isfinite(float(rear.get(key,DEFAULT["rear"][key]))) or float(rear.get(key,DEFAULT["rear"][key]))<=0:raise ValueError(key)
@@ -111,14 +113,18 @@ class SharedCameraRig:
   self.front_clock=CaptureClock();self.rear_clock=CaptureClock();self.front=deque(maxlen=128)
   self.pending_rear=deque(maxlen=self.front.maxlen)
   self.pending_epoch=None;self.last_front_check=None;self.delayed_pairs=0
-  self.config=validate(json.loads(self.path.read_text())) if self.path.exists() else copy.deepcopy(DEFAULT)
+  self.defaults = copy.deepcopy(DEFAULT)
+  if not getattr(service, "legacy_rover", True):
+   self.defaults["rear"].update(T_front_camera_rear_camera_m=None, mount_qualification="no_rear_camera_configured")
+  self.config=validate(json.loads(self.path.read_text())) if self.path.exists() else copy.deepcopy(self.defaults)
   self.stamp=None;self.previous=None;self.source_epoch=None;self.snapshot=None
   from rear_sensor_push import RearSensorIngress
   self.sensors=RearSensorIngress(self)
  def configure(self,value):
+  value=validate(value)
   if "sensor_rig" in value:
    self.service.lidar.configure(value["sensor_rig"])
-  value=validate(value);atomic_json(self.path,value)
+  atomic_json(self.path,value)
   return {"availability":"available","configuration":value,"applied":"worker_hot_reload"}
  def start(self):
   self.sensors.start()
@@ -211,7 +217,7 @@ class SharedCameraRig:
  def _reload(self):
   stamp=self.path.stat().st_mtime_ns if self.path.exists() else None
   if stamp==self.stamp:return
-  value=validate(json.loads(self.path.read_text())) if stamp else copy.deepcopy(DEFAULT)
+  value=validate(json.loads(self.path.read_text())) if stamp else copy.deepcopy(self.defaults)
   if self.camera:self.camera.close();self.camera=None
   if self.publisher:self.publisher.close();self.publisher=None
   self.config=value;self.stamp=stamp;self.previous=None;self.front.clear();self.rear_clock=CaptureClock()

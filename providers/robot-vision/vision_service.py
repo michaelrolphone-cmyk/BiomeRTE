@@ -28,6 +28,8 @@ import publication_trace
 from detector import ObjectDetector
 from ground_projection import calibration_errors, project_ground
 from vision_config import DEFAULT_STATE, atomic_json, load_config
+from robot_profiles import bind_robot_state, model_definition, prepare_robot, robot_identity
+import robot_motion
 from vision_store import VisionStore
 from metric_sessions import METRIC_CAPABILITIES, MetricCalibration
 from tof_source import read_tof
@@ -57,6 +59,7 @@ CAPABILITIES = [
     "robot.tof.status", "robot.tof.localize",
     "robot.camera.light.status", "robot.camera.light.set",
     "robot.ahrs.status", "robot.ahrs.snapshot", "robot.ahrs.calibrate",
+    robot_motion.STATUS, robot_motion.COMMAND,
 ] + ["robot.video.import.read", "robot.video.import.write", "robot.map.snapshot", "robot.vision.schemas", "robot.vision.rig.status","robot.vision.rig.configure"] + METRIC_CAPABILITIES + PORTABLE_OPERATIONS + RADIO_CAPABILITIES
 LOG = logging.getLogger("robot-vision")
 
@@ -72,6 +75,13 @@ def unknown_localization(reason):
 class VisionService:
     def __init__(self, config, state_dir, *, camera=None, detector=None, backend_factory=None,
                  radio_source=None, radio_model=None, ahrs_source=None, defer_backend_start=False):
+        config = copy.deepcopy(config)
+        self.robot_identity = robot_identity(config)
+        self.legacy_rover = self.robot_identity["robot_id"] == "rover"
+        self.state_dir = Path(state_dir)
+        config = prepare_robot(config, self.state_dir, self.robot_identity)
+        bind_robot_state(self.state_dir, self.robot_identity)
+        self.robot_definition = {} if self.legacy_rover else model_definition(self.state_dir, self.robot_identity)
         from leased_publish import LiveFrames
         from dual_camera_feed import DualCameraFrames,RearCameraFrames
         from sensor_inventory import SensorInventory
@@ -102,6 +112,16 @@ class VisionService:
                                        source=radio_source, model=radio_model)
         self.capabilities = [name for name in CAPABILITIES
                              if self.radio is not None or name not in RADIO_CAPABILITIES]
+        if not self.legacy_rover and config["camera"].get("capture_transport") == "websocket_push":
+            unsupported = {"robot.camera.light.status", "robot.camera.light.set",
+                           "robot.camera.exposure.status", "robot.camera.exposure.set"}
+            self.capabilities = [name for name in self.capabilities if name not in unsupported]
+        ingress_path = self.state_dir / "sensor-push.json"
+        if self.robot_definition.get("control", {}).get("transport") != robot_motion.WIRE:
+            self.capabilities.remove(robot_motion.STATUS)
+            self.capabilities.remove(robot_motion.COMMAND)
+        elif not ingress_path.is_file() or json.loads(ingress_path.read_text()).get("motion_enabled") is not True:
+            self.capabilities.remove(robot_motion.COMMAND)
         self.camera = camera or CameraSource({**config["camera"], "include_radio": self.radio is not None})
         from camera_telemetry import CameraHTTPClient
         self.camera_http = CameraHTTPClient(config["camera"])
@@ -110,13 +130,14 @@ class VisionService:
         self.ahrs = AHRSTracking(config["camera"], config.get("ahrs", {}), source=ahrs_source)
         self.ultrasonic = UltrasonicSource(config["camera"], config.get("ultrasonic", {}))
         mapping = config.get("multisensor_mapping") or {}
-        self.pose_estimator = AttitudePoseEstimator({"R_camera_imu": ROVER_R_CAMERA_IMU, **(mapping.get("ahrs") or {})})
+        attitude_defaults = {"R_camera_imu": ROVER_R_CAMERA_IMU} if self.legacy_rover else {"level_camera_mount": False}
+        self.pose_estimator = AttitudePoseEstimator({**attitude_defaults, **(mapping.get("ahrs") or {})})
         ahrs_settings = config.get("ahrs", {})
         self.auto_gyro = AutoGyroCalibration(self.ahrs.calibrate_gyro, enabled=bool(
             ahrs_settings.get("enabled",False) and ahrs_settings.get("auto_gyro_calibration",True)))
         self.pose_timeline = PoseTimeline()
         self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
-            mapping.get("sonar_mounts", rover_sensor_mounts()), mapping.get("resolution_m", .05))
+            mapping.get("sonar_mounts", rover_sensor_mounts() if self.legacy_rover else {}), mapping.get("resolution_m", .05))
         self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
         self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount,
                                                 self._record_metric_sensor_frame)
@@ -161,6 +182,7 @@ class VisionService:
         map_id = runtime.get("map_id")
         if map_id:
             info = self.store.read_map(map_id, limit=1)["map"]
+            self._check_map_robot(info)
             associated = info.get("metadata", {}).get("calibration_id")
             if associated:
                 record = self.store.get_calibration(associated)
@@ -263,13 +285,15 @@ class VisionService:
     def _map_metadata(self, extra=None):
         return {
             **(extra or {}),
+            **self.robot_identity,
             "kind": "monocular_sparse_map", "units": "arbitrary",
             "scale_status": "unobserved",
             "calibration_id": self.calibration["calibration_id"],
             "camera_source_id": self.config["camera"].get("source_id"),
             "origin": "first_localized_camera",
-            "occupancy": "sonar_beam_evidence_query_robot.map.obstacles",
-            "mapping_sources": ["visual_features", "capture_clock_ahrs", "four_mounted_sonars"],
+            "occupancy": "sonar_beam_evidence_query_robot.map.obstacles" if self.legacy_rover else "calibrated_lidar",
+            "mapping_sources": (["visual_features", "capture_clock_ahrs", "four_mounted_sonars"] if self.legacy_rover
+                                else ["visual_features", "calibrated_lidar"]),
         }
 
     def _prepare_backend(self, map_id, calibration, *, allow_load_failure=False):
@@ -283,7 +307,7 @@ class VisionService:
             **self.config.get("slam", {}),
             "calibration": copy.deepcopy(calibration),
             "fps": self.config["camera"].get("expected_fps", 5.0),
-            "pyslam_root": str(self.state_dir / "vendor/pyslam"),
+            "pyslam_root": self.config.get("slam", {}).get("pyslam_root", str(self.state_dir / "vendor/pyslam")),
         }
         backend = self.backend_factory(cfg, self.state_dir)
         try:
@@ -586,9 +610,10 @@ class VisionService:
             metadata={"session_id":self.session_id}
             birth=getattr(getattr(self,"backend",None),"_native_birth",None)
             if birth and getattr(self.backend,"_map_id",None)==self.map_id:
+                sources = (["visual_features", "capture_clock_ahrs", "four_mounted_sonars", "front_lidar", "rear_lidar"]
+                           if self.legacy_rover else ["visual_features", *sorted(self.lidar.config["lidar"])])
                 metadata.update(units="m",scale_status="metric",scale_source="native_lidar",scale_m_per_map_unit=1.,
-                    mapping_sources=["visual_features","capture_clock_ahrs","four_mounted_sonars","front_lidar","rear_lidar"],
-                    native_lidar_initialization=birth)
+                                mapping_sources=sources,native_lidar_initialization=birth)
             update = self.store.apply_map_update(
                 self.map_id, self.revision, self._pending_changes, reason=reason,metadata=metadata)
             self.revision = update["revision"] if isinstance(update, dict) else int(update)
@@ -875,6 +900,7 @@ class VisionService:
 
     def _prepare_stream(self, metadata, image):
         with publication_trace.span("prepare", metadata):
+            metadata.update(getattr(self, "robot_identity", {}))
             if not isinstance(metadata.get("lidar"),dict) or metadata["lidar"].get("latest") is None:
                 with publication_trace.span("prepare.lidar"):
                     metadata["lidar"] = self.lidar.status()
@@ -1295,22 +1321,15 @@ class VisionService:
 
 
     def _robot_model(self, *, summary=False):
+        identity = getattr(self, "robot_identity", robot_identity({}))
         try:
-            definition = json.loads((self.state_dir / "robot-model.json").read_text())
-            if (not isinstance(definition, dict) or definition.get("schema_version") != 1
-                    or not isinstance(definition.get("model_id"), str)
-                    or not definition["model_id"]
-                    or isinstance(definition.get("revision"), bool)
-                    or not isinstance(definition.get("revision"), int)
-                    or definition["revision"] < 1):
-                raise ValueError("invalid_robot_model_identity")
-            # Configuration is reported evidence, not an estimator or odometry source.
-            json.dumps(definition, allow_nan=False)
+            definition = model_definition(self.state_dir, identity,
+                                          use_builtin=identity["robot_id"] != "rover")
         except FileNotFoundError:
             return {"availability": "unavailable", "reason": "robot_model_not_configured"}
         except (OSError, ValueError, TypeError):
             return {"availability": "unavailable", "reason": "robot_model_configuration_invalid"}
-        result = {"availability": "available", "model_id": definition["model_id"],
+        result = {**identity, "availability": "available", "model_id": definition["model_id"],
                   "revision": definition["revision"],
                   "qualification_status": definition.get("qualification_status", "unqualified"),
                   "source": "versioned_robot_configuration"}
@@ -1319,10 +1338,10 @@ class VisionService:
                 result["definition"]=definition
                 return result
             front=definition["camera"]
-            T=np.asarray(front.get("T_robot_camera",np.eye(4)),float)
+            T = np.asarray(front["T_robot_camera"], float) if front.get("T_robot_camera") is not None else None
             rig=getattr(self,"camera_rig",None)
-            definition["cameras"]={"front":copy.deepcopy(front)}
-            if rig is not None:
+            definition["cameras"]={"front":{**copy.deepcopy(front), "source_id": self.config["camera"].get("source_id")}}
+            if rig is not None and T is not None and (getattr(self, "legacy_rover", True) or rig.config["rear"]["enabled"]):
                 rearT=T@np.asarray(rig.config["rear"]["T_front_camera_rear_camera_m"])
                 definition["cameras"]["rear"]={"source_id":rig.config["rear"]["camera"].get("source_id"),
                     "T_robot_camera":rearT.tolist(),"position_body_m":rearT[:3,3].tolist(),
@@ -1333,9 +1352,11 @@ class VisionService:
                 definition["sensor_rig"]=copy.deepcopy(lidar.config)
                 definition["lidar_poses"]={}
                 for name,mount in lidar.config["lidar"].items():
-                    pose=T@np.asarray(mount["T_front_camera_sensor_m"])
-                    definition["lidar_poses"][name]={**copy.deepcopy(mount),"T_robot_sensor":pose.tolist(),
-                        "position_body_m":pose[:3,3].tolist(),"direction_body":pose[:3,2].tolist()}
+                    pose = T @ np.asarray(mount["T_front_camera_sensor_m"]) if T is not None else None
+                    definition["lidar_poses"][name] = {**copy.deepcopy(mount),
+                        "T_robot_sensor": pose.tolist() if pose is not None else None,
+                        "position_body_m": pose[:3,3].tolist() if pose is not None else None,
+                        "direction_body": pose[:3,2].tolist() if pose is not None else None}
             result["definition"] = definition
         return result
 
@@ -1344,6 +1365,10 @@ class VisionService:
         inputs = inputs or {}
         if operation == "robot.vision.trace":
             return publication_trace.command(inputs)
+        if operation in (robot_motion.COMMAND, robot_motion.STATUS):
+            if operation not in self.capabilities:
+                raise KeyError("unsupported_operation")
+            return robot_motion.request(self, operation, inputs)
         # Explicit local diagnostics must not touch receiver or publication locks.
         if (operation == "robot.vision.status" and len(inputs) == 2 and
                 inputs.get("receiver_only") is True and inputs.get("thread_stacks") is True):
@@ -1371,6 +1396,7 @@ class VisionService:
             return {"availability": "available",
                     "state": self._lifecycle_state if not self._stop.is_set() else "stopping",
                     "capabilities": self.capabilities,
+                    **getattr(self, "robot_identity", {}),
                     "map_id": getattr(self,"map_id",None),
                     "streaming": {"available": not self._stop.is_set(),
                                   "lanes": ["vision", "map"],
@@ -1601,7 +1627,8 @@ class VisionService:
             calibration["calibration_id"] = record.get("calibration_id")
             result = project_ground(inputs.get("pixel"), calibration,
                                     [frame["width"], frame["height"]],
-                                    confirmed_floor_contact=True)
+                                    confirmed_floor_contact=(getattr(self, "legacy_rover", True) or
+                                                             inputs.get("confirmed_floor_contact") is True))
             return {**self._binding(snapshot), "projection": result}
         if operation == "robot.map.checkpoint" and hasattr(self.backend, "capture_checkpoint"):
             if inputs.get("map_id", self.map_id) != self.map_id:
@@ -1646,11 +1673,20 @@ class VisionService:
                         "previous_map_preserved": True, "backend": self._backend_status()}
         raise KeyError("unsupported_operation")
 
+    def _check_map_robot(self, info):
+        identity = getattr(self, "robot_identity", robot_identity({}))
+        owner = (info.get("metadata") or {}).get("robot_id")
+        if owner is None and identity["robot_id"] == "rover":
+            return
+        if owner != identity["robot_id"]:
+            raise ValueError("map_belongs_to_another_robot")
+
     def _open_map(self, map_id):
         if map_id == self.map_id and not self._recovery_error:
             return {"map_id": map_id, "session_id": self.session_id,
                     "map_revision": self.revision, "backend": self._backend_status()}
         info = self.store.read_map(map_id, limit=1)["map"]
+        self._check_map_robot(info)
         calibration_id = info.get("metadata", {}).get("calibration_id")
         calibration = self.store.get_calibration(calibration_id)
         if calibration.get("availability") != "available":

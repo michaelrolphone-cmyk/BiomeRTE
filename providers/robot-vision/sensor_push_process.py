@@ -51,10 +51,11 @@ class _QueueSink:
     def ingress_metrics(self, metrics):
         self.readings.put(time.monotonic(), ('metrics',dict(metrics)))
 
-def _receiver_process(state_dir, delivery, stop, images, window, config):
+def _receiver_process(state_dir, delivery, stop, images, window, config, motion_outbox=None):
     from sensor_push import SensorPushReceiver
     receiver=SensorPushReceiver(_QueueSink(state_dir,delivery,images,window,config))
     receiver.stop=stop
+    receiver.motion_outbox = motion_outbox
     receiver.metrics.update(execution='independent_process',worker_pid=multiprocessing.current_process().pid)
     try:
         receiver._run()
@@ -109,12 +110,15 @@ def start_isolated_receiver(receiver):
     receiver.delivery_window=freshness_window(receiver.stream.service)
     receiver._delivery_queue=context.Queue(maxsize=1)
     receiver._images=context.Queue(maxsize=1)
+    from robot_motion import COMMAND
+    if COMMAND in getattr(receiver.stream.service, "capabilities", ()):
+        receiver.motion_outbox = context.Queue(maxsize=1)
     # The child serves the same camera contract, including optional radio fields.
     # Carry the effective service settings across spawn rather than rebuilding a
     # partial service object that loses camera validation configuration.
     service_config=copy.deepcopy(receiver.stream.service.config)
     receiver.process=context.Process(target=_receiver_process,
-        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images,receiver.delivery_window,service_config),
+        args=(str(receiver.stream.service.state_dir),receiver._delivery_queue,receiver.stop,receiver._images,receiver.delivery_window,service_config,receiver.motion_outbox),
         name='sensor-websocket-ingress',daemon=True)
     receiver.process.start()
     receiver._image_thread=threading.Thread(target=_deliver_images,args=(receiver,),name='pushed-camera-delivery',daemon=True)

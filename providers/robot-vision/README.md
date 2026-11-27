@@ -308,6 +308,9 @@ relocalization before publishing a valid current pose.
 
 ### Robot configuration metadata
 
+See [Run multiple robots](MULTIPLE_ROBOTS.md) for the Rover and LAFVIN body
+profiles, map isolation, and the spider's camera, depth and motion routes.
+
 An optional `robot-model.json` in the state directory holds the robot's
 versioned configuration and its measurement provenance. It is independent of
 lens calibration and does not switch maps. `robot.vision.metadata.robot_model`
