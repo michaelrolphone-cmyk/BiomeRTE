@@ -61,9 +61,12 @@ def inspect(directory):
         return state
     with handle:
         # Completion may commit after the first read and before custody releases.
-        # Recheck under the acquired lock before declaring the executor lost.
+        # Recheck both records before making a claim about execution.
         if os.path.exists(result_path):
             return read(result_path)
+        state = read(marker)
+        if state['state'] == 'starting':
+            return {'state': 'not_started', 'reason': 'Runner exited before starting the adapter'}
     # A released custody lock with no completion cannot prove the effect.
     return {'state': 'interrupted', 'reason': 'runner lost custody; effect requires reconciliation',
             'last_observation': state, 'replay_allowed': False}
@@ -84,28 +87,47 @@ def ensure(root, operation, signature, argv, request, timeout=None):
                 raise ValueError('Runner operation identity conflict')
         else:
             save(path, spec)
-        if not os.path.exists(os.path.join(directory, 'state.json')):
-            # Several launch attempts are harmless: custody.lock and the durable
-            # marker below permit exactly one adapter launch, including after restart.
-            with open(os.path.join(directory, 'runner.log'), 'ab') as log:
-                child = subprocess.Popen([sys.executable, '-S', os.path.abspath(__file__), directory],
-                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                 start_new_session=True, close_fds=True)
-                reaper = threading.Thread(target=child.wait)
-                reaper.daemon = True
-                reaper.start()
+        custody = locked(os.path.join(directory, 'custody.lock'))
+        if custody is not None:
+            with custody:
+                marker = os.path.join(directory, 'state.json')
+                completion = os.path.join(directory, 'completion.json')
+                if not os.path.exists(marker) and not os.path.exists(completion):
+                    save(marker, dict(state='starting', operation=operation, signature=signature,
+                                      observed_at=time.time()))
+                    fd = custody.fileno()
+                    # The child inherits the already-held lock. There is no gap
+                    # in which a live prelaunch child could be declared absent.
+                    try:
+                        with open(os.path.join(directory, 'runner.log'), 'ab') as log:
+                            child = subprocess.Popen(
+                                [sys.executable, '-S', os.path.abspath(__file__), directory, str(fd)],
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                start_new_session=True, pass_fds=(fd,))
+                    except OSError as exc:
+                        save(completion, dict(state='not_started', reason=str(exc)))
+                    else:
+                        reaper = threading.Thread(target=child.wait)
+                        reaper.daemon = True
+                        reaper.start()
     return inspect(directory)
 
 
-def run(directory):
-    handle = locked(os.path.join(directory, 'custody.lock'))
+def run(directory, custody_fd=None):
+    handle = (locked(os.path.join(directory, 'custody.lock')) if custody_fd is None
+              else os.fdopen(custody_fd, 'a'))
     if handle is None:
         return
     with handle:
         marker = os.path.join(directory, 'state.json')
-        if os.path.exists(marker):
+        if custody_fd is None and os.path.exists(marker):
             return  # Never replay a launch, even if its previous runner died.
         spec = read(os.path.join(directory, 'request.json'))
+        if custody_fd is not None:
+            prepared = read(marker)
+            if (prepared.get('state') != 'starting' or
+                    any(prepared.get(key) != spec[key] for key in ('operation', 'signature'))):
+                return
         state = dict(state='launching', operation=spec['operation'],
                      signature=spec['signature'], runner_pid=os.getpid(), observed_at=time.time())
         save(marker, state)  # Must be durable BEFORE the adapter can have effects.
@@ -145,4 +167,4 @@ def run(directory):
 
 if __name__ == '__main__':
     os.umask(0o077)
-    run(sys.argv[1])
+    run(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else None)
