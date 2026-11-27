@@ -59,6 +59,16 @@ class OutputLiveness:
                              unchanged_output_windows=self.unchanged)
 
 
+def command_stop_requested(remote, args):
+    """Read stop control for a command whose local custody is already active."""
+    try:
+        state = remote.call('cap.command.state', args)
+    except Exception:
+        # The next pass retries control while the existing owner reports liveness.
+        return False
+    return isinstance(state, dict) and (state.get('kill_requested') is True or state.get('state') == 'abandoned')
+
+
 def communicate(worker, proc, request, action, adapter):
     cfg = adapter.get('configuration', {})
     interval = min(cfg.get('heartbeat_interval_seconds', 60) / 2, 5)
@@ -80,8 +90,7 @@ def communicate(worker, proc, request, action, adapter):
         if now >= next_check:
             next_check = now + interval
             try:
-                state = worker.remote.call('cap.command.state', args)
-                if state['kill_requested'] or state['state'] == 'abandoned':
+                if command_stop_requested(worker.remote, args):
                     if stop_started is None:
                         stop_started = now
                         with open(path + '.stop', 'w') as out:

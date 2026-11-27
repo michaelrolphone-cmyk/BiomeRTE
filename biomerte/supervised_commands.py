@@ -4,7 +4,7 @@ import os
 import time
 from . import command_runner as runner
 from .store import Fault, digest, encode
-from .command_watch import OutputLiveness
+from .command_watch import OutputLiveness, command_stop_requested
 
 CONTRACTS = ('host.terminal.run:1', 'docker.cli:1')
 
@@ -113,8 +113,7 @@ def finish(worker, action, adapter, schema, signature):
             if time.monotonic() >= next_report:
                 next_report = time.monotonic() + interval
                 try:
-                    control = worker.remote.call('cap.command.state', args)
-                    if control.get('kill_requested') or control.get('state') == 'abandoned':
+                    if command_stop_requested(worker.remote, args):
                         runner.save(request['progress_path'] + '.stop', {'stop': True})
                         stop_native_terminal(worker, action)
                     else:

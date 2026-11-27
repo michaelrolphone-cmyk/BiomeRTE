@@ -6,6 +6,7 @@ import tempfile
 import types
 import unittest
 from biomerte.command_watch import capture, communicate
+from biomerte.store import Fault
 
 
 class CommandWatch(unittest.TestCase):
@@ -20,6 +21,31 @@ class CommandWatch(unittest.TestCase):
             self.assertEqual(65536,os.path.getsize(path))
             self.assertEqual(2000000,counts['stdout']['bytes_seen'])
             self.assertTrue(counts['stdout']['truncated'])
+
+    def test_unavailable_control_read_does_not_skip_heartbeat(self):
+        class Remote:
+            node = 'provider'
+
+            def __init__(self):
+                self.heartbeats = []
+
+            def call(self, name, args):
+                if name == 'cap.command.state':
+                    raise Fault('Control read unavailable', 503)
+                if name == 'cap.heartbeat':
+                    self.heartbeats.append(args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            remote = Remote()
+            worker = types.SimpleNamespace(remote=remote)
+            path = os.path.join(directory, 'progress')
+            with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(.25); print(42)'],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+                out, _ = communicate(worker, child, {'progress_path': path}, {'id': 'op', 'generation': 8},
+                                     {'configuration': {'heartbeat_interval_seconds': .1}})
+            self.assertEqual(out.strip(), b'42')
+            self.assertIn({'provider': 'provider', 'operation': 'op', 'generation': 8}, remote.heartbeats)
+            self.assertFalse(os.path.exists(path + '.stop'))
 
     def test_output_progress_keeps_long_process_alive_and_explicit_kill_stops_it(self):
         with tempfile.TemporaryDirectory() as directory:
