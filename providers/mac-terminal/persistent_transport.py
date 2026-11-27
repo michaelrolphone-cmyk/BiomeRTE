@@ -12,14 +12,21 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'transport_vendor'))
 
 
+class ReplyPending(ConnectionError):
+    """The RPC may have reached the controller. Keep its original request ID."""
+
+
 class PersistentTransport:
-    def __init__(self, origin, credentials):
+    def __init__(self, origin, credentials, reply_timeout=90):
         self.origin = origin
         self.credentials = credentials
+        # Match the HTTP response horizon. Only the transport wait is bounded.
+        self.reply_timeout = reply_timeout
         self.lock = threading.RLock()
         self.send_lock = threading.Lock()
         self.socket = None
         self.token = None
+        self.draining = False
         self.pending = {}
 
     def _connect(self):
@@ -45,6 +52,7 @@ class PersistentTransport:
             if expected is not None and self.socket is not expected:
                 return
             ws, self.socket = self.socket, None
+            self.draining = False
             if ws is not None:
                 try:
                     ws.close()
@@ -86,22 +94,37 @@ class PersistentTransport:
     def invoke(self, args):
         ws = self._connect()
         ident = uuid.uuid4().hex
-        item = {'ready': threading.Event()}
         with self.lock:
             if self.socket is not ws:
                 raise ConnectionError('Persistent connection moving')
+            if self.draining:
+                raise ReplyPending('Persistent connection is retiring an old inbox poll')
+            item = {'ready': threading.Event()}
             self.pending[ident] = item
         try:
             with self.send_lock:
                 ws.send(json.dumps({'type': 'invoke', 'id': ident, 'arguments': args}))
-            # There is deliberately no job deadline. Disconnect wakes all callers.
-            item['ready'].wait()
-            if 'error' in item:
-                raise item['error']
-            return {'result': item['result']}
+            ready = item['ready'].wait(self.reply_timeout)
+            with self.lock:
+                # Check again under the receive lock for an ACK at the boundary.
+                if not ready and not item['ready'].is_set():
+                    if args.get('operation') == 'provider.poll' and self.socket is ws:
+                        # The gateway can hold an empty inbox poll until the socket
+                        # closes. Drain other replies before retiring that poll.
+                        self.draining = True
+                    raise ReplyPending('Persistent reply pending; durable request identity retained')
+                if 'error' in item:
+                    raise item['error']
+                return {'result': item['result']}
+        except ReplyPending:
+            # Socket pongs do not prove this RPC completed. Let the caller use
+            # its existing HTTP fallback, keeping unrelated socket calls alive.
+            raise
         except Exception:
             self._disconnect(ws)
             raise
         finally:
             with self.lock:
                 self.pending.pop(ident, None)
+                if self.socket is ws and self.draining and not self.pending:
+                    self._disconnect(ws)
