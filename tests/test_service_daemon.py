@@ -19,6 +19,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 import uuid
@@ -66,6 +67,7 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
         daemon.binding = {"boot_epoch": "current"}
         daemon.config = {"authority_kind": "controller"}
         daemon.lock = asyncio.Lock()
+        daemon.event_lock = asyncio.Lock()
         daemon.transport = Mock(validate=AsyncMock())
         daemon.phase = AsyncMock(return_value={"phase": "active"})
         daemon.publish = AsyncMock()
@@ -76,6 +78,7 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
         daemon.events.stores = {"one": store}
         daemon.events.delivery_offset = 0
         await daemon.maintain_once()
+        await daemon.maintain_events_once()
         daemon.authority.maintain.assert_called_once()
         store.deliver.assert_not_called()
         self.assertEqual(daemon.publish.await_count, 2)
@@ -84,9 +87,63 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
         store.active.return_value = True
         store.deliver.return_value = 0
         await daemon.maintain_once()
+        await daemon.maintain_events_once()
         store.deliver.assert_called_once_with(max_callbacks=1)
         self.assertEqual(daemon.publish.await_count, 5)
         self.assertEqual(daemon.transport.validate.await_count, 5)
+
+    async def test_slow_event_callback_leaves_normal_controller_dispatch_and_tick_available(self):
+        daemon = AuthorityDaemon.__new__(AuthorityDaemon)
+        daemon.binding = {"boot_epoch": "current"}
+        daemon.config = {"authority_kind": "controller"}
+        daemon.lock = asyncio.Lock()
+        daemon.event_lock = asyncio.Lock()
+        daemon.transport = Mock(validate=AsyncMock())
+        daemon.phase = AsyncMock(return_value={"phase": "active"})
+        daemon.publish = AsyncMock()
+        daemon.authority = Mock()
+        daemon.authority.call.return_value = {"state": "succeeded"}
+        daemon.events = Mock()
+        entered, release = threading.Event(), threading.Event()
+
+        def callback():
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("callback fixture was not released")
+
+        daemon.events.deliver.side_effect = callback
+        delivery = asyncio.create_task(daemon.maintain_events_once())
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            await asyncio.wait_for(daemon.maintain_once(), 1)
+            reply = await asyncio.wait_for(daemon.dispatch({"type": "call", "id": "status",
+                "binding": daemon.binding, "envelope": {"operation": "cap.status"}}), 1)
+            self.assertEqual(reply["status"], 200)
+            self.assertEqual(reply["result"], {"state": "succeeded"})
+            self.assertFalse(delivery.done())
+            daemon.authority.maintain.assert_called_once()
+        finally:
+            release.set()
+            await delivery
+
+    async def test_event_checkpoint_waits_for_the_controller_publication_lock(self):
+        from biomerte.controller_events import ManagedEvents
+        daemon = Mock(lock=asyncio.Lock(), publish=AsyncMock(), transport=Mock(validate=AsyncMock()))
+        events = ManagedEvents.__new__(ManagedEvents)
+        events.daemon = daemon
+        events.config = {}
+        events.loop = asyncio.get_running_loop()
+        events._barrier_override = None
+
+        async with daemon.lock:
+            barrier = asyncio.create_task(asyncio.to_thread(events.barrier))
+            done, _ = await asyncio.wait([barrier], timeout=.1)
+            self.assertFalse(done)
+            daemon.publish.assert_not_awaited()
+            daemon.transport.validate.assert_not_awaited()
+        await asyncio.wait_for(barrier, 1)
+        daemon.publish.assert_awaited_once()
+        daemon.transport.validate.assert_awaited_once_with(daemon.binding, preparing=False)
 
     async def test_slow_signed_batch_attributes_publication_time_without_exposing_envelopes(self):
         clock = Clock()
@@ -154,10 +211,11 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(daemon.authority.prepare_fences.call_count, 1)
                         self.assertEqual(daemon.publish.await_count, 1)
 
-    async def test_maintenance_reports_the_failing_stage_and_status_without_data(self):
+    async def test_event_delivery_reports_the_failing_stage_and_status_without_data(self):
         daemon = AuthorityDaemon.__new__(AuthorityDaemon)
         daemon.config, daemon.binding = {}, {"test": "binding"}
         daemon.lock = asyncio.Lock()
+        daemon.event_lock = asyncio.Lock()
         daemon.transport = Mock(validate=AsyncMock())
         daemon.phase = AsyncMock(return_value={"phase": "active"})
         daemon.publish = AsyncMock()
@@ -167,7 +225,7 @@ class ControllerPublicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("biomerte.service", level="WARNING") as logs, \
              patch("biomerte.service_daemon.asyncio.sleep", side_effect=asyncio.CancelledError):
             with self.assertRaises(asyncio.CancelledError):
-                await daemon.maintenance_loop()
+                await daemon.event_loop()
         self.assertIn("stage=event_delivery status=409", " ".join(logs.output))
         self.assertNotIn("private callback payload", " ".join(logs.output))
 

@@ -158,7 +158,8 @@ class ManagedEvents:
             return self._barrier_override(publish)
         async def check():
             if publish:
-                await self.daemon.publish()
+                async with self.daemon.lock:
+                    await self.daemon.publish()
             await self.daemon.transport.validate(self.daemon.binding,preparing=False)
         return asyncio.run_coroutine_threadsafe(check(),self.loop).result(
             timeout=self.config.get("request_timeout_s",15)*4)

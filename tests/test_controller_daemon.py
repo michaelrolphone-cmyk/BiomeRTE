@@ -341,6 +341,43 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await connection
 
+    async def test_blocked_event_management_does_not_block_fresh_status_on_same_socket(self):
+        entered, release, status_sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = []
+
+        async def dispatch(message):
+            if message["id"] == "event":
+                entered.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def frame(identifier, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({"type": "call",
+                        "id": identifier, "binding": B, "envelope": {"operation": operation}}))
+                yield frame("event", "gateway.events.change")
+                await entered.wait()
+                yield frame("status", "cap.status")
+                await release.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies.append(response["id"])
+                if response["id"] == "status":
+                    status_sent.set()
+
+        self.daemon.dispatch = dispatch
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(Socket()))
+        try:
+            await asyncio.wait_for(status_sent.wait(), 1)
+            self.assertEqual(replies, ["status"])
+        finally:
+            release.set()
+            await connection
+
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
         processed, replies = [], []
