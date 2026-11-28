@@ -1,0 +1,66 @@
+{
+  "kind": "evolving_aggregate_reverse_qualification",
+  "date": "2026-11-07",
+  "base_commit": "f43af274b109561bb6e65e74ffa93aedb81b5240",
+  "source_sha256": {
+    "activation_field/adapters/qwen35_reverse.py": "565b38b99b5d2e44f5680fc1679e8194e19757229e2585e49f9925ae48431965",
+    "activation_field/adapters/reverse_projection.py": "7454de07b9087bc224f29777da71165569e1e86addd3aa69883f8d7b2f7882e0",
+    "activation_field/reverse_state.py": "a3f4549fc815caf8df993744468898e3c6ee7bf55e7859784b974629f885b910",
+    "activation_field/inverse_runtime.py": "15efa8d36b006a99fed9a640819f9d711c4bfc02d39757b28a67806a3c114969",
+    "tests/test_evolving_reverse_native.py": "f84385e99b26dd504f4d1776ea278d2f69f0edc9ac9f8bd93d93e9964aa1a5d2",
+    "tests/test_reverse_state.py": "83feb799cceca9083e2ba9c53044afa8d4f8801c68eff6d4ec4317db465ec02f",
+    "tests/test_reverse_native.py": "4583c869953edf3edfd91edfd5011765b7b36414ab6baa3d27d9a1cd84141734",
+    "CONTEXT_RECONSTRUCTION.md": "3d1d54e394f5df5b32b7fdc2954c7daa01ab79df23ca38dddd1f32a87c2987cc",
+    "README.md": "69533da9ad526a09cf94ee88d6795e39897857eff6f02ffaba40139056bcd27b"
+  },
+  "candidate_archive_sha256": "10e303ac0f59543908fa5c2b81d0bed8764babd121d432d1c3d1596ae30c2c75",
+  "linux_mlx_cpu": {
+    "mlx_version": "0.32.4",
+    "passed": 239,
+    "skipped": 3,
+    "failed": 0,
+    "duration_seconds": 6.56,
+    "skip_reasons": [
+      "optional ripser unavailable",
+      "two Metal-only writer tests unavailable on CPU"
+    ],
+    "compilation": "passed",
+    "diff_check": "passed"
+  },
+  "native_apple_silicon": {
+    "mlx_version": "0.32.4",
+    "passed": 242,
+    "skipped": 0,
+    "failed": 0,
+    "duration_seconds": 8.15,
+    "scope": "Full activation-field suite against isolated candidate source, with actual tiny installed Qwen layers; no pretrained-model load."
+  },
+  "coverage": [
+    "All 248 projection counterparts in a tiny 32-layer actual Qwen model",
+    "Operation-local boundary directions and signed writes before selected projection transpose",
+    "Independent layer/projection motion beyond a stationary terminal",
+    "Paired-context nonnegative mass and preserved-prefix handling across evicted gaps",
+    "State-only recurrent and convolution regularized predecessor algebra",
+    "Evolving QKV/z/a/b/MLP gate boundary state",
+    "Current and delta weights, unchanged and changed projection codes",
+    "Legacy mean-cell and existing paired checkpoints",
+    "Source arrays and weight identity unchanged",
+    "Debug on/off output equality and projection-level diagnostics",
+    "One-step MLX graph release and reinstallation without stacked classes"
+  ],
+  "independent_review": {
+    "blocking_findings": 0,
+    "additional_checks": [
+      "101 forced tiny-model reverse steps with constant active MLX memory",
+      "Ten-step BF16 current/changed-delta finite-state checks",
+      "Native scalar-gate recurrence matrix oracle in current/changed-delta modes"
+    ]
+  },
+  "limitations": [
+    "Private states are inferred aggregate predecessors, not recovered history or an inverse.",
+    "Equal boundary blends and unit-ridge predecessor regularization are explicit surrogate assumptions.",
+    "Frozen partition readout remains untrained; these mechanical checks do not establish semantic quality.",
+    "No source input/token sequence logs or new persisted snapshot fields were added.",
+    "Production deployment and the requested full-model run are tracked separately."
+  ]
+}

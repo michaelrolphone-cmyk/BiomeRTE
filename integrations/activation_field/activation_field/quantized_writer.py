@@ -26,6 +26,12 @@ def uniform_counters(indices, seed):
     return (v >> 8).astype(np.float32) / np.float32(16777216)
 
 
+def write_coefficients(z, gate, *, eta, role_scale, step_fraction_max, xp=np):
+    """The signed bounded row coefficient, shared with direction capture."""
+    coefficient = eta*role_scale*z*gate
+    return coefficient*xp.minimum(1, step_fraction_max/xp.maximum(xp.abs(coefficient), 1e-12))
+
+
 def reference_write(packed, scales, offsets, x, z, gate, *, eta, role_scale,
                     step_fraction_max, seed, baseline_pull=0., anchor=None,
                     delta_n=1, tile_rows=16):
@@ -50,8 +56,8 @@ def reference_write(packed, scales, offsets, x, z, gate, *, eta, role_scale,
         b = np.repeat(np.asarray(offsets[start:end],np.float32),group,axis=-1)
         w = codes.astype(np.float32)*s+b
         norm = np.maximum(np.linalg.norm(w,axis=-1),1e-6)
-        coefficient = eta*role_scale*np.asarray(z[start:end])*np.asarray(gate[start:end])
-        coefficient *= np.minimum(1,step_fraction_max/np.maximum(np.abs(coefficient),1e-12))
+        coefficient = write_coefficients(np.asarray(z[start:end]), np.asarray(gate[start:end]),
+                                         eta=eta, role_scale=role_scale, step_fraction_max=step_fraction_max)
         proposal = w + (norm*coefficient)[:,None]*x
         if baseline_pull > 0:
             w0 = unpack(base[start:end]).astype(np.float32)*s+b
@@ -70,3 +76,4 @@ def reference_write(packed, scales, offsets, x, z, gate, *, eta, role_scale,
         stats['realized_squared_norm']+=float(np.sum((realized-w)**2,dtype=np.float64))
         stats['quantization_squared_error']+=float(np.sum((realized-proposal)**2,dtype=np.float64))
     return out,stats
+

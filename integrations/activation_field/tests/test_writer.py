@@ -41,6 +41,7 @@ def test_config_rejects_invalid(bad):
 
 def test_metal_matches_reference():
     mx=pytest.importorskip('mlx.core')
+    if not mx.metal.is_available():pytest.skip('Metal backend unavailable; CPU MLX cannot run Metal kernels')
     from activation_field.kernels.field_write import write,row_norm
     p,s,b,x,z,g=fixture()
     arrays=[mx.array(a) for a in (p,s,b,x,z,g)]
@@ -55,6 +56,7 @@ def test_metal_matches_reference():
 
 def test_metal_audit_matches_measured_reference():
     mx=pytest.importorskip('mlx.core')
+    if not mx.metal.is_available():pytest.skip('Metal backend unavailable; CPU MLX cannot run Metal kernels')
     from activation_field.kernels.field_write import write,row_norm,audit
     p,s,b,x,z,g=fixture()
     arrays=[mx.array(a) for a in (p,s,b,x,z,g)]

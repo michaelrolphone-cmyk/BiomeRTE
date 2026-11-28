@@ -1,0 +1,319 @@
+# Approximate reverse propagation
+
+The path now accumulates signed propagation information while the field's
+quantized weights evolve, propagates combined present state backwards through
+operation counterparts, and emits a token sequence. It stops there.
+
+## Forward state
+
+The 248 writable projections retain fixed-size signed input/output moments,
+forward movement and bounded write-coefficient moments. Each decoder layer and
+the final normalization retain running boundary means, current normalized output
+and a small signed movement matrix. Boundary state is aggregated online even
+when weight commits are batched; no per-token boundary history is kept.
+
+Linear-attention layers retain their current recurrent matrix, which is already
+an aggregate state, and the mean of the convolution context. Full-attention
+layers now retain fixed-size **paired** moments for each KV head:
+
+- `S = sum(phi(rotated_key) outer value)` and `z = sum(phi(rotated_key))`.
+- `phi(x) = max(ELU(x * head_dim**(-1/4)) + 1, 1e-6)`.
+- An exact integer descriptor records the query's absolute rotary position,
+  cache kind/capacity, preserved-prefix count, surviving-past count and tail
+  position range. Positions are JSON integers, never float32 tensors.
+
+Capture occurs before the final query updates the native cache. The summary
+contains only historical cells that survive that query's native eviction; it
+excludes the current cell. The private reverse call computes its current key
+and value once at the saved rotary position. This preserves key/value pairing
+and query sensitivity without storing any sequence of keys, values, tokens or
+positions. Ring overwrites, preserved prefixes, and trimming after oversized
+prefill follow the actual MLX cache layout. Unsupported masks/cache types fail
+explicitly instead of silently summarizing a different attention window.
+
+These moments describe the surviving window in the current ordinary-cache
+segment, not every evicted token from earlier input. Only one final summary is
+saved. Their tensor shapes are independent of sequence length: each KV head
+stores `head_dim * value_dim + head_dim` float32 values. The cache descriptor
+is also fixed-size. During online capture, a disposable aggregate tracker adds
+the current pair and subtracts the evicted pair. It is rebuilt at ring wraps
+and after unobserved intervals, rather than reducing the full window at every
+token. The tracker is evaluated eagerly and stores no deferred token graph.
+At the model's 4 KV heads, dimension 256 and 8 full-attention layers, the saved
+paired moments occupy about 8 MiB in total.
+
+Once weighted boundary state exists, zero-write template/footer tokens refresh
+its final context and position without changing weighted means, current weighted
+output, motion, sample counts or weight writes. Disabled/read-only capture still
+collects no new state. The terminal trajectory remains weighted accumulated
+state; it is not an exact reconstruction of the final token's original Jacobian.
+
+Direction and boundary tensors use the existing authenticated encrypted
+checkpoint format. Snapshots include the adjusted packed weights and those
+aggregates. They exclude original token IDs, source text, logits and ordinary
+cache shards. Legacy checkpoints still load for ordinary use, but cannot supply
+direction information that was never collected. Reverse jobs on them fail
+explicitly instead of reverting to token search.
+
+Boundary checkpoint schema 2 adds the exact context descriptor and paired-moment
+shapes. Schema 1 remains readable for ordinary use and its existing approximate
+mean-cell reverse path; re-saving it does not manufacture paired information or
+absolute rotary phase. A later observed forward step collects the new context.
+The encrypted container format is unchanged. Field-only reconstruction snapshots
+are marked schema 2 and retain only baseline/config identity, packed changes and
+accumulated direction/boundary state. They never open ordinary-cache shards.
+Complete checkpoints retain their existing native-cache behavior. A fixed per-layer
+freshness marker is saved only when the actual live cache tracker matches the
+final observed boundary. With that marker and matching cache descriptors, the
+disposable tracker is recreated from the persisted pre-query summary and the
+already-existing current native cell, preserving its update arithmetic without
+another stored array. Offset equality alone is not treated as matching history:
+ordinary-state resets followed by disabled ingestion cannot hydrate stale moments.
+The marker is excluded from field-only reconstruction snapshots.
+A rebuild after an unobserved interval can differ by float32 reduction roundoff;
+it does not change native forward outputs.
+
+## Reverse operations
+
+The runtime loads current adjusted weights into a private engine. The installed
+Qwen layer bodies retain residuals, norms, nonlinear gates, attention,
+convolution and recurrence. Each of the 248 executing quantized projections now
+has its **own** approximate counterpart. Missing projection records are explicit
+errors rather than silently omitting their directions.
+
+For each projection, initialize input/output directions as the normalized sum
+of its recorded current and mean directions. Evaluate the local projection on
+an equal blend of its incoming value and its recorded input direction at that
+value's magnitude. Blend its output with its recorded output direction in the
+same way. These equal blends are explicit surrogate-model assumptions, not
+recovered activation values. In backward traversal, the custom rule applies
+the selected native weight transpose to `incoming + write_mean`. The bounded
+signed write mean is added at that projection's output coordinates, **not** at
+a layer's hidden output and never independently normalized. This includes Q/K/V,
+recurrent QKV/z/a/b, attention output, and all MLP gate/up/down projections.
+
+This custom backward rule is deliberately **not the derivative of the boundary
+blend**, and not an inverse. Norms, residuals and gates use their ordinary local
+adjoints around those surrogate values. The terminal norm retains the earlier
+directional scale reversal rather than erasing a radial signal with a norm VJP.
+Current-weight and explicit delta-weight modes use the same state mechanics.
+Delta mode still means exactly `Wcurrent-W0` for eligible projection matrices.
+
+### Evolving aggregate state
+
+Each layer and the terminal boundary now have independent movement trajectories.
+A layer's changed output direction conditions its next incoming reverse signal;
+its pulled-back signal steers its input direction by that layer's measured
+output movement distance, retaining its aggregate input magnitude. Projection
+input/output directions move against their recorded mean forward flows, keeping
+those flow magnitudes. Each projection can spend at most its recorded
+`samples-1` transitions; a zero aggregate flow has no movement. Traversal stops
+when all boundary trajectories and projection movement are exhausted or
+stationary. Terminal stagnation alone no longer hides movement below it. This
+is a data-derived traversal horizon, not a configured token count or a learned
+end-of-language decision.
+
+All evolving states are private, fixed-size copies initialized from the final
+snapshot. Source records, packed weights, scales and biases are not changed.
+There is no per-input activation, token, gate or KV sequence. Independent readout does not feed output back. The explicit sequence mode below
+maintains a separate causal context for emitted output only.
+
+### Approximate context predecessors
+
+- **Paired attention:** evaluate the existing positive-kernel summary plus one
+  differentiable current K/V cell. Between emissions, infer a predecessor cell
+  by transporting the current local key one rotary step backwards and retaining
+  its local value. This is a local-constancy approximation, not identification
+  of a historical cell. Subtract that pair's features from the summary; project
+  the removed feature mass onto available nonnegative mass and use the same
+  projected features for cross-moment subtraction. Empty rows are zeroed. Move
+  the query phase and available-cell count backwards. An evicted rotating-cache
+  cell cannot be recovered, so no invented older cells replenish the window.
+  Saved prefix/tail ranges identify gaps: preserve the surviving prefix summary
+  while traversing an evicted middle range, then remove it only at prefix positions.
+  The initial final phase is exact; subsequent cells/states are approximate.
+- **Recurrence:** with local Q/K/V and a/b gates fixed for this step, let `F(z)`
+  be the installed differentiable native state transition, `c` the current
+  inferred state, and `p` the saved final aggregate. Compute the state-only
+  residual pullback `J_F(c)^T (c-F(c))`, then set
+  `c_next = (c + p + J_F(c)^T (c-F(c))) / 2`. This is one gradient step for
+  `.5||F(z)-c||² + .5||z-p||²`, starting at `c`. The normalized delta recurrence
+  has state operator norm at most one; the half step is its analytic
+  smoothness bound with unit ridge regularization. It regularizes unidentifiable
+  history toward the saved aggregate, rather than dividing by decayed gates or
+  claiming an inverse. It is not an iterative activation-matching solve.
+- **Convolution:** retain only the mean-window surrogate. For `m` slots,
+  `F(c)=((m-1)c+qkv)/m`; apply the same single ridge predecessor step using
+  `F'(c)=(m-1)/m`. A one-slot window has no recoverable predecessor component.
+  No token window is reconstructed.
+- **Gates:** z/a/b, the full-attention output gate and the MLP gate are recomputed
+  from their evolving projection boundaries. No missing gate history is
+  fabricated or persisted.
+- **Legacy attention:** schema-v1 mean K/V cells continue through their legacy
+  softmax counterpart and a regularized mean-cell predecessor heuristic. They
+  are not upgraded to paired moments or given invented absolute-position data.
+
+The positive-kernel summary remains **not softmax-equivalent**. None of these
+updates identifies the original sequence or establishes semantic quality.
+
+## Direct token readout and optional sequence feedback
+
+A reusable coordinate-partition tree is built once from frozen baseline rows.
+Each emission follows coordinate comparisons to one token ID. It does not scan
+vocabulary rows, simulate candidate tokens, compute a vocabulary-sized logits
+vector, rank candidate sequences or replay the original inputs. One-time index
+construction reads all baseline rows; this is not per-emission token scoring.
+
+`readout_mode="independent"` remains the default and preserves the existing
+input-embedding partition. Select `readout_mode="sequence"` for causal feedback:
+
+1. Initialize empty, private output-only attention/convolution/recurrent caches.
+   No source native caches or input tokens are loaded into these caches.
+2. For the first emission, scale the current reverse embedding direction by the
+   saved first-layer aggregate input magnitude (unit fallback for a zero mean).
+   For later emissions, fetch the last emitted token's frozen input embedding
+   and average it with the current reverse direction at that embedding's norm.
+   This equal blend is an explicit, **untrained** soft-conditioning choice.
+3. Pass that one continuous embedding through Qwen's existing causal backbone,
+   sharing its current adjusted weights. Stop before `lm_head` or tied
+   `as_linear`; no vocabulary logits are produced. These native calls bypass
+   all reverse projection/attention/recurrence wrappers, so they cannot replace
+   the pending reverse transition data needed for the next reverse step.
+4. Normalize the resulting causal hidden vector and traverse the same partition
+   algorithm, indexed over the frozen **output-head rows** instead of input
+   embeddings. Untied actual Qwen model wrappers resolve their language-model
+   output head explicitly; tied models use their shared embedding rows.
+5. Retain the emitted token as the next input and keep output-only causal caches.
+   Earlier emitted output influences subsequent hidden states through those
+   caches, even when two prefixes have the same last token. The reverse vector
+   continues to contribute at every step. Reset these caches at each new run.
+
+The two indices have distinct cache names and baseline identities, so an old
+input-embedding tree cannot masquerade as an output-head tree. Source snapshot
+format, field weights, direction records and boundary records do not change.
+Generated-output caches are transient and use the existing native context-window
+setting; that window bounds attention memory, not the number of emissions.
+
+For `weight_mode="delta"`, reverse projections still use `Wcurrent-W0`.
+The optional causal sequence backbone deliberately uses **current** ordinary
+weights to retain the pretrained sequence transition. Results state this
+separately as `sequence_context_weight_mode="current"`; choose independent
+readout for a delta-only reverse/readout experiment.
+
+Neither partition is a trained language head, a probability model, a nearest
+neighbor guarantee, or a learned mapping from field state to meaning. Using
+trained causal layers adds genuine sequence dependence but does **not** establish
+linguistic coherence, grounding, subject retention or original wording. The
+raw sequence is delivered unchanged, with no reinforcement or polishing pass.
+
+## Interface and limits
+
+Existing Biome start/status/cancel/export routes remain. Example:
+
+```json
+{"mode":"reverse","weight_mode":"current","readout_mode":"sequence","debug":true}
+```
+
+Omitting `readout_mode` preserves independent readout. The former `first_pass`,
+`replay`, candidate-pool, beam and fixed-token-count options remain rejected.
+Their offline numerical helpers remain only for historical artifacts.
+Both readout modes retain the existing boundary/projection movement termination;
+no configured token count, learned end condition or semantic quality threshold
+is introduced. The protected export packages all raw emitted text and IDs.
+
+## Observational reverse diagnostics
+
+Set `options: {"mode": "reverse", "debug": true}` to include a compact diagnostic
+trace in the existing encrypted result and its explicit protected export.
+Debugging defaults to off. It does not change reverse arithmetic, write-direction
+conditioning, normalization, stopping rules, emitted IDs or token count. It
+does not run an extra model evaluation, scan the vocabulary or retain input
+tokens, source text, full reverse vectors, or a forward activation history.
+
+The trace records each emission's signal norm, change from the preceding
+emission, cosine, and normalized chord change. Layer measurements bracket the
+layer conditioning and the VJP. Every projection also reports its own incoming,
+conditioned and pulled-back signals and its evolving input/output directions.
+Per-layer context measurements reveal whether aggregate buffers move. Sequence
+mode additionally traces reverse input, previous emitted embedding, mixed input
+and causal hidden-state movement; no signal vectors are serialized. Separate measurements report
+the raw write-mean norms, combined write magnitude, and how much
+conditioning changes the incoming direction. Trajectory measurements report
+the raw movement, its radial and tangential components, actual normalized-state
+movement, and which existing motion, small-step or zero-direction stop fired. These are
+observations, not new correctness thresholds or stopping criteria.
+
+Readout diagnostics describe the exact comparison vector and visited partition
+branches, along with the closest split and its margin. Identical paths are
+stored once. This distinguishes an unchanged upstream signal, variation lost
+during propagation, and changing readout vectors that remain in one partition
+region. Equal token IDs alone do not distinguish those cases.
+
+Debug schema version 2 names the bias magnitude `combined_write_norm`; the Qwen
+result marks conditioning as `recorded_signed_magnitude`. The earlier instrumentation-only
+schema 1 used `combined_unit_write_norm` for the unit-amplified implementation.
+
+Only one preceding vector per observed signal is kept transiently. Serialized
+trace storage is scalar-only and proportional to emitted steps and model
+layers; signal names and column names are stored once. It is never written to
+ordinary job progress or plaintext logs. The result's existing source reference
+binds the trace to its checkpoint. Completed runs retain the full trace; a run
+that fails before producing a result does not yet export partial diagnostics.
+
+The code is an approximate numerical implementation, not an exact inverse or a
+trained decoder. Software tests check state handling, numerical mechanics and
+control flow; they do not establish semantic reconstruction quality.
+
+Native saved-checkpoint validation with the full 9B model reproduced 489 copies
+of one token before the magnitude correction. Preserving recorded write
+magnitudes produced 489 outputs spanning 34 token IDs, with no consecutive
+identical IDs. The terminal trajectory and motion-exhausted stopping point were
+unchanged. Consecutive normalized readout movement increased from roughly
+1.8e-7 to a median of 0.888. The resulting raw text is still incoherent: this
+validates removal of the measured signal collapse, not semantic reconstruction.
+The native suite passed 172 tests with no skips. No new ingestion, corpus trial
+or training was performed for this validation.
+
+## Final-state context validation (2026-11-07)
+
+The cloud CPU suite exercises actual MLX 0.32.4 and mlx-lm 0.32.2 Qwen/cache
+classes, including dimension-256 grouped attention and Q/K/V VJPs. Tests compare
+paired response and gradients to an independent dense positive-kernel oracle;
+they do not claim equality with softmax. Coverage includes equal separate means
+with different pairings, empty/current-only history, repeated ring wraps, retained
+prefixes, oversized prefill trimming, disabled intervals, final zero-write
+footers, checkpoint continuation, exact integer positions beyond 2**24, malformed
+schema rejection, legacy reverse, encrypted snapshot exclusion and fixed tensor
+size. Captured and uncaptured native forward outputs are identical in the tiny
+Qwen regression. Full pretrained-model performance and semantic quality remain
+unmeasured for this change. No live service, active experiment or saved source
+checkpoint was modified during these tests.
+
+Validation result: **213 passed, 3 skipped**. Skips are the two existing Metal
+writer tests (no Metal backend on the cloud CPU) and optional Ripser topology.
+Compilation and whitespace checks passed. See
+`qualification/final-state-context-20261107.json` for source hashes and scope.
+
+## Explicit delta-only projection mode
+
+`options: {"mode": "reverse", "weight_mode": "delta", "debug": true}`
+selects ΔW = Wcurrent − W0 for every eligible quantized projection in the
+private reverse engine. Omitting `weight_mode` preserves `current` behavior.
+Other values are rejected. This is subtraction, not the reflected operator
+W0 − ΔW. Results record `weight_mode`, `projection_operator`, and
+`projection_bias`.
+
+Each delta counterpart computes two quantized products using FP32 input,
+scales and offsets, subtracts in FP32, and returns the activation dtype.
+Both products participate in the VJP; no full-model floating-point weight
+matrix is allocated. Packed codes, baseline anchors, scales and offsets
+remain unchanged. Frozen ordinary projection bias cancels, as in
+(x Wcurrentᵀ + b) − (x W0ᵀ + b).
+
+Delta mode applies only to field-eligible projection matrices. Embeddings,
+normalizations, convolutions, residual connections, recorded recurrent state,
+paired attention summaries and the frozen embedding readout remain in place.
+Thus a zero projection delta does not imply zero whole-layer output or an empty
+emitted stream: residual and recorded-state paths can still carry a signal.
+This mode is an approximate local counterpart at the saved aggregate state,
+not proof of semantic reconstruction or recovery of the original transcript.

@@ -71,3 +71,28 @@ Through Biome, use `context.action=experiment_start` with `context.experiment_co
 Optional topology: install `.[topology]`, then set `persistent_homology=true` in a descriptor run or field configuration. H0/H1 use the flag complex of `1-S/max(S)`, without assuming a metric. [Ripser API](https://ripser.scikit-tda.org/en/latest/reference/stubs/ripser.ripser.html). Its utility is measured against the graph-only baseline.
 
 Native regressions: `python -m pytest -q`, `python tests/qualify_full_model.py`, `python tests/qualify_continuation.py`, and `python tests/qualify_api.py`. Qualification reports keep skipped, failed, unexecuted and measured results distinct.
+
+
+## Approximate reverse propagation
+
+See [CONTEXT_RECONSTRUCTION.md](CONTEXT_RECONSTRUCTION.md) for the current
+direction-accumulation and reverse-to-token path, including fixed-size paired
+attention summaries and exact final rotary/cache descriptors in boundary schema 2.
+Reverse options default to `weight_mode="current"`; explicit `weight_mode="delta"`
+uses projection ΔW = Wcurrent − W0 without altering stored weights.
+Legacy mean-cell checkpoints remain readable; new paired state must be collected
+by forward observation. Newly collected state is
+required; older weight-only checkpoints cannot retroactively acquire it. The
+former vocabulary-ranking/replay service modes are retired. Full-model semantic
+quality remains unmeasured; this code update does not run inference experiments.
+
+The reverse engine now uses direction records at all 248 projection counterparts
+and evolves layer, projection, attention, recurrent, convolution and gate state
+between emissions. These are private approximate predecessor states, not recovered
+history. See the equations and limitations in CONTEXT_RECONSTRUCTION.md.
+
+Optional `readout_mode="sequence"` lets evolving reverse vectors and previously
+emitted output condition a separate causal Qwen readout state. It uses a cached
+branch-only output-head partition, never vocabulary-wide logits. The existing
+`readout_mode="independent"` remains the default. This is untrained conditioning
+and approximate token selection, not a demonstrated coherent language decoder.

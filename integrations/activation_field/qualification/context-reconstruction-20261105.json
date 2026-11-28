@@ -1,0 +1,67 @@
+{
+  "status": "native_export_requalification_pending",
+  "source_commit": "f6c1c53237f67a68265ec95a5e63a24c2823eeee",
+  "transport_fix_commit": "c37b8e27dba66206ad2ecc28820c4ee64a161a70",
+  "source_identity": "48b32e8c548f0513a4b8107d00213d4fc874198e95422cc8ded9c11c295632d6",
+  "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+  "validation": {
+    "initial_native_tests": 64,
+    "repair_native_tests": "pending",
+    "repair_repository_ci": "https://github.com/michaelrolphone-cmyk/BiomeRTE/actions/runs/42090633024",
+    "initial_harness": "failed: single_integrity",
+    "initial_harness_terminal": "afctx-native-qualification-supervisor",
+    "export_denial": "afctx-export-protection-test",
+    "fit_resume": "afctx-resume-fit-after-native-20261105"
+  },
+  "cases": [
+    {
+      "label": "single",
+      "run_id": "786aa2c3908b466ca2af50dfc6d9b397",
+      "expected_tokens": [
+        82082
+      ],
+      "estimated_tokens": [
+        82082
+      ],
+      "relative_squared_error": 0,
+      "evidence_operation": "afctx-repair-read-single",
+      "report_transport_integrity": "pending",
+      "precision_scope": null
+    },
+    {
+      "label": "sequence",
+      "run_id": "08ef25b0bcb04f118ab25d4b5a57cf8f",
+      "expected_tokens": [
+        82082,
+        72730
+      ],
+      "estimated_tokens": [
+        82082
+      ],
+      "relative_squared_error": 0.5358201129950034,
+      "evidence_operation": "afctx-repair-read-sequence",
+      "report_transport_integrity": "pending",
+      "precision_scope": "Exploratory accuracy; expected second token not recovered."
+    },
+    {
+      "label": "zero",
+      "run_id": "2b76ceeaeaec4e0ab8c004594ac927dc",
+      "expected_tokens": [],
+      "estimated_tokens": [],
+      "relative_squared_error": null,
+      "evidence_operation": "afctx-repair-read-zero",
+      "report_transport_integrity": "pending",
+      "precision_scope": null
+    }
+  ],
+  "continuation": {
+    "operations": [
+      "afctx-export-integrity-diagnosis",
+      "afctx-integrity-fix-install",
+      "afctx-c37-export-requalification"
+    ],
+    "verify_script": "import sys,json,hashlib,base64,time,datetime\nfrom pathlib import Path\nroot=Path.home()/'.local/share/biome-activation-field'\nside=Path.home()/'.local/share/biome-context-reconstruction'\nversion=json.loads((side/'source-version.json').read_text())\nassert version['git_revision']=='c37b8e27dba66206ad2ecc28820c4ee64a161a70',version\nsys.path.insert(0,version['source'])\nfrom activation_field.checkpoint import Vault,canonical\nfrom activation_field.provider import gateway\nfrom activation_field.context_reconstruction.transport import read_transfer\ng=gateway()\nresource='model.context-reconstruction.mac.a0e62492364bd9ddd423'\ncases=[\n('single','786aa2c3908b466ca2af50dfc6d9b397','6f61a04a22e0f037a045d22983a52530fd351da323d5521a7abf3befeac2c71c',[82082]),\n('sequence','08ef25b0bcb04f118ab25d4b5a57cf8f','3fe124b649231fba9a518d03cbf6eac8566f165056ad34d313ac7b26e1c38e18',[82082,72730]),\n('zero','2b76ceeaeaec4e0ab8c004594ac927dc','94b89aa274e0024bcf4f86639802455624bf7f7db6d1c4051d0e3c72ac917498',[])]\ne=dict(status='running',installed=version,checks={},cases={})\nout=root/'context-export-requalification.json'\ndef save():\n e['observed_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()\n tmp=out.with_suffix('.tmp');tmp.write_text(json.dumps(e,indent=2));tmp.replace(out)\ndef check(name,value):\n e['checks'][name]=bool(value);save()\n assert value,name\ndef cap(action,args,label):\n op='afctx-c37-verified-'+label+'-'+action\n g.invoke('cap.submit',dict(contract='model.context_reconstruction.'+action+':1',resource=resource,operation=op,inputs={'arguments':args}),rid=op,realm='site')\n while True:\n  r=g.invoke('cap.submission',dict(operation=op),realm='site')\n  if r['state'] in ('succeeded','failed','cancelled','rejected'):break\n  time.sleep(2)\n assert r['state']=='succeeded',r\n value=r['result']['result'];assert value['ok'],value\n if action=='export':\n  check(label+'_lossless_transport','result_artifact' in value)\n  value=json.loads(read_transfer(value['result_artifact'],lambda sha:base64.b64decode(g.invoke('artifact.get',dict(sha256=sha),realm='site')['data'])))\n return value\nsave()\ntry:\n for label,job,sha,expected in cases:\n  state=cap('status',dict(run_id=job),label)\n  check(label+'_job_succeeded',state['status']=='succeeded')\n  report=cap('export',dict(run_id=job,expected_version=state['version'],allow_plaintext=True),label)['artifact']\n  data=dict(report);integrity=data.pop('integrity')\n  check(label+'_integrity',integrity['sha256']==hashlib.sha256(canonical(data)).hexdigest())\n  check(label+'_source_unchanged',sha==hashlib.sha256(canonical(Vault(root/'state').manifest('afctx-qualification-'+label))).hexdigest())\n  check(label+'_no_history_used',all(report[k] is False for k in ('uses_source_transcript','uses_source_native_caches','uses_source_logits')))\n  e['cases'][label]=dict(run_id=job,expected=expected,report=report,exact=report['estimated_token_ids']==expected)\n  if label=='zero':check('zero_no_invented_tokens',report['status']=='insufficient_signal' and not report['estimated_token_ids'])\n  else:check(label+'_full_model_replay',all(c['scored_projections']==248 and c['scored_layers']==32 for c in report['candidates']))\n  if label=='single':check('single_exact',e['cases'][label]['exact'] and report['best_relative_squared_error']==0)\n state=cap('status',dict(run_id='653ec2b449444954b0f1f934da5d5a2d'),'cancelled')\n check('cancelled_terminal',state['status']=='cancelled')\n e['cancelled']=state;e['status']='passed';save()\nexcept BaseException as exc:\n e.update(status='failed',error=repr(exc));save();raise\nprint(json.dumps(dict(status=e['status'],checks=e['checks'],observed_at=e['observed_at'],path=str(out),cases={k:dict(estimated=v['report']['estimated_token_ids'],exact=v['exact'],residual=v['report'].get('best_relative_squared_error')) for k,v in e['cases'].items()})))\n",
+    "native_result_path": "~/.local/share/biome-activation-field/context-export-requalification.json",
+    "instruction": "Read cap.submission for each operation. Inspect terminal result.exit_code and full stdout/stderr. Installer tests and deploys c37. Verification must pass every checksum/source-preservation/full-model check. Do not rerun model work for a transport-only fix. Do not claim complete until verified."
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "kind": "causal_sequence_readout_qualification",
+  "date": "2026-11-07",
+  "base_commit": "3b171a74c0adf7a352b9e0197f1f83ea29d22e56",
+  "source_sha256": {
+    "CONTEXT_RECONSTRUCTION.md": "fac560b70e2d48add76743728f179503cedb155f62692e3f68bc6dc9b3fc2a62",
+    "README.md": "b56abe3372d963c04bd8ab9e5c27a9d173f75530a5587fc9cf485cff9a5981ee",
+    "activation_field/adapters/delta_projection.py": "7be25df0435f3c930e8afddd7e6ff29c7302bf88ac6f218a5bc508692fa1f752",
+    "activation_field/adapters/qwen35_reverse.py": "fa82e386c140fd4b9b773b68326fef1774114467528d3a7f94b1d7da5a88f26f",
+    "activation_field/adapters/sequence_readout.py": "829329ba0f7c9abb826ec4af4a34f071c77e9a1570107aabc2ae7f730141ffb3",
+    "activation_field/context_reconstruction/capabilities.py": "b005fefddc0819d1a47c9b4aa29175137c8571ea2fda4ed617f3af26905e9e92",
+    "activation_field/inverse.py": "fc89737d42bc41edc8c017c1c138660574e07b82db0954ac34fc1144572ee051",
+    "activation_field/inverse_runtime.py": "a4687aaf799c888420da3ca5d8c1bd6324272db54548a5ba18e919b558b0ed34",
+    "tests/test_evolving_reverse_native.py": "f75362ea0d06d7dc4252c602ff14b6bb164a37a9191ade431c1024aafff45800",
+    "tests/test_reverse_debug.py": "36ff6d57994bbd7a9cd2833e7ae70254eca34976bfd22b4df81895f61253d63f",
+    "tests/test_sequence_readout.py": "2b9f144b6479897231daaa033fbb6ac0fed92246727bccf696ecf962a4d737ff"
+  },
+  "candidate_archive_sha256": "95bcc431197ab26b8b047d38e4cef127814d933de4bc80a34ae8a38c705e160e",
+  "implementation_hash": "97f1ddaf43d1ceb33f3be5e2a18ee41f6154ed9b64e15ae2ea249d8617d59725",
+  "linux_mlx_cpu": {
+    "mlx_version": "0.32.4",
+    "passed": 251,
+    "skipped": 3,
+    "failed": 0,
+    "duration_seconds": 8.59,
+    "skip_reasons": [
+      "Optional Ripser unavailable",
+      "Two Metal-only writer tests unavailable on CPU"
+    ],
+    "compilation": "passed",
+    "diff_check": "passed"
+  },
+  "native_apple_silicon": {
+    "mlx_version": "0.32.4",
+    "passed": 254,
+    "skipped": 0,
+    "failed": 0,
+    "duration_seconds": 10.86,
+    "scope": "Actual tiny native Qwen models and Model wrappers, no pretrained model loaded for tests."
+  },
+  "coverage": [
+    "Distinct earlier emitted prefixes affect readout despite equal most-recent token",
+    "Changing evolving reverse vectors affects subsequent causal state",
+    "Every pending reverse projection and recurrence object survives causal calls unchanged",
+    "Reverse context advancement is bit-identical with and without causal calls in current/delta modes",
+    "Causal backbone uses current matrices without altering delta reverse semantics",
+    "Separate output-head index resolves the actual untied Qwen Model wrapper",
+    "Vocabulary head is never invoked during emission",
+    "Missing untied output head fails explicitly, not a silent input-table fallback",
+    "Output caches reset between runs; debug does not change output",
+    "Existing attention window bounds generated cache memory but does not cap emissions",
+    "Capture suppressed and restored: generated output never enters source observation buffers",
+    "Classes and capture restored after exceptions"
+  ],
+  "independent_review": {
+    "blocking_findings": 0,
+    "additional_checks": [
+      "Forty output steps with a four-position attention window reached a constant active MLX memory plateau"
+    ]
+  },
+  "options": {
+    "mode": "reverse",
+    "weight_mode": "current",
+    "readout_mode": "sequence",
+    "debug": true
+  },
+  "compatibility": "Independent readout remains default; sequence feedback is explicit. Checkpoint schema and original reverse movement termination unchanged.",
+  "limitations": [
+    "Soft conditioning is an untrained equal blend of reverse direction and prior emitted embedding.",
+    "Coordinate partition of output-head rows is approximate token selection, not native LM probabilities or a trained hierarchical head.",
+    "Mechanical tests establish sequence dependence, not semantic grounding or coherence.",
+    "Source snapshot is unchanged; only generated-output causal state is transiently retained.",
+    "Deployment and the single requested orchard run are tracked separately."
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-11-07",
+  "base_commit": "3c7c93898e4bcdb46e3d508a5d6bf5682c33c1c0",
+  "operator": "Wcurrent-W0",
+  "option": {
+    "mode": "reverse",
+    "weight_mode": "delta",
+    "debug": true
+  },
+  "default_preserved": "weight_mode=current",
+  "cloud_suite": {
+    "passed": 222,
+    "failed": 0,
+    "skipped": 3,
+    "skip_reasons": [
+      "Metal-only tests (2)",
+      "Optional Ripser unavailable (1)"
+    ]
+  },
+  "compileall": "passed",
+  "diff_check": "passed",
+  "code_sha256": {
+    "activation_field/adapters/delta_projection.py": "3db077c1864ed617025d088e855e0e039b33960c7e1e446b275004f0886474ca",
+    "activation_field/adapters/qwen35_reverse.py": "7ae8bc7cb77c3956456c7b1c3987decb9d998d9d277b9ae3037025ed644b0e7e",
+    "activation_field/inverse.py": "2c8bcf352c6c8ec2446cb338a3daae08b38cf734d7c192322372192581f7396a",
+    "activation_field/inverse_runtime.py": "b1a3f35e2e5d9f33672ed4ff80d9d6d97baa28c29687c93645ff2283631b4be2",
+    "activation_field/context_reconstruction/capabilities.py": "413d62d1db4af841970477f5533b5b9bcffbac3c17bb09bb2eb0fb365623a503",
+    "tests/test_delta_reverse.py": "0a708da1cfd5c040007db07ac918547d6652e4d4d49dace6f26e31b116e1b547",
+    "tests/test_reverse_debug.py": "35048e85c25ea9cf930a2f7ef19fbcacf55ca35fed32031f95d0e5620816837f"
+  },
+  "coverage": [
+    "Signed nonzero and zero delta projection output and VJP",
+    "FP32 and BF16 against an independently dequantized small test oracle",
+    "Frozen ordinary bias cancels; stored quantized arrays and parameters unchanged",
+    "Actual tiny Qwen reverse for current/delta and changed/unchanged weights"
+  ],
+  "limits": [
+    "Only eligible quantized projection matrices use delta; embeddings/norms/convolution/residuals/contexts remain",
+    "No exact inverse or semantic reconstruction guarantee",
+    "Full-model native run still pending at this commit"
+  ]
+}
