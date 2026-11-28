@@ -16,6 +16,9 @@ from terminal import check_argv, store_stream
 from terminal_limits import apply_limits, read_limits
 
 
+ADAPTER_EXITED_REASON = 'terminal_adapter_exited_before_recording_outcome'
+
+
 def save_receipt(path, value):
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.')
     try:
@@ -180,13 +183,16 @@ def recover_one_finished(remote, cfg, operation, reconcile_receipt):
             return
         saved = json.loads(path.read_text())
         failed = failed_runner_evidence(directory, saved) if saved['state'] == 'running' else None
-        if saved['state'] != 'finished' and failed is None:
+        if saved['state'] not in ('finished', 'recovered_failure') and failed is None:
             return
         action = remote.call('cap.status', {'operation': operation})
         expected = hashlib.sha256(json.dumps([operation, action['inputs'], cfg['terminal_profile']],
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         if saved['signature'] != expected or saved['operation'] != operation:
             raise RuntimeError('Terminal recovery identity mismatch')
+        if saved['state'] == 'recovered_failure':
+            reconcile_receipt(str(ROOT), remote, operation, 'failed', saved['result'])
+            return
         if failed is not None:
             from biomerte.store import digest
             marker, evidence = failed
@@ -194,7 +200,7 @@ def recover_one_finished(remote, cfg, operation, reconcile_receipt):
             if (action.get('id') != operation or action.get('provider') != remote.node
                     or action.get('contract') != 'host.terminal.run:1' or marker.get('signature') != identity):
                 return
-            result = dict(reason='terminal_adapter_exited_before_recording_outcome',
+            result = dict(reason=ADAPTER_EXITED_REASON,
                           effects_unknown=True, replay_allowed=False, evidence=evidence, streams={})
             state = 'failed'
         else:
@@ -202,8 +208,14 @@ def recover_one_finished(remote, cfg, operation, reconcile_receipt):
             state = 'succeeded'
         for name in ('stdout', 'stderr'):
             result[name], result['streams'][name] = store_stream(directory / name, remote, 48 * 1024)
+        # The worker can retire the result as soon as the controller accepts it.
+        # Save the exact outcome locally before a settlement with an uncertain reply.
+        if failed is not None:
+            saved.update(state='recovered_failure', result=result)
+            save_receipt(path, saved)
+        else:
+            save_receipt(directory / 'published.json', result)
         reconcile_receipt(str(ROOT), remote, operation, state, result)
-        save_receipt(directory / 'published.json', result)
 
 
 def expire_result(operation,historical=None):
@@ -283,10 +295,23 @@ def acknowledge_result(request):
             if saved.get('result_digest') != request['result_digest']:
                 raise RuntimeError('Terminal acknowledgement result mismatch')
         else:
-            if saved['state'] != 'finished':
-                raise RuntimeError('Unresolved terminal output cannot be retired')
             published = directory / 'published.json'
-            value = json.loads(published.read_text())
+            if saved['state'] == 'recovered_failure':
+                value = saved['result']
+            elif saved['state'] == 'finished':
+                value = json.loads(published.read_text())
+            elif saved['state'] == 'running' and published.is_file():
+                # Older recovery code published verified failure without updating the receipt.
+                value = json.loads(published.read_text())
+                evidence = value.get('evidence', {})
+                if (value.get('reason') != ADAPTER_EXITED_REASON
+                        or evidence.get('quiescent') is not True
+                        or evidence.get('process_group_absent') is not True
+                        or evidence.get('adapter_pid') != saved['adapter_pid']
+                        or evidence.get('pgid') != saved['pgid']):
+                    raise RuntimeError('Unresolved terminal output cannot be retired')
+            else:
+                raise RuntimeError('Unresolved terminal output cannot be retired')
             digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
             if digest != request['result_digest']:
                 raise RuntimeError('Terminal acknowledgement result mismatch')
