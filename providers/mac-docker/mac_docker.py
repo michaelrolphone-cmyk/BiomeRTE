@@ -18,7 +18,7 @@ TERMINAL = HOME / '.local/share/biome-mac-terminal'
 LABEL = 'org.biomerte.mac-docker'
 sys.path[:0] = [str(HERE.parents[1]), str(HERE.parent / 'pi-docker'), str(TERMINAL)]
 import mac_provider as gateway
-from biomerte.worker import ActionPool, Worker
+from biomerte.worker import ActionPool, ReceiptMaintenance, Worker
 from docker_cli import CONTRACT, execute, usage
 
 
@@ -61,6 +61,7 @@ def serve(cfg):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         worker = Worker(str(STATE / 'worker.sqlite'), remote, [local], 5400)
         pool = ActionPool(worker, cfg['slots'])
+        maintenance = ReceiptMaintenance(worker, 2)
         advertised = None
         checked = launch_after = 0
         stopping = False
@@ -85,12 +86,13 @@ def serve(cfg):
                             launch_after = now + 120
                         checked = now + 10
                     if advertised == 'ready':
-                        worker.once(pool)
+                        worker.once(pool, receipt_maintenance=maintenance)
                     time.sleep(2)
                 except Exception as exc:
                     print('Worker retry:', type(exc).__name__, str(exc)[:240], file=sys.stderr, flush=True)
                     time.sleep(5)
         finally:
+            maintenance.close()
             try:
                 remote.call('cap.offer', offer(cfg, 'offline'))
             finally:

@@ -1,4 +1,4 @@
-import json, tempfile, unittest
+import json, sys, tempfile, unittest
 from pathlib import Path
 from biomerte.worker import Worker
 from biomerte.store import Fault, digest, encode
@@ -83,3 +83,21 @@ class WorkerRecovery(unittest.TestCase):
         self.uncertain()
         a=dict(id='new-action',resource='terminal',guard='slot-a',generation=1,lease='prior')
         with self.assertRaises(Fault):self.w.perform(a)
+
+    def test_failing_ack_cleanup_keeps_its_receipt_and_allows_later_cleanup(self):
+        for operation, code in (('a-failed', 1), ('b-good', 0)):
+            signature = digest(operation)
+            self.w.db.execute('INSERT INTO actions VALUES(?,?,?,?,?)',
+                              (operation, signature, 'succeeded', '{}', 'terminal'))
+            self.w.db.execute('INSERT INTO result_retention_eligible VALUES(?,?)', (operation, signature))
+            self.w.db.execute('INSERT INTO result_acknowledged VALUES(?)', (operation,))
+            argv = [sys.executable, '-c', 'raise SystemExit(' + str(code) + ')']
+            self.w.db.execute('INSERT INTO result_cleanup VALUES(?,?,?)', (operation, encode(argv), '{}'))
+
+        with self.assertLogs(level='WARNING'):
+            self.w.cleanup_results()
+        self.assertEqual([('a-failed',)], self.w.db.execute('SELECT id FROM result_cleanup').fetchall())
+        with self.assertRaises(Fault):
+            self.w.cleanup_results('a-failed')
+        self.assertEqual([('a-failed',), ('b-good',)], self.w.db.execute(
+            'SELECT id FROM result_acknowledged ORDER BY id').fetchall())
