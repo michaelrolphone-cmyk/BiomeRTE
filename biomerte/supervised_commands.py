@@ -132,7 +132,11 @@ def finish(worker, action, adapter, schema, signature):
                     # Network loss does not discard custody or the completion record.
                     pass
             time.sleep(min(.2, interval))
-            observation = runner.inspect(directory)
+            if observation['state'] == 'starting' and 'signature' not in observation:
+                # A pre-upgrade runner can hold custody before writing any marker.
+                observation = runner.ensure(root, action['id'], signature, adapter['argv'], request, worker.timeout)
+            else:
+                observation = runner.inspect(directory)
         try:
             worker.remote.call('provider.custody', dict(args, observation=dict(
                 observation, signature=signature, recovery_path=directory,

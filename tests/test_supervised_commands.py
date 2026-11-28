@@ -135,6 +135,59 @@ class RunnerTests(unittest.TestCase):
         runner.ensure(self.root,'missing','sig',['/no/such/executable'],{})
         status = self.wait(runner.location(self.root,'missing'))
         self.assertEqual(status['state'], 'not_started')
+
+    def test_runner_exit_before_adapter_start_settles_claim_without_replay(self):
+        remote = Remote()
+        worker, offer = self.worker(remote)
+        self.addCleanup(worker.db.close)
+        action = self.action()
+        directory = runner.location(os.path.join(self.root, 'command-runners'), action['id'])
+        start = subprocess.Popen
+
+        def early_exit(_argv, **kwargs):
+            return start([sys.executable, '-S', '-c', 'raise SystemExit(9)'], **kwargs)
+
+        # Stop the test quickly if the old code keeps reporting 'starting'.
+        read_observation = runner.inspect
+        observations = []
+
+        def inspect(path):
+            value = read_observation(path)
+            observations.append(value['state'])
+            if len(observations) > 15:
+                self.fail('exited runner never settled')
+            return value
+
+        with mock.patch.object(runner.subprocess, 'Popen', side_effect=early_exit) as launch, \
+                mock.patch.object(runner, 'inspect', side_effect=inspect):
+            worker.perform(action)
+            request = dict(operation=action['id'], inputs={}, progress_path=os.path.join(directory, 'progress.json'))
+            signature = digest([action[k] for k in ('contract', 'inputs', 'resource', 'generation', 'lease')])
+            reopened = runner.ensure(os.path.dirname(directory), action['id'], signature, offer['argv'], request)
+            self.assertEqual(reopened['state'], 'not_started')
+            launch.assert_called_once()
+        result = remote.results[action['id']]
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['result']['evidence'], {'executed': False, 'quiescent': True})
+        self.assertEqual(supervised.pending(worker), [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'effects')))
+
+    def test_observer_rechecks_starting_marker_after_custody_is_released(self):
+        directory = runner.location(self.root, 'race')
+        os.makedirs(directory)
+        marker = os.path.join(directory, 'state.json')
+        runner.save(marker, {'state': 'starting', 'signature': 'sig'})
+        acquire = runner.locked
+
+        def launched_before_observer_got_lock(path):
+            runner.save(marker, {'state': 'launching', 'signature': 'sig'})
+            return acquire(path)
+
+        with mock.patch.object(runner, 'locked', side_effect=launched_before_observer_got_lock):
+            observation = runner.inspect(directory)
+        self.assertEqual(observation['state'], 'interrupted')
+        self.assertEqual(observation['last_observation']['state'], 'launching')
+        self.assertFalse(observation['replay_allowed'])
     def test_adapter_failure_retains_evidence(self):
         runner.ensure(self.root, 'bad', 'sig', [sys.executable, '-S', '-c',
                       "import sys; sys.stderr.write('failure'); sys.exit(7)"], {})
