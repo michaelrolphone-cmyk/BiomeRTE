@@ -9,6 +9,7 @@ on:
       - 'biomerte/**'
       - 'providers/mac-docker/**'
       - 'providers/pi-docker/docker_cli.py'
+      - 'providers/pi-terminal/terminal.py'
       - 'providers/mac-terminal/mac_provider.py'
       - 'providers/mac-terminal/persistent_transport.py'
 

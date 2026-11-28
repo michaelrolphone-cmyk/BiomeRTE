@@ -9,6 +9,7 @@ COPY --from=docker-client /usr/local/bin/docker /usr/local/bin/docker
 COPY biomerte /opt/biome/biomerte
 COPY providers/mac-docker/mac_docker.py /opt/biome/providers/mac-docker/
 COPY providers/pi-docker/docker_cli.py /opt/biome/providers/pi-docker/
+COPY providers/pi-terminal/terminal.py /opt/biome/providers/pi-terminal/
 COPY providers/mac-terminal/mac_provider.py providers/mac-terminal/persistent_transport.py /opt/biome/providers/mac-terminal/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     BIOME_MAC_GATEWAY_STATE=/run/biome/mac-terminal \
