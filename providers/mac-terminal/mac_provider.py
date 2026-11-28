@@ -18,7 +18,7 @@ from pathlib import Path
 
 ORIGIN = 'https://biomerte-controller.cantikash.chatgpt.site'
 RESOURCE = ORIGIN + '/api/mcp'
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(os.environ['BIOME_MAC_GATEWAY_STATE']) if 'BIOME_MAC_GATEWAY_STATE' in os.environ else Path(__file__).resolve().parent
 CREDS = ROOT / 'oauth.json'
 
 class HTTPFailure(RuntimeError):

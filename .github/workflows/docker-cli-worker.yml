@@ -1,0 +1,25 @@
+name: Docker CLI worker image
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/docker-cli-worker.yml'
+      - 'deploy/workers/docker-cli/**'
+      - 'deploy/docker-services/images.json'
+      - 'biomerte/**'
+      - 'providers/mac-docker/**'
+      - 'providers/pi-docker/docker_cli.py'
+      - 'providers/mac-terminal/mac_provider.py'
+      - 'providers/mac-terminal/persistent_transport.py'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke the catalog image
+        run: |
+          python3 deploy/docker-services/images.py build --image worker-docker-cli --output-dir "$RUNNER_TEMP/biome-images"
