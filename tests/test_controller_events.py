@@ -1,11 +1,14 @@
 """Managed event registration, cursor continuity, replication and sender fencing."""
 import base64
 import copy
+import io
 import json
 import os
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from biomerte.app import Application, initialize
 from biomerte.controller_authority import ControllerAuthority
@@ -162,6 +165,48 @@ class ManagedEventTests(unittest.TestCase):
         self.events.deliver()
         self.assertIn(True,self.barriers)
         self.assertEqual(self.saved(PI,result["id"])["record"]["cursor"],7)
+
+    def test_authorization_transport_failure_preserves_the_replicated_cursor(self):
+        sub = self.subscribe()['id']
+        self.messages.clear()
+
+        def unavailable(owner, grant):
+            raise HTTPError('https://controller.example/authorize', 403, 'Forbidden', {}, None)
+
+        self.events._authorize_override = unavailable
+        self.assertEqual(self.events.deliver(), 1)
+        self.assertEqual(self.events.deliver(), 0)
+        self.assertEqual(self.messages, [])
+        pending = self.saved(PI, sub)['record']
+        self.assertEqual(pending['cursor'], 6)
+        self.assertEqual(pending['last_error'], 'authorization HTTP 403')
+
+        self.events.close()
+        self.events = self.open()
+        self.authority.events = self.events
+        store = self.events.stores[PI]
+        with store.db:
+            store.db.execute('UPDATE subscriptions SET next_try=0 WHERE id=?', (sub,))
+        self.assertEqual(self.events.deliver(), 1)
+        self.assertEqual(self.messages[0][2]['eventId'], 'delegate_original')
+        self.assertEqual(self.saved(PI, sub)['record']['cursor'], 7)
+
+    def test_authorization_request_identifies_the_event_client(self):
+        with tempfile.NamedTemporaryFile() as key:
+            key.write(b'qualification-key-' * 3)
+            key.flush()
+            self.events._authorize_override = None
+            self.config.update(event_authorize_url='https://controller.example/authorize',
+                               event_authorize_key_file=key.name)
+            with patch('biomerte.controller_events.build_opener') as opener:
+                opener.return_value.open.return_value = io.BytesIO(b'{"allowed": false}')
+                self.assertFalse(self.events.authorize('non-owner', None))
+
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_header('User-agent'), 'BiomeRTE-Events/1.0')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer ' + 'qualification-key-' * 3)
+        self.assertEqual(json.loads(request.data), {'owner': 'non-owner', 'grant': None})
+        self.assertEqual(self.barriers, [False])
 
     def test_retry_after_uncertain_callback_keeps_exact_event_identity(self):
         result=self.subscribe()

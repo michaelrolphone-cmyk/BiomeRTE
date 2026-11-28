@@ -158,7 +158,8 @@ class ManagedEvents:
             return self._barrier_override(publish)
         async def check():
             if publish:
-                await self.daemon.publish()
+                async with self.daemon.lock:
+                    await self.daemon.publish()
             await self.daemon.transport.validate(self.daemon.binding,preparing=False)
         return asyncio.run_coroutine_threadsafe(check(),self.loop).result(
             timeout=self.config.get("request_timeout_s",15)*4)
@@ -173,7 +174,8 @@ class ManagedEvents:
         key = Path(self.config["event_authorize_key_file"]).read_text().strip()
         if len(key)<32:
             raise Fault("Missing private event authorization credential",503)
-        headers = {"Authorization":"Bearer "+key,"Content-Type":"application/json"}
+        headers = {"Authorization":"Bearer "+key,"Content-Type":"application/json",
+                   "User-Agent":"BiomeRTE-Events/1.0"}
         access = self.config.get("event_site_access_file")
         if access:
             value = json.loads(Path(access).read_text())
