@@ -21,6 +21,8 @@ jobs:
         run: python3 -S -m unittest discover -s integrations/proactive_assistant/tests -v
       - name: Qualify the LM Studio coding adapter
         run: python3 -S -m unittest discover -s providers/lmstudio -p 'test_coding.py' -v
+      - name: Qualify Mac model admission and idle expiry
+        run: python3 -S -m unittest discover -s providers/model-runtime -v
       - name: Start a fresh clone and run an actual work cycle
         run: |
           export BIOME_HOME="$RUNNER_TEMP/biome-node"

@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -24,6 +25,23 @@ from image_preprocessing import preprocessing_policy, preprocess_slam_image
 PYSLAM_COMMIT = "a4e6a31f211ac6b2f9ecf4ab628734f6194caa15"
 FORMAT = "pyslam-system-state"
 FORMAT_VERSION = 1
+
+
+class LoopClosingLogFilter(logging.Filter):
+    """Keep loop corrections and failures without logging each idle poll."""
+
+    def filter(self, record):
+        if record.levelno != logging.INFO:
+            return True
+        message = record.getMessage()
+        return message not in {
+            "LoopClosing: waiting for loop-detection output...",
+            "LoopClosing: No loop candidates detected",
+        } and not message.startswith("LoopClosing: loop closing thread elapsed time: ")
+
+
+_LOOP_CLOSING_LOG_FILTER = LoopClosingLogFilter()
+
 
 def reconcile_keyframe_points(keyframe, *, restored=False):
     """A landmark has one feature observation per keyframe in native pySLAM."""
@@ -289,6 +307,7 @@ class SlamBackend:
         from mapper_checkpoint import install_owner_capture
         from pyslam.slam.local_mapping import LocalMapping
         from pyslam.slam.keyframe import KeyFrame
+        logging.getLogger("loop_closing_logger").addFilter(_LOOP_CLOSING_LOG_FILTER)
         install_keyframe_point_ownership(KeyFrame)
         install_owner_capture(LocalMapping)
         runtime = Slam(camera, tracker, loop, None, SensorType.MONOCULAR,
