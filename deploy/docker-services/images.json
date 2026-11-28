@@ -55,6 +55,17 @@
         "smoke"
       ],
       "include_by_default": false
+    },
+    {
+      "id": "worker-sdr",
+      "dockerfile": "deploy/workers/sdr/Dockerfile",
+      "platforms": [
+        "linux/arm/v7"
+      ],
+      "smoke": [
+        "check"
+      ],
+      "include_by_default": false
     }
   ]
 }
