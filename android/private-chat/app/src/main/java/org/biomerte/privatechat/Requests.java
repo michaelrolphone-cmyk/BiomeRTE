@@ -17,6 +17,11 @@ final class Requests {
  static void complete(JSONObject d,JSONObject pending,JSONObject reply)throws JSONException{
   String id=id(pending);
   if(!Conversations.exists(d,pending.getString("thread_id"))){remove(d,id);return;}
+  if("select_model".equals(pending.optString("action"))){
+   String selected=pending.getString("selected_model");
+   if(!selected.equals(reply.getString("selected_model")))throw new JSONException("Model selection acknowledgement mismatch");
+   d.put("selected_model",selected);remove(d,id);return;
+  }
   if(pending.optString("action").equals("models")){d.put("models",Models.unique(reply.getJSONArray("models")));remove(d,id);return;}
   if(!Conversations.exists(d,pending.getString("thread_id"))){remove(d,id);return;}
   JSONObject target=Conversations.find(d,pending.getString("thread_id"));JSONArray messages=target.getJSONArray("messages"),images=target.getJSONArray("images");

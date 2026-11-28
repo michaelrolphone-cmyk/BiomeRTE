@@ -25,7 +25,7 @@ public class ClipboardTest {
  }
  @Test public void providerServesPngReadOnlyAndReportsMime()throws Exception{
   byte[] image=png();Uri uri=ClipboardImages.store(a,image);ClipboardImageProvider provider=Robolectric.buildContentProvider(ClipboardImageProvider.class).create().get();assertEquals("image/png",provider.getType(uri));
-  try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(provider.openFile(uri,"r"))){assertArrayEquals(image,read(in));}
+  try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(provider.openFile(uri,"r"))){assertArrayEquals(image,readPipe(in,image.length));}
   try{provider.openFile(uri,"w");fail();}catch(FileNotFoundException expected){}
  }
  @Test public void directCopyActionsKeepTextExactAndCopyCollapsedImages()throws Exception{
@@ -33,5 +33,15 @@ public class ClipboardTest {
   View list=(View)PendingRecoveryTest.get(a,"messageList");ClipboardManager clipboard=(ClipboardManager)a.getSystemService(Context.CLIPBOARD_SERVICE);ChatUiTest.findDescription(list,"Copy prompt").performClick();assertEquals("prompt\nexact",clipboard.getPrimaryClip().getItemAt(0).getText().toString());assertTrue(clipboard.getPrimaryClip().getDescription().getExtras().getBoolean("android.content.extra.IS_SENSITIVE"));ChatUiTest.findDescription(list,"Copy response").performClick();assertEquals("response\nexact",clipboard.getPrimaryClip().getItemAt(0).getText().toString());
   byte[] image=png();JSONObject entry=new JSONObject().put("prompt","image prompt").put("expanded",false).put("images",new JSONArray().put(new JSONObject().put("data",Vault.b64(image))));d.getJSONArray("images").put(entry);PendingRecoveryTest.call(a,"render");list=(View)PendingRecoveryTest.get(a,"messageList");ChatUiTest.findDescription(list,"Copy image prompt").performClick();assertEquals("image prompt",clipboard.getPrimaryClip().getItemAt(0).getText().toString());ChatUiTest.findDescription(list,"Copy generated image").performClick();Uri uri=clipboard.getPrimaryClip().getItemAt(0).getUri();assertNotNull(uri);assertArrayEquals(image,ClipboardImages.read(a,uri));assertFalse(entry.getBoolean("expanded"));assertTrue(clipboard.getPrimaryClipDescription().hasMimeType("image/png"));
  }
- static byte[] read(InputStream in)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return out.toByteArray();}
+ static byte[] readPipe(InputStream in,int expectedLength)throws IOException,InterruptedException{
+  ByteArrayOutputStream out=new ByteArrayOutputStream();
+  byte[] buffer=new byte[4096];
+  long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+  while(out.size()<expectedLength&&System.nanoTime()<deadline){
+   int count=in.read(buffer);
+   // Robolectric models the pipe with a growing file, which can briefly report EOF.
+   if(count<0)Thread.sleep(10);else out.write(buffer,0,count);
+  }
+  return out.toByteArray();
+ }
 }

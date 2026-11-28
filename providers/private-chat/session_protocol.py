@@ -85,7 +85,7 @@ class SessionServer:
         data = open_message(session['keys']['request'],'request',sid,operation,session['hash'],envelope)
         # Authenticate and validate before removing the one-use session.
         messages = data.get('messages')
-        if not (self.request_handler and data.get('action') == 'models'):
+        if not (self.request_handler and data.get('action') in ('models', 'select_model')):
             messages = conversation_messages(messages)
             data['messages'] = messages
         phone = session['phone']

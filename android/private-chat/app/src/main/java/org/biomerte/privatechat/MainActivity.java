@@ -242,7 +242,19 @@ public final class MainActivity extends Activity {
   String[] labels=new String[models.length()];int selected=-1;
   for(int i=0;i<labels.length;i++)try{JSONObject m=models.getJSONObject(i);labels[i]=m.getString("name")+(m.optBoolean("loaded")?" • loaded":"");if(m.getString("id").equals(data.optString("selected_model")))selected=i;}catch(Exception e){fail();return;}
   modelDialog=new AlertDialog.Builder(this).setTitle("Chat model").setSingleChoiceItems(labels,selected,(dialog,index)->{
-   try{data.put("selected_model",models.getJSONObject(index).getString("id"));save();modelButton.setText("Model · "+models.getJSONObject(index).getString("name"));dialog.dismiss();status.setText("Model selected for your next message.");}catch(Exception e){fail();}
+   try{
+    if(!data.has("pairing")||!data.has("oauth")){dialog.dismiss();settings();return;}
+    String model=models.getJSONObject(index).getString("id");
+    JSONArray pending=Requests.all(data);
+    for(int i=0;i<pending.length();i++){
+     JSONObject request=pending.getJSONObject(i);
+     if("select_model".equals(request.optString("action"))&&!request.optBoolean("terminal_failed")){
+      dialog.dismiss();status.setText("A model switch is already in progress.");return;
+     }
+    }
+    Requests.add(data,startSession(false,"").put("action","select_model").put("selected_model",model));
+    save();dialog.dismiss();status.setText("Switching model on your Mac…");resume();
+   }catch(Exception e){fail();}
   }).setNeutralButton("Refresh",(d,w)->refreshModels()).setNegativeButton("Cancel",null).show();
  }
  private void refreshModels(){
@@ -313,6 +325,7 @@ public final class MainActivity extends Activity {
    requestKey=wire.traffic(shared,hash,"request");responseKey=wire.traffic(shared,hash,"response");
    JSONObject body=new JSONObject().put("messages",pending.optJSONArray("request_messages")!=null?pending.getJSONArray("request_messages"):pending.optBoolean("image")?Conversations.imageContext(pending.getString("image_prompt"),Conversations.instructions(data,pending.getString("thread_id"))):Conversations.withInstructions(Conversations.context(Conversations.find(data,pending.getString("thread_id")).getJSONArray("messages")),Conversations.instructions(data,pending.getString("thread_id"))));
    if(pending.optString("action").equals("models"))body=new JSONObject().put("action","models");
+   else if("select_model".equals(pending.optString("action")))body=new JSONObject().put("action","select_model").put("model",pending.getString("selected_model"));
    else if(!pending.optBoolean("image")&&!pending.optString("selected_model").isEmpty())body.put("model",pending.getString("selected_model"));
    if(pairing.has("enrollment_token"))body.put("enrollment_token",pairing.getString("enrollment_token"));
    clear=body.toString().getBytes(StandardCharsets.UTF_8);byte[] nonce=Crypto.random(12);String sid=hello.getString("sid"),id=pending.getString("request_id");
@@ -386,7 +399,7 @@ public final class MainActivity extends Activity {
  private void watch(JSONObject pending,String token)throws Exception{
   String id=Requests.id(pending),resource=data.getJSONObject("pairing").getString("resource");boolean image=pending.optBoolean("image"),hello=pending.getString("stage").equals("hello");
   if(image)resource=resource.replace("privatechat.mac.","image.mac.");final String target=resource;JSONObject outbound=pending.getJSONObject(hello?"hello":"envelope");
-  final long[] progressSequence={0};int g=epoch;Biome client=requestClient();requestClients.put(id,client);pending.put("status",hello?"Connecting securely…":pending.optString("action").equals("models")?"Loading models…":image?"Generating image on your Mac…":"Waiting for your model…");
+  final long[] progressSequence={0};int g=epoch;Biome client=requestClient();requestClients.put(id,client);pending.put("status",hello?"Connecting securely…":pending.optString("action").equals("models")?"Loading models…":"select_model".equals(pending.optString("action"))?"Switching model on your Mac…":image?"Generating image on your Mac…":"Waiting for your model…");
   Future<?> job=executor.submit(()->{try{JSONObject response=client.exchange(token,target,outbound,image,()->g==epoch&&requestClients.get(id)==client&&!Thread.currentThread().isInterrupted(),frame->showImageProgress(frame,pending,g,progressSequence));
    runOnUiThread(()->{if(g!=epoch||data==null||!Requests.contains(data,id))return;try{JSONObject saved=Requests.find(data,id);
     if(hello){JSONObject next=finishSession(saved,response);Requests.replace(data,id,next);save();requestClients.remove(id);requestJobs.remove(id);resume();return;}
@@ -398,7 +411,7 @@ public final class MainActivity extends Activity {
     if(reply.has("error")){saved.put("terminal_failed",true).put("status",modelError(reply.optString("error")));}
     else{Requests.complete(data,saved,reply);data.getJSONObject("pairing").remove("enrollment_token");}
     saveDraft();save();requestClients.remove(id);requestJobs.remove(id);
-    if(conversationsScreen)renderConversationRows("");else if(!connectionScreen){saveDraft();render(false);status.setText("Ready · Encrypted history saved");}
+    if(conversationsScreen)renderConversationRows("");else if(!connectionScreen){saveDraft();render(false);status.setText(!reply.has("error")&&"select_model".equals(saved.optString("action"))?"Model ready on your Mac.":"Ready · Encrypted history saved");}
     updateControls();showRequestStatus();resume();
    }catch(Exception e){requestInterrupted(pending,g,e);}});
   }catch(Exception e){runOnUiThread(()->requestInterrupted(pending,g,e));}});requestJobs.put(id,job);

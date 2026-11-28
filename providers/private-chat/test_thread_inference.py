@@ -21,3 +21,10 @@ class ThreadInferenceTests(unittest.TestCase):
         with patch.object(private_chat,'privacy_ready'),patch.object(private_chat,'ModelRuntime') as selected:
             with self.assertRaises(ValueError):private_chat.inference([{'role':'user','content':'x'},{'role':'system','content':'late'}],'selected-key')
             selected.assert_not_called()
+
+    def test_encrypted_model_action_uses_runtime_admission_without_inference(self):
+        with patch.object(private_chat, 'privacy_ready'), patch.object(private_chat, 'ModelRuntime') as runtime:
+            runtime.return_value.slot.return_value = nullcontext('loaded-instance')
+            result = private_chat.handle_request({'action': 'select_model', 'model': 'selected-key'})
+            self.assertEqual(result, {'selected_model': 'selected-key'})
+            runtime.return_value.slot.assert_called_once_with('llm', 'selected-key')

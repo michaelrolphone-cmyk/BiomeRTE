@@ -56,6 +56,12 @@ def handle_request(data):
     privacy_ready()
     if data.get('action') == 'models':
         return {'models': model_catalog(LOCAL, LM)}
+    if data.get('action') == 'select_model':
+        model = data.get('model')
+        if not isinstance(model, str) or not model:
+            raise ModelError('selected_model_required')
+        with ModelRuntime().slot('llm', model):
+            return {'selected_model': model}
     if data.get('action') not in (None, ''):
         raise ValueError('Invalid private action')
     return inference(data['messages'], data.get('model'))
