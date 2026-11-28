@@ -1,11 +1,13 @@
 """Managed event registration, cursor continuity, replication and sender fencing."""
 import base64
 import copy
+import io
 import json
 import os
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 
 from biomerte.app import Application, initialize
@@ -188,6 +190,23 @@ class ManagedEventTests(unittest.TestCase):
         self.assertEqual(self.events.deliver(), 1)
         self.assertEqual(self.messages[0][2]['eventId'], 'delegate_original')
         self.assertEqual(self.saved(PI, sub)['record']['cursor'], 7)
+
+    def test_authorization_request_identifies_the_event_client(self):
+        with tempfile.NamedTemporaryFile() as key:
+            key.write(b'qualification-key-' * 3)
+            key.flush()
+            self.events._authorize_override = None
+            self.config.update(event_authorize_url='https://controller.example/authorize',
+                               event_authorize_key_file=key.name)
+            with patch('biomerte.controller_events.build_opener') as opener:
+                opener.return_value.open.return_value = io.BytesIO(b'{"allowed": false}')
+                self.assertFalse(self.events.authorize('non-owner', None))
+
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_header('User-agent'), 'BiomeRTE-Events/1.0')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer ' + 'qualification-key-' * 3)
+        self.assertEqual(json.loads(request.data), {'owner': 'non-owner', 'grant': None})
+        self.assertEqual(self.barriers, [False])
 
     def test_retry_after_uncertain_callback_keeps_exact_event_identity(self):
         result=self.subscribe()
