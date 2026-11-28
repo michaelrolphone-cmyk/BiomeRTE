@@ -10,33 +10,66 @@ def ready(tx, item):
                                            for dep in item['dependencies'])
 
 
-def check_deps(tx, key, deps):
+def check_plan(tx, item):
+    """Validate hierarchy and the proposed prerequisite graph before saving."""
+    items = {row['id']: row for row in tx.rows('work')}
+    key, parent = item['id'], item['parent']
+    if parent and (parent not in items or items[parent]['kind'] != PARENTS[item['kind']]):
+        raise Fault('Invalid hierarchy')
+    deps = item['dependencies'] + item.get('sequence_dependencies', [])
+    if any(not isinstance(dep, str) for dep in deps):
+        raise Fault('Invalid dependency identifier')
+    if len(set(deps)) != len(deps):
+        raise Fault('Each prerequisite may appear once')
+    for dep in deps:
+        if ident(dep) != key and dep not in items:
+            raise Fault('Unknown prerequisite: ' + dep)
+    items[key] = item
+    children = {}
+    for row in items.values():
+        children.setdefault(row['parent'], []).append(row['id'])
+
+    # Parent acceptance waits for children. Dependency paths must also account
+    # for those implicit edges, including the new edge introduced by a move.
+    pending = deps + children.get(key, [])
     visited = set()
-    todo = list(deps)
-    while todo:
-        dep = ident(todo.pop())
+    while pending:
+        dep = pending.pop()
         if dep == key:
             raise Fault('Dependency cycle')
         if dep not in visited:
             visited.add(dep)
-            todo.extend(tx.need('work', dep)['dependencies'])
+            row = items[dep]
+            pending.extend(row['dependencies'])
+            pending.extend(row.get('sequence_dependencies', []))
+            pending.extend(children.get(dep, []))
+    if parent in visited:
+        raise Fault('Dependency cycle through parent')
+    if item['state'] != 'accepted' and parent and items[parent]['state'] == 'accepted':
+        raise Fault('Reopen the parent before adding unfinished work', 409)
+    if item['state'] == 'accepted' and any(items[dep]['state'] != 'accepted'
+                                           for dep in item['dependencies']):
+        raise Fault('Accepted work has unmet prerequisites', 409)
 
 
-@op('work.create', 'kind:str title:str id?:str parent?:str priority?:int sequence?:int dependencies?:list criteria?:list context?:list')
-def create(tx, ctx, kind, title, id='', parent='', priority=0, sequence=0, dependencies=None, criteria=None, context=None):
+@op('work.create', 'kind:str title:str id?:str parent?:str priority?:int sequence?:int dependencies?:list criteria?:list context?:list sequence_dependencies?:list')
+def create(tx, ctx, kind, title, id='', parent='', priority=0, sequence=0, dependencies=None,
+           criteria=None, context=None, sequence_dependencies=None):
     """Create a goal, milestone, planning workflow or task. Larger priority is selected first."""
     key = ident(id) if id else uid()
     if tx.get('work', key):
         raise Fault('Work ID exists', 409)
-    if kind not in PARENTS or (parent and tx.need('work', parent)['kind'] != PARENTS[kind]):
-        raise Fault('Invalid hierarchy')
-    check_deps(tx, key, dependencies or [])
+    if kind not in PARENTS:
+        raise Fault('Invalid work kind')
     for criterion in criteria or []:
         text(criterion, 'criterion', 2000)
     item = {'id': key, 'kind': kind, 'title': text(title, 'title', 500), 'parent': parent,
             'priority': priority, 'sequence': sequence, 'dependencies': dependencies or [],
             'criteria': criteria or [], 'context': context or [], 'state': 'open', 'revision': 1,
             'assigned': '', 'attempts': [], 'evidence': {}}
+    if sequence_dependencies:
+        item['sequence_dependencies'] = sequence_dependencies
+    check_plan(tx, item)
     tx.put('work', key, item)
     from .extensions import record_plan
     record_plan(tx, ctx, item)
@@ -50,17 +83,19 @@ def update(tx, ctx, id, revision, changes):
     if item['revision'] != revision:
         raise Fault('Stale work revision', 409)
     allowed = {'title': str, 'priority': int, 'sequence': int, 'dependencies': list,
-               'context': list, 'assigned': str}
+               'context': list, 'assigned': str, 'parent': str, 'sequence_dependencies': list}
     for k, v in changes.items():
         if k not in allowed or not isinstance(v, allowed[k]):
             raise Fault('Invalid work edit: ' + k)
-    if 'dependencies' in changes:
-        check_deps(tx, id, changes['dependencies'])
+    if 'title' in changes:
+        text(changes['title'], 'title', 500)
     item.update(changes)
+    if changes.keys() & {'dependencies', 'sequence_dependencies', 'parent'}:
+        check_plan(tx, item)
     item['revision'] += 1
     tx.put('work', id, item)
     from .extensions import record_plan, PLAN_FIELDS
-    if any(k in changes for k in PLAN_FIELDS):
+    if changes.keys() & (set(PLAN_FIELDS) | {'parent', 'sequence_dependencies'}):
         record_plan(tx, ctx, item)
     tx.emit('work.updated', {'id': id, 'revision': item['revision']})
     return item
@@ -68,7 +103,16 @@ def update(tx, ctx, id, revision, changes):
 
 @op('work.list', 'kind?:str', False)
 def listing(tx, ctx, kind=''):
-    return [dict(item, ready=ready(tx, item)) for item in tx.rows('work') if not kind or item['kind'] == kind]
+    items = tx.rows('work')
+    accepted = {item['id'] for item in items if item['state'] == 'accepted'}
+    return [
+        dict(item, ready=item['state'] == 'open' and not blocked,
+             blocked_by=blocked, sequence_pending=sequence_pending)
+        for item in items if not kind or item['kind'] == kind
+        for blocked in [[dep for dep in item['dependencies'] if dep not in accepted]]
+        for sequence_pending in [[dep for dep in item.get('sequence_dependencies', [])
+                                  if dep not in accepted]]
+    ]
 
 
 @op('work.accept', 'id:str revision:int evidence:obj')

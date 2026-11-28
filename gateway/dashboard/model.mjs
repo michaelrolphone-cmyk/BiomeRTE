@@ -147,3 +147,50 @@ export function createClient(fetcher=fetch,onStatus=()=>{},getRealm=()=> 'site')
   }
  };
 }
+
+export const workParents={goal:'',milestone:'goal',workflow:'milestone',task:'workflow'};
+
+export function workHierarchy(items){
+ const byId=new Map(items.map(item=>[item.id,item]));
+ const children=new Map();
+ for(const item of [...items].sort((a,b)=>
+  (b.priority||0)-(a.priority||0)||(a.sequence||0)-(b.sequence||0)||a.title.localeCompare(b.title))){
+  const parent=byId.has(item.parent)?item.parent:'';
+  if(!children.has(parent))children.set(parent,[]);
+  children.get(parent).push(item);
+ }
+ const rows=[];
+ function visit(item,ancestors){
+  const row={item,ancestors,accepted:0,total:0};
+  rows.push(row);
+  if(item.kind==='task'){row.total=1;row.accepted=Number(item.state==='accepted');}
+  for(const child of children.get(item.id)||[]){
+   const result=visit(child,[...ancestors,item]);
+   row.total+=result.total;
+   row.accepted+=result.accepted;
+  }
+  return row;
+ }
+ for(const root of children.get('')||[])visit(root,[]);
+ return {byId,rows};
+}
+
+export function workDependencyGraph(items,focus){
+ const byId=new Map(items.map(item=>[item.id,item]));
+ const scope=new Set([focus]);
+ for(const {item,ancestors} of workHierarchy(items).rows){
+  if(ancestors.some(parent=>parent.id===focus))scope.add(item.id);
+ }
+ const nodes=new Set(scope),edges=[];
+ for(const item of items){
+  for(const [ids,label] of [[item.dependencies,'Technical'],[item.sequence_dependencies,'Preferred order']]){
+   for(const from of ids||[]){
+    if(!byId.has(from)||(!scope.has(item.id)&&!scope.has(from)))continue;
+    nodes.add(from);
+    nodes.add(item.id);
+    edges.push({from,to:item.id,label});
+   }
+  }
+ }
+ return {nodes:[...nodes].map(id=>({id,name:byId.get(id).title,type:byId.get(id).kind})),edges};
+}

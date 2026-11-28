@@ -258,13 +258,14 @@ def validate_records(tx, changes, scope, app=None, peer_keys=None):
                     type(value.get('revision')) is not int or value['revision'] < 1 or
                     not isinstance(value.get('title'), str) or not value['title'].strip() or
                     any(not isinstance(value.get(k), list) for k in ('dependencies', 'criteria', 'context', 'attempts')) or
-                    not isinstance(value.get('evidence'), dict)):
+                    not isinstance(value.get('evidence'), dict) or
+                    not isinstance(value.get('sequence_dependencies', []), list)):
                 raise Fault('Invalid durable work record')
             if value.get('id') != key:
                 raise Fault('Work identity mismatch')
             if old and value != old:
-                if any(value.get(k) != old.get(k) for k in ('id', 'kind', 'parent')):
-                    raise Fault('Work hierarchy identity is immutable')
+                if any(value.get(k) != old.get(k) for k in ('id', 'kind')):
+                    raise Fault('Work identity and kind are immutable')
                 if value['revision'] <= old['revision']:
                     raise Fault('Work revision must advance', 409)
                 if old['state'] == 'accepted' and value['state'] != 'accepted':
@@ -273,9 +274,14 @@ def validate_records(tx, changes, scope, app=None, peer_keys=None):
                 from .work import PARENTS
                 if need('work', value['parent']).get('kind') != PARENTS.get(value.get('kind')):
                     raise Fault('Work parent kind mismatch')
-            for dep in value.get('dependencies', []):
+            technical = value['dependencies']
+            prerequisites = technical + value.get('sequence_dependencies', [])
+            if (any(not isinstance(dep, str) for dep in prerequisites) or
+                    len(set(prerequisites)) != len(prerequisites)):
+                raise Fault('Invalid durable prerequisites')
+            for dep in prerequisites:
                 dependency = need('work', dep)
-                if value.get('state') == 'accepted' and dependency.get('state') != 'accepted':
+                if dep in technical and dependency.get('state') != 'accepted':
                     raise Fault('Accepted work has unmet dependencies')
             if value.get('state') == 'accepted':
                 if (not value['evidence'] or set(value['criteria']) - set(value['evidence']) or
@@ -300,13 +306,18 @@ def validate_records(tx, changes, scope, app=None, peer_keys=None):
                 if outcome.get('grant') != key or outcome.get('rev') != value['rev']:
                     raise Fault('Grant outcome binding mismatch')
 
+    children = {}
+    for (kind, key), value in view.items():
+        if kind == 'work' and value and value.get('parent'):
+            children.setdefault(value['parent'], []).append(key)
+
     def visit(kind, key, active, done):
         if key in active:
             raise Fault('Cyclic durable references')
         if key in done:
             return
         value = need(kind, key)
-        refs = (value.get('dependencies', []) + ([value['parent']] if value.get('parent') else [])
+        refs = (value['dependencies'] + value.get('sequence_dependencies', []) + children.get(key, [])
                 if kind == 'work' else list(value['calls'].values()))
         for ref in refs:
             visit(kind, ref, active | {key}, done)

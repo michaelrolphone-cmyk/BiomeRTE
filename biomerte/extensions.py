@@ -12,6 +12,8 @@ def record_plan(tx, ctx, item):
     parents = [item['plan_rev']] if item.get('plan_rev') else []
     body = {k: item[k] for k in PLAN_FIELDS}
     body.update(kind=item['kind'], parent=item['parent'])
+    if item.get('sequence_dependencies'):
+        body['sequence_dependencies'] = item['sequence_dependencies']
     r = knowledge.put(tx, ctx, key, body, parents, [item['id']], 'plan')
     item['plan_rev'] = r['rev']
     tx.put('work', item['id'], item)
@@ -21,7 +23,7 @@ def record_plan(tx, ctx, item):
 @op('plan.apply', 'id:str parents:list values:obj')
 def apply_plan(tx, ctx, id, parents, values):
     """Materialize or resolve a replicated plan; acceptance and assignments remain local decisions."""
-    from .work import PARENTS, check_deps
+    from .work import PARENTS, check_plan
     key = PLAN_PREFIX + ident(id)
     doc = tx.need('documents', key)
     if set(parents) != set(doc['heads']):
@@ -30,27 +32,29 @@ def apply_plan(tx, ctx, id, parents, values):
         body = tx.need('revisions', parents[0])['body']
     else:
         body = values
-    if set(body) != set(PLAN_FIELDS + ('kind', 'parent')) or body['kind'] not in PARENTS:
+    required = set(PLAN_FIELDS + ('kind', 'parent'))
+    if set(body) - {'sequence_dependencies'} != required or body['kind'] not in PARENTS:
         raise Fault('A complete merged plan body is required')
     if not isinstance(body['priority'], int) or not isinstance(body['sequence'], int):
         raise Fault('Invalid plan priority or order')
     text(body['title'])
-    if not isinstance(body['dependencies'], list):
+    if (not isinstance(body['dependencies'], list) or
+            not isinstance(body.get('sequence_dependencies', []), list) or
+            not isinstance(body['parent'], str)):
         raise Fault('Invalid dependencies')
-    check_deps(tx, id, body['dependencies'])
-    if body['parent'] and tx.need('work', body['parent'])['kind'] != PARENTS[body['kind']]:
-        raise Fault('Invalid parent')
     item = tx.get('work', id)
-    if item and (item['kind'] != body['kind'] or item['parent'] != body['parent']):
+    if item and item['kind'] != body['kind']:
         raise Fault('Conflicting work hierarchy', 409)
     if not item:
         item = {'id': id, 'criteria': [], 'context': [key], 'state': 'open', 'attempts': [],
                 'assigned': '', 'evidence': {}, 'revision': 0}
+    item.pop('sequence_dependencies', None)
+    item.update(body)
+    check_plan(tx, item)
     if len(parents) > 1 or values:
         item['plan_rev'] = knowledge.put(tx, ctx, key, body, parents, [id], 'plan')['rev']
     else:
         item['plan_rev'] = parents[0]
-    item.update(body)
     item['revision'] += 1
     tx.put('work', id, item)
     tx.emit('work.plan_applied', {'id': id})
