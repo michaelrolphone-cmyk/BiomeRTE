@@ -53,7 +53,8 @@
       ],
       "smoke": [
         "smoke"
-      ]
+      ],
+      "include_by_default": false
     }
   ]
 }

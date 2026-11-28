@@ -24,9 +24,11 @@ class ImageReleaseTests(unittest.TestCase):
                 (root / "Dockerfile").write_text("ARG BIOMERTE_SOURCE_REVISION\n")
                 images.save_json(root / "images.json", {"schema": "biomerte-container-builds/1",
                     "images": [{"id": "authority", "dockerfile": "Dockerfile",
-                                "platforms": [platform], "embed_source_revision": True}]})
+                                "platforms": [platform], "embed_source_revision": True},
+                               {"id": "pilot", "dockerfile": "Dockerfile",
+                                "platforms": ["linux/arm/v7"], "include_by_default": False}]})
                 args = Namespace(repo=root, revision="HEAD", plan="images.json", docker="docker",
-                                 output_dir=root / "out", image=["authority"], platform=[platform])
+                                 output_dir=root / "out", image=[], platform=[platform])
                 calls = []
 
                 def command(argv, cwd=None):

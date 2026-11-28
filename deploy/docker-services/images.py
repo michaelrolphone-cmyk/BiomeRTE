@@ -103,6 +103,8 @@ def load_plan(path):
             raise ValueError("Image has unsupported or missing platforms")
         if item.get("base_argument") not in (None, "PYTHON_IMAGE", "NODE_IMAGE"):
             raise ValueError("Only public base-image build arguments are accepted")
+        if type(item.get("include_by_default", True)) is not bool:
+            raise ValueError("include_by_default must be a boolean")
         images[name] = item
     if not images:
         raise ValueError("No image targets")
@@ -231,7 +233,11 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="biomerte-image-source-") as temp:
         source = archive_source(repo, revision, Path(temp))
         plan = load_plan(plan_path(source, args.plan))
-        selected = list(dict.fromkeys(args.image or list(plan)))
+        selected = list(dict.fromkeys(args.image or [
+            name for name, spec in plan.items() if spec.get("include_by_default", True)
+        ]))
+        if not selected:
+            raise ValueError("Select at least one image target")
         if any(name not in plan for name in selected):
             raise ValueError("Unknown image target")
         requested = list(dict.fromkeys(args.platform or [engine_platform(args.docker)]))
