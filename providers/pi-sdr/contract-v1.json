@@ -1,0 +1,33 @@
+{
+  "operation": "cap.define",
+  "arguments": {
+    "name": "radio.sdr.receive",
+    "version": 1,
+    "description": "Receive-only RTL-SDR discovery, bounded spectrum/IQ sampling, hopping, persistent monitoring, events and physical trial markers.",
+    "inputs": {
+      "action": "str",
+      "device": "str?",
+      "frequency_hz": "int?",
+      "frequencies_hz": "list?",
+      "gain_db": "num?",
+      "ppm": "int?",
+      "dwell_seconds": "num?",
+      "width_hz": "int?",
+      "threshold_db": "num?",
+      "include_iq": "bool?",
+      "profile": "str?",
+      "scan_id": "str?",
+      "offset": "int?",
+      "since": "num?",
+      "limit": "int?",
+      "expected_revision": "int?",
+      "label": "str?",
+      "note": "str?"
+    },
+    "outputs": {
+      "ok": "bool",
+      "data": "obj?",
+      "error": "obj?"
+    }
+  }
+}
