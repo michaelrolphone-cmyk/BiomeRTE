@@ -1,8 +1,11 @@
 """Lifecycle boundaries for optional native app ownership and legacy startup."""
 import contextlib
+import http.client
 import signal
+import socketserver
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -10,6 +13,8 @@ from unittest import mock
 
 import install_provider as installer
 import vision_service as runtime
+from leased_maps import LiveMap
+from leased_publish import LiveFrames
 
 
 class ServiceModeTests(unittest.TestCase):
@@ -110,6 +115,47 @@ class ParentLifecycleTests(unittest.TestCase):
     def test_parent_death_during_initialization_closes_without_publishing_api(self):
         events = self.run_service(native_parent=True, lose_parent_during_init=True)
         self.assertEqual(events, ["initialized", "closed"])
+
+
+class LiveSubscriberLifecycleTests(unittest.TestCase):
+    def test_closed_idle_clients_release_each_feed_without_waiting_for_a_sample(self):
+        front, rear, maps = LiveFrames(), LiveFrames(), LiveMap()
+        stop = threading.Event()
+        service = types.SimpleNamespace(live_frames=front, rear_live_frames=rear,
+                                        live_maps=maps, _stop=stop)
+        # The handler sees the same peer EOF on TCP and on the production Unix socket.
+        with socketserver.ThreadingTCPServer(("127.0.0.1", 0), runtime.handler_for(service)) as server:
+            worker = threading.Thread(target=server.serve_forever)
+            worker.start()
+            try:
+                host, port = server.server_address
+                for path, feed in (("/v1/live", front), ("/v1/live/rear", rear), ("/v1/live/map", maps)):
+                    with self.subTest(path=path):
+                        active = http.client.HTTPConnection(host, port, timeout=3)
+                        leaving = http.client.HTTPConnection(host, port, timeout=3)
+                        try:
+                            active.request("GET", path)
+                            active_response = active.getresponse()
+                            leaving.request("GET", path)
+                            leaving_response = leaving.getresponse()
+                            self.assertEqual((active_response.status, leaving_response.status), (200, 200))
+                            self.assertEqual(len(feed.subscribers), 2)
+                            leaving_response.close()
+                            leaving.close()
+                            end = time.monotonic() + 2.5
+                            while len(feed.subscribers) > 1 and time.monotonic() < end:
+                                time.sleep(.01)
+                            self.assertEqual(len(feed.subscribers), 1)
+                            active_response.close()
+                        finally:
+                            active.close()
+                            leaving.close()
+            finally:
+                stop.set()
+                for feed in (front, rear, maps):
+                    feed.close()
+                server.shutdown()
+                worker.join()
 
 
 if __name__ == "__main__":
