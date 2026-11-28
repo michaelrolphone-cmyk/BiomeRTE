@@ -94,7 +94,7 @@
     {
       "adaptations": "Explicit endpoint/configuration injection where needed and normalized trailing whitespace; native semantics retained",
       "bytes": 17277,
-      "packaged_sha256": "301b12c8040a6923af54f975fe6bb69906e6ed71e3e242313dfa3380da9109a9",
+      "packaged_sha256": "b0da4cc5d211f81feb66b6ce81d604e09aefaf2fd1b3f3bb81d9b1ce7d9f9950",
       "path": "rover_service.py",
       "sha256": "ddfed9386e80d0c9ba99ad7c40f95dfe3cda529bf936ad89282f9747c8fd6f75",
       "source": "/Users/micahelbyrns/.local/share/biomerte-releases/service-authorities-0b5d03ea8465/rover/rover_service.py"
