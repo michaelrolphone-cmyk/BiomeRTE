@@ -1,0 +1,82 @@
+{
+  "tested_commit": "f6841ea829df0dac52afac74f7fda234c0642dbc",
+  "operation": "af-qualify-provenance-f6841ea",
+  "qualification": {
+    "status": "passed",
+    "tests": {
+      "all_32_layers_248_projections": true,
+      "field_disabled_reference_equivalence": true,
+      "entire_reset_clears_sampling_and_token_counters": true,
+      "zero_pull_bypasses_anchor": true,
+      "actual_packed_weight_changes": true,
+      "frozen_tensors_unchanged": true,
+      "opaque_stream_and_source_provenance": true,
+      "readonly_preserves_frequency": true,
+      "weight_changes_affect_later_inference": true,
+      "complete_checkpoint_weights_roundtrip": true,
+      "complete_checkpoint_native_state": true,
+      "stream_identity_checkpoint_roundtrip": true,
+      "complete_resume_next_logits_bitexact": true,
+      "same_seed_replay_bitexact": true,
+      "change_map_bitexact_roundtrip": true,
+      "import_resets_all_native_caches": true
+    },
+    "model": "Qwen3.5-9B",
+    "layers": 32,
+    "memory": {
+      "model_bytes": 5038041600,
+      "writable_bytes": 3459252224,
+      "transaction_peak_bytes": 12694743552,
+      "native_cache_estimate": 201326592,
+      "host_bytes": 25769803776
+    },
+    "disabled_seconds_per_token": 0.1155713125008333,
+    "disabled_max_logit_error": 0,
+    "enabled_seconds_per_token": 2.5769778750000114,
+    "max_later_logit_effect": 0.34375,
+    "diagnostics": {
+      "field_version": 3,
+      "consumed_tokens": 2,
+      "eligible_layers": 32,
+      "eligible_projections": 248,
+      "changed_words_total": 0,
+      "last_receipts": [],
+      "baseline_pull": 0,
+      "read_only": true,
+      "field_enabled": false,
+      "commit_every_tokens": 1,
+      "precision": "fp32 proposal; uint32 packed affine4; fixed group64 scales/offsets",
+      "realized_step_bound": false,
+      "native_tokens": 0,
+      "consumed_token_count": 2,
+      "ordinary_resets": 5,
+      "spectral": {
+        "windows_completed": 0,
+        "backlog": 0,
+        "errors": 0,
+        "covered_tokens": 0,
+        "label": "trajectory novelty; unvalidated",
+        "bucket_assignment": "projection-output-row modulo8; attention8+MLP8/layer; v1"
+      },
+      "memory": {
+        "model_bytes": 5038041600,
+        "writable_bytes": 3459252224,
+        "transaction_peak_bytes": 12694743552,
+        "native_cache_estimate": 201326592,
+        "host_bytes": 25769803776
+      },
+      "mlx_peak_memory": 12230341190,
+      "mlx_active_memory": 8570625394,
+      "load_seconds": 1.1990099169997848,
+      "forward_seconds": 1.437920626012783,
+      "write_seconds": 7.8401243740008795,
+      "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc"
+    }
+  },
+  "final_unit_suite": {
+    "commit": "06c37c84750ba77d98da4f20d460dbd0a98aca9b",
+    "operation": "af-final-summary-tests-06c37c8",
+    "passed": 47,
+    "seconds": 1.68
+  }
+}

@@ -1,0 +1,1 @@
+{"kind":"stability","manifest":"/Users/micahelbyrns/.local/share/biome-activation-field/model-manifest.json","output":"/Users/micahelbyrns/.local/share/biome-activation-field/experiments/stability-zero-pull-v1","tokens":10000,"checkpoint_tokens":512,"seed":42,"spectral":true,"probe_tokens":32}

@@ -1,0 +1,53 @@
+{
+  "full_model_cf30944": {
+    "status": "passed",
+    "tests": {
+      "all_32_layers_248_projections": true,
+      "field_disabled_reference_equivalence": true,
+      "zero_pull_bypasses_anchor": true,
+      "actual_packed_weight_changes": true,
+      "frozen_tensors_unchanged": true,
+      "readonly_preserves_frequency": true,
+      "weight_changes_affect_later_inference": true,
+      "complete_checkpoint_weights_roundtrip": true,
+      "complete_checkpoint_native_state": true,
+      "complete_resume_next_logits_bitexact": true,
+      "same_seed_replay_bitexact": true,
+      "change_map_bitexact_roundtrip": true,
+      "import_resets_all_native_caches": true
+    },
+    "enabled_seconds_per_token": 2.4153543334978167,
+    "disabled_seconds_per_token": 0.12422922900077538
+  },
+  "stability_smoke": {
+    "run_id": "f68b23838bf14b4581bd3e24fa542097",
+    "status": "complete",
+    "consumed_tokens": 8,
+    "checkpoint_tokens": [
+      8
+    ],
+    "last_checkpoint": "boundary-8-31063cd4702b407eb60278885ffb8ed4",
+    "nll_relative_increase": -0.0010034568133211463,
+    "accuracy_change": 0,
+    "meets_duration": false,
+    "stability_target_met": false,
+    "scientific_memory_claim": "not_assessed_by_stability",
+    "identity": {
+      "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+      "config_hash": "fc205875c3ca30cf0ac415546e415b85ad38855d4f7d060b1bcfb180fa0324a5",
+      "corpus_hash": "74d824b9bdfed7b0b28602fceeb45ff035e0446d6dff279a21a2d38cd1ec47cf",
+      "schema_version": 2,
+      "source_hash": "22fe4fc8662d9c83b2404b504b3b656c380c9ae0cb34d0fabe2be99c354977e0"
+    },
+    "baseline": {
+      "nll": 4.8242449583830656,
+      "mean_entropy": 3.4425921216607094,
+      "accuracy": 0.16666666666666666
+    },
+    "post": {
+      "nll": 4.819404036910446,
+      "mean_entropy": 3.460709478173937,
+      "accuracy": 0.16666666666666666
+    }
+  }
+}

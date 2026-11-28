@@ -1,0 +1,505 @@
+{
+  "operation": "af-finish-deploy-06c37c8",
+  "exit_code": 0,
+  "stage": "complete",
+  "commit": "06c37c84750ba77d98da4f20d460dbd0a98aca9b",
+  "observed_at": 1793852310.789545,
+  "health": {
+    "ready": true,
+    "version": "0.1.0",
+    "model_loaded": false,
+    "active_session": null,
+    "admission": "idle",
+    "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+    "field_default": false,
+    "baseline_pull_default": 0
+  },
+  "reports": {
+    "f68b23838bf14b4581bd3e24fa542097": {
+      "run_id": "f68b23838bf14b4581bd3e24fa542097",
+      "version": 1,
+      "status": "succeeded",
+      "error": null,
+      "progress": {
+        "consumed_tokens": 8,
+        "kind": "stability",
+        "status": "complete",
+        "target_tokens": 8,
+        "updated_at": 1793850518.4035032
+      },
+      "report": {
+        "status": "complete",
+        "consumed_tokens": 8,
+        "checkpoint_tokens": [
+          8
+        ],
+        "nll_relative_increase": -0.0010034568133211463,
+        "accuracy_change": 0,
+        "meets_duration": false,
+        "stability_target_met": false,
+        "scientific_memory_claim": "not_assessed_by_stability"
+      },
+      "next_action": "Review the measured report; this job is no longer running"
+    },
+    "084c6bca02934817a44629bbf5983600": {
+      "run_id": "084c6bca02934817a44629bbf5983600",
+      "version": 1,
+      "status": "succeeded",
+      "error": null,
+      "progress": {
+        "completed_traces": 54,
+        "expected_traces": 54,
+        "identity": {
+          "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+          "config_hash": "e607b27ef95c5e32b96d4f30ca91226dfef5b4eb81f485b28cbc7efc8fa3f7f9",
+          "corpus_hash": "11cf8863c6d3db6b5430e7016760f24dd78f6c11de80ea674c3b8737bc8af1e4",
+          "schema_version": 2,
+          "source_hash": "22fe4fc8662d9c83b2404b504b3b656c380c9ae0cb34d0fabe2be99c354977e0"
+        },
+        "kind": "descriptors",
+        "status": "complete",
+        "updated_at": 1793852280.373585
+      },
+      "report": {
+        "label": "trajectory_novelty_unvalidated",
+        "generalization_scope": "fixed synthetic templates; validator-defined answer correctness",
+        "counts": {
+          "test": 18,
+          "train": 18,
+          "validation": 18
+        },
+        "heldout_auroc_target_met": false,
+        "methods": {
+          "activation_mean": {
+            "coherence": {
+              "auroc": 0.5185185185185185,
+              "brier": 0.24986262501876494,
+              "calibration_bins": [
+                {
+                  "confidence": 0.495430666049655,
+                  "count": 9,
+                  "lower": 0.4,
+                  "observed": 0.4444444444444444,
+                  "upper": 0.5
+                },
+                {
+                  "confidence": 0.5073092687064267,
+                  "count": 9,
+                  "lower": 0.5,
+                  "observed": 0.5555555555555556,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.049616254227169754,
+              "precision": 0.5555555555555556,
+              "recall": 0.5555555555555556
+            },
+            "retrieval_accuracy": 0.7777777777777778
+          },
+          "directed": {
+            "coherence": {
+              "auroc": 0.5432098765432098,
+              "brier": 0.24957389803277877,
+              "calibration_bins": [
+                {
+                  "confidence": 0.4935280594520744,
+                  "count": 13,
+                  "lower": 0.4,
+                  "observed": 0.46153846153846156,
+                  "upper": 0.5
+                },
+                {
+                  "confidence": 0.5073885136946906,
+                  "count": 5,
+                  "lower": 0.5,
+                  "observed": 0.6,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.048829011355750754,
+              "precision": 0.6,
+              "recall": 0.3333333333333333
+            },
+            "retrieval_accuracy": 0.8888888888888888
+          },
+          "graph": {
+            "coherence": {
+              "auroc": 0.5555555555555556,
+              "brier": 0.24958123198795146,
+              "calibration_bins": [
+                {
+                  "confidence": 0.4962291828986048,
+                  "count": 11,
+                  "lower": 0.4,
+                  "observed": 0.5454545454545454,
+                  "upper": 0.5
+                },
+                {
+                  "confidence": 0.5095860300946454,
+                  "count": 7,
+                  "lower": 0.5,
+                  "observed": 0.42857142857142855,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.06158784437654806,
+              "precision": 0.42857142857142855,
+              "recall": 0.3333333333333333
+            },
+            "retrieval_accuracy": 0.8888888888888888
+          },
+          "length": {
+            "coherence": {
+              "auroc": 0.5,
+              "brier": 0.25,
+              "calibration_bins": [
+                {
+                  "confidence": 0.5,
+                  "count": 18,
+                  "lower": 0.5,
+                  "observed": 0.5,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0,
+              "precision": 0.5,
+              "recall": 1
+            },
+            "retrieval_accuracy": 0.3333333333333333
+          },
+          "shuffled": {
+            "coherence": {
+              "auroc": 0.43209876543209874,
+              "brier": 0.2721752710512457,
+              "calibration_bins": [
+                {
+                  "confidence": 0.5516730784779706,
+                  "count": 14,
+                  "lower": 0.5,
+                  "observed": 0.5714285714285714,
+                  "upper": 0.6000000000000001
+                },
+                {
+                  "confidence": 0.6499119425429972,
+                  "count": 4,
+                  "lower": 0.6000000000000001,
+                  "observed": 0.25,
+                  "upper": 0.7000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.1042347039711333,
+              "precision": 0.5,
+              "recall": 1
+            },
+            "retrieval_accuracy": 0.3888888888888889
+          },
+          "structural": {
+            "coherence": {
+              "auroc": 0.4691358024691358,
+              "brier": 0.25000940499335184,
+              "calibration_bins": [
+                {
+                  "confidence": 0.4997015662117005,
+                  "count": 10,
+                  "lower": 0.4,
+                  "observed": 0.5,
+                  "upper": 0.5
+                },
+                {
+                  "confidence": 0.500328002558825,
+                  "count": 8,
+                  "lower": 0.5,
+                  "observed": 0.5,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.0003115754640886401,
+              "precision": 0.5,
+              "recall": 0.4444444444444444
+            },
+            "retrieval_accuracy": 0.5555555555555556
+          },
+          "temporal": {
+            "coherence": {
+              "auroc": 0.5555555555555556,
+              "brier": 0.24983766988536996,
+              "calibration_bins": [
+                {
+                  "confidence": 0.4985879125665097,
+                  "count": 10,
+                  "lower": 0.4,
+                  "observed": 0.5,
+                  "upper": 0.5
+                },
+                {
+                  "confidence": 0.5038768393465878,
+                  "count": 8,
+                  "lower": 0.5,
+                  "observed": 0.5,
+                  "upper": 0.6000000000000001
+                }
+              ],
+              "count": 18,
+              "ece": 0.0025075327282002937,
+              "precision": 0.5,
+              "recall": 0.4444444444444444
+            },
+            "retrieval_accuracy": 0.7777777777777778
+          }
+        }
+      },
+      "next_action": "Review the measured report; this job is no longer running"
+    }
+  },
+  "session_checks": {
+    "enabled_request_succeeded": true,
+    "enabled_request_changed_weights": true,
+    "restored_request_succeeded": true,
+    "off_toggle_survives_restore": true,
+    "off_toggle_preserves_weights": true,
+    "restored_request_consumes_new_tokens": true
+  },
+  "live_biome": {
+    "health_operation": "af-final-agent-health-06c37c8",
+    "health": {
+      "result": {
+        "active_session": null,
+        "admission": "idle",
+        "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+        "baseline_pull_default": 0,
+        "field_default": false,
+        "model_loaded": false,
+        "ok": true,
+        "ready": true,
+        "version": "0.1.0"
+      }
+    },
+    "report_operation": "af-final-agent-descriptor-report",
+    "report_status": "succeeded",
+    "report": {
+      "result": {
+        "error": null,
+        "next_action": "Review the measured report; this job is no longer running",
+        "ok": true,
+        "progress": {
+          "completed_traces": 54,
+          "expected_traces": 54,
+          "identity": {
+            "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+            "config_hash": "e607b27ef95c5e32b96d4f30ca91226dfef5b4eb81f485b28cbc7efc8fa3f7f9",
+            "corpus_hash": "11cf8863c6d3db6b5430e7016760f24dd78f6c11de80ea674c3b8737bc8af1e4",
+            "schema_version": 2,
+            "source_hash": "22fe4fc8662d9c83b2404b504b3b656c380c9ae0cb34d0fabe2be99c354977e0"
+          },
+          "kind": "descriptors",
+          "status": "complete",
+          "updated_at": 1793852280.373585
+        },
+        "report": {
+          "counts": {
+            "test": 18,
+            "train": 18,
+            "validation": 18
+          },
+          "generalization_scope": "fixed synthetic templates; validator-defined answer correctness",
+          "heldout_auroc_target_met": false,
+          "label": "trajectory_novelty_unvalidated",
+          "methods": {
+            "activation_mean": {
+              "coherence": {
+                "auroc": 0.5185185185185185,
+                "brier": 0.24986262501876494,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.495430666049655,
+                    "count": 9,
+                    "lower": 0.4,
+                    "observed": 0.4444444444444444,
+                    "upper": 0.5
+                  },
+                  {
+                    "confidence": 0.5073092687064267,
+                    "count": 9,
+                    "lower": 0.5,
+                    "observed": 0.5555555555555556,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.049616254227169754,
+                "precision": 0.5555555555555556,
+                "recall": 0.5555555555555556
+              },
+              "retrieval_accuracy": 0.7777777777777778
+            },
+            "directed": {
+              "coherence": {
+                "auroc": 0.5432098765432098,
+                "brier": 0.24957389803277877,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.4935280594520744,
+                    "count": 13,
+                    "lower": 0.4,
+                    "observed": 0.46153846153846156,
+                    "upper": 0.5
+                  },
+                  {
+                    "confidence": 0.5073885136946906,
+                    "count": 5,
+                    "lower": 0.5,
+                    "observed": 0.6,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.048829011355750754,
+                "precision": 0.6,
+                "recall": 0.3333333333333333
+              },
+              "retrieval_accuracy": 0.8888888888888888
+            },
+            "graph": {
+              "coherence": {
+                "auroc": 0.5555555555555556,
+                "brier": 0.24958123198795146,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.4962291828986048,
+                    "count": 11,
+                    "lower": 0.4,
+                    "observed": 0.5454545454545454,
+                    "upper": 0.5
+                  },
+                  {
+                    "confidence": 0.5095860300946454,
+                    "count": 7,
+                    "lower": 0.5,
+                    "observed": 0.42857142857142855,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.06158784437654806,
+                "precision": 0.42857142857142855,
+                "recall": 0.3333333333333333
+              },
+              "retrieval_accuracy": 0.8888888888888888
+            },
+            "length": {
+              "coherence": {
+                "auroc": 0.5,
+                "brier": 0.25,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.5,
+                    "count": 18,
+                    "lower": 0.5,
+                    "observed": 0.5,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0,
+                "precision": 0.5,
+                "recall": 1
+              },
+              "retrieval_accuracy": 0.3333333333333333
+            },
+            "shuffled": {
+              "coherence": {
+                "auroc": 0.43209876543209874,
+                "brier": 0.2721752710512457,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.5516730784779706,
+                    "count": 14,
+                    "lower": 0.5,
+                    "observed": 0.5714285714285714,
+                    "upper": 0.6000000000000001
+                  },
+                  {
+                    "confidence": 0.6499119425429972,
+                    "count": 4,
+                    "lower": 0.6000000000000001,
+                    "observed": 0.25,
+                    "upper": 0.7000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.1042347039711333,
+                "precision": 0.5,
+                "recall": 1
+              },
+              "retrieval_accuracy": 0.3888888888888889
+            },
+            "structural": {
+              "coherence": {
+                "auroc": 0.4691358024691358,
+                "brier": 0.25000940499335184,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.4997015662117005,
+                    "count": 10,
+                    "lower": 0.4,
+                    "observed": 0.5,
+                    "upper": 0.5
+                  },
+                  {
+                    "confidence": 0.500328002558825,
+                    "count": 8,
+                    "lower": 0.5,
+                    "observed": 0.5,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.0003115754640886401,
+                "precision": 0.5,
+                "recall": 0.4444444444444444
+              },
+              "retrieval_accuracy": 0.5555555555555556
+            },
+            "temporal": {
+              "coherence": {
+                "auroc": 0.5555555555555556,
+                "brier": 0.24983766988536996,
+                "calibration_bins": [
+                  {
+                    "confidence": 0.4985879125665097,
+                    "count": 10,
+                    "lower": 0.4,
+                    "observed": 0.5,
+                    "upper": 0.5
+                  },
+                  {
+                    "confidence": 0.5038768393465878,
+                    "count": 8,
+                    "lower": 0.5,
+                    "observed": 0.5,
+                    "upper": 0.6000000000000001
+                  }
+                ],
+                "count": 18,
+                "ece": 0.0025075327282002937,
+                "precision": 0.5,
+                "recall": 0.4444444444444444
+              },
+              "retrieval_accuracy": 0.7777777777777778
+            }
+          }
+        },
+        "run_id": "084c6bca02934817a44629bbf5983600",
+        "status": "succeeded",
+        "version": 1
+      }
+    }
+  },
+  "queue_note": "The existing LM Studio slot cleared. A contemplated worker restart was aborted by its live-model precondition before sending any signal. No LM Studio or controller service was changed."
+}

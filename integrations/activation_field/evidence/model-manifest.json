@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "repository": "mlx-community/Qwen3.5-9B-4bit",
+  "revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+  "path": "<MODEL_SNAPSHOT_DIRECTORY>",
+  "files": {
+    "chat_template.jinja": {
+      "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715",
+      "bytes": 7756
+    },
+    "config.json": {
+      "sha256": "a96942cb6a8a1d3f1d17514d81a1925d04362a6a3233b389d13012211baaa9f8",
+      "bytes": 3331
+    },
+    "model-00001-of-00002.safetensors": {
+      "sha256": "a68b87558c6ef43f74c2bd63ce7e9092ceddc3101f3def0030774bae5f42aadd",
+      "bytes": 5349771222
+    },
+    "model-00002-of-00002.safetensors": {
+      "sha256": "b0a770bf8469c7f3f18756a0e0283f1c1174344a83e059a4e483f6af4907352d",
+      "bytes": 600449850
+    },
+    "model.safetensors.index.json": {
+      "sha256": "dd023913fb87cfdae27fb11dcf695117c925833796ccac3c64117d6652d8ff1e",
+      "bytes": 123592
+    },
+    "preprocessor_config.json": {
+      "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+      "bytes": 390
+    },
+    "processor_config.json": {
+      "sha256": "14932921ca485d458a04dafd8069fbb0a4505622a48208d19ed247115801385b",
+      "bytes": 1300
+    },
+    "tokenizer.json": {
+      "sha256": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4",
+      "bytes": 19989343
+    },
+    "tokenizer_config.json": {
+      "sha256": "e98f1901ac6f0adff67b1d540bfa0c36ac1a0cf59eb72ed78146ef89aafa1182",
+      "bytes": 1139
+    },
+    "video_preprocessor_config.json": {
+      "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+      "bytes": 385
+    },
+    "vocab.json": {
+      "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+      "bytes": 6722759
+    }
+  },
+  "config": {
+    "architectures": [
+      "Qwen3_5ForConditionalGeneration"
+    ],
+    "image_token_id": 248056,
+    "model_type": "qwen3_5",
+    "quantization": {
+      "group_size": 64,
+      "bits": 4,
+      "mode": "affine"
+    },
+    "quantization_config": {
+      "group_size": 64,
+      "bits": 4,
+      "mode": "affine"
+    },
+    "text_config": {
+      "attention_bias": false,
+      "attention_dropout": 0.0,
+      "attn_output_gate": true,
+      "dtype": "bfloat16",
+      "eos_token_id": 248044,
+      "full_attention_interval": 4,
+      "head_dim": 256,
+      "hidden_act": "silu",
+      "hidden_size": 4096,
+      "initializer_range": 0.02,
+      "intermediate_size": 12288,
+      "layer_types": [
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention"
+      ],
+      "linear_conv_kernel_dim": 4,
+      "linear_key_head_dim": 128,
+      "linear_num_key_heads": 16,
+      "linear_num_value_heads": 32,
+      "linear_value_head_dim": 128,
+      "max_position_embeddings": 262144,
+      "mlp_only_layers": [],
+      "model_type": "qwen3_5_text",
+      "mtp_num_hidden_layers": 1,
+      "mtp_use_dedicated_embeddings": false,
+      "num_attention_heads": 16,
+      "num_hidden_layers": 32,
+      "num_key_value_heads": 4,
+      "rms_norm_eps": 1e-06,
+      "use_cache": true,
+      "vocab_size": 248320,
+      "mamba_ssm_dtype": "float32",
+      "rope_parameters": {
+        "mrope_interleaved": true,
+        "mrope_section": [
+          11,
+          11,
+          10
+        ],
+        "rope_type": "default",
+        "rope_theta": 10000000,
+        "partial_rotary_factor": 0.25
+      }
+    },
+    "tie_word_embeddings": false,
+    "transformers_version": "4.57.0.dev0",
+    "video_token_id": 248057,
+    "vision_config": {
+      "deepstack_visual_indexes": [],
+      "depth": 27,
+      "hidden_act": "gelu_pytorch_tanh",
+      "hidden_size": 1152,
+      "in_channels": 3,
+      "initializer_range": 0.02,
+      "intermediate_size": 4304,
+      "model_type": "qwen3_5",
+      "num_heads": 16,
+      "num_position_embeddings": 2304,
+      "out_hidden_size": 4096,
+      "patch_size": 16,
+      "spatial_merge_size": 2,
+      "temporal_patch_size": 2
+    },
+    "vision_end_token_id": 248054,
+    "vision_start_token_id": 248053
+  },
+  "versions": {
+    "shellingham": "1.5.4",
+    "uvicorn": "0.54.0",
+    "mlx": "0.32.4",
+    "mlx-lm": "0.32.2",
+    "pydantic": "2.14.2",
+    "filelock": "4.2.9",
+    "starlette": "1.10.0",
+    "click": "8.5.0",
+    "packaging": "26.3",
+    "protobuf": "7.36.2",
+    "tokenizers": "0.23.3",
+    "Pygments": "2.21.0",
+    "rich": "15.0.0",
+    "sentencepiece": "0.2.2",
+    "pydantic_core": "2.50.2",
+    "iniconfig": "2.3.1",
+    "numpy": "2.5.4",
+    "cryptography": "50.0.2",
+    "pycparser": "3.12",
+    "pluggy": "1.7.0",
+    "opentelemetry-api": "1.45.2",
+    "safetensors": "0.8.0",
+    "typing-inspection": "0.4.5",
+    "tqdm": "4.70.1",
+    "h11": "0.16.0",
+    "mdurl": "0.1.2",
+    "mlx-metal": "0.32.4",
+    "PyYAML": "6.0.3",
+    "httpcore2": "2.16.0",
+    "fsspec": "2026.9.0",
+    "truststore": "0.10.5",
+    "cffi": "2.1.1",
+    "httpx2": "2.16.0",
+    "typer": "0.27.3",
+    "pytest": "9.2.0",
+    "Jinja2": "3.1.6",
+    "annotated-types": "0.8.0",
+    "regex": "2026.9.29",
+    "markdown-it-py": "4.2.0",
+    "annotated-doc": "0.0.5",
+    "transformers": "5.22.1",
+    "fastapi": "0.162.0",
+    "anyio": "4.16.0",
+    "typing_extensions": "4.16.0",
+    "MarkupSafe": "3.0.4",
+    "hf-xet": "1.8.0",
+    "huggingface_hub": "2.4.0",
+    "scipy": "1.18.1",
+    "idna": "3.20"
+  },
+  "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc"
+}

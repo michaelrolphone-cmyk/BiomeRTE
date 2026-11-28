@@ -1,0 +1,139 @@
+{
+  "operation": "af-agent-live-enabled-2",
+  "state": "succeeded",
+  "result": {
+    "result": {
+      "ok": true,
+      "response": {
+        "diagnostics": {
+          "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+          "baseline_pull": 0,
+          "changed_words_total": 797573,
+          "commit_every_tokens": 1,
+          "consumed_token_count": 25,
+          "consumed_tokens": 25,
+          "eligible_layers": 32,
+          "eligible_projections": 248,
+          "field_enabled": true,
+          "field_version": 11,
+          "forward_seconds": 1.9787349570069637,
+          "last_receipts": [
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 22365,
+              "changed_words": 72032,
+              "config_revision": 0,
+              "field_version": 6,
+              "old_field_version": 5,
+              "token_end": 18,
+              "token_start": 18
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 22469,
+              "changed_words": 72650,
+              "config_revision": 0,
+              "field_version": 7,
+              "old_field_version": 6,
+              "token_end": 19,
+              "token_start": 19
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 22076,
+              "changed_words": 71440,
+              "config_revision": 0,
+              "field_version": 8,
+              "old_field_version": 7,
+              "token_end": 20,
+              "token_start": 20
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 22266,
+              "changed_words": 71897,
+              "config_revision": 0,
+              "field_version": 9,
+              "old_field_version": 8,
+              "token_end": 21,
+              "token_start": 21
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 21923,
+              "changed_words": 70936,
+              "config_revision": 0,
+              "field_version": 10,
+              "old_field_version": 9,
+              "token_end": 22,
+              "token_start": 22
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 22398,
+              "changed_words": 71494,
+              "config_revision": 0,
+              "field_version": 11,
+              "old_field_version": 10,
+              "token_end": 23,
+              "token_start": 23
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 0,
+              "changed_words": 0,
+              "config_revision": 0,
+              "field_version": 11,
+              "old_field_version": 11,
+              "status": "exact_noop",
+              "token_end": 24,
+              "token_start": 24
+            },
+            {
+              "baseline_pull": 0,
+              "candidate_rows": 0,
+              "changed_words": 0,
+              "config_revision": 0,
+              "field_version": 11,
+              "old_field_version": 11,
+              "status": "exact_noop",
+              "token_end": 25,
+              "token_start": 25
+            }
+          ],
+          "load_seconds": 2.245806166996772,
+          "memory": {
+            "host_bytes": 25769803776,
+            "model_bytes": 5038041600,
+            "native_cache_estimate": 201326592,
+            "transaction_peak_bytes": 12694743552,
+            "writable_bytes": 3459252224
+          },
+          "mlx_active_memory": 8571050506,
+          "mlx_peak_memory": 12049625678,
+          "native_tokens": 25,
+          "ordinary_resets": 0,
+          "precision": "fp32 proposal; uint32 packed affine4; fixed group64 scales/offsets",
+          "read_only": false,
+          "realized_step_bound": false,
+          "spectral": {
+            "backlog": 0,
+            "bucket_assignment": "projection-output-row modulo8; attention8+MLP8/layer; v1",
+            "covered_tokens": 25,
+            "errors": 0,
+            "label": "trajectory novelty; unvalidated",
+            "windows_completed": 0
+          },
+          "write_seconds": 12.765308082991396
+        },
+        "finish_reason": "length",
+        "model": "mlx-community/Qwen3.5-9B-4bit",
+        "model_revision": "8b2b98c00a6b4d291155e4890773ca8f769aee53",
+        "text": "Hello! How can I help you today"
+      },
+      "session_id": "b85e2ba8-1e33-48ee-b066-3bd2a7e4d7d3",
+      "status": "succeeded",
+      "version": 1
+    }
+  }
+}
