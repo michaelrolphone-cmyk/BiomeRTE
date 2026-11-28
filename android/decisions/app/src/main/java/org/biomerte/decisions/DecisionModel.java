@@ -7,6 +7,17 @@ import java.util.Set;
 
 /** Validate what the user must be able to review before a reply can be signed. */
 public final class DecisionModel {
+ public static String title(JSONObject request) {
+    String value=request.optString("title").trim();
+    if(value.isEmpty()) value=request.optString("question","Decision").trim();
+    String[] words=value.split("[\\p{Z}\\s]+");
+    return String.join(" ",java.util.Arrays.copyOf(words,Math.min(10,words.length)));
+ }
+ public static String fullQuestion(JSONObject request)throws Exception {
+    String detail=describe(request);
+    return request.getString("question")+(detail.isEmpty()?"":"\n\n"+detail);
+ }
+
  public static String problem(Object value) {
   try {
    if(!(value instanceof JSONObject))throw new Exception("Decision must be an object");
