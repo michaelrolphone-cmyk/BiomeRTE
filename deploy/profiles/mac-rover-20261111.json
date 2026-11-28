@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source_commit": "9fe7f25a14d565c13fb84668ed728588910c790b",
+  "reason": "Preserve the audited Mac production storage/assistant versions while upgrading only Rover control UTC and router behavior.",
+  "overrides": [
+    {
+      "path": "biomerte/store.py",
+      "commit": "bcef0dad6f8c745d01603de11919d64547c665ad",
+      "sha256": "78ac723d35a535003aac587ed3c63869d64f27aea4657017117dc5d507a2f50a"
+    },
+    {
+      "path": "biomerte/assistant_support.py",
+      "commit": "bcef0dad6f8c745d01603de11919d64547c665ad",
+      "sha256": "61f3dc47d94ba986f5dd432c1745b89ba3b278514a34c53ae132e125f88fd031"
+    }
+  ],
+  "firmware_commit": "12f6a76083a0c74be848451c41b545d8f2c17928",
+  "adapter_commit": "a457887b79ab77e65fefe5f290f500851a6da885"
+}
