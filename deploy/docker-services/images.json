@@ -66,6 +66,17 @@
         "check"
       ],
       "include_by_default": false
+    },
+    {
+      "id": "worker-rover-motion",
+      "dockerfile": "deploy/workers/motion/Dockerfile",
+      "platforms": [
+        "linux/arm64"
+      ],
+      "smoke": [
+        "check"
+      ],
+      "include_by_default": false
     }
   ]
 }

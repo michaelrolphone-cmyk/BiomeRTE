@@ -1,0 +1,21 @@
+name: Rover motion worker image
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/motion-worker-image.yml'
+      - 'deploy/workers/motion/**'
+      - 'providers/rover-motion/**'
+      - 'biomerte/motion_*.py'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the motion capability image and run its tests
+        run: |
+          python3 deploy/docker-services/images.py build --image worker-rover-motion --output-dir "$RUNNER_TEMP/biome-motion"
