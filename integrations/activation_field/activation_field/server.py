@@ -16,6 +16,8 @@ def app(root,manifest,initial_config=None):
     api=FastAPI(title='Activation Field',docs_url=None,redoc_url=None,dependencies=[Depends(auth)])
     from .experiment_jobs import ExperimentJobs
     experiments=ExperimentJobs(root,manifest)
+    from .transforms.service import install as install_transforms
+    install_transforms(api,root,manifest,sessions)
     @api.post('/experiments')
     def experiment_create(body:dict):return experiments.start(body)
     @api.get('/experiments/{run_id}')
@@ -84,4 +86,3 @@ def app(root,manifest,initial_config=None):
         s['checkpoint']=name;s['reset_native_on_load']=body.get('reset_native_state',True);sessions.save(s)
         return created
     return api
-

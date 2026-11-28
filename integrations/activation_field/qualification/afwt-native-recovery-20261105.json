@@ -1,0 +1,209 @@
+{
+  "schema": "afwt.native-qualification/1",
+  "implementation_revision": "6c5f9b1fbf98955a9dfc22f2513bfb5312e6c167",
+  "observed_on": "2026-11-05",
+  "environment": {
+    "host": "Mac mini",
+    "platform": "Darwin arm64",
+    "model": "mlx-community/Qwen3.5-9B-4bit",
+    "baseline_hash": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc"
+  },
+  "engineering": {
+    "native_tests": {
+      "passed": 73,
+      "seconds": 1.94,
+      "operation": "afspec-native73-tests"
+    },
+    "export": {
+      "bytes": 149092,
+      "sha256": "0e23ded994da97f09bc2fb60ff588a0527425bfe06dd225ff52c159ed900b7f2",
+      "transport": "biome-artifact-tree/1",
+      "verified_exact": true,
+      "operation": "afspec-reconcile-export-cache"
+    },
+    "restoration": {
+      "status": "succeeded",
+      "run_id": "86a6b3e8e7ef41218be0e1ffa1b7213c",
+      "baseline_only": true,
+      "independent_encrypted_checkpoint": true
+    },
+    "comparison": {
+      "run_id": "8ab1a530c6144f64a6874b7ba8c7d1a8",
+      "status": "succeeded",
+      "report": {
+        "assessment": null,
+        "conditions": {
+          "B": {
+            "arithmetic": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "5"
+            },
+            "code": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "35"
+            },
+            "instruction": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "ready"
+            }
+          },
+          "R": {
+            "arithmetic": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "5"
+            },
+            "code": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "35"
+            },
+            "instruction": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "ready"
+            }
+          },
+          "T": {
+            "arithmetic": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "5"
+            },
+            "code": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "35"
+            },
+            "instruction": {
+              "finish_reason": "stop",
+              "kind": "general",
+              "score": 1,
+              "text": "ready"
+            }
+          }
+        },
+        "cost": {
+          "disk_scope": "job artifacts, encrypted state and logs",
+          "job_disk_bytes": 40730033,
+          "peak_process_ram_bytes": 5072240640,
+          "ram_scope": "process lifetime high-water mark; not baseline-subtracted"
+        },
+        "decay": false,
+        "identity": "df925b326a617fc08cd937af306e0bb84a4d0434057859a1fc05c081fe22c117",
+        "initial_native_state": "empty",
+        "paired_bootstrap_95": {
+          "R-B": [
+            0,
+            0
+          ],
+          "R-T": [
+            0,
+            0
+          ],
+          "T-B": [
+            0,
+            0
+          ]
+        },
+        "paired_kl": {
+          "arithmetic": {
+            "T_to_B": {
+              "mean": 0.0015020904664021686,
+              "positions": 14,
+              "same_prefixes": true
+            },
+            "T_to_R": {
+              "mean": 0.0009485153110088688,
+              "positions": 14,
+              "same_prefixes": true
+            }
+          },
+          "code": {
+            "T_to_B": {
+              "mean": 0.0009374948655425364,
+              "positions": 20,
+              "same_prefixes": true
+            },
+            "T_to_R": {
+              "mean": 0.0009387968074478732,
+              "positions": 20,
+              "same_prefixes": true
+            }
+          },
+          "instruction": {
+            "T_to_B": {
+              "mean": 0.0013879173575978888,
+              "positions": 7,
+              "same_prefixes": true
+            },
+            "T_to_R": {
+              "mean": 0.0012444966684161463,
+              "positions": 7,
+              "same_prefixes": true
+            }
+          }
+        },
+        "probe_suite_hash": "2c28e0008ffb0ddc24d7a21e4096a8f74d8e4bf45f454af512f5472fa74d0cf7",
+        "retention_ratio": null,
+        "scientific_usefulness": "unresolved; operator assessment required",
+        "scores": {
+          "B": 1,
+          "R": 1,
+          "T": 1
+        },
+        "seconds": 26.982211915994412,
+        "selected_candidate": null,
+        "source": {
+          "baseline": "5fe6cb50ccda48dc54ee1a3ae124fcd728f22966bd847572a261a87d629e63cc",
+          "restored": "1373c3cb4564b01de5823510d8fb4ff4312122eed9964fc597612f021035e2d9",
+          "target": "080983ab1cb8276e03435e65194a546799e04b82ed5906aec883850f2147057c"
+        },
+        "status": "succeeded",
+        "uncertainty_scope": "paired probe bootstrap; synthetic smoke probes are not held-out memory acceptance",
+        "writes": false
+      }
+    },
+    "trial": {
+      "created": 3,
+      "independent": true,
+      "read_only": true,
+      "blind": false,
+      "writes": false,
+      "decay": false,
+      "operation": "afspec-qualification-trial-b27c40e0"
+    },
+    "cancellation_resume": {
+      "fit_run_id": "b3b31360dc2748f18fa55568dba076eb",
+      "pause_version": 9,
+      "resume_version": 10,
+      "checkpoint_regions": 92,
+      "normal_capability_path": true
+    }
+  },
+  "scope": {
+    "candidate_regions": 11,
+    "optimization_coverage": "Partial fit, first two eligible tensor identities; baseline materialization and inference use the full model.",
+    "fit_complete": false,
+    "scientific_usefulness": "Unestablished. Three general smoke probes are not held-out memory acceptance. All conditions scored equally, so retention_ratio is null.",
+    "human_assessment": "Not supplied. Engineering annotations are attributed to ChatGPT.",
+    "lm_studio_dependency": false
+  },
+  "recovery": {
+    "rhizome_task_id": "47f9f416-2954-4223-950b-78504d135207",
+    "humus": "default/activation-field-transform-recovery-b27c40e0",
+    "report_path": "~/.local/share/biome-field-transform/qualification-b27c40e0.json",
+    "driver_operation": "afspec-qualification-driver2-b27c40e0"
+  }
+}

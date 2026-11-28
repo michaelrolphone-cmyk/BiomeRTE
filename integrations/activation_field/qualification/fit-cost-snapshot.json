@@ -1,0 +1,9 @@
+{
+  "complete": false,
+  "completed_tensors": 1,
+  "elapsed_seconds": 3400.4669982490013,
+  "job_disk_bytes": 1239253289,
+  "regions": 100,
+  "status": "cancelled",
+  "version": 15
+}

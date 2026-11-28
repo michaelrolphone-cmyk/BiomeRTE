@@ -3,6 +3,13 @@ from pathlib import Path
 
 
 def main():
+    import sys
+    if len(sys.argv)>1 and sys.argv[1]=='transform':
+        from .transforms.cli import main as transform_main
+        return transform_main(sys.argv[2:])
+    if sys.argv[1:3]==['session','import']:
+        from .transforms.cli import session_import
+        return session_import(sys.argv[3:])
     root=Path.home()/'.local/share/biome-activation-field'
     parser=argparse.ArgumentParser(prog='fieldctl');sub=parser.add_subparsers(dest='command',required=True)
     serve=sub.add_parser('serve');serve.add_argument('--root',default=str(root));serve.add_argument('--manifest',default=str(root/'model-manifest.json'));serve.add_argument('--port',type=int,default=8791);serve.add_argument('--config')
@@ -49,4 +56,3 @@ def main():
         print(json.dumps(result,indent=2))
 
 if __name__=='__main__':main()
-

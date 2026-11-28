@@ -1,0 +1,32 @@
+{
+  "native_tests": {
+    "operation": "afwt-quantized-metrics-stage-test",
+    "exit_code": 0,
+    "stdout": "........................................................................ [ 96%]\n...                                                                      [100%]\n75 passed in 1.92s\n",
+    "implementation_revision": "dc274ca296dfa14fd6c0db1d8a226c9eb849bf25"
+  },
+  "typed_error": {
+    "operation": "afwt-final-typed-error-proof",
+    "result": {
+      "result": {
+        "error": {
+          "code": "not_found",
+          "message": "HTTP Error 404: Not Found"
+        },
+        "ok": false
+      }
+    }
+  },
+  "portability": {
+    "operation": "afwt-native-portability-v2",
+    "exit_code": 0,
+    "tensor_records": 250,
+    "source_reads_denied": 2
+  },
+  "export": {
+    "operation": "afwt-export-partial-native",
+    "bytes": 149092,
+    "sha256": "0e23ded994da97f09bc2fb60ff588a0527425bfe06dd225ff52c159ed900b7f2",
+    "verified_parts": 5
+  }
+}
