@@ -18,6 +18,7 @@
     {
       "id": "service-authority",
       "dockerfile": "deploy/service-authority/Dockerfile",
+      "embed_source_revision": true,
       "platforms": [
         "linux/arm64",
         "linux/arm/v7",

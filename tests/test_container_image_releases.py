@@ -1,4 +1,5 @@
 import importlib.util
+from argparse import Namespace
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,51 @@ images = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(images)
 
 class ImageReleaseTests(unittest.TestCase):
+    def test_build_checks_embedded_runtime_revision_before_export(self):
+        commit = "a" * 40
+        origin = "https://github.com/example/runtime.git"
+        image = "sha256:" + "b" * 64
+        platform = "linux/arm64"
+
+        for reported in (commit, "c" * 40):
+            with self.subTest(reported=reported), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "Dockerfile").write_text("ARG BIOMERTE_SOURCE_REVISION\n")
+                images.save_json(root / "images.json", {"schema": "biomerte-container-builds/1",
+                    "images": [{"id": "authority", "dockerfile": "Dockerfile",
+                                "platforms": [platform], "embed_source_revision": True}]})
+                args = Namespace(repo=root, revision="HEAD", plan="images.json", docker="docker",
+                                 output_dir=root / "out", image=["authority"], platform=[platform])
+                calls = []
+
+                def command(argv, cwd=None):
+                    calls.append(argv)
+                    if argv[:2] == ["git", "rev-parse"]:
+                        return commit
+                    if argv[:2] == ["git", "remote"]:
+                        return origin
+                    if argv[:2] == ["docker", "build"]:
+                        self.assertIn("BIOMERTE_SOURCE_REVISION=" + commit, argv)
+                        Path(argv[argv.index("--iidfile") + 1]).write_text(image)
+                        return ""
+                    if argv[:2] == ["docker", "run"]:
+                        self.assertEqual(argv[2:9], ["--rm", "--network", "none", "--entrypoint", "python", image, "-c"])
+                        return reported
+                    self.assertEqual(argv[:3], ["docker", "save", "--output"])
+                    Path(argv[3]).write_bytes(b"archive")
+                    return ""
+
+                labels = images.expected_labels(commit, origin, "authority", platform)
+                with patch.object(images, "archive_source", return_value=root), \
+                        patch.object(images, "inspect_image", return_value={"Config": {"Labels": labels}}), \
+                        patch.object(images, "call", side_effect=command):
+                    if reported == commit:
+                        self.assertEqual(images.build(args)["source_commit"], commit)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "runtime source revision"):
+                            images.build(args)
+                        self.assertFalse(any(argv[:2] == ["docker", "save"] for argv in calls))
+
     def test_release_rejects_armv7_runtime_labeled_arm64_and_reclaims_inspection(self):
         image = "sha256:" + "a" * 64
         arm32 = bytearray(20)
@@ -40,7 +86,6 @@ class ImageReleaseTests(unittest.TestCase):
         images.validate_elf(arm32, "linux/arm64")
 
     def test_direct_build_checks_actual_python_against_requested_target(self):
-        from argparse import Namespace
         with tempfile.TemporaryDirectory() as folder:
             binary = Path(folder) / "python"
             with patch.object(images.sys, "executable", str(binary)):

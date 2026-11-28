@@ -247,6 +247,7 @@ def build(args):
                 tag = "biomerte-local/{}:{}-{}".format(name, revision[:12], suffix)
                 iidfile = Path(temp) / (name + "-" + suffix + ".iid")
                 dockerfile = source / spec["dockerfile"]
+                dockerfile_source = dockerfile.read_text()
                 argv = [args.docker, "build", "--platform", platform,
                         "--iidfile", iidfile, "--tag", tag,
                         "--label", "org.opencontainers.image.source=" + origin,
@@ -255,15 +256,25 @@ def build(args):
                         "--label", "io.biomerte.platform=" + platform, "--file", dockerfile]
                 base = None
                 if spec.get("base_image"):
-                    if "ARG " + spec["base_argument"] not in dockerfile.read_text():
+                    if "ARG " + spec["base_argument"] not in dockerfile_source:
                         raise ValueError("Dockerfile does not expose its base-image argument")
                     base = resolve_base(args.docker, spec["base_image"], platform)
                     argv += ["--build-arg", spec["base_argument"] + "=" + base]
+                if spec.get("embed_source_revision"):
+                    if "ARG BIOMERTE_SOURCE_REVISION" not in dockerfile_source:
+                        raise ValueError("Dockerfile does not expose its source revision argument")
+                    argv += ["--build-arg", "BIOMERTE_SOURCE_REVISION=" + revision]
                 argv.append(source)
                 call(argv)
                 image = iidfile.read_text().strip()
                 data = inspect_image(args.docker, image, platform)
                 check_provenance(data, expected_labels(revision, origin, name, platform))
+                if spec.get("embed_source_revision"):
+                    running_revision = call([args.docker, "run", "--rm", "--network", "none",
+                        "--entrypoint", "python", image, "-c",
+                        "from biomerte.release import identity; print(identity()['commit'])"])
+                    if running_revision != revision:
+                        raise ValueError("Image runtime source revision does not match the release lock")
                 if spec.get("smoke"):
                     call([args.docker, "run", "--rm", "--network", "none", image] + spec["smoke"])
                 artifact = output / (name + "-" + suffix + ".tar")
