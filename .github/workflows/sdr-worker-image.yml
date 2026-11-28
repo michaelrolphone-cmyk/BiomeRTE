@@ -1,0 +1,27 @@
+name: SDR worker image
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sdr-worker-image.yml'
+      - 'deploy/workers/sdr/**'
+      - 'providers/pi-sdr/**'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - name: Build and smoke the Pi image
+        run: |
+          python3 deploy/docker-services/images.py build --image worker-sdr --platform linux/arm/v7 --output-dir "$RUNNER_TEMP/biome-sdr"
+      - name: Test the SDR daemon and client in the built image
+        run: |
+          image_id=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/biome-sdr/images.lock.json"))["images"][0]["image_id"])')
+          docker run --rm --network none --entrypoint python3 "$image_id" -m unittest discover -s /app/providers/pi-sdr -p 'test_*.py'

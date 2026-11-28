@@ -41,6 +41,10 @@ def serve(home, root):
     service = socketserver.UnixStreamServer(path, Handler)
     try:
         os.chmod(path, 0o600)
+        ready_fd = os.environ.get('BIOMERTE_SDR_READY_FD')
+        if ready_fd is not None:
+            with os.fdopen(int(ready_fd), 'wb') as ready:
+                ready.write(b'1')
         service.serve_forever()
     finally:
         service.server_close()
