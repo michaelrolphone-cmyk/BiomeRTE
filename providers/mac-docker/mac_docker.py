@@ -81,7 +81,7 @@ def serve(cfg):
                         if state != advertised:
                             remote.call('cap.offer', offer(cfg, state))
                             advertised = state
-                        if not ready and cfg.get('desktop') and now >= launch_after:
+                        if not ready and sys.platform == 'darwin' and cfg.get('desktop') and now >= launch_after:
                             subprocess.run(['/usr/bin/open', '-gja', 'Docker'], timeout=15, check=False)
                             launch_after = now + 120
                         checked = now + 10
@@ -165,7 +165,9 @@ def install():
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == 'install':
+    if sys.argv[1] == 'smoke':
+        subprocess.run(['/usr/local/bin/docker', '--version'], check=True)
+    elif sys.argv[1] == 'install':
         install()
     else:
         cfg = json.loads((STATE / 'manifest.json').read_text())

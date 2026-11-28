@@ -49,21 +49,20 @@ class ClockTests(unittest.TestCase):
         self.assertEqual(generic.snapshot()['elapsed_since_receive_s'],1.)
 
     def test_publisher_does_not_require_retired_radio_stream(self):
-        module=types.ModuleType('camera_telemetry');module.CameraHTTPClient=object
-        packet_module=types.ModuleType('capture_packet');packet_module.validate_packet=lambda p,**kw:p
-        with patch.dict('sys.modules',{'camera_telemetry':module,'capture_packet':packet_module}):
-            import sensor_tick_stream
-            service=types.SimpleNamespace(config={'camera':{}},map_id='map',revision=1,session_id='session',
-                _stream_ahrs=lambda f:{},_capture_sensor_stream=lambda f,n:{},
-                live_frames=types.SimpleNamespace(publish=lambda m,b:published.append((m,b))))
-            stream=object.__new__(sensor_tick_stream.SensorTickStream)
-            stream.service=service;stream.last_identity=None;stream.published=0
-            published=[]
-            stream.publish(dict(schema='biome.sensor_tick.v1',receiver_id='rover',boot_id='boot',
-                frame_id='boot:1000000',capture_monotonic_us=1000000,served_monotonic_us=1000001),
-                10.,10.01,capture_interval=[10.,10.005])
-            self.assertEqual(published[0][0]['sensor_delivery'],'websocket_push')
-            self.assertEqual(published[0][1],b'')
+        import sensor_tick_stream
+        service=types.SimpleNamespace(config={'camera':{}},map_id='map',revision=1,session_id='session',
+            _stream_ahrs=lambda f:{},_capture_sensor_stream=lambda f,n:{},
+            live_frames=types.SimpleNamespace(publish=lambda m,b:published.append((m,b))))
+        stream=object.__new__(sensor_tick_stream.SensorTickStream)
+        stream.service=service;stream.last_identity=None;stream.published=0
+        published=[]
+        stream.publish(dict(schema='biome.sensor_tick.v1',receiver_id='rover',boot_id='boot',
+            frame_id='boot:1000000',capture_monotonic_us=1000000,served_monotonic_us=1000001,
+            capture_clock='esp_timer',image_available=False,
+            capture_timestamp_semantics='sensor_snapshot_tick_no_camera_frame'),
+            10.,10.01,capture_interval=[10.,10.005])
+        self.assertEqual(published[0][0]['sensor_delivery'],'websocket_push')
+        self.assertEqual(published[0][1],b'')
 
     def test_exchange_bounds_real_capture_and_preserves_delay(self):
         clock=ClockAlignment()

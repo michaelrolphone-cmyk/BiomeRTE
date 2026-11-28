@@ -44,6 +44,17 @@
         "-c",
         "import router, rover; print('portable-services imports ready')"
       ]
+    },
+    {
+      "id": "worker-docker-cli",
+      "dockerfile": "deploy/workers/docker-cli/Dockerfile",
+      "platforms": [
+        "linux/arm64"
+      ],
+      "smoke": [
+        "smoke"
+      ],
+      "include_by_default": false
     }
   ]
 }
