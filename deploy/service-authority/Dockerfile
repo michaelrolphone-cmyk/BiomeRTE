@@ -11,6 +11,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 RUN apk add --no-cache openssl && pip install --no-cache-dir aiohttp==3.14.5
 WORKDIR /app
 COPY biomerte /app/biomerte
+ARG BIOMERTE_SOURCE_REVISION
+RUN case "$BIOMERTE_SOURCE_REVISION" in \
+      '') ;; \
+      *[!0-9a-f]*) exit 1 ;; \
+      *) test "${#BIOMERTE_SOURCE_REVISION}" -eq 40 && \
+         printf '{"schema":"biomerte-autodeploy-release/1","commit":"%s"}\n' \
+             "$BIOMERTE_SOURCE_REVISION" > .biomerte-release.json ;; \
+    esac
 ENTRYPOINT ["python", "-m", "biomerte.service_daemon"]
 CMD ["--role", "authority", "--config", "/config/service.json"]
 
