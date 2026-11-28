@@ -31,10 +31,12 @@ async function refresh(){
   const inspect=x=>['Inspect',()=>detail(x)];
   const byId=new Map(state.work.map(w=>[w.id,w]));
   const workLabel=w=>{const parents=[];let p=byId.get(w.parent);while(p && parents.length<4){parents.unshift(p.title);p=byId.get(p.parent);}
-    return parents.concat(w.title).join(' › ')+' · '+w.kind+' · '+(w.ready?'ready':w.state);};
+    const titles=ids=>(ids||[]).map(id=>byId.get(id)?.title||id).join(', ');
+    return parents.concat(w.title).join(' › ')+' · '+w.kind+' · '+(w.blocked_by?.length?'blocked by '+titles(w.blocked_by):w.ready?'ready':w.state)
+      +(w.sequence_pending?.length?' · preferred predecessors: '+titles(w.sequence_pending):'');};
   const modes=(state.mission||{}).allocation||{};el('mission').textContent=Object.keys(modes).length?'Mission services: '+Object.keys(modes).map(k=>k+' = '+(modes[k]||'minimum unmet')).join(' · '):'';
   rows('work-list',state.work,workLabel,x=>{
-    const controls=[inspect(x)];
+    const controls=[inspect(x),['Edit plan',()=>editPlan(x)]];
     if(x.ready && x.kind==='task' && state.process.definitions.length) controls.push(['Run',()=>chooseProcess(x)]);
     if(x.state==='open' || x.state==='review')controls.push(['Accept',()=>acceptWork(x)]);
     return controls;
@@ -94,6 +96,12 @@ function editFields(title,schema,submit,defaults={}) {
     }catch(err){el('edit-error').textContent=err.message;}
   };
   if(!dialog.open)dialog.showModal();
+}
+function editPlan(item){
+  editFields('Edit '+item.title,{title:'str',parent:'str?',priority:'int',sequence:'int',
+    dependencies:'list',sequence_dependencies:'list'},
+    changes=>call('work.update',{id:item.id,revision:item.revision,changes:{parent:'',...changes}}),
+    {...item,dependencies:JSON.stringify(item.dependencies),sequence_dependencies:JSON.stringify(item.sequence_dependencies||[])});
 }
 function startProcess(def,task=''){
   editFields('Run '+def.id,def.inputs,inputs=>call('process.start',{name:def.id,inputs,task}));

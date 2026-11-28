@@ -102,6 +102,38 @@ class Runtime(unittest.TestCase):
         with self.assertRaises(Fault):
             self.call('work.update', {'id': 'a', 'revision': 1, 'changes': {'sequence': 1}})
 
+    def test_dependency_plan_moves_and_advisory_sequence(self):
+        def create(kind, key, **fields):
+            return self.call('work.create', dict(fields, kind=kind, id=key, title=key))
+
+        create('goal', 'goal')
+        create('milestone', 'milestone', parent='goal')
+        create('workflow', 'workflow', parent='milestone')
+        create('task', 'first')
+        create('task', 'second', sequence_dependencies=['first'])
+        create('task', 'third', parent='workflow', dependencies=['second'])
+        moved = self.call('work.update', {'id': 'second', 'revision': 1,
+                                         'changes': {'parent': 'workflow'}})
+        rows = {row['id']: row for row in self.call('work.list')}
+        self.assertEqual(rows['second']['sequence_pending'], ['first'])
+        self.assertTrue(rows['second']['ready'])
+        self.assertEqual(rows['third']['blocked_by'], ['second'])
+        self.assertFalse(rows['third']['ready'])
+        with self.assertRaisesRegex(Fault, 'Dependency cycle'):
+            self.call('work.update', {'id': 'second', 'revision': moved['revision'],
+                                      'changes': {'dependencies': ['milestone']}})
+        with self.assertRaisesRegex(Fault, 'Invalid hierarchy'):
+            self.call('work.update', {'id': 'second', 'revision': moved['revision'],
+                                      'changes': {'parent': 'goal'}})
+        self.call('work.accept', {'id': 'second', 'revision': moved['revision'],
+                                  'evidence': {'outcome': 'verified'}})
+        items = {row['id']: row for row in self.call('work.list')}
+        self.assertEqual(items['second']['parent'], 'workflow')
+        self.assertTrue(items['third']['ready'])
+        body = self.call('knowledge.get', {'key': 'plan.second'})['revisions'][0]['body']
+        self.assertEqual(body['sequence_dependencies'], ['first'])
+        self.assertEqual(body['parent'], 'workflow')
+
     def test_parallel_join_call_versions(self):
         child = {'name': 'child', 'steps': [{'type': 'set', 'values': {'v': 'original'}}],
                  'inputs': {}, 'outputs': {'value': 'str'}, 'result': {'value': {'$': 'v'}}}

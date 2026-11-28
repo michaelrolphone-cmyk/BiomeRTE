@@ -1,4 +1,4 @@
-import {escapeHTML as esc,shortID,friendlyIdentity,mappingFor,nameFor,mappingKey,namespaceTree,namespaceAt,descendantCount,statusName,statusTone,runTitle,overviewStats,resourcePools,graphModel,elapsedLabel,createClient} from './model.mjs';
+import {escapeHTML as esc,shortID,friendlyIdentity,mappingFor,nameFor,mappingKey,namespaceTree,namespaceAt,descendantCount,statusName,statusTone,runTitle,overviewStats,resourcePools,graphModel,elapsedLabel,createClient,workHierarchy,workParents,workDependencyGraph} from './model.mjs';
 import {diagramMarkup,wireDiagram,diagramToolbar} from './diagram.mjs';
 import {graphModel as toGraph,nodeStates as reportedNodeStates} from './model.mjs';
 import {diagramMarkup as drawGraph,wireDiagram as connectDiagram,diagramToolbar as flowToolbar} from './diagram.mjs';
@@ -145,7 +145,17 @@ function streams(){const sessions=list(data('streams'),['sessions','streams','it
 function processes(){const summaries=data('summaries')?.runs||{},filter=state.runFilter||'all';const rows=list(data('processes'),['runs','items']).filter(match).filter(r=>filter==='all'||filter==='running'&&['running','waiting','open','paused'].includes(r.state)||filter==='attention'&&['failed','uncertain','waiting'].includes(r.state)||filter==='completed'&&r.state==='completed');return panel('Process runs','processes',`<div class="tabs">${[['all','All runs'],['running','Running'],['attention','Needs attention'],['completed','Completed']].map(([id,label])=>`<button data-run-filter="${id}" class="${filter===id?'sel':''}">${label}</button>`).join('')}</div>`+table(['Process / run','Status','Current activity / progression','Recorded steps'],rows.map(r=>{const summary=summaries[r.id]||{},nodes=summary.current_nodes||[];return [recordButton(r.name||r.id,r,'process',r.id||r.run)+'<small>'+esc(r.id||r.run)+'</small>',pill(r.state||r.status),nodes.length?nodes.map(n=>'<b>'+esc(n.name||n.label||n.id)+'</b><small>'+esc(n.state)+'</small>').join(''):(r.state==='completed'?'Process complete':'Inspect execution diagram →'),esc(r.steps??'Not reported')];}),'No process runs were reported.'))+panel('Execution summaries','summaries',`<div class="panel-body"><p class="small">${Object.keys(summaries).length} run summaries loaded. Select a run to view its pinned workflow graph, active nodes and retained history.</p></div>`);}
 
 function workflows(){const definitions=list(data('processes'),['definitions']);return panel('Published workflows','processes',`<div class="panel-body cards">${definitions.filter(match).map(d=>`<article class="card"><span class="pill">PUBLISHED PROCESS</span><h2>${esc(d.name||d.id)}</h2><p>Revision <span class="mono">${esc(short(d.rev||d.revision))}</span></p><p>${Object.keys(d.inputs||{}).length} inputs · ${Object.keys(d.outputs||{}).length} outputs</p><div class="row">${recordButton('Inspect workflow →',d,'workflow',d.name||d.id)}</div></article>`).join('')||empty('No definitions reported','Select the controller and store that own your published processes.')}</div>`)+`<a class="design-link" href="https://biomerte-enterprise-console-concept.cantikash.chatgpt.site/design/#Workflows">Original workflow library and interactive BPMN design → <span class="pill amber">Not implemented · Design preview</span></a>`;}
-function workView(){return panel('Work plan','work',table(['Title / kind','State','Readiness','Parent / dependencies'],list(data('work'),['work','items']).filter(match).map(w=>[recordButton(w.title||w.id,w)+'<small>'+esc(w.kind)+'</small>',pill(w.state),esc(w.ready===undefined?'Not reported':w.ready?'Ready':'Not ready'),esc(w.parent||'Root')+'<small>'+esc((w.dependencies||[]).join(', '))+'</small>'])));}
+function workView(){
+ const {byId,rows}=workHierarchy(list(data('work'),['work','items']));
+ return panel('Work plan','work',table(['Work','State','Task progress','Prerequisites'],rows
+  .filter(({item,ancestors})=>match([item,...ancestors]))
+  .map(({item:w,ancestors,accepted,total})=>[
+   recordButton(w.title||w.id,w)+'<small>'+esc([...ancestors.map(p=>p.title),friendlyIdentity(w.kind)].join(' › '))+'</small>',
+   pill(w.blocked_by?.length&&w.state==='open'?'blocked':w.state),
+   total?esc(accepted+' / '+total+' accepted'):'',
+   workLinks(w,byId,(dep)=>recordButton(dep.title||dep.id,dep))
+  ])));
+}
 function knowledgeView(){return panel('Saved knowledge','knowledge',table(['Document','Revision heads','Conflict'],list(data('knowledge'),['documents','items']).filter(match).map(d=>[recordButton(d.title||d.id,d,'document',d.id),`<span class="mono">${esc((d.heads||[]).map(short).join(', '))}</span>`,pill(d.conflict?'conflict':'No conflict reported')])));}
 function accessView(){return panel('Enrolled provider identities','pairing',table(['Provider','Enrollment','Identity'],list(data('pairing'),['pairs','items']).filter(match).map(p=>[recordButton(p.label||p.id,p),pill(p.state),`<span class="mono">${esc(p.id)}</span>`])))+panel('Delivery destinations','destinations',table(['Destination','Kind','Inbox','State'],list(data('destinations'),['destinations','items']).filter(match).map(d=>[recordButton(d.id,d),esc(d.kind),esc(d.inbox),pill(d.state)])))+`<section class="panel"><div class="panelhead"><h2>Application connections</h2></div><div class="panel-body"><p>Review the controller's existing OAuth grants and their scopes.</p><a href="https://biomerte-controller.cantikash.chatgpt.site/oauth/connections" target="_blank" rel="noopener">Manage controller application connections ↗</a></div></section><a class="design-link" href="https://biomerte-enterprise-console-concept.cantikash.chatgpt.site/design/#Access">Enterprise identity, role and governance design → <span class="pill amber">Not implemented</span></a>`;}
 function activityView(){const events=data('events');return panel('Retained controller events','events',`<div class="panel-body"><form id="event-query"><label>Topic <input name="topic" value="${esc(state.eventTopic||'workflow.delegation.requested')}" required></label> <button>Read events</button></form><p class="small">Showing one exact event topic. The controller's retained history determines available events.</p>${events?.history_before_unavailable?'<p class="measurement-note">The retention window moved. Showing currently retained events; earlier history is no longer available.</p>':''}</div>`+table(['Sequence / event','Time','State'],list(events,['events','items']).filter(match).map(e=>[recordButton(e.topic||e.type||String(e.seq||e.sequence),e),esc(stamp(e.created_at||e.created||e.time)),pill(e.state||e.status||'Recorded')])))+panel('Inbox messages','inbox',table(['Message','To / correlation','State'],list(data('inbox'),['messages','items']).filter(match).map(m=>[recordButton(m.id||m.type||'Message',m),esc(m.to||m.correlation||m.address),pill(m.state||m.status||'Recorded')])))+`<a class="design-link" href="https://biomerte-enterprise-console-concept.cantikash.chatgpt.site/design/#Audit">Original audit trail and export design → <span class="pill amber">Not implemented</span></a>`;}
@@ -320,8 +330,17 @@ function resources(){
  return '<p class="muted small">Capacity and availability reported by registered providers.</p><div class="card-grid">'+pools.map(pool=>{const meta=m('resource',pool.id,{title:friendlyIdentity(pool.offers[0]?.service||pool.id)}),use=pool.capacity?Math.min(100,100*pool.allocated/pool.capacity):0;return '<article class="catalog-card"><span class="eyebrow">RESOURCE POOL</span><h2>'+esc(meta.name)+'</h2><p>'+esc(meta.summary||pool.contracts.length+' supported capabilities')+'</p><p>'+pool.allocated+' allocated'+(pool.capacity?' of '+pool.capacity+' slots':'')+' · '+pool.queued+' queued</p><div class="capacity"><span data-capacity="'+use+'"></span></div><div class="card-bottom">'+pill(pool.states.includes('ready')?'ready':'unknown')+button('View details →','resource',pool.id)+'</div></article>';}).join('')+'</div>';
 }
 function workView(){
- const items=(snapshot.work||[]).filter(w=>match(w.title,w.kind,w.state));
- return '<section class="panel"><div class="panel-head"><h2>Goals and work</h2>'+button('＋ Add work','new-work')+'</div>'+(items.length?'<div class="table-scroll"><table><thead><tr><th>WORK</th><th>TYPE</th><th>STATUS</th><th>NEXT ACTION</th></tr></thead><tbody>'+items.map(w=>'<tr data-open-work="'+esc(w.id)+'" tabindex="0"><td><strong>'+esc(w.title)+'</strong>'+(w.parent?'<small>'+esc((snapshot.work||[]).find(p=>p.id===w.parent)?.title||'Parent work')+'</small>':'')+'</td><td>'+esc(friendlyIdentity(w.kind))+'</td><td>'+pill(w.state)+'</td><td>'+esc(w.ready?'Ready to start':w.state==='review'?'Review the result':'View work')+'</td></tr>').join('')+'</tbody></table></div>':empty('No work yet','Add a goal, milestone, workflow, or task to organize your work.'))+'</section>';
+ const {byId,rows}=workHierarchy(snapshot.work||[]);
+ const visible=rows.filter(({item:w,ancestors})=>match(w.title,w.kind,w.state,...ancestors.map(p=>p.title)));
+ const link=dep=>button(dep.title,'inspect-work',dep.id);
+ return '<section class="panel"><div class="panel-head"><h2>Goals and work</h2>'+button('Add work','new-work')+'</div>'+
+  (visible.length?'<div class="table-scroll"><table><thead><tr><th>Work</th><th>Status</th><th>Task progress</th><th>Prerequisites</th></tr></thead><tbody>'+
+  visible.map(({item:w,ancestors,accepted,total})=>'<tr><td>'+link(w)+
+   '<small>'+esc([...ancestors.map(p=>p.title),friendlyIdentity(w.kind)].join(' › '))+'</small></td><td>'+
+   pill(w.blocked_by?.length&&w.state==='open'?'blocked':w.state)+'</td><td>'+
+   (w.kind!=='task'&&total?esc(accepted+' / '+total+' accepted'):'')+'</td><td>'+
+   workLinks(w,byId,link)+'</td></tr>').join('')+'</tbody></table></div>':
+   empty('No matching work','Add a goal, milestone, workflow, or task to organize your work.'))+'</section>';
 }
 function knowledgeView(){
  return '<section class="panel"><div class="panel-head"><h2>Saved knowledge</h2>'+button('＋ Add document','new-document')+'</div><div class="panel-body"><div class="card-grid">'+(snapshot.documents||[]).filter(d=>match(n('document',d.id),d.id)).map(d=>'<article class="catalog-card"><span class="eyebrow">DOCUMENT</span><h2>'+esc(n('document',d.id))+'</h2><p>'+esc(d.conflict?'Multiple versions need review.':'Saved in this workspace.')+'</p><div class="card-bottom">'+pill(d.conflict?'review':'ready')+button('Read →','document',d.id)+'</div></article>').join('')+'</div>'+(!(snapshot.documents||[]).length?empty('No documents yet','Save process results and reusable knowledge here.'):'')+'</div></section>';
@@ -438,9 +457,52 @@ function chooseWorkflow(task=''){
  // Keep the input form open across the dialog's close/continue transition.
  const base=el('modal-form').onsubmit;el('modal-form').onsubmit=base;
 }
+function editWork(item){
+ const items=snapshot.work||[];
+ const kinds=Object.keys(workParents);
+ const opts=(values,selected)=>values.map(([id,title])=>
+  '<option value="'+esc(id)+'"'+(selected.includes(id)?' selected':'')+'>'+esc(title)+'</option>').join('');
+ const dependencies=items.filter(w=>w.id!==item?.id).map(w=>[w.id,w.title+' · '+friendlyIdentity(w.kind)]);
+ const kindField=item?'':'<label class="field">Type<select name="kind">'+opts(kinds.map(k=>[k,friendlyIdentity(k)]),['task'])+'</select></label>';
+ const depField=(name,label)=>'<label class="field">'+label+'<select name="'+name+'" multiple>'+
+  opts(dependencies,item?.[name]||[])+'</select></label>';
+ openModal(item?'Edit work':'Add work','<div class="form-grid">'+kindField+
+  '<label class="field">Title<input name="title" maxlength="500" required value="'+esc(item?.title)+'"></label>'+
+  '<label class="field">Parent<select name="parent"></select></label>'+
+  '<label class="field">Priority<input name="priority" type="number" required value="'+(item?.priority??0)+'"></label>'+
+  '<label class="field">Order<input name="sequence" type="number" required value="'+(item?.sequence??0)+'"></label>'+
+  depField('dependencies','Technical prerequisites')+depField('sequence_dependencies','Preferred predecessors')+'</div>',
+  async form=>{
+   const changes={title:form.get('title'),parent:form.get('parent'),priority:Number(form.get('priority')),
+    sequence:Number(form.get('sequence')),dependencies:form.getAll('dependencies'),
+    sequence_dependencies:form.getAll('sequence_dependencies')};
+   if(item)await call('work.update',{id:item.id,revision:item.revision,changes});
+   else await call('work.create',{kind:form.get('kind'),...changes});
+   await refresh();
+   toast(item?'Work saved':'Work added');
+  });
+ const form=el('modal-form');
+ const kind=form.elements.namedItem('kind');
+ const parent=form.elements.namedItem('parent');
+ const fill=selected=>{parent.innerHTML=opts([['','Unassigned'],...items
+  .filter(w=>w.kind===workParents[item?.kind||kind.value]).map(w=>[w.id,w.title])],[selected]);};
+ fill(item?.parent||'');
+ if(kind)kind.onchange=()=>fill('');
+}
+
+function showWorkMap(id){
+ const items=snapshot.work||[];
+ const work=items.find(item=>item.id===id);
+ if(!work)return;
+ const graph=workDependencyGraph(items,id);
+ const diagram=diagramMarkup(graph,{selected:id,statusLabel:'Planning item'});
+ openModal('Dependency map · '+work.title,
+  '<div id="work-dependency-map">'+diagramToolbar+'<div class="diagram-viewport">'+diagram.html+'</div></div>');
+ wireDiagram(el('work-dependency-map'),diagram.layout,workDetail);
+}
 async function workDetail(id){
  const w=(snapshot.work||[]).find(x=>x.id===id);if(!w)return;
- openModal(w.title,'<div class="summary-row">'+field('Type',esc(friendlyIdentity(w.kind)))+field('Status',pill(w.state))+'</div><p>'+esc(w.description||(w.ready?'This work is ready to continue.':'Review its current state and results.'))+'</p><div class="inline-actions">'+(w.ready&&w.kind==='task'?button('Run workflow','run-work',id):'')+(['open','review'].includes(w.state)?button('Review and accept','accept-work',id):'')+'</div>'+raw(w));
+ openModal(w.title,'<div class="summary-row">'+field('Type',esc(friendlyIdentity(w.kind)))+field('Status',pill(w.state))+'</div><p>'+esc(w.description||(w.ready?'This work is ready to continue.':'Review its current state and results.'))+'</p><div class="inline-actions">'+button('Edit work','edit-work',id)+button('Dependency map','map-work',id)+(w.ready&&w.kind==='task'?button('Run workflow','run-work',id):'')+(['open','review'].includes(w.state)?button('Review and accept','accept-work',id):'')+'</div>'+raw(w));
 }
 async function acceptWork(id){
  const w=(snapshot.work||[]).find(x=>x.id===id);const schema=Object.fromEntries((w.criteria?.length?w.criteria:['outcome']).map(key=>[key,'str']));
@@ -480,7 +542,9 @@ async function handle(action,id){
  if(action==='cancel-run'){openModal('Cancel this run?','<p>The run will stop and release its held resources.</p>',async()=>{await call('process.cancel',{run:id});runCache.delete(id);await refresh();toast('Run cancelled');},'Cancel run');return;}
  if(action==='decision'){const wait=(snapshot.waits||[]).find(w=>w.id===id);openModal(decisionTitle(wait),'<p>'+esc(wait.question||wait.name)+'</p>'+schemaForm(wait.answer_schema),async()=>{await call('process.answer',{wait:id,answer:schemaValues()});await refresh();toast('Response submitted');},'Submit response');return;}
  if(action==='resource'){const pool=resourcePools(snapshot).find(p=>p.id===id);openModal(n('resource',id,{title:friendlyIdentity(pool.offers[0]?.service)}),'<div class="summary-row">'+field('Allocated',pool.allocated)+field('Capacity',pool.capacity||'Not reported')+field('Queued',pool.queued)+'</div>'+button('Edit name','rename-resource',id)+raw(pool));return;}
- if(action==='new-work'){openModal('Add work','<div class="form-grid"><label class="field">Type<select name="kind"><option value="goal">Goal</option><option value="milestone">Milestone</option><option value="workflow">Workflow</option><option value="task">Task</option></select></label><label class="field">Title<input name="title" required></label><label class="field">Parent<select name="parent"><option value="">No parent</option>'+(snapshot.work||[]).filter(x=>x.kind!=='task').map(x=>'<option value="'+esc(x.id)+'">'+esc(x.title)+'</option>').join('')+'</select></label></div>',async form=>{await call('work.create',{kind:form.get('kind'),title:form.get('title'),parent:form.get('parent')});await refresh();toast('Work added');},'Add work');return;}
+ if(action==='new-work'||action==='edit-work'){editWork(action==='edit-work'?snapshot.work.find(w=>w.id===id):null);return;}
+ if(action==='inspect-work'){await workDetail(id);return;}
+ if(action==='map-work'){showWorkMap(id);return;}
  if(action==='run-work'){chooseWorkflow(id);return;}
  if(action==='accept-work'){await acceptWork(id);return;}
  if(action==='document'){await documentDetail(id);return;}
@@ -511,4 +575,14 @@ async function editStepName(identity){
  });
 }
 
+}
+
+function workLinks(item,byId,link){
+ const groups=[['Technical',item.dependencies||[],item.blocked_by],
+  ['Preferred order',item.sequence_dependencies||[],item.sequence_pending]];
+ return groups.filter(([,ids])=>ids.length).map(([label,ids,pending])=>
+  '<div><small>'+label+'</small>'+ids.map(id=>{
+   const dep=byId.get(id);
+   return (dep?link(dep):esc(id))+(pending?.includes(id)?' <small>Pending</small>':'');
+  }).join(' ')+'</div>').join('');
 }
