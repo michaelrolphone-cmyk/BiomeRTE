@@ -174,7 +174,8 @@ class ManagedEvents:
         key = Path(self.config["event_authorize_key_file"]).read_text().strip()
         if len(key)<32:
             raise Fault("Missing private event authorization credential",503)
-        headers = {"Authorization":"Bearer "+key,"Content-Type":"application/json"}
+        headers = {"Authorization":"Bearer "+key,"Content-Type":"application/json",
+                   "User-Agent":"BiomeRTE-Events/1.0"}
         access = self.config.get("event_site_access_file")
         if access:
             value = json.loads(Path(access).read_text())
