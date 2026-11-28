@@ -885,6 +885,7 @@ class AuthorityDaemon:
         authority_type=ControllerAuthority if controller else ScopedAuthority
         self.authority=authority_type(self.app,config,self.binding)
         self.lock=asyncio.Lock()
+        self.event_lock=asyncio.Lock()
         self.connected=False
         self.events=None
         self.confirmed_controller_publication = None
@@ -938,6 +939,23 @@ class AuthorityDaemon:
                                     phase.get("generation_floors",{}))
             await self.publish()
 
+    async def dispatch_event_call(self, message, stages):
+        # Event projections share a connection and remain serialized with the
+        # delivery tick. Only publication needs the ordinary controller lock.
+        async with self.event_lock:
+            if (await self.phase())["phase"] != "active":
+                raise Fault("Service effect admission is unavailable", 503)
+            async with self.lock:
+                stages.mark("lock_wait")
+                await self.publish()
+            stages.mark("prior_publish")
+            result = await asyncio.to_thread(self.authority.call, message["envelope"], False)
+            stages.mark("operation")
+            async with self.lock:
+                await self.publish()
+            stages.mark("result_publish")
+            return result
+
     async def dispatch(self,message):
         stages = StageTimes()
         typ=message.get("type")
@@ -953,39 +971,44 @@ class AuthorityDaemon:
             phase=await self.phase()
             stages.mark("phase")
             preparing=phase["phase"]!="active" or bool(message.get("preparation"))
-            async with self.lock:
-                stages.mark("lock_wait")
-                # Reconcile any locally durable update whose previous response
-                # was lost before processing another request.
-                await self.publish()
-                stages.mark("prior_publish")
-                if typ=="call":
-                    result=await asyncio.to_thread(self.authority.call,
-                                      message["envelope"],preparing)
-                    reply["result"]=result
-                elif typ=="pair" and self.config.get("authority_kind")=="controller":
-                    reply["result"]=await asyncio.to_thread(self.authority.pair,
-                        message.get("operation"),message.get("payload"),preparing)
-                elif typ=="capability_demand" and not preparing and self.config.get("authority_kind")=="controller":
-                    reply["result"]=await asyncio.to_thread(self.authority.capability_demand, message.get("scope"))
-                elif typ=="inspect" and not preparing:
-                    requested=message.get("authority")
-                    if self.config.get("authority_kind")=="controller":
-                        if requested not in [self.config["authority_id"]]+self.config.get("controller_aliases",[]):
-                            raise Fault("Wrong managed stream authority",403)
-                        reply["grant"]=await asyncio.to_thread(
-                            self.authority.inspect,message["session"],requested)
+            if controller and typ == "call" and self.authority_request_band(message) == "event_management":
+                if preparing:
+                    raise Fault("Service effect admission is unavailable", 503)
+                reply["result"] = await self.dispatch_event_call(message, stages)
+            else:
+                async with self.lock:
+                    stages.mark("lock_wait")
+                    # Reconcile any locally durable update whose previous response
+                    # was lost before processing another request.
+                    await self.publish()
+                    stages.mark("prior_publish")
+                    if typ=="call":
+                        result=await asyncio.to_thread(self.authority.call,
+                                          message["envelope"],preparing)
+                        reply["result"]=result
+                    elif typ=="pair" and self.config.get("authority_kind")=="controller":
+                        reply["result"]=await asyncio.to_thread(self.authority.pair,
+                            message.get("operation"),message.get("payload"),preparing)
+                    elif typ=="capability_demand" and not preparing and self.config.get("authority_kind")=="controller":
+                        reply["result"]=await asyncio.to_thread(self.authority.capability_demand, message.get("scope"))
+                    elif typ=="inspect" and not preparing:
+                        requested=message.get("authority")
+                        if self.config.get("authority_kind")=="controller":
+                            if requested not in [self.config["authority_id"]]+self.config.get("controller_aliases",[]):
+                                raise Fault("Wrong managed stream authority",403)
+                            reply["grant"]=await asyncio.to_thread(
+                                self.authority.inspect,message["session"],requested)
+                        else:
+                            if requested!=self.config["authority_id"]:
+                                raise Fault("Wrong logical stream authority",403)
+                            reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
                     else:
-                        if requested!=self.config["authority_id"]:
-                            raise Fault("Wrong logical stream authority",403)
-                        reply["grant"]=await asyncio.to_thread(self.authority.inspect,message["session"])
-                else:
-                    raise Fault("Service effect admission is unavailable",503)
-                stages.mark("operation")
-                await self.publish()
-                stages.mark("result_publish")
-                if not controller:
-                    await self.transport.validate(self.binding,preparing=preparing)
+                        raise Fault("Service effect admission is unavailable",503)
+                    stages.mark("operation")
+                    await self.publish()
+                    stages.mark("result_publish")
+                    if not controller:
+                        await self.transport.validate(self.binding,preparing=preparing)
             if controller:
                 # The result is already witnessed. The final check still
                 # fences the reply, without holding the application lock.
@@ -1059,17 +1082,41 @@ class AuthorityDaemon:
             self.maintenance_stage = "validate_tick"
             await self.transport.validate(self.binding,preparing=False)
             stages.mark("validate_tick")
-            if getattr(self,"events",None) is not None and await asyncio.to_thread(self.events.active):
-                self.maintenance_stage = "event_delivery"
-                await asyncio.to_thread(self.events.deliver)
-                stages.mark("events")
-                self.maintenance_stage = "publish_events"
-                await self.publish()
-                stages.mark("publish_events")
-                self.maintenance_stage = "validate_events"
-                await self.transport.validate(self.binding,preparing=False)
-                stages.mark("validate_events")
         stages.report("maintenance")
+
+    async def maintain_events_once(self):
+        stages = StageTimes()
+        async with self.event_lock:
+            self.event_stage = "read_events"
+            if not await asyncio.to_thread(self.events.active):
+                return
+            self.event_stage = "validate_events_phase"
+            if (await self.phase())["phase"] != "active":
+                return
+            self.event_stage = "event_delivery"
+            await asyncio.to_thread(self.events.deliver)
+            stages.mark("events")
+            self.event_stage = "publish_events"
+            async with self.lock:
+                await self.publish()
+            stages.mark("publish_events")
+            self.event_stage = "validate_events"
+            await self.transport.validate(self.binding,preparing=False)
+            stages.mark("validate_events")
+        stages.report("event_delivery")
+
+    async def event_loop(self):
+        interval = self.config.get("maintenance_interval_s", 1)
+        while True:
+            try:
+                await self.maintain_events_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                status = getattr(error, "status", None)
+                LOG.warning("Service event delivery retry: %s stage=%s status=%s", type(error).__name__,
+                            self.event_stage, status if type(status) is int else None)
+            await asyncio.sleep(interval)
 
     async def maintenance_loop(self):
         interval=self.config.get("maintenance_interval_s",1)
@@ -1390,18 +1437,20 @@ class AuthorityDaemon:
     async def serve_controller_socket(self, ws):
         # The gateway admits requests across the whole link. Keep that window
         # work-conserving here and schedule the admitted classes fairly below.
-        bands = ("result_status", "read", "lease_demand", "lease_status", "lifecycle", "general", "registry", "discovery", "event_management",
+        bands = ("result_status", "read", "lease_demand", "lease_status", "lifecycle", "general", "registry", "discovery",
                  "submission", "provider_progress")
         stream_bands = ("stream_open", "inspection", "attachment", "reservation", "fence")
         fast_slots = {"inspection": 4, "read": 8, "result_status": 4}
         # Protocol v1 gateways used 64 concurrent requests and a 20s response
         # budget before advertising the configured values at registration.
         rpc_limit, rpc_timeout = 64, 20.0
-        outstanding = dict.fromkeys((*bands, *stream_bands, "diagnostic"), 0)
-        pending = {band: [] for band in outstanding}
+        regular_bands = (*bands, *stream_bands, "diagnostic")
+        pending = {band: [] for band in (*regular_bands, "event_management")}
+        outstanding = dict.fromkeys(pending, 0)
         next_rejection_log = {}
         enqueued_at = {}
         ready = asyncio.Event()
+        event_ready = asyncio.Event()
         stopping = False
         fast_inspections = set()
         fast_provider_polls = set()
@@ -1412,7 +1461,7 @@ class AuthorityDaemon:
             band = self.authority_request_band(message)
             pending[band].append(message)
             enqueued_at[id(message)] = time.monotonic()
-            ready.set()
+            (event_ready if band == "event_management" else ready).set()
 
         async def retire_expired_requests():
             # The coordinator stops waiting after the negotiated RPC window.
@@ -1430,8 +1479,10 @@ class AuthorityDaemon:
                     else:
                         remaining.append(message)
                 pending[band] = remaining
-            if not any(pending.values()):
+            if not any(pending[band] for band in regular_bands):
                 ready.clear()
+            if not pending["event_management"]:
+                event_ready.clear()
             for message in expired:
                 if stopping or ws.closed:
                     break
@@ -1464,6 +1515,26 @@ class AuthorityDaemon:
                 await ws.send_json(reply)
                 outstanding[self.authority_request_band(message)] -= 1
 
+        async def dispatch_event_queue():
+            try:
+                while not stopping:
+                    await event_ready.wait()
+                    if stopping:
+                        return
+                    await retire_expired_requests()
+                    if stopping or not event_ready.is_set():
+                        continue
+                    queue = pending["event_management"]
+                    message = queue.pop(0)
+                    del enqueued_at[id(message)]
+                    if not queue:
+                        event_ready.clear()
+                    await self.reply_to_authority_request(ws, message)
+                    outstanding["event_management"] -= 1
+            finally:
+                if not ws.closed:
+                    await ws.close()
+
         async def dispatch_queue():
             index = 0
             stream_index = 0
@@ -1486,7 +1557,7 @@ class AuthorityDaemon:
                     # Once half of the caller's RPC window has elapsed, give
                     # the oldest waiting request a turn. Alternate with ordinary
                     # fair selection so a slow queue cannot capture the socket.
-                    oldest = min((band for band, queue in pending.items() if queue),
+                    oldest = min((band for band in regular_bands if pending[band]),
                                  key=lambda name: enqueued_at[id(pending[name][0])])
                     urgent_turn = (not urgent_turn and
                                    time.monotonic() - enqueued_at[id(pending[oldest][0])] >= rpc_timeout / 2)
@@ -1520,7 +1591,7 @@ class AuthorityDaemon:
                         # Otherwise one read from each independent queue can
                         # share this acknowledgement without admitting a burst.
                         if band not in stream_bands and not any(
-                                pending[key] for key in (*stream_bands, "lifecycle", "general", "event_management")):
+                                pending[key] for key in (*stream_bands, "lifecycle", "general")):
                             for partner in ("diagnostic", "read", "discovery"):
                                 waiting = pending[partner]
                                 if waiting and not waiting[0].get("preparation"):
@@ -1537,7 +1608,7 @@ class AuthorityDaemon:
                     else:
                         previous = band
                         last_diagnostic = False
-                    if not any(pending.values()):
+                    if not any(pending[key] for key in regular_bands):
                         ready.clear()
                     if len(batch) == 1:
                         await self.reply_to_authority_request(ws, batch[0])
@@ -1563,6 +1634,7 @@ class AuthorityDaemon:
                     await ws.close()
 
         dispatcher = asyncio.create_task(dispatch_queue())
+        event_dispatcher = asyncio.create_task(dispatch_event_queue())
         try:
             async for event in ws:
                 if event.type != WSMsgType.TEXT:
@@ -1584,6 +1656,9 @@ class AuthorityDaemon:
                     reply = self.authority_response(message, self.binding)
                     reply.update(status=429, error="Managed controller is busy")
                     await ws.send_json(reply)
+                    continue
+                if band == "event_management":
+                    enqueue(message)
                     continue
                 key = self.witnessed_vision_key(message)
                 if (key in self.witnessed_vision_inspections
@@ -1619,8 +1694,12 @@ class AuthorityDaemon:
             await asyncio.gather(*fast_tasks, return_exceptions=True)
             pending.clear()
             ready.set()
+            event_ready.set()
             # A running to_thread transaction must settle before reconnecting.
-            await dispatcher
+            results = await asyncio.gather(dispatcher, event_dispatcher, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
 
     async def authority_loop(self):
         while True:
@@ -1685,6 +1764,8 @@ async def run(config,role):
         tasks=[asyncio.create_task(loop())]
         if role=="authority":
             tasks.append(asyncio.create_task(instance.maintenance_loop()))
+            if instance.events is not None:
+                tasks.append(asyncio.create_task(instance.event_loop()))
         elif config.get("authority_kind") == "controller":
             tasks.append(asyncio.create_task(instance.watch_checkpoint_health()))
         try:

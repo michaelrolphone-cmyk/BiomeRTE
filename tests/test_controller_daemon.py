@@ -341,6 +341,43 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await connection
 
+    async def test_blocked_event_management_does_not_block_fresh_status_on_same_socket(self):
+        entered, release, status_sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        replies = []
+
+        async def dispatch(message):
+            if message["id"] == "event":
+                entered.set()
+                await release.wait()
+            return self.daemon.authority_response(message, B)
+
+        class Socket:
+            closed = False
+
+            async def __aiter__(self):
+                def frame(identifier, operation):
+                    return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps({"type": "call",
+                        "id": identifier, "binding": B, "envelope": {"operation": operation}}))
+                yield frame("event", "gateway.events.change")
+                await entered.wait()
+                yield frame("status", "cap.status")
+                await release.wait()
+                self.closed = True
+
+            async def send_json(self, response):
+                replies.append(response["id"])
+                if response["id"] == "status":
+                    status_sent.set()
+
+        self.daemon.dispatch = dispatch
+        connection = asyncio.create_task(self.daemon.serve_controller_socket(Socket()))
+        try:
+            await asyncio.wait_for(status_sent.wait(), 1)
+            self.assertEqual(replies, ["status"])
+        finally:
+            release.set()
+            await connection
+
     async def test_socket_rejects_excess_work_and_drops_waiter_on_disconnect(self):
         started, release, rejected = asyncio.Event(), asyncio.Event(), asyncio.Event()
         processed, replies = [], []
@@ -382,6 +419,15 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(processed, ["first"])
 
     async def test_expired_waiter_does_not_block_live_attachment_or_stop_running_effect(self):
+        await self.assert_expired_waiter_reclaims_capacity("ordinary.call", 2)
+
+    async def test_expired_event_waiter_does_not_block_attachment(self):
+        await self.assert_expired_waiter_reclaims_capacity("gateway.events.change", 2)
+
+    async def test_expired_event_waiter_is_skipped_before_dispatch_with_spare_capacity(self):
+        await self.assert_expired_waiter_reclaims_capacity("gateway.events.change", 3)
+
+    async def assert_expired_waiter_reclaims_capacity(self, operation, limit):
         started, release, done = asyncio.Event(), asyncio.Event(), asyncio.Event()
         clock = [100.0]
         processed, replies = [], {}
@@ -400,10 +446,10 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 def frame(message):
                     return types.SimpleNamespace(type=WSMsgType.TEXT, data=json.dumps(message))
 
-                yield frame({"type": "registered", "rpc_limit": 2, "rpc_timeout_s": 5})
-                yield frame({"type": "call", "id": "running"})
+                yield frame({"type": "registered", "rpc_limit": limit, "rpc_timeout_s": 5})
+                yield frame({"type": "call", "id": "running", "envelope": {"operation": operation}})
                 await started.wait()
-                yield frame({"type": "call", "id": "expired"})
+                yield frame({"type": "call", "id": "expired", "envelope": {"operation": operation}})
                 clock[0] += 6
                 yield frame({"type": "call", "id": "live", "envelope": {"operation": "stream.attach"}})
                 release.set()
@@ -415,7 +461,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
             async def send_json(self, reply):
                 replies[reply["id"]] = reply
-                if {"running", "live"} <= replies.keys():
+                if {"running", "expired", "live"} <= replies.keys():
                     done.set()
 
         self.daemon.dispatch = dispatch
