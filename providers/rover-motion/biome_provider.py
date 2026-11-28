@@ -139,7 +139,7 @@ def local_offers(cfg):
         service="robot-motion",capacity=cfg["slots"],state="ready",
         usage=dict(before="Use this generic contract with cap.acquire/invoke/status or cap.submit. Provider selection is automatic; predictions never command motion.",
             read_result="Read cap.status.result.result. Inspect freshness, support, retained steering and uncertainty. A successful read is not physical calibration."),
-        argv=[cfg["python"],cfg["adapter_path"],"execute","--state",cfg["state"],"--contract",contract])
+        argv=[cfg["python"],cfg["adapter_path"],"execute","--state",cfg["state"],"--contract",contract, *cfg.get("execution_args", ())])
         for contract in CONTRACTS]
 
 def register_runner_contracts():
@@ -203,8 +203,15 @@ def main():
     parser.add_argument("mode",choices=["serve","execute"])
     parser.add_argument("--state",required=True)
     parser.add_argument("--contract",choices=list(CONTRACTS))
+    parser.add_argument("--packaged-runtime", type=Path)
     args=parser.parse_args()
     cfg=json.loads((Path(args.state)/"provider.json").read_text())
+    if args.packaged_runtime:
+        root = args.packaged_runtime.resolve(strict=True)
+        cfg.update(runtime=str(root), worker_runtime=str(root),
+                   gateway_state=str(root / "gateway"), python=sys.executable,
+                   adapter_path=str(Path(__file__).resolve()), state=str(Path(args.state).resolve()),
+                   execution_args=["--packaged-runtime", str(root)])
     sys.path.insert(0,cfg["runtime"])
     if args.mode=="serve":
         serve(cfg);return
