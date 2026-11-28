@@ -131,13 +131,21 @@ class RoutedRemote(ControllerRoutes):
             path = self.vision_controller_path(owner)
             self.vision_scope = (contract, resource, path)
             descriptor = self.resume_from_bootstrap(owner, path, contract, resource, task)
-            if descriptor is None:
-                descriptor = self.signed_request(owner, 'stream.resume',
-                    {'contract': contract, 'resource': resource, 'task': task}, managed_path=path)
         except HTTPError as error:
             if error.code == 404:
                 return None
             raise
+        if descriptor is None:
+            try:
+                descriptor = self.signed_request(owner, 'stream.resume',
+                    {'contract': contract, 'resource': resource, 'task': task}, managed_path=path)
+            except HTTPError as error:
+                # Some paired callers can acquire their exact resource but
+                # lack the optional stream.resume grant. Let the normal
+                # owner lifecycle request a separately authorized lease.
+                if error.code in (403, 404):
+                    return None
+                raise
         lease = descriptor['subscription_lease']
         self.leases[lease] = owner
         self.lease_resources[lease] = (contract, resource)
