@@ -7,6 +7,8 @@ import tempfile
 import threading
 import unittest
 import weakref
+from unittest.mock import patch
+import biomerte.store as store_module
 from biomerte.store import Store, _IDLE_CONNECTIONS, _CONNECTIONS_LOCK
 
 
@@ -181,7 +183,7 @@ class ConnectionReuseTests(unittest.TestCase):
             code = store_module._close_connections.__code__
             lines, first_line = inspect.getsourcelines(store_module._close_connections)
             check_line = next(first_line + index for index, line in enumerate(lines)
-                              if line.strip() == 'if entry[0] is key:')
+                              if line.strip().startswith('if entry[0] is key'))
             def collect_during_close(frame, event, arg):
                 if (frame.f_code is code and event == 'line' and
                         frame.f_lineno == check_line and not observed):
@@ -212,6 +214,130 @@ class ConnectionReuseTests(unittest.TestCase):
             db.execute('BEGIN IMMEDIATE')
             db.execute("INSERT INTO records VALUES('work','pending','true')")
         self.assertIsNone(self.store.execute(lambda tx: tx.get('work', 'pending'), read_only=True))
+
+
+class FinalizingPool(list):
+    """Inject one real Store finalizer at a pool operation's allocation point."""
+    def arm(self, events, callback):
+        self.events = set(events)
+        self.callback = callback
+
+    def fire(self, event):
+        callback = getattr(self, 'callback', None)
+        if callback is not None and event in self.events:
+            self.callback = None
+            callback()
+
+    def __iter__(self):
+        self.fire('read')
+        return super().__iter__()
+
+    def __getitem__(self, index):
+        self.fire('read')
+        return super().__getitem__(index)
+
+    def pop(self, index=-1):
+        self.fire('claim')
+        return super().pop(index)
+
+    def remove(self, entry):
+        self.fire('claim')
+        return super().remove(entry)
+
+    def __setitem__(self, index, value):
+        self.fire('rewrite')
+        return super().__setitem__(index, value)
+
+
+class ReentrantConnectionReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.pool = FinalizingPool()
+        pool_patch = patch.object(store_module, '_IDLE_CONNECTIONS', self.pool)
+        pool_patch.start()
+        self.addCleanup(pool_patch.stop)
+
+    def store(self, realm):
+        store = Store(self.directory.name, realm)
+        self.addCleanup(store.close)
+        return store
+
+    def warm(self, store):
+        with store.connection() as db:
+            return db
+
+    def assert_closed(self, db):
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute('SELECT 1')
+
+    def assert_pool(self, *connections):
+        self.assertEqual([id(db) for owner, db in self.pool],
+                         [id(db) for db in connections])
+        for db in connections:
+            self.assertEqual(db.execute('SELECT 1').fetchone()[0], 1)
+        self.assertIsNone(self.pool.callback)
+
+    def test_finalizer_shrinks_pool_during_checkout_lookup(self):
+        survivor = self.store('survivor')
+        wanted = self.store('wanted')
+        victim = self.store('victim')
+        survivor_db, wanted_db, victim_db = [
+            self.warm(store) for store in (survivor, wanted, victim)]
+        self.pool.arm({'read'}, victim._connection_finalizer)
+        with wanted.connection() as db:
+            self.assertIs(db, wanted_db)
+            self.assert_closed(victim_db)
+            self.assert_pool(survivor_db)
+        self.assert_pool(survivor_db, wanted_db)
+
+    def test_finalizer_cannot_shift_checkout_to_another_owner(self):
+        victim = self.store('victim')
+        wanted = self.store('wanted')
+        survivor = self.store('survivor')
+        victim_db, wanted_db, survivor_db = [
+            self.warm(store) for store in (victim, wanted, survivor)]
+        self.pool.arm({'claim'}, victim._connection_finalizer)
+        with wanted.connection() as db:
+            self.assertIs(db, wanted_db)
+            self.assert_closed(victim_db)
+            self.assert_pool(survivor_db)
+        self.assert_pool(survivor_db, wanted_db)
+
+    def test_finalized_snapshot_entry_is_not_checked_out(self):
+        wanted = self.store('wanted')
+        closed_db = self.warm(wanted)
+        self.pool.arm({'claim'}, wanted._connection_finalizer)
+        with wanted.connection() as db:
+            self.assertIsNot(db, closed_db)
+            self.assert_closed(closed_db)
+            self.assertEqual(db.execute('SELECT 1').fetchone()[0], 1)
+            self.assert_pool()
+        self.assert_pool(db)
+
+    def test_close_cannot_resurrect_finalized_foreign_entry(self):
+        closing = self.store('closing')
+        victim = self.store('victim')
+        survivor = self.store('survivor')
+        closing_db, victim_db, survivor_db = [
+            self.warm(store) for store in (closing, victim, survivor)]
+        self.pool.arm({'rewrite', 'claim'}, victim._connection_finalizer)
+        closing.close()
+        self.assert_closed(closing_db)
+        self.assert_closed(victim_db)
+        self.assert_pool(survivor_db)
+
+    def test_eviction_keeps_returned_handle_when_finalizer_frees_capacity(self):
+        victim = self.store('victim')
+        returning = self.store('returning')
+        with contextlib.ExitStack() as stack:
+            victim_dbs = [stack.enter_context(victim.connection()) for unused in range(8)]
+        self.assertEqual(len(self.pool), 8)
+        with returning.connection() as db:
+            self.pool.arm({'claim'}, victim._connection_finalizer)
+        for victim_db in victim_dbs:
+            self.assert_closed(victim_db)
+        self.assert_pool(db)
 
 
 if __name__ == '__main__':
