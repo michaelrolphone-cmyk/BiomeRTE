@@ -86,7 +86,10 @@ class MultipleRobotTest(unittest.TestCase):
                 self.assertNotIn("rear", definition["cameras"])
                 self.assertFalse(spider.query("robot.metric.status")["local_metric_geometry_available"])
                 self.assertIsNone(spider.pose_estimator.mount)
-                self.assertEqual(spider.obstacle_map.mounts, {})
+                self.assertEqual(spider.sonar_mounts, {})
+                self.assertIn("front", rover.sonar_mounts)
+                self.assertFalse(list(spider_state.glob("sonar-obstacles.sqlite3*")))
+                self.assertFalse(list(rover_state.glob("sonar-obstacles.sqlite3*")))
                 self.assertEqual(spider.lidar.config["lidar"], {})
                 self.assertIn("front", rover.lidar.config["lidar"])
                 with self.assertRaisesRegex(ValueError, "another_robot"):
