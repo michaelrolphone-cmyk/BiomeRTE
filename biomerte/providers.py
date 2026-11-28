@@ -855,6 +855,14 @@ def result(tx, ctx, provider, operation, generation, state, result):
     lifecycle.current(tx, a)
     if a['state'] not in ('claimed', 'uncertain'):
         raise Fault('Operation has not been claimed', 409)
+    if state == 'uncertain':
+        uncertainty = digest(result)
+        # A lifecycle timeout is not a provider report. Record the first report
+        # even when its payload equals that older uncertainty, then leave exact
+        # redelivery and its recovery requirements unchanged.
+        if (a['state'] == 'uncertain' and a.get('uncertain_result_digest') == uncertainty
+                and a.get('result') == result):
+            return a
     if state in ('succeeded', 'failed'):
         from .resource_recovery import protected
         held = tx.need('leases', a['lease'])
@@ -867,10 +875,15 @@ def result(tx, ctx, provider, operation, generation, state, result):
     if state == 'succeeded':
         validate(tx.need('contracts', a['contract'])['outputs'], result)
     a.update(state=state, result=result)
-    a.pop('recovery', None)
-    lease = tx.get('leases', a['lease'])
-    if lease and lease.pop('recovery_required', None):
-        tx.put('leases', lease['id'], lease)
+    if state == 'uncertain':
+        a['uncertain_result_digest'] = uncertainty
+    else:
+        # Only a settled execution outcome resolves the recovery requirement.
+        a.pop('uncertain_result_digest', None)
+        a.pop('recovery', None)
+        lease = tx.get('leases', a['lease'])
+        if lease and lease.pop('recovery_required', None):
+            tx.put('leases', lease['id'], lease)
     tx.put('actions', operation, a)
     from .authorization import observe
     observe(tx, operation, state, result)
