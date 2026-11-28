@@ -6,6 +6,7 @@ import os
 import tempfile
 import types
 import unittest
+from urllib.error import HTTPError
 
 from biomerte.app import Application, initialize
 from biomerte.controller_authority import ControllerAuthority
@@ -162,6 +163,31 @@ class ManagedEventTests(unittest.TestCase):
         self.events.deliver()
         self.assertIn(True,self.barriers)
         self.assertEqual(self.saved(PI,result["id"])["record"]["cursor"],7)
+
+    def test_authorization_transport_failure_preserves_the_replicated_cursor(self):
+        sub = self.subscribe()['id']
+        self.messages.clear()
+
+        def unavailable(owner, grant):
+            raise HTTPError('https://controller.example/authorize', 403, 'Forbidden', {}, None)
+
+        self.events._authorize_override = unavailable
+        self.assertEqual(self.events.deliver(), 1)
+        self.assertEqual(self.events.deliver(), 0)
+        self.assertEqual(self.messages, [])
+        pending = self.saved(PI, sub)['record']
+        self.assertEqual(pending['cursor'], 6)
+        self.assertEqual(pending['last_error'], 'authorization HTTP 403')
+
+        self.events.close()
+        self.events = self.open()
+        self.authority.events = self.events
+        store = self.events.stores[PI]
+        with store.db:
+            store.db.execute('UPDATE subscriptions SET next_try=0 WHERE id=?', (sub,))
+        self.assertEqual(self.events.deliver(), 1)
+        self.assertEqual(self.messages[0][2]['eventId'], 'delegate_original')
+        self.assertEqual(self.saved(PI, sub)['record']['cursor'], 7)
 
     def test_retry_after_uncertain_callback_keeps_exact_event_identity(self):
         result=self.subscribe()

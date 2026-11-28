@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 EVENT = 'workflow.delegation.requested'
 LEASE_EVENT = 'lease.available'
 DAY = 86400
+AUTHORIZATION_RETRY_SECONDS = 30
 class CallbackError(Exception):
     pass
 
@@ -248,7 +249,21 @@ class EventStore:
                     continue
                 if topic == LEASE_EVENT:
                     data = dict(data, realm=args['realm'])
-                if not self.authorize(sub['owner'],sub['grant_id']):
+                if max_callbacks is not None and sent>=max_callbacks:
+                    return sent
+                try:
+                    allowed = self.authorize(sub['owner'],sub['grant_id'])
+                except (OSError, http.client.HTTPException) as error:
+                    # An unavailable authorization decision leaves this event pending.
+                    status = getattr(error, 'code', None)
+                    reason = 'authorization HTTP '+str(status) if type(status) is int else 'authorization unavailable'
+                    with self.db:
+                        self.db.execute('UPDATE subscriptions SET next_try=?,last_error=? WHERE id=? AND generation=?',
+                                        (time.time()+AUTHORIZATION_RETRY_SECONDS, reason, sub['id'], sub['generation']))
+                    sent += 1
+                    self.delivery_cursor = sub['id']
+                    break
+                if not allowed:
                     with self.db:
                         self.db.execute('DELETE FROM subscriptions WHERE id=? AND generation=?',(sub['id'],sub['generation']))
                     break
@@ -267,8 +282,6 @@ class EventStore:
                 keys=[sub['key']]
                 if sub['old_key'] and sub['rotate_until']>time.time():
                     keys.append(sub['old_key'])
-                if max_callbacks is not None and sent>=max_callbacks:
-                    return sent
                 sent+=1;self.delivery_cursor=sub['id']
                 try:
                     if grok:

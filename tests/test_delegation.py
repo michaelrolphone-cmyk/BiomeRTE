@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 from biomerte.app import Application, initialize
 from biomerte.store import Fault
 from biomerte.xmlprofile import compile_xml
@@ -62,6 +63,42 @@ class Delegation(unittest.TestCase):
         self.tick()
         w=self.call('process.waits',{'run':run})[0]
         return run,w['id']
+
+    def test_unavailable_authorization_retains_event_without_stalling_other_receivers(self):
+        store = self.store()
+        self.addCleanup(store.close)
+        affected = store.change('events/subscribe', self.params, 'affected', 'grant-a')['id']
+        healthy = store.change('events/subscribe', self.params, 'healthy', 'grant-b')['id']
+        _, wait = self.start()
+        self.records.clear()
+        authorizations = []
+
+        def authorize(owner, grant):
+            authorizations.append((owner, grant))
+            if owner == 'affected':
+                raise HTTPError('https://controller.example/authorize', 403, 'Forbidden', {}, None)
+            return True
+
+        store.authorize = authorize
+        store.deliver()
+        self.assertCountEqual(authorizations, [('affected', 'grant-a'), ('healthy', 'grant-b')])
+        self.assertEqual([entry[0]['eventId'] for entry in self.records], ['delegate_' + wait])
+        pending = store.db.execute('SELECT cursor,failures,next_try,last_error FROM subscriptions WHERE id=?',
+                                   (affected,)).fetchone()
+        self.assertEqual((pending['cursor'], pending['failures'], pending['last_error']),
+                         (0, 0, 'authorization HTTP 403'))
+        self.assertGreater(pending['next_try'], time.time())
+        store.deliver()
+        self.assertEqual(len(authorizations), 2)
+
+        with store.db:
+            store.db.execute('UPDATE subscriptions SET next_try=0 WHERE id=?', (affected,))
+        store.authorize = lambda owner, grant: True
+        store.deliver()
+        self.assertEqual([entry[0]['eventId'] for entry in self.records], ['delegate_' + wait] * 2)
+        cursors = dict(store.db.execute('SELECT id,cursor FROM subscriptions'))
+        self.assertEqual(cursors[affected], cursors[healthy])
+        self.assertGreater(cursors[affected], 0)
 
     def test_lifecycle_and_correlated_completion(self):
         st=self.store()

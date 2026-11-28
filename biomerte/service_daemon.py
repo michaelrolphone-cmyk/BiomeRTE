@@ -1444,12 +1444,13 @@ class AuthorityDaemon:
         # Protocol v1 gateways used 64 concurrent requests and a 20s response
         # budget before advertising the configured values at registration.
         rpc_limit, rpc_timeout = 64, 20.0
-        pending = {band: [] for band in (*bands, *stream_bands, "diagnostic")}
-        outstanding = dict.fromkeys((*pending, "event_management"), 0)
-        event_requests = asyncio.Queue()
+        regular_bands = (*bands, *stream_bands, "diagnostic")
+        pending = {band: [] for band in (*regular_bands, "event_management")}
+        outstanding = dict.fromkeys(pending, 0)
         next_rejection_log = {}
         enqueued_at = {}
         ready = asyncio.Event()
+        event_ready = asyncio.Event()
         stopping = False
         fast_inspections = set()
         fast_provider_polls = set()
@@ -1460,7 +1461,34 @@ class AuthorityDaemon:
             band = self.authority_request_band(message)
             pending[band].append(message)
             enqueued_at[id(message)] = time.monotonic()
-            ready.set()
+            (event_ready if band == "event_management" else ready).set()
+
+        async def retire_expired_requests():
+            # The coordinator stops waiting after the negotiated RPC window.
+            # Retire work that has not reached dispatch. An in-flight effect
+            # still owns its slot until its transaction and publication settle.
+            cutoff = time.monotonic() - rpc_timeout
+            expired = []
+            for band, queue in pending.items():
+                remaining = []
+                for message in queue:
+                    if enqueued_at[id(message)] <= cutoff:
+                        del enqueued_at[id(message)]
+                        outstanding[band] -= 1
+                        expired.append(message)
+                    else:
+                        remaining.append(message)
+                pending[band] = remaining
+            if not any(pending[band] for band in regular_bands):
+                ready.clear()
+            if not pending["event_management"]:
+                event_ready.clear()
+            for message in expired:
+                if stopping or ws.closed:
+                    break
+                reply = self.authority_response(message, self.binding)
+                reply.update(status=503, error="Managed controller request expired before dispatch")
+                await ws.send_json(reply)
 
         def admit(band):
             # Include dispatched work through reply delivery. After an upstream
@@ -1489,10 +1517,18 @@ class AuthorityDaemon:
 
         async def dispatch_event_queue():
             try:
-                while True:
-                    message = await event_requests.get()
+                while not stopping:
+                    await event_ready.wait()
                     if stopping:
                         return
+                    await retire_expired_requests()
+                    if stopping or not event_ready.is_set():
+                        continue
+                    queue = pending["event_management"]
+                    message = queue.pop(0)
+                    del enqueued_at[id(message)]
+                    if not queue:
+                        event_ready.clear()
                     await self.reply_to_authority_request(ws, message)
                     outstanding["event_management"] -= 1
             finally:
@@ -1510,6 +1546,9 @@ class AuthorityDaemon:
                     await ready.wait()
                     if stopping:
                         break
+                    await retire_expired_requests()
+                    if stopping or not ready.is_set():
+                        continue
                     # A status poll cannot fill the waiting slot for a new
                     # reservation or block an installed fence acknowledgement.
                     # Alternate stream lifecycle work with ordinary work.
@@ -1518,7 +1557,7 @@ class AuthorityDaemon:
                     # Once half of the caller's RPC window has elapsed, give
                     # the oldest waiting request a turn. Alternate with ordinary
                     # fair selection so a slow queue cannot capture the socket.
-                    oldest = min((band for band, queue in pending.items() if queue),
+                    oldest = min((band for band in regular_bands if pending[band]),
                                  key=lambda name: enqueued_at[id(pending[name][0])])
                     urgent_turn = (not urgent_turn and
                                    time.monotonic() - enqueued_at[id(pending[oldest][0])] >= rpc_timeout / 2)
@@ -1569,7 +1608,7 @@ class AuthorityDaemon:
                     else:
                         previous = band
                         last_diagnostic = False
-                    if not any(pending.values()):
+                    if not any(pending[key] for key in regular_bands):
                         ready.clear()
                     if len(batch) == 1:
                         await self.reply_to_authority_request(ws, batch[0])
@@ -1611,13 +1650,15 @@ class AuthorityDaemon:
                     self.connected = True
                     continue
                 band = self.authority_request_band(message)
+                if sum(outstanding.values()) >= rpc_limit:
+                    await retire_expired_requests()
                 if not admit(band):
                     reply = self.authority_response(message, self.binding)
                     reply.update(status=429, error="Managed controller is busy")
                     await ws.send_json(reply)
                     continue
                 if band == "event_management":
-                    event_requests.put_nowait(message)
+                    enqueue(message)
                     continue
                 key = self.witnessed_vision_key(message)
                 if (key in self.witnessed_vision_inspections
@@ -1653,7 +1694,7 @@ class AuthorityDaemon:
             await asyncio.gather(*fast_tasks, return_exceptions=True)
             pending.clear()
             ready.set()
-            event_requests.put_nowait(None)
+            event_ready.set()
             # A running to_thread transaction must settle before reconnecting.
             results = await asyncio.gather(dispatcher, event_dispatcher, return_exceptions=True)
             for result in results:
