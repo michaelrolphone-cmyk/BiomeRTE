@@ -46,7 +46,7 @@ from metric_sensor_worker import MetricSensorWorker
 from rover_events import MotionEvents
 from applied_control_stream import AppliedControlStream
 from sensor_tick_stream import SensorTickStream
-from multisensor_mapping import AttitudePoseEstimator, PoseTimeline, SonarObstacleMap, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, sonar_image_constraint, ROVER_R_CAMERA_IMU
+from multisensor_mapping import AttitudePoseEstimator, sonar_observations, rover_sensor_mounts, SonarMetricOdometry, attitude_sample, ROVER_R_CAMERA_IMU
 
 RADIO_CAPABILITIES = ["robot.radio.status", "robot.radio.localize", "robot.map.radio.read"]
 
@@ -136,12 +136,10 @@ class VisionService:
         ahrs_settings = config.get("ahrs", {})
         self.auto_gyro = AutoGyroCalibration(self.ahrs.calibrate_gyro, enabled=bool(
             ahrs_settings.get("enabled",False) and ahrs_settings.get("auto_gyro_calibration",True)))
-        self.pose_timeline = PoseTimeline()
-        self.obstacle_map = SonarObstacleMap(self.state_dir / "sonar-obstacles.sqlite3",
-            mapping.get("sonar_mounts", rover_sensor_mounts() if self.legacy_rover else {}), mapping.get("resolution_m", .05))
-        self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.obstacle_map.mounts)
-        self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount,
-                                                self._record_metric_sensor_frame)
+        self.sonar_mounts = mapping.get("sonar_mounts", rover_sensor_mounts() if self.legacy_rover else {})
+        self.sonar_resolution_m = mapping.get("resolution_m", .05)
+        self.metric_odometry = SonarMetricOdometry(self.state_dir / "sonar-metric-state.json", self.sonar_mounts)
+        self.metric_worker = MetricSensorWorker(self.metric_odometry, self.pose_estimator.mount)
         self.detector = detector or ObjectDetector(config.get("detector", {}), self.state_dir)
         if backend_factory is None:
             from slam_backend import SlamBackend
@@ -205,7 +203,7 @@ class VisionService:
         self.atlas = WorldAtlas(self.state_dir / "world.sqlite3", self.store)
         self.atlas.register(self.map_id)
         self._world_lost_frames = set()
-        self.atlas.sonar_entities = self._sonar_entities
+        self.atlas.sonar_entities = self._lidar_entities
         self.tof_registration = FrameRegistration(self.state_dir / 'tof-registration.json', self._sonar_anchor,
                                                   config.get('tof_registration', {}))
         self.atlas.registration_status = self._registration_for_map
@@ -292,7 +290,7 @@ class VisionService:
             "calibration_id": self.calibration["calibration_id"],
             "camera_source_id": self.config["camera"].get("source_id"),
             "origin": "first_localized_camera",
-            "occupancy": "sonar_beam_evidence_query_robot.map.obstacles" if self.legacy_rover else "calibrated_lidar",
+            "occupancy": "sonar_history_disabled" if self.legacy_rover else "calibrated_lidar",
             "mapping_sources": (["visual_features", "capture_clock_ahrs", "four_mounted_sonars"] if self.legacy_rover
                                 else ["visual_features", "calibrated_lidar"]),
         }
@@ -738,9 +736,6 @@ class VisionService:
         if not localization.get("valid"):
             localization["T_map_camera"] = None
         packet = frame.get("sensor_packet") or {}
-        if localization.get("valid") and packet.get("capture_monotonic_us") is not None:
-            self.pose_timeline.append(self.map_id, packet.get("boot_id"),
-                packet["capture_monotonic_us"] / 1e6, localization["T_map_camera"])
         # Share fresh mapper displacement, not a second location solver. This
         # small latest-state file contains no images or unbounded history.
         if time.monotonic()-getattr(self, "_rover_motion_written_at", 0.) >= .5:
@@ -759,13 +754,6 @@ class VisionService:
         keyframe = self._sonar_anchor(self.map_id, reference)
         with self.metric_worker.lock:
             observations = sonar_observations(frame)
-            image_constraints = []
-            for observation in observations:
-                projection = sonar_image_constraint(observation,
-                    self.obstacle_map.mounts.get(observation["sensor_id"]), self.calibration)
-                if projection is not None:
-                    observation["image_constraint"] = projection
-                    image_constraints.append(projection)
             attitude = attitude_sample(frame)
             absolute_rotation, orientation_epoch, rotation_time = None, None, None
             if attitude is not None and self.pose_estimator.mount is not None:
@@ -779,30 +767,6 @@ class VisionService:
             metric_pose = self.metric_worker.pose_for(frame) if absolute_rotation is not None and attitude is not None else self.metric_odometry.update(
                 observations, absolute_rotation, orientation_epoch, rotation_time,
                 stationary_reference_reset=bool(gyro_calibration.get("gyro_bias_valid") and gyro_calibration.get("status")=="succeeded"))
-            sonar_revision = self.revision + 1
-            added = self.obstacle_map.record(self.map_id, frame_id, observations,
-                self.pose_timeline.at, keyframe, sonar_revision,
-                metric_pose_at=self.metric_odometry.timeline.at, local_frame_id=self.metric_odometry.local_frame_id)
-            resolved = self.obstacle_map.resolve_timeline_pending(
-                self.map_id, self.pose_timeline, self.metric_odometry.timeline,
-                keyframe=keyframe, revision=sonar_revision, local_frame_id=self.metric_odometry.local_frame_id)
-            ledger_count = self.obstacle_map.summary(self.map_id)['ray_count']
-            committed_counts = getattr(self, '_sonar_committed_counts', {})
-            if added or resolved or ledger_count != committed_counts.get(self.map_id,0):
-                self._commit_changes([{"op": "upsert", "kind": "sonar_state", "entity_id": "ledger",
-                    "data": {"frame_id": frame_id, "added": added, "resolved": resolved}}], "sonar_observations")
-                localization["map_revision"] = self.revision
-                committed_counts[self.map_id] = ledger_count
-                self._sonar_committed_counts = committed_counts
-            if metric_pose.get("valid"):
-                paired_visual = self.pose_timeline.at(metric_pose["time_s"],packet.get("boot_id"))
-                if paired_visual is not None:
-                    self.obstacle_map.offer_alignment(self.map_id,
-                        self.metric_odometry.local_frame_id+":"+str(metric_pose["time_s"]),
-                        self.metric_odometry.local_frame_id,paired_visual,metric_pose["T_local_metric_camera"],
-                        keyframe,self.revision)
-            obstacle_status = self._read_obstacles(self.map_id, include_rays=False)
-            obstacle_status["metric_odometry"] = metric_pose
         if getattr(self, "tof_registration", None) is not None:
             try:
                 events = self._stream_motion_events(frame).get("events", [])
@@ -829,8 +793,8 @@ class VisionService:
                 "pitch_down_deg": self.calibration.get("mounting", {}).get("pitch_down_deg"),
                 "calibration_id": self.calibration["calibration_id"],
             },
-            "occupancy": obstacle_status,
-            "sonar_image_constraints": image_constraints,
+            "occupancy": {"availability": "unavailable", "reason": "sonar_history_disabled",
+                          "metric_odometry": metric_pose},
             "traversability": {"availability": "unavailable", "reason": "not_estimated"},
             "dropoffs": {"availability": "unavailable", "reason": "not_estimated"},
             "metric_depth": {"availability": "available" if observations else "unavailable",
@@ -856,8 +820,15 @@ class VisionService:
                    "motion_class": d["motion_class"], "image_motion": d["image_motion"]}
                   for d in detections.get("items", []) if d.get("track_id")]
         stage_started = time.monotonic()
+        # Keep the original packet for live delivery and strip raw ranges from
+        # the copy sent to the durable observation store.
+        stored_frame = {key: value for key, value in frame.items() if key != "ultrasonic"}
+        if isinstance(frame.get("sensor_packet"), dict):
+            stored_frame["sensor_packet"] = {
+                key: value for key, value in packet.items() if key != "ultrasonic"
+            }
         snapshot = self.store.publish_observation(
-            self.session_id, frame, detections.get("items", []), localization,
+            self.session_id, stored_frame, detections.get("items", []), localization,
             tracks=tracks, spatial_evidence=spatial,
             keyframe_id=anchor["keyframe_id"] if exact_anchor else None,
             durable=exact_anchor, image_bytes=encoded.tobytes())
@@ -978,21 +949,6 @@ class VisionService:
         automatic = getattr(self,"auto_gyro",None)
         return automatic.observe(frame,image) if automatic is not None else {"enabled":False,"calibration_blocking":False}
 
-    def _record_metric_sensor_frame(self, frame, observations):
-        # This ledger is independent of native SLAM readiness. The next visual
-        # commit publishes a sonar-state change for revision-pinned world reads.
-        map_id, revision = self.map_id, self.revision+1
-        timeline = self.metric_odometry.timeline
-        added = self.obstacle_map.record(map_id, frame.get('frame_id') or
-            (frame.get('sensor_packet') or {}).get('frame_id'), observations,
-            lambda *_:None, revision=revision, metric_pose_at=timeline.at,
-            local_frame_id=self.metric_odometry.local_frame_id)
-        resolved = self.obstacle_map.resolve_timeline_pending(
-            map_id, None, timeline, revision=revision, local_frame_id=self.metric_odometry.local_frame_id)
-        return {'map_id':map_id, 'added':added, 'resolved':resolved,
-                'ray_count':self.obstacle_map.summary(map_id)['ray_count'],
-                'visual_processing_required':False}
-
     def _sonar_anchor(self, map_id, identifier, revision=None):
         if identifier is None:
             return None
@@ -1000,61 +956,18 @@ class VisionService:
         return None if entity is None else {"id": str(identifier),
                                            "T_map_keyframe": entity["data"]["T_map_camera"]}
 
-    def _read_obstacles(self, map_id, revision=None, include_rays=True, *, world_rays_only=False):
+    def _read_obstacles(self, map_id, revision=None):
         scale = self.metric.attachment_status(map_id, revision=revision)
-        if not include_rays:
-            return {**self.obstacle_map.summary(map_id,
-                scale.get("scale_m_per_map_unit") if scale.get("availability") == "available" else None),
+        return {"map_id": map_id, "availability": "unavailable", "reason": "sonar_history_disabled",
+                "ray_count": 0, "posed_observations": 0, "unposed_observations": 0,
+                "metric_observations": 0, "rays": [], "obstacles": [], "obstacle_count": 0,
+                "mounts": copy.deepcopy(self.sonar_mounts), "resolution_m": self.sonar_resolution_m,
+                "query_operation": "robot.map.obstacles", "free_space_certified": False,
                 "metric_scale": scale}
-        anchors = {}
-        def resolve(identifier):
-            if identifier in anchors:
-                return anchors[identifier]
-            anchor = self._sonar_anchor(map_id, identifier, revision)
-            anchors[identifier] = None if anchor is None else anchor["T_map_keyframe"]
-            return anchors[identifier]
-        result = self.obstacle_map.read(map_id,
-            scale_m_per_map_unit=scale.get("scale_m_per_map_unit") if scale.get("availability") == "available" else None,
-            resolve_anchor=resolve, revision=revision, world_rays_only=world_rays_only)
-        result["metric_scale"] = scale
-        if not include_rays:
-            result["ray_count"] = len(result.pop("rays"))
-            result["obstacle_count"] = len(result.pop("obstacles"))
-        return result
 
-    def _sonar_entities(self, map_id, revision):
-        import numpy as np
-        result = self._read_obstacles(map_id, revision, world_rays_only=True)
-        scale = result["metric_scale"].get("scale_m_per_map_unit")
-        alignments = {}
-        anchors = {}
-        def resolve(identifier):
-            if identifier not in anchors:
-                anchor = self._sonar_anchor(map_id,identifier,revision)
-                anchors[identifier] = None if anchor is None else anchor["T_map_keyframe"]
-            return anchors[identifier]
-        entities = []
-        for ray in result["rays"]:
-            if ray["coordinate_frame"] == "map_metric" and scale:
-                position = np.asarray(ray["endpoint_m"])/scale
-                qualification = "qualified_metric_attachment"
-            else:
-                local_frame = ray.get("local_frame_id")
-                if local_frame not in alignments:
-                    alignments[local_frame] = self.obstacle_map.alignment(map_id,local_frame,resolve,revision)
-                alignment = alignments[local_frame]
-                if not alignment.get("valid"):
-                    continue
-                inverse = np.linalg.inv(np.asarray(alignment["T_local_metric_map"]))
-                position = (inverse @ [*ray["endpoint_m"],1])[:3]
-                qualification = alignment["qualification"]
-            entities.append({"kind":"sparse_point","entity_id":"sonar:"+ray["id"],
-                "data":{"xyz":position.tolist(),"rgb":[255,170,30],"source":"sonar",
-                    "sensor_id":ray["sensor_id"],"beam_half_angle_deg":ray["beam_half_angle_deg"],
-                    "lateral_uncertainty_m":ray["lateral_uncertainty_m"],"units":"arbitrary",
-                    "scale_status":qualification}})
-        if getattr(self,'lidar',None) is not None:entities.extend(self.lidar.entities(map_id,revision))
-        return entities
+    def _lidar_entities(self, map_id, revision):
+        lidar = getattr(self, "lidar", None)
+        return lidar.entities(map_id, revision) if lidar is not None else []
 
     def _stream_ultrasonic(self):
         """Latest sensor cache only; never issue HTTP from frame delivery."""
@@ -1744,7 +1657,6 @@ class VisionService:
             self.ultrasonic.close()
         self.metric_worker.close()
         self.auto_gyro.close()
-        self.obstacle_map.close()
         self.metric.close()
         if getattr(self, "tof_registration", None) is not None:
             self.tof_registration.close()

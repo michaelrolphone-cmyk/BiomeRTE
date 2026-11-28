@@ -90,25 +90,14 @@ class MetricWorkerTests(unittest.TestCase):
             worker._stationary(room_frame(2),image)
             self.assertFalse(worker._stationary(room_frame(2.2),255-image))
 
-    def test_mapping_consumes_capture_without_any_visual_processing(self):
-        from multisensor_mapping import SonarObstacleMap
-        from types import SimpleNamespace
-        import importlib.util
-        if importlib.util.find_spec('cv2') is None:
-            self.skipTest('native vision-service dependencies required')
-        from vision_service import VisionService
+    def test_live_ranges_drive_metric_pose_without_any_visual_processing(self):
         with tempfile.TemporaryDirectory() as d:
             model=SonarMetricOdometry(Path(d)/'state',estimated_rover_mounts())
-            ledger=SonarObstacleMap(Path(d)/'rays',estimated_rover_mounts())
-            service=SimpleNamespace(map_id='map',revision=0,metric_odometry=model,obstacle_map=ledger)
-            record=lambda f,o:VisionService._record_metric_sensor_frame(service,f,o)
-            worker=MetricSensorWorker(model,np.eye(3),record)
-            for i in range(12):worker.observe(room_frame(1+i*.2))
-            status=ledger.summary('map')
-            self.assertEqual(status['ray_count'],48)
-            self.assertGreater(status['metric_observations'],30)
-            self.assertFalse(worker.status()['mapping_write']['visual_processing_required'])
-            ledger.close()
+            worker=MetricSensorWorker(model,np.eye(3))
+            results = [worker.observe(room_frame(1+i*.2)) for i in range(12)]
+            self.assertGreater(sum(result['valid'] for result in results), 5)
+            self.assertNotIn('mapping_write', worker.status())
+            self.assertEqual([path.name for path in Path(d).iterdir()], ['state'])
 
     def test_sonar_is_retained_when_capture_attitude_is_unavailable(self):
         recorded=[]

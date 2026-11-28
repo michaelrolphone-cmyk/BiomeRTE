@@ -28,43 +28,23 @@ The capture packet selects only returns both measured and completed before the
 image capture. Missing history stays unavailable. Separate latest HTTP telemetry
 and the independent latest-image live feed keep their existing behavior.
 
-The host interpolates camera poses in that same boot's capture clock. Each
-accepted sonar observation is stored once in `sonar-obstacles.sqlite3`, along
-with range in metres, mount geometry, sample identity, source frame, local pose,
-and relative keyframe anchor. Missing poses retain raw observations rather than fabricating points. Sonar
-poses and ranges form a local metric map even without visual scale. A later bracketing pose can resolve
-pending returns. Different local maps retain separate observations. Reading
-reprojects anchors at the requested map revision, so corrected geometry moves
-previous returns consistently. Map checkpoints do not clone the ray ledger.
-
-`robot.map.obstacles` exposes accumulated spatial rays, occupied endpoint voxels,
-centerline clearing evidence, sample counts and beam uncertainty. World-map reads
-include sonar endpoints as orange sparse points, in the existing pagination and
-submap transforms. Unaligned local submaps are retained and stay out of world
-coordinates until the atlas establishes their transform.
+The host uses causal sonar ranges for live telemetry and metric odometry.
+Observation snapshots omit raw ultrasonic packets. Vision does not open the
+sonar ray database or publish accumulated sonar points to the world map.
+`robot.map.obstacles` reports `sonar_history_disabled` with empty ray and obstacle
+lists. Live ultrasonic readings are available on the sensor stream.
 
 The sonar mapper estimates local planar translation from changes in at least
 three directionally independent, timestamped ranges and observed rotation.
 Robust residual checks reject inconsistent surface matches; missing translation
 evidence is unknown motion, never a stationary pose. This estimator assumes
 locally static corresponding surfaces and a locally perpendicular beam/surface
-model. Its uncertainty and planar assumptions remain visible. Local metric pose
-and map identities persist across restarts; measurement gaps create separate
-retained local frames rather than stacking observations at a reused origin.
+model. Its uncertainty and planar assumptions remain visible. The odometry
+state file holds the latest estimator state so it can recover after a restart.
 
-Sonar ranges and these local poses are already in metres. No visual-scale
-attachment is required for their accumulation. Timestamp-matched visual and
-sonar trajectories estimate the transformation into each native visual submap.
-Straight driving can estimate scale because paired camera orientations constrain
-the axes. This is labelled an estimated sonar/visual alignment, and is recomputed
-from current keyframe anchors after map corrections. Existing qualified metric
-attachments can also place sonar rays in the visual map. Unaligned metric
-submaps stay available through the obstacle query until world placement is known.
-
-Sonar
-endpoints are beam centerline evidence, not exact wall samples; the HC-SR04 beam
-width and mount uncertainty remain attached. Free-space evidence along a ray
-does not certify vehicle clearance or traversability.
+Sonar ranges and these local poses are in metres. Live odometry operates without
+a visual-scale attachment. LiDAR contributes geometry to the world map through
+its existing fusion path.
 
 The default mounts are measured from `03-1000017388.jpg` against the 20mm
 checkerboard, combined with owner-supplied heights. `measure_rover_mounts.py`

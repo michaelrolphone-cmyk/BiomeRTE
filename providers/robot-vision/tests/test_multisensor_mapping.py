@@ -345,7 +345,7 @@ class MetricMappingTests(unittest.TestCase):
 
 
 class ServiceFusionTests(unittest.TestCase):
-    def test_service_consumes_frame_sensors_and_exports_persistent_obstacles(self):
+    def test_service_uses_live_sonar_without_retaining_raw_ranges(self):
         try:
             import test_vision_service as fixture_module
             from test_ahrs_source import telemetry
@@ -386,18 +386,22 @@ class ServiceFusionTests(unittest.TestCase):
                         'geometry':{'available':True,'complete_snapshot':False},'map_changes':[]})
                 snapshot = fixture.process(service,captured)
             self.assertTrue(snapshot['localization']['sensor_fusion']['orientation_fused'])
-            self.assertEqual(snapshot['spatial_evidence']['occupancy']['ray_count'],8)
-            with patch.object(service.metric,'attachment_status',return_value={
-                    'availability':'available','scale_m_per_map_unit':1.}):
-                obstacles = service.query('robot.map.obstacles')
-                self.assertEqual(len(obstacles['rays']),4)
-                self.assertEqual(len(service._sonar_entities(service.map_id,service.revision)),4)
-                front = next(r for r in obstacles['rays'] if r['sensor_id']=='front')
-                expected = pose(.1,.05)[:3,:3] @ np.array([.005,.0381,.044]) + [.1,0,0]
-                np.testing.assert_allclose(front['origin_m'],expected,atol=1e-7)
+            self.assertEqual(snapshot['spatial_evidence']['metric_depth']['availability'], 'available')
+            self.assertNotIn('ultrasonic', snapshot['frame']['sensor_packet'])
+            self.assertNotIn('sonar_image_constraints', snapshot['spatial_evidence'])
+            self.assertIn('ultrasonic', captured.metadata['sensor_packet'])
+            self.assertFalse(list(service.state_dir.glob('sonar-obstacles.sqlite3*')))
+            obstacles = service.query('robot.map.obstacles')
+            self.assertEqual(obstacles['reason'], 'sonar_history_disabled')
+            self.assertEqual(obstacles['rays'], [])
+            lidar_point = {'kind': 'sparse_point', 'entity_id': 'lidar:test'}
+            with patch.object(service.lidar, 'entities', return_value=[lidar_point]) as entities:
+                self.assertEqual(service.atlas.sonar_entities(service.map_id, service.revision), [lidar_point])
+                entities.assert_called_once_with(service.map_id, service.revision)
             service.close()
             reopened = fixture.make_service(config)
-            self.assertEqual(reopened.obstacle_map.summary(service.map_id)['ray_count'],8)
+            self.assertEqual(reopened.query('robot.map.obstacles')['ray_count'], 0)
+            self.assertFalse(list(reopened.state_dir.glob('sonar-obstacles.sqlite3*')))
         finally:
             fixture.tearDown()
 
