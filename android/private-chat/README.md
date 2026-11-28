@@ -42,3 +42,81 @@ No artificial inference timeouts or CPU/memory limits are imposed. Core dumps ar
 
 ## Encrypted image generation
 Generate image uses the separate image.private.exchange:1 capability backed by Fluxed Up GGUF Q8_0 on the Mac. Image prompts and PNG replies are encrypted before dispatch and before leaving the Mac; image history stays in the password-encrypted phone vault. Existing chat, OAuth and pairing remain compatible. Images display only while unlocked and are cleared from the view on lock. Generic Biome callers separately use image.generate:1. Physical phone lock/resume/display qualification remains pending until tested on the device.
+
+
+## Conversation controls (0.8.0)
+The conversation selector creates and switches threads; each thread retains its own
+messages, images, draft and selected model inside the existing encrypted vault.
+Existing history migrates into Conversation 1 without changing pairing or OAuth.
+Rename the current thread from its selector or the conversation menu.
+
+Use the menu on a message to delete it. Image cards start collapsed; Show/Hide
+controls persist their visibility. Delete removes the whole result, or expand a
+multi-image result to delete an individual image. Deletion affects local encrypted
+history and future inference context; an already dispatched request can still
+contain the earlier message. Image positions are adjusted when earlier text is deleted.
+
+Switching threads parks an in-flight request for explicit resumption. Every saved
+request retains its originating thread; its result is added there even if resumed
+from another thread. Terminal failures are retained in Pending requests; starting
+one again requires an explicit action because a previous lost result may have
+already run. Transport interruptions continue to resume the same operation.
+Assistant model labels remain display metadata and are excluded from chat context.
+
+Image generation progress is authenticated and encrypted by the Mac using the
+image session. The app displays preparation, sampling step/total, decoding and
+delivery updates; prompts and image bytes are excluded from progress records.
+Progress failures do not cancel or repeat generation.
+
+## Named threads, instructions and pins (0.9.0)
+Open Conversation settings from the menu or conversation selector to edit a
+thread's name, multiline instructions and pin. Pinned threads appear first;
+pinning does not change thread identity or request ownership.
+Instructions are stored only in the existing encrypted vault. For new chat
+requests they are prepended as a system message; image requests carry them inside
+the encrypted request and include them in the image prompt while preserving
+explicit image parameters. Each request snapshots its instruction context when
+created. Editing a thread never changes an already-started saved request.
+
+Conversations now has a dedicated inbox screen rather than a dropdown selector.
+It opens after unlocking and is reachable with Back / All conversations from a
+chat. Rows show names, pins, draft or recent-message previews, and thread settings.
+Search filters names/previews locally while unlocked. Opening a row restores its
+history and draft; pinning affects only list order.
+
+0.10.0: Saved chat/image requests resume automatically after unlock and foreground.
+An encrypted request queue stores each original operation ID, transcript and keys.
+Each outstanding request has an independent network client and watcher; navigating
+threads does not stop it. The Mac continues queued work while Android is closed;
+reopening collects encrypted results into the originating thread, once, at the
+saved prompt anchor. Network interruptions reconnect automatically. Explicitly
+failed operations remain visible for a deliberate restart, to avoid duplicate work.
+Model rows merge exact IDs and loaded flags; distinct quantizations stay separate.
+
+0.11.0: Tap the info button on an assistant response for its requested model,
+resolved loaded instance and LM Studio-reported model. A verified label requires
+all authenticated provenance fields to agree. Older responses show their saved
+label with verification unavailable; the selected model is never substituted
+for a missing actual model. Inspect the immutable instructions/messages sent for
+that response, queue/model preparation and inference timing, token counts, finish
+reason and request/session IDs. Internal model templates/truncation are not
+captured. Metadata and context live only inside the encrypted phone vault and
+are projected out of future inference messages. Deleting a message removes saved
+context snapshots in that thread and redacts pending response snapshots. Info
+windows are secure and close when the vault locks.
+
+0.12.0: Delete conversation is available from the thread row menu and the chat
+menu. Confirmation removes the complete encrypted thread, its queued request
+records and local watchers. Other conversations and their in-flight requests
+continue. Late replies cannot restore a deleted thread. The inbox remains empty
+when its last thread is deleted. A Mac operation already running may finish;
+its deleted thread's result is ignored.
+
+Copy buttons on messages copy exact prompt/response text. Image results include
+Copy prompt and Copy image while collapsed; batches offer image selection and
+expanded images have per-image long-press actions. Images use PNG content URIs
+through a private, read-only provider with temporary Android clipboard grants.
+Temporary image bytes are encrypted at rest with an Android Keystore key and
+streamed to authorized paste consumers. Copying marks the clipboard sensitive
+and does not add image/text data to inference context. Image paste requires a
+recipient app with image clipboard support.

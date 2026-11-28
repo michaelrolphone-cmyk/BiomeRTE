@@ -1,0 +1,21 @@
+name: Biome Private Chat Android
+on:
+  push:
+    paths:
+      - 'android/private-chat/**'
+      - '.github/workflows/android-private-chat.yml'
+  pull_request:
+    paths:
+      - 'android/private-chat/**'
+      - '.github/workflows/android-private-chat.yml'
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the repository Android toolchain
+        run: docker build --tag biome-private-chat-build android/private-chat
+      - name: Test and assemble
+        run: docker run --rm --volume "$PWD/android/private-chat:/source" biome-private-chat-build gradle --no-daemon testDebugUnitTest assembleDebug
