@@ -202,6 +202,43 @@ class RunnerTests(unittest.TestCase):
     def action(self):
         return dict(id='command', provider='provider', contract='host.terminal.run:1', inputs={},
                     resource='terminal', guard='slot', generation=1, lease='lease')
+
+    def test_control_read_fault_keeps_reporting_live_custody(self):
+        class UnavailableControl(Remote):
+            def __init__(self):
+                super().__init__()
+                self.running_custody = []
+                self.fallback = []
+
+            def call(self, name, args, rid=None):
+                if name == 'cap.command.state':
+                    raise Fault('Control read unavailable', 503)
+                if name == 'provider.custody' and args['observation']['state'] == 'running':
+                    self.running_custody.append(args)
+                    if len(self.running_custody) == 1:
+                        raise Fault('Custody RPC unavailable', 503)
+                if name == 'cap.heartbeat':
+                    self.fallback.append(dict(args))
+                return super().call(name, args, rid)
+
+        remote = UnavailableControl()
+        worker, offer = self.worker(remote)
+        self.addCleanup(worker.db.close)
+        offer.update(argv=self.argv(.6), configuration={'heartbeat_interval_seconds': .1})
+        action = self.action()
+        worker.perform(action)
+
+        self.assertGreaterEqual(len(remote.running_custody), 2)
+        custody = remote.running_custody[-1]
+        self.assertEqual(custody['operation'], action['id'])
+        self.assertEqual(custody['generation'], action['generation'])
+        self.assertEqual(custody['observation']['signature'], digest([
+            action[k] for k in ('contract', 'inputs', 'resource', 'generation', 'lease')]))
+        self.assertIn({'provider': remote.node, 'operation': action['id'], 'generation': action['generation']},
+                      remote.fallback)
+        self.assertEqual(remote.results[action['id']]['state'], 'succeeded')
+        self.assertEqual(self.text(os.path.join(self.root, 'effects')), 'once\n')
+
     def test_lost_ack_restart_redelivers_without_execution(self):
         remote = Remote()
         remote.lose_ack = True
