@@ -1,0 +1,19 @@
+name: Pi FM provider
+on:
+  push:
+    paths:
+      - 'providers/pi-fm/**'
+      - '.github/workflows/pi-fm.yml'
+  pull_request:
+    paths:
+      - 'providers/pi-fm/**'
+      - '.github/workflows/pi-fm.yml'
+  workflow_dispatch:
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Adapter, WAV conversion and watchdog tests
+        working-directory: providers/pi-fm
+        run: python3 -m unittest -v test_adapter test_watch test_wav
