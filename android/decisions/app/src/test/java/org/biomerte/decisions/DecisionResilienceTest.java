@@ -50,7 +50,7 @@ public class DecisionResilienceTest {
  private void cannotAnswer(JSONObject row)throws Exception{
   try{DecisionModel.validate(row,"approve","");fail("Malformed request was answerable");}catch(Exception expected){}
   assertFalse(DecisionModel.problem(row).isEmpty());
-  assertEquals("No response buttons for malformed requests",1,DecisionWidget.rows(app,row,false,false).size());
+  assertEquals("No response buttons for malformed requests",0,DecisionWidget.rows(app,row,false,false).size());
  }
 
  @Test public void malformedEntryIsRetainedWithoutHidingAValidBinaryDecision()throws Exception {
@@ -61,7 +61,7 @@ public class DecisionResilienceTest {
   assertEquals(3,s.getJSONArray("rows").length());
   assertEquals(2,State.invalidRows(s).length());
   assertEquals("maintenance:new",State.pending(s).getJSONObject(0).getString("id"));
-  assertEquals(3,DecisionWidget.rows(app,valid,false,false).size());
+  assertEquals(2,DecisionWidget.rows(app,valid,false,false).size());
   cannotAnswer(bad);
  }
 
@@ -96,7 +96,8 @@ public class DecisionResilienceTest {
 
  @Test public void lockedMalformedDecisionDoesNotExposeQuestionOrOptions()throws Exception {
   JSONObject bad=row("secret");bad.getJSONObject("request").put("proposal",new JSONObject());
-  List<RemoteViews> views=DecisionWidget.rows(app,bad,true,false);assertEquals(1,views.size());
+  assertTrue(DecisionWidget.rows(app,bad,true,false).isEmpty());
+  List<RemoteViews> views=DecisionWidget.descriptionRows(app,bad,true);assertEquals(1,views.size());
   View view=views.get(0).apply(app,new FrameLayout(app));
   assertEquals("Unlock to review",((TextView)view.findViewById(R.id.question)).getText().toString());
  }
@@ -134,8 +135,8 @@ public class DecisionResilienceTest {
   assertEquals("needs_review",item.getString("state"));assertFalse(State.deliveryLabel(item).contains("sending"));
   assertEquals(original,item.getJSONObject("envelope").toString());assertEquals("ok",item.getString("text"));
   assertEquals(2,State.pending(s).length());assertFalse(State.submitted(s,"fresh"));
-  assertEquals(1,DecisionWidget.rows(app,first,false,true).size());
-  assertEquals(3,DecisionWidget.rows(app,second,false,false).size());
+  assertEquals(0,DecisionWidget.rows(app,first,false,true).size());
+  assertEquals(2,DecisionWidget.rows(app,second,false,false).size());
   try{State.retryItem(item);fail("Review text must not be changed into another automatic reply");}catch(Exception expected){}
  }
 
