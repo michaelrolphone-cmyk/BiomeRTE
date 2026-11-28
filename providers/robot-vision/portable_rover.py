@@ -77,10 +77,14 @@ def metric_status(service, snapshot=None):
     scale=service.metric.attachment_status(map_id, revision=revision)
     model=service._robot_model()
     definition=model.get("definition", {})
+    local_geometry = (model.get("availability") == "available" if getattr(service, "legacy_rover", True)
+                      else bool(definition.get("geometry", {}).get("calibrated_kinematics") or
+                                any(pose.get("T_robot_sensor") is not None
+                                    for pose in definition.get("lidar_poses", {}).values())))
     return {"availability":"available", "units":"m",
         "metric_scale_available": scale.get("availability")=="available",
         "map_scale":scale,
-        "local_metric_geometry_available":model.get("availability")=="available",
+        "local_metric_geometry_available":local_geometry,
         "sonar_range_units":"m", "sonar_requires_monocular_scale":False,
         "body_model_revision":definition.get("revision"),
         "checkerboard_reference":definition.get("metric_reference"),
@@ -134,15 +138,17 @@ def sonar_snapshot(service):
 
 def enrich(service, operation, result):
     if not isinstance(result,dict):return result
+    result.update(getattr(service, "robot_identity", {}))
     if operation in ("robot.vision.metadata","robot.vision.status"):
         result["body_model_capability"]="robot.body.model:1"
-        result["drive_model"]=copy.deepcopy(DRIVE)
+        result["drive_model"] = control_model(service)
         result["metric"]=metric_status(service)
         result["metric_scale_available"]=result["metric"]["metric_scale_available"]
         result["local_metric_geometry_available"]=result["metric"]["local_metric_geometry_available"]
         result["camera_exposure_timing"]=copy.deepcopy(EXPOSURE_TIME)
-        result["camera_driving_light"]={"contract":"robot.camera.light.set:1",
-            "purpose":"illuminate_camera_view_for_driving"}
+        if getattr(service, "legacy_rover", True):
+            result["camera_driving_light"]={"contract":"robot.camera.light.set:1",
+                "purpose":"illuminate_camera_view_for_driving"}
     snapshot=result.get("snapshot")
     if operation in ("robot.vision.snapshot","robot.vision.geometry"):
         binding=snapshot if isinstance(snapshot,dict) else result
@@ -156,10 +162,16 @@ def enrich(service, operation, result):
         evidence=binding.get("spatial_evidence",{})
         if isinstance(evidence.get("ahrs"),dict):
             evidence["ahrs"]["metric_scale_available"]=metric["metric_scale_available"]
-        if isinstance(evidence.get("ground_projection"),dict):
+        if getattr(service, "legacy_rover", True) and isinstance(evidence.get("ground_projection"),dict):
             evidence["ground_projection"].update(availability="available_on_floor_plane_query",
                 caller_floor_contact_confirmation_required=False)
     return result
+
+def control_model(service):
+    if getattr(service, "legacy_rover", True):
+        return copy.deepcopy(DRIVE)
+    return {**service.robot_identity, **copy.deepcopy(service.robot_definition.get("control", {}))}
+
 
 def dispatch(service, operation, inputs, fallback):
     if operation in ("robot.camera.exposure.status","robot.camera.exposure.set"):
@@ -180,7 +192,7 @@ def dispatch(service, operation, inputs, fallback):
         except CameraHTTPError as exc:
             return {"availability":"unavailable",**exc.as_dict(),"timestamp_qualification":copy.deepcopy(EXPOSURE_TIME)}
     if operation=="robot.body.model":return service._robot_model()
-    if operation=="robot.control.model":return copy.deepcopy(DRIVE)
+    if operation=="robot.control.model":return control_model(service)
     if operation=="robot.sonar.snapshot":return sonar_snapshot(service)
     if operation=="robot.metric.status":return metric_status(service)
     return enrich(service,operation,fallback(operation,inputs))

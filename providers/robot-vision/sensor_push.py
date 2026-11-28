@@ -48,6 +48,7 @@ class SensorPushReceiver:
         self.configured = self.config is not None
         self.thread = self.loop = self.server = None
         self.stop = threading.Event()
+        self.motion_outbox = None
         self.metrics = dict(packets=0, errors=0, gaps=0, last_sequence=None)
         self._last_diagnostic=0.
 
@@ -101,6 +102,7 @@ class SensorPushReceiver:
             clock.boot, clock.bounds, clock.observed = prior_clock
             pending = {}
             previous = None
+            sent_motion = (None, 0)
             async def synchronize():
                 while True:
                     # TCP is ordered. Keep the outstanding exchange until its
@@ -151,6 +153,10 @@ class SensorPushReceiver:
                                         capture_age_upper_s=received-interval[0],
                                         clock_uncertainty_s=(interval[1]-interval[0])/2)
                     self.diagnostic(state='streaming',last_error=None)
+                    if self.motion_outbox is not None:
+                        from robot_motion import deliver
+                        sent_motion = await deliver(socket, self.motion_outbox, packet, interval,
+                                                    self.config["motion_secret"], sent_motion)
                     if packet.get('delivery_mode') == 'continuous':
                         continue
                     samples = ((packet.get('ahrs') or {}).get('ahrs') or {}).get('imu_samples',[])
@@ -180,5 +186,8 @@ class SensorPushReceiver:
             self._delivery_queue.close()
             self._image_thread.join()
             self._images.close()
+            if self.motion_outbox is not None:
+                self.motion_outbox.cancel_join_thread()
+                self.motion_outbox.close()
         elif self.thread:
             self.thread.join(timeout=3)

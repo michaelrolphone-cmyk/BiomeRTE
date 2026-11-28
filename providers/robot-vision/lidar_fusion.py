@@ -23,12 +23,22 @@ def defaults():
               "zone_orientation":"ST_lens_inverts_both_axes_provisional_mount_orientation"}
         for name,T in (("front",front),("rear",rear))}}
 
-def validate_config(value):
+def validate_config(value, robot_id=None):
     if not isinstance(value,dict) or value.get("schema")!="rover.sensor-rig/1":
         raise ValueError("sensor_rig_schema")
     if type(value.get("revision")) is not int or value["revision"]<1:
         raise ValueError("sensor_rig_revision")
+    if robot_id is not None and value.get("robot_id") != robot_id:
+        raise ValueError("sensor_rig_robot_mismatch")
+    if not isinstance(value.get("lidar"), dict) or len(value["lidar"]) > 16:
+        raise ValueError("sensor_rig_lidar_dictionary_required")
     for name,row in value["lidar"].items():
+        if not isinstance(name, str) or not name or not isinstance(row, dict):
+            raise ValueError("invalid_lidar_mount")
+        if robot_id is not None and (row.get("camera_id") not in ("front", "rear") or row.get("validated") is not True):
+            raise ValueError("calibrated_lidar_mount_required")
+        if "projection_camera_id" in row and row["projection_camera_id"] not in (None, "front", "rear"):
+            raise ValueError("invalid_lidar_projection_camera")
         rigid_transform(row["T_front_camera_sensor_m"])
         for key in ("fov_horizontal_deg","fov_vertical_deg"):
             if type(row.get(key)) not in (int,float) or not 0<row[key]<180:raise ValueError(key)
@@ -94,7 +104,11 @@ class LidarFusion:
             self.survey_landmarks=SurveyLidarLandmarks(service.state_dir,service.atlas)
             service.atlas.survey_lidar=self.survey_landmarks
         self.service=service;self.path=service.state_dir/"sensor-rig.json"
-        self.config=validate_config(json.loads(self.path.read_text())) if self.path.exists() else defaults()
+        self.robot_id = (getattr(service, "robot_identity", {}).get("robot_id")
+                         if not getattr(service, "legacy_rover", True) else None)
+        initial = defaults() if self.robot_id is None else {
+            "schema": "rover.sensor-rig/1", "revision": 1, "robot_id": self.robot_id, "lidar": {}}
+        self.config = validate_config(json.loads(self.path.read_text()), self.robot_id) if self.path.exists() else initial
         self.stamp=None;self.lock=threading.RLock();self.event=threading.Event();self.stop=threading.Event()
         # SQLite transactions/reads may block on storage; raw state must not.
         # Never hold this lock and the state lock at the same time.
@@ -114,21 +128,38 @@ class LidarFusion:
     def start(self):
         self.thread=threading.Thread(target=self._run,name="slam-lidar-fusion",daemon=True);self.thread.start();return self
     def configure(self,value):
-        config=validate_config(value)
+        config=validate_config(value,self.robot_id)
         with self.config_lock:
             with self.lock:
                 config["revision"]=max(self.config["revision"]+1,config["revision"])
             atomic_json(self.path,config)
-            with self.lock:self.config=config;self.scale=None
+            with self.lock:
+                self.config=config
+                self.scale=None
+                self.scans={name:deque(maxlen=64) for name in config["lidar"]}
         return self.status()
     def enqueue(self,packet,interval):
         if not packet.get("lidar"):return
+        if self.robot_id is not None:
+            role = packet.get("camera_id")
+            if role == "front":
+                expected = self.service.config["camera"]["source_id"]
+            elif role == "rear":
+                rear = self.service.camera_rig.sensors.config or {}
+                expected = rear.get("receiver_id")
+            else:
+                return
+            if not expected or packet.get("receiver_id") != expected:
+                return
         with self.lock:
             capture=packet.get("capture_monotonic_us")
             for raw in packet["lidar"].get("sensors",[]):
                 name=raw.get("id")
                 us=raw.get("observed_monotonic_us")
-                if name not in self.config["lidar"] or not isinstance(us,int) or not isinstance(capture,int):
+                mount = self.config["lidar"].get(name)
+                if mount is None or not isinstance(us,int) or not isinstance(capture,int):
+                    continue
+                if self.robot_id is not None and mount["camera_id"] != role:
                     continue
                 history=self.scans.setdefault(name,deque(maxlen=64))
                 identity=(packet.get("receiver_id"),packet.get("boot_id"),us)
@@ -141,6 +172,37 @@ class LidarFusion:
             self.pending=(copy.deepcopy(packet),list(interval),self.service.map_id)
         self.event.set()
     def for_camera(self,frame,name,cal,camera_mount=None):
+        with self.lock:
+            config = self.config
+            sensors = [sensor for sensor, mount in sorted(config["lidar"].items())
+                       if mount.get("projection_camera_id", mount.get("camera_id", sensor)) == name]
+        observations = []
+        for index, sensor in enumerate(sensors):
+            result = self._for_sensor(frame, sensor, name, cal, camera_mount)
+            if result and result["rig_revision"] == config["revision"]:
+                observations.append((index, result))
+        with self.lock:
+            if self.config is not config or not observations:
+                return None
+        if len(sensors) == 1:
+            return observations[0][1]
+        # A camera can see more than one mounted depth grid. Preserve separate
+        # zone IDs, and keep the nearest measured surface when grids overlap.
+        merged = observations[0][1].copy()
+        merged["depth"] = np.zeros_like(merged["depth"])
+        merged["zones"] = np.full_like(merged["zones"], -1)
+        for index, scan in observations:
+            depth = scan["depth"]
+            closer = (depth > 0) & ((merged["depth"] == 0) | (depth < merged["depth"]))
+            merged["depth"][closer] = depth[closer]
+            merged["zones"][closer] = scan["zones"][closer] + index * 64
+        merged["sensor_ids"] = [scan["sensor_id"] for _, scan in observations]
+        merged["scan_id"] = "|".join(scan["sensor_id"] + ":" + scan["scan_id"] for _, scan in observations)
+        skews = [scan["skew_bound_s"] for _, scan in observations]
+        merged["skew_bound_s"] = max(skews) if all(skew is not None for skew in skews) else None
+        return merged
+
+    def _for_sensor(self,frame,name,role,cal,camera_mount=None):
         from native_lidar_depth import project_depth
         packet=frame.get("sensor_packet") or {}
         boot=(packet.get("receiver_id"),packet.get("boot_id"))
@@ -148,7 +210,7 @@ class LidarFusion:
         if not isinstance(image_us,int):image_us=packet.get("capture_monotonic_us")
         interval=frame.get("capture_host_monotonic_interval_s")
         tick=getattr(getattr(self.service,"sensor_ticks",None),"_push_snapshot",None)
-        if name=="front" and tick and isinstance(image_us,int) and boot==(tick[0].get("receiver_id"),tick[0].get("boot_id")):
+        if role=="front" and tick and isinstance(image_us,int) and boot==(tick[0].get("receiver_id"),tick[0].get("boot_id")):
             delta=(image_us-tick[0]["capture_monotonic_us"])/1e6
             interval=[x+delta for x in tick[1]]
         with self.lock:
@@ -174,7 +236,7 @@ class LidarFusion:
             return dict(depth=depth,zones=zones,scan_id=":".join(map(str,identity)),rig_revision=revision,
                         skew_bound_s=error,sensor_id=name,map_id=self.service.map_id)
         backend=getattr(self.service,"backend",None)
-        if (name=="front" and self.survey_landmarks and getattr(backend,"_state",None)=="initializing"
+        if (role=="front" and self.survey_landmarks and getattr(backend,"_state",None)=="initializing"
                 and not getattr(backend,"_native_birth",None) and not backend._geometry.get("keyframe_count")):
             seed=self.survey_landmarks.depth_at_verified_start(name,revision,interval)
             if seed:
@@ -232,8 +294,12 @@ class LidarFusion:
             stamp=self.path.stat().st_mtime_ns if self.path.exists() else None
             if stamp!=self.stamp:
                 if stamp is not None:
-                    updated=validate_config(json.loads(self.path.read_text()))
-                    with self.lock:self.config=updated
+                    updated=validate_config(json.loads(self.path.read_text()),self.robot_id)
+                    with self.lock:
+                        if self.config != updated:
+                            self.config=updated
+                            self.scale=None
+                            self.scans={name:deque(maxlen=64) for name in updated["lidar"]}
                 self.stamp=stamp
             with self.lock:
                 config_source=self.config
@@ -245,13 +311,19 @@ class LidarFusion:
         capture=packet["capture_monotonic_us"];rows=[]
         for row in packet["lidar"].get("sensors",[]):
             mount=config["lidar"].get(row.get("id"))
-            if not mount:continue
+            if not mount or (self.robot_id is not None and mount["camera_id"] != packet.get("camera_id")):continue
             points=zone_points(row,mount,capture)
             rows.append({"sensor_id":row["id"],"valid":bool(points),"points":points,"raw":copy.deepcopy(row),"mount":copy.deepcopy(mount)})
         live={"schema":"rover.lidar-fusion/1","received_monotonic":time.monotonic(),"capture_host_interval_s":interval,
               "receiver_id":packet["receiver_id"],"boot_id":packet["boot_id"],"map_id":map_id,
               "packet_id":packet["frame_id"],"sensors":rows,"rig_revision":config["revision"],"units":"m",
-              "mounts_qualification":"provisional_until_owner_measurements","pose_available":False}
+              "mounts_qualification": "validated_robot_mounts" if self.robot_id and rows else
+                  "awaiting_lidar_calibration" if self.robot_id else "provisional_until_owner_measurements",
+              "pose_available":False}
+        if self.robot_id is not None and not rows:
+            self.processed += 1
+            with self.lock:self.latest=live
+            return
         if self.survey_landmarks is not None:
             self.survey_landmarks.observe(rows,packet,interval,config["revision"])
             try:self.local_slam.observe(rows,packet,interval,map_id)
@@ -278,11 +350,15 @@ class LidarFusion:
             matches=[]
             prior=(scale or {}).get("scale_m_per_map_unit") if (scale or {}).get("map_id")==map_id else None
             supported=0
+            sensor_indices = {name: index for index, name in enumerate(sorted(config["lidar"]))}
             for row in rows:
                 depths,hits=self.survey_landmarks.visual_depths(packet["frame_id"],row) if self.survey_landmarks else (row["points"],0)
                 supported+=hits
                 side=math.isqrt(row["raw"].get("resolution",64))
-                if side in (4,8):matches.extend(scale_matches(q,depths,row["mount"],side,prior))
+                if side in (4,8):
+                    offset = 64 * sensor_indices[row["sensor_id"]]
+                    matches.extend((index, factor, zone + offset)
+                                   for index, factor, zone in scale_matches(q, depths, row["mount"], side, prior))
             live["survey_depth_zones_used"]=supported
             if len(matches)>=6:
                 factors=np.array([m[1] for m in matches]);median=float(np.median(factors))
@@ -292,7 +368,8 @@ class LidarFusion:
                     scale={"availability":"available","map_id":map_id,"scale_m_per_map_unit":median,
                            "source":"lidar_visual_landmark_depth_correspondence","relative_mad":scatter,
                            "inliers":int(inliers.sum()),"rig_revision":config["revision"],
-                           "qualification":"estimated_with_provisional_sensor_mounts"}
+                           "qualification": ("estimated_with_calibrated_sensor_mounts" if self.robot_id else
+                                             "estimated_with_provisional_sensor_mounts")}
                     with self.lock:
                         if self.config is config_source:self.scale=scale
             attachment=self.service.metric.attachment_status(map_id)

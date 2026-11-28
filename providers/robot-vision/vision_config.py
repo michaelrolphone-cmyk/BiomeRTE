@@ -88,8 +88,9 @@ def load_config(state_dir, config_path=None):
     if not path.exists():
         atomic_json(path, DEFAULT_CONFIG)
     value = json.loads(path.read_text())
-    if not isinstance(value.get("camera"), dict) or not value["camera"].get("url"):
-        raise ValueError("camera.url is required")
+    camera = value.get("camera")
+    if not isinstance(camera, dict) or not (camera.get("url") or camera.get("capture_transport") == "websocket_push"):
+        raise ValueError("camera.url is required for pull capture")
     for key in ("network_timeout_s", "reconnect_delay_s"):
         if float(value["camera"].get(key, 1)) <= 0:
             raise ValueError(f"camera.{key} must be positive")
