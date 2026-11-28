@@ -17,18 +17,22 @@ The ESP8266 target uses the NodeMCU ESP8266 4 MB flash profile. The camera targe
 
 ## Wiring
 
+The spider camera uses the same ESP32-S3-CAM and sensor harness pinout as the Rover rear camera. The UART connects to the spider's ESP8266 motion controller.
+
 | Connection | ESP32-S3-CAM GPIO | Other end |
 | --- | ---: | --- |
-| Motion UART TX | 1 | ESP8266 RX / GPIO3 |
-| Motion UART RX | 41 | ESP8266 TX / GPIO1 |
+| Motion UART TX | 38 | ESP8266 RX / GPIO3 |
+| Motion UART RX | 39 | ESP8266 TX / GPIO1 |
 | UART ground | GND | ESP8266 GND |
-| ToF I²C SDA / SCL | 38 / 39 | VL53L5CX SDA / SCL, or a TCA9548A at 0x70 |
+| ToF I²C SDA / SCL | 41 / 42 | Both VL53L5CX SDA / SCL |
+| Forward / rearward ToF LPn | 1 / 21 | Enable pin on each VL53L5CX |
 | BNO085 SPI SCK / MISO / MOSI | 14 / 47 / 2 | SCL / SDA / ADD |
-| BNO085 SPI CS / INT / RST | 40 / 21 / 42 | CS / INT / RST |
+| BNO085 SPI CS / INT / RST | 40 / 3 / 46 | CS / INT / RST |
+| BNO085 VCC / GND | 3.3 V / GND | Power / common ground |
 
 UART is 3.3 V logic, 115200 baud, 8N1. The LAFVIN kit uses the same RX/TX for the factory ultrasonic sensor and the onboard CP2102 USB bridge. Leave the factory ultrasonic sensor unplugged. Verify that the CP2102 TX cannot drive GPIO3 while the S3 TX is attached. Isolate the bridge TX if the board connects it directly. Disconnect the S3 UART leads for ESP8266 USB flashing and reconnect the bridge TX when flashing requires it. Use the kit's servo supply and an appropriately rated supply for the camera and sensors, with a shared ground.
 
-The ToF driver accepts a single direct VL53L5CX at 0x29 or two modules at 0x29 on TCA9548A channels 0 and 1. It preserves the native zone order. Select SPI mode on the BNO085 breakout and wire its power and ground according to the breakout's pinout. The camera profile reserves the listed SPI and ToF pins, which overlap the SD interface on this board. It uses USB CDC for logs.
+On the shared I²C bus, the firmware enables the ToF heads individually and assigns the forward head address `0x2a` and the rearward head address `0x2b`. An optional TCA9548A at `0x70` can still select modules at `0x29` on channels 0 and 1. The driver preserves the native zone order. Set both BNO085 mode pins, PS0 and PS1, high for SPI. GPIO46 is also an ESP32-S3 boot strap and must be low during reset to enter serial download mode. Keep the SD slot empty. Debug logs use USB CDC.
 
 The servo output order is GPIO14, 12, 13, 15, 16, 5, 4, 2. The motion target reads the factory EEPROM trim bytes at offsets 0–7 without writing flash. Use the factory calibration procedure with the legs supported before bench testing a gait. Flash a build with the same EEPROM layout and skip a full erase if you need to retain factory trim. A blank trim region uses zero trim. The boot pose is the factory calibration zero. The normal resting and stop pose is `stand`.
 

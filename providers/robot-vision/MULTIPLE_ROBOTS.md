@@ -73,7 +73,7 @@ to qualify servo-based foot positions and displacement.
    camera's optical axes. For body-frame LiDAR poses, also supply the measured
    `camera.T_robot_camera` in the body model. Raw grids remain visible before
    calibration. The body model assigns `spider-tof-0` to forward and
-   `spider-tof-1` to rearward. Check the multiplexer wiring against those IDs
+   `spider-tof-1` to rearward. Check the forward and rearward LPn wiring against those IDs
    when calibrating. Each grid can supply depth to its matching optical view
    and contribute points behind or ahead of the robot to the same map.
 

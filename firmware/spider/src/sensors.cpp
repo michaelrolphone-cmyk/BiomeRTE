@@ -3,10 +3,11 @@
 #include <Adafruit_BNO08x.h>
 #include <Arduino.h>
 #include <SPI.h>
-#include <SparkFun_VL53L5CX_IO.h>
+#include <SparkFun_VL53L5CX_Library.h>
 #include <vl53l5cx_api.h>
 #include <Wire.h>
 #include <esp_timer.h>
+#include <sdkconfig.h>
 
 #include "camera_config.h"
 
@@ -15,6 +16,14 @@ namespace {
 
 constexpr uint8_t tofMuxAddress = 0x70;
 constexpr uint8_t tofAddress = 0x29;
+constexpr uint8_t directTofAddresses[] = {0x2a, 0x2b};
+#if defined(CONFIG_SCCB_HARDWARE_I2C_PORT1) && CONFIG_SCCB_HARDWARE_I2C_PORT1
+constexpr int sensorBus = 0;
+#elif defined(CONFIG_SCCB_HARDWARE_I2C_PORT0) && CONFIG_SCCB_HARDWARE_I2C_PORT0
+constexpr int sensorBus = 1;
+#else
+#error Confirm the camera SCCB bus before building the spider camera firmware.
+#endif
 constexpr int64_t lidarFreshUs = 500000;
 constexpr int64_t imuFreshUs = 250000;
 constexpr int64_t retryUs = 5000000;
@@ -36,55 +45,87 @@ struct Reading {
     Grid grids[2];
     ImuReport rotation, acceleration, gyro, magnetic, linearAcceleration;
     bool imuPresent;
-    bool muxPresent;
 };
 
 Reading latest{};
 portMUX_TYPE readingLock = portMUX_INITIALIZER_UNLOCKED;
+TwoWire tofWire(sensorBus);
 SparkFun_VL53L5CX_IO tofBus[2];
+SparkFun_VL53L5CX tofDriver[2];
 VL53L5CX_Configuration lidar[2];
 VL53L5CX_ResultsData lidarResult;
-SPIClass imuSpi(FSPI);
-Adafruit_BNO08x imu(pins::imuReset);
+SPIClass imuSpi(HSPI);
+// The worker pulses RST and waits for INT. SH-2 must not reset the sensor again.
+Adafruit_BNO08x imu;
 
-bool selectTof(uint8_t channel, bool mux) {
-    if (!mux) return channel == 0;
-    Wire.beginTransmission(tofMuxAddress);
-    Wire.write(1 << channel);
-    return Wire.endTransmission() == 0;
+bool probeTof(uint8_t address) {
+    tofWire.beginTransmission(address);
+    return tofWire.endTransmission() == 0;
 }
 
-bool startRanging(uint8_t index) {
+bool selectMuxChannel(uint8_t channel) {
+    tofWire.beginTransmission(tofMuxAddress);
+    tofWire.write(1 << channel);
+    return tofWire.endTransmission() == 0;
+}
+
+bool configureTof(uint8_t index, uint8_t address, uint8_t targetAddress) {
     auto& device = lidar[index];
-    // Allocate each driver once. SparkFun's begin() allocates on every retry.
+    auto& driver = tofDriver[index];
+    // Bind storage owned by this worker. SparkFun's full begin() allocates on every retry.
     memset(&device, 0, sizeof(device));
-    if (!tofBus[index].begin(tofAddress, Wire)) return false;
-    device.platform.address = tofAddress;
+    if (!tofBus[index].begin(address, tofWire)) return false;
+    device.platform.address = address;
     device.platform.VL53L5CX_i2c = &tofBus[index];
+    driver.Dev = &device;
+    driver.VL53L5CX_i2c = &tofBus[index];
+    driver.setWireMaxPacketSize(128);
     uint8_t alive = 0;
     return vl53l5cx_is_alive(&device, &alive) == 0 && alive &&
-        vl53l5cx_init(&device) == 0 && vl53l5cx_set_resolution(&device, 64) == 0 &&
+        (address == targetAddress || (driver.setAddress(targetAddress) && probeTof(targetAddress)));
+}
+
+bool startRanging(uint8_t index, bool mux, bool peerOnline) {
+    const uint8_t peer = 1 - index;
+    uint8_t address = tofAddress;
+    if (!mux) {
+        digitalWrite(pins::tofEnable[peer], LOW);
+        digitalWrite(pins::tofEnable[index], HIGH);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        // LPn gates I²C. A powered head may already retain its assigned address.
+        if (probeTof(directTofAddresses[index])) address = directTofAddresses[index];
+    }
+    const bool addressed = configureTof(index, address, mux ? tofAddress : directTofAddresses[index]);
+    if (!mux) {
+        if (!addressed) digitalWrite(pins::tofEnable[index], LOW);
+        if (peerOnline) digitalWrite(pins::tofEnable[peer], HIGH);
+    }
+    auto& device = lidar[index];
+    return addressed && vl53l5cx_init(&device) == 0 && vl53l5cx_set_resolution(&device, 64) == 0 &&
         vl53l5cx_set_ranging_frequency_hz(&device, 10) == 0 &&
         vl53l5cx_start_ranging(&device) == 0;
 }
 
 void lidarWorker(void*) {
-    Wire.begin(pins::tofSda, pins::tofScl, 400000);
-    Wire.setTimeOut(20);
-    Wire.beginTransmission(tofMuxAddress);
-    const bool mux = Wire.endTransmission() == 0;
-    portENTER_CRITICAL(&readingLock);
-    latest.muxPresent = mux;
-    portEXIT_CRITICAL(&readingLock);
+    for (int pin : pins::tofEnable) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+    }
+    while (!tofWire.begin(pins::tofSda, pins::tofScl, 400000)) delay(100);
+    tofWire.setTimeOut(20);
+    const bool mux = probeTof(tofMuxAddress);
+    if (mux) {
+        for (int pin : pins::tofEnable) digitalWrite(pin, HIGH);
+    }
     int64_t nextAttempt[2] = {};
     bool online[2] = {};
     for (;;) {
-        for (uint8_t i = 0; i < (mux ? 2 : 1); ++i) {
+        for (uint8_t i = 0; i < 2; ++i) {
             const int64_t now = esp_timer_get_time();
             if (!online[i] && now < nextAttempt[i]) continue;
-            const bool selected = selectTof(i, mux);
+            const bool selected = !mux || selectMuxChannel(i);
             if (!online[i]) {
-                online[i] = selected && startRanging(i);
+                online[i] = selected && startRanging(i, mux, online[1 - i]);
                 nextAttempt[i] = esp_timer_get_time() + retryUs;
             }
             Grid fresh{};
@@ -112,6 +153,7 @@ void lidarWorker(void*) {
             }
             previous.present = online[i];
             portEXIT_CRITICAL(&readingLock);
+            if (!mux && !online[i]) digitalWrite(pins::tofEnable[i], LOW);
         }
         delay(10);
     }
@@ -197,7 +239,8 @@ void imuWorker(void*) {
     digitalWrite(pins::imuReset, HIGH);
     imuSpi.begin(pins::imuSck, pins::imuMiso, pins::imuMosi, pins::imuCs);
     for (;;) {
-        const bool present = imuRespondsToReset() && imu.begin_SPI(pins::imuCs, pins::imuInt, &imuSpi);
+        const bool attention = imuRespondsToReset();
+        const bool present = attention && imu.begin_SPI(pins::imuCs, pins::imuInt, &imuSpi);
         clearImu(present);
         if (present && enableImuReports()) {
             int64_t lastReport = esp_timer_get_time();
@@ -214,7 +257,7 @@ void imuWorker(void*) {
                 delay(2);
             }
         }
-        if (present) sh2_close();
+        if (attention) sh2_close();
         clearImu(false);
         delay(2000);
     }
@@ -252,7 +295,7 @@ void appendSensors(JsonDocument& packet, int64_t tickUs) {
     auto tof = packet["lidar"].to<JsonObject>();
     tof["model"] = "VL53L5CX";
     auto grids = tof["sensors"].to<JsonArray>();
-    for (size_t i = 0; i < (snapshot.muxPresent ? 2u : 1u); ++i) {
+    for (size_t i = 0; i < 2; ++i) {
         const auto& grid = snapshot.grids[i];
         auto row = grids.add<JsonObject>();
         row["id"] = i == 0 ? "spider-tof-0" : "spider-tof-1";
