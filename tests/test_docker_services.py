@@ -155,6 +155,7 @@ class JsonReply:
 class InlineThread:
     def __init__(self, target, args=()):
         self.target, self.args = target, args
+        self.name = target.__name__
         self.daemon = False
 
     def start(self):
@@ -167,6 +168,15 @@ class DeferredThread(InlineThread):
 
     def finish(self):
         self.target(*self.args)
+
+
+def fail_thread_start(target_name):
+    class FailingThread(InlineThread):
+        def start(self):
+            if self.target.__name__ == target_name:
+                raise RuntimeError("can't start new thread")
+            super().start()
+    return mock.patch.object(ds.threading, "Thread", FailingThread)
 
 
 class RunnerCase(unittest.TestCase):
@@ -264,6 +274,33 @@ class ManifestAdmissionTests(unittest.TestCase):
 
 
 class LeaseAndFailureTests(RunnerCase):
+    def test_failed_child_thread_leaves_no_custody_and_retries(self):
+        self.prepare()
+        with fail_thread_start("_create_child"):
+            self.runner.accept(self.response(), self.clock())
+        self.assertEqual({}, self.runner.start_jobs)
+        self.assertEqual({}, self.runner.start_bindings)
+        self.assertEqual({}, self.runner.state.children())
+        self.assertEqual([], self.engine.created)
+        self.runner.accept(self.response(), self.clock())
+        self.assertEqual(1, len(self.engine.created))
+
+    def test_failed_cleanup_thread_keeps_custody_until_removal(self):
+        self.prepare()
+        self.runner.accept(self.response(), self.clock())
+        service_id = self.value["id"]
+        child = self.runner.containers[service_id]
+        with fail_thread_start("_cleanup_child"):
+            self.assertFalse(self.runner.stop_service(service_id))
+            self.assertEqual({}, self.runner.cleanup_jobs)
+            self.assertNotIn(service_id, self.runner.grants)
+            self.assertEqual(child, self.runner.state.children()[service_id]["container"])
+            self.assertFalse(self.runner.advertisements()[0]["dependencies_ready"])
+        self.runner.expire()
+        self.assertEqual([child], self.engine.removed)
+        self.assertEqual({}, self.runner.state.children())
+        self.assertTrue(self.runner.advertisements()[0]["dependencies_ready"])
+
     def test_delayed_heartbeat_uses_send_time_as_deadline(self):
         self.client.replies.append((3, self.response()))
         self.runner.tick()
@@ -642,6 +679,32 @@ class ImagePreparationTests(RunnerCase):
         self.runner.pulls[image_ref].finish()
         self.assertTrue(self.runner.advertisements()[0]["prepared"])
 
+    def test_pruned_image_is_pulled_again(self):
+        del self.engine.images[IMAGE]
+        self.assertFalse(self.prepare()[0]["prepared"])
+        self.assertTrue(self.runner.advertisements()[0]["prepared"])
+        del self.engine.images[IMAGE]
+        self.clock.advance(10)
+        self.assertFalse(self.runner.advertisements()[0]["prepared"])
+        self.assertTrue(self.runner.advertisements()[0]["prepared"])
+        self.assertEqual([IMAGE, IMAGE], self.engine.pulled)
+
+    def test_failed_pull_thread_preserves_peer_advertisements_and_retries(self):
+        wanted = "example.invalid/service@sha256:" + "3" * 64
+        self.runner.state.save_manifest(manifest(id="a-missing-image", images={"linux/arm64": wanted}))
+        with fail_thread_start("_pull"):
+            self.client.replies.append((0, {"boot_epoch": BOOT_EPOCH, "assignments": []}))
+            self.runner.tick()
+        reports = {row["manifest"]["id"]: row for row in self.client.calls[0][1]["services"]}
+        self.assertFalse(reports["a-missing-image"]["prepared"])
+        self.assertTrue(reports[self.value["id"]]["dependencies_ready"])
+        self.runner.advertisements()
+        self.assertEqual([], self.engine.pulled)
+        self.clock.advance(10)
+        self.runner.advertisements()
+        self.assertEqual([wanted], self.engine.pulled)
+        self.assertTrue(self.runner.advertisements()[0]["prepared"])
+
 
 class ExternalFencingTests(RunnerCase):
     def setUp(self):
@@ -673,6 +736,36 @@ class ExternalFencingTests(RunnerCase):
         self.runner.accept(self.response(self.grant(state="active")), self.clock())
         self.assertEqual(1, len(self.engine.created))
 
+    def test_failed_fence_thread_preserves_peer_renewal_and_retries_exact_grant(self):
+        peer = manifest(id="unrelated-service")
+        self.runner.state.save_manifest(peer)
+        self.prepare()
+        peer_grant = self.grant(service_id=peer["id"], manifest_revision=peer["revision"])
+        self.runner.accept(self.response(assignments=[peer_grant]), self.clock())
+        peer_child = self.runner.containers[peer["id"]]
+        previous_deadline = self.runner.grants[peer["id"]]["deadline"]
+        self.clock.advance(9)
+        fenced_grant = self.grant(state="fencing")
+        response = self.response(assignments=[fenced_grant, peer_grant])
+        with fail_thread_start("_fence"):
+            self.runner.accept(response, self.clock())
+        self.assertNotIn(self.value["id"], self.runner.fence_jobs)
+        self.assertNotIn(self.value["id"], self.runner.fence_acks)
+        self.assertEqual({peer["id"]: peer_child}, self.runner.containers)
+        self.clock.advance(2)
+        self.runner.expire()
+        self.assertGreater(self.clock(), previous_deadline)
+        self.assertEqual(peer_child, self.runner.containers[peer["id"]])
+
+        with mock.patch.object(ds, "urlopen", return_value=JsonReply(self.acknowledgement())) as sink:
+            self.runner.accept(response, self.clock())
+        sent = json.loads(sink.call_args.args[0].data)
+        for field in ("service_id", "manifest_revision", "boot_epoch", "grant_token"):
+            self.assertEqual(fenced_grant[field], sent[field])
+        self.assertEqual({peer["id"]: peer_child}, self.runner.containers)
+        self.runner.accept(self.response(assignments=[self.grant(), peer_grant]), self.clock())
+        self.assertIn(self.value["id"], self.runner.containers)
+        self.assertEqual(peer_child, self.runner.containers[peer["id"]])
 
     def test_starting_with_coordinator_readiness_and_exact_fence_ack_can_become_healthy(self):
         pending = self.grant(state="fencing", effect_ready=False)

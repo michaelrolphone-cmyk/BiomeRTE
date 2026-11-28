@@ -560,14 +560,31 @@ class Runner:
                     # New revision is not eligible until exact-image preparation.
                     self.prepared[value["id"]] = False
 
+    def _launch_job(self, thread, jobs, key):
+        try:
+            thread.start()
+        except RuntimeError as error:
+            # A rejected thread launch cannot own an in-flight reservation.
+            # Keep processing other services and retry from the next observation.
+            with self.lock:
+                if jobs.get(key) is thread:
+                    del jobs[key]
+            LOG.warning("Docker background job %s could not start (%s)",
+                        thread.name, type(error).__name__)
+            return False
+        return True
+
+    def _schedule_pull_retry(self, image_ref):
+        self.pulls[image_ref] = {"retry_at": self.clock() + self.config.get("image_retry_s", 10)}
+
     def _pull(self, image_ref):
         try:
             self.engine.pull(image_ref)
-            self.pulls[image_ref] = None
         except Exception as error:
-            self.pulls[image_ref] = {"error": str(error),
-                "retry_at": self.clock() + self.config.get("image_retry_s", 10)}
             LOG.warning("Image preparation failed: %s", error)
+        finally:
+            # A prior pull does not prove the image is still present in Docker.
+            self._schedule_pull_retry(image_ref)
 
     def _dependencies(self, manifest):
         for dep in manifest.get("readiness", []):
@@ -667,7 +684,8 @@ class Runner:
                 thread = threading.Thread(target=self._pull, args=(image_ref,))
                 thread.daemon = True
                 self.pulls[image_ref] = thread
-                thread.start()
+                if not self._launch_job(thread, self.pulls, image_ref):
+                    self._schedule_pull_retry(image_ref)
             dependencies = (prepared and not self._has_orphans(service_id) and
                             service_id not in self.pending_cleanup and
                             self._bindings_ready(manifest) and self._dependencies(manifest))
@@ -789,12 +807,7 @@ class Runner:
                                       args=(service_id, dict(grant), operation, job_key))
             thread.daemon = True
             self.adapter_jobs[job_key] = thread
-        try:
-            thread.start()
-        except Exception:
-            with self.lock:
-                self.adapter_jobs.pop(job_key, None)
-            raise
+        self._launch_job(thread, self.adapter_jobs, job_key)
 
     def _admit_start(self, service_id, grant, staging):
         with self.lock:
@@ -857,12 +870,7 @@ class Runner:
                                       args=(service_id, dict(record)))
             thread.daemon = True
             self.cleanup_jobs[service_id] = thread
-        try:
-            thread.start()
-        except Exception:
-            with self.lock:
-                self.cleanup_jobs.pop(service_id, None)
-            raise
+        self._launch_job(thread, self.cleanup_jobs, service_id)
 
     def _created_child(self, service_id, grant, container):
         record = {"container": container, "uncertain": False}
@@ -943,13 +951,11 @@ class Runner:
             thread.daemon = True
             self.start_jobs[service_id] = thread
             self.start_bindings[service_id] = adapters.binding(grant)
-        try:
-            thread.start()
-        except Exception:
+        if not self._launch_job(thread, self.start_jobs, service_id):
             with self.lock:
-                self.start_jobs.pop(service_id, None)
-                self.start_bindings.pop(service_id, None)
-            raise
+                if service_id not in self.start_jobs:
+                    self.start_bindings.pop(service_id, None)
+            return False
         return service_id in self.containers
 
     def _record_stage(self, service_id, grant, phase):
@@ -980,11 +986,7 @@ class Runner:
             return False
         ack = self.fence_acks.get(service_id)
         if not adapters.fence_matches(ack, grant, proof):
-            if service_id not in self.fence_jobs:
-                thread = threading.Thread(target=self._fence, args=(service_id, dict(grant)))
-                thread.daemon = True
-                self.fence_jobs[service_id] = thread
-                thread.start()
+            self._begin_fence(service_id, grant)
             self._record_stage(service_id, grant, "fencing")
             return False
         if grant.get("state") not in ("starting", "active") or grant.get("effect_ready") is not True:
@@ -998,13 +1000,22 @@ class Runner:
             return False
         return True
 
+    def _begin_fence(self, service_id, grant):
+        with self.lock:
+            if service_id in self.fence_jobs or not self._current(grant):
+                return
+            thread = threading.Thread(target=self._fence, args=(service_id, dict(grant)))
+            thread.daemon = True
+            self.fence_jobs[service_id] = thread
+        self._launch_job(thread, self.fence_jobs, service_id)
+
     def _fence(self, service_id, grant):
-        manifest = self.manifests[service_id]
-        hook = manifest["fence_hook"]
         try:
             with self.lock:
                 if not self._current(grant):
                     return
+                manifest = self.manifests[service_id]
+                hook = manifest["fence_hook"]
                 state_proof = self.state_proofs.get(service_id)
                 if adapters.staged(manifest) and (
                         not adapters.proof_matches(state_proof, grant) or
@@ -1036,7 +1047,8 @@ class Runner:
         except Exception as error:
             LOG.warning("Service %s remains fenced: %s", service_id, error)
         finally:
-            self.fence_jobs.pop(service_id, None)
+            with self.lock:
+                self.fence_jobs.pop(service_id, None)
 
     def stop_service(self, service_id, expired_only=False):
         # Withdraw local admission immediately. Slow Docker removal happens outside
@@ -1119,11 +1131,7 @@ class Runner:
             elif manifest["effect_policy"] != "stateless":
                 ack = self.fence_acks.get(sid, {})
                 if ack.get("grant_token") != grant["grant_token"] or ack.get("boot_epoch") != grant["boot_epoch"]:
-                    if sid not in self.fence_jobs:
-                        thread = threading.Thread(target=self._fence, args=(sid, grant))
-                        thread.daemon = True
-                        self.fence_jobs[sid] = thread
-                        thread.start()
+                    self._begin_fence(sid, grant)
                     continue
                 if phase not in ("active", "starting") or grant.get("effect_ready") is not True:
                     continue
