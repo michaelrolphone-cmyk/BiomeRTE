@@ -1414,6 +1414,31 @@ class AuthorityDaemon:
             enqueued_at[id(message)] = time.monotonic()
             ready.set()
 
+        async def retire_expired_requests():
+            # The coordinator stops waiting after the negotiated RPC window.
+            # Retire work that has not reached dispatch. An in-flight effect
+            # still owns its slot until its transaction and publication settle.
+            cutoff = time.monotonic() - rpc_timeout
+            expired = []
+            for band, queue in pending.items():
+                remaining = []
+                for message in queue:
+                    if enqueued_at[id(message)] <= cutoff:
+                        del enqueued_at[id(message)]
+                        outstanding[band] -= 1
+                        expired.append(message)
+                    else:
+                        remaining.append(message)
+                pending[band] = remaining
+            if not any(pending.values()):
+                ready.clear()
+            for message in expired:
+                if stopping or ws.closed:
+                    break
+                reply = self.authority_response(message, self.binding)
+                reply.update(status=503, error="Managed controller request expired before dispatch")
+                await ws.send_json(reply)
+
         def admit(band):
             # Include dispatched work through reply delivery. After an upstream
             # timeout the original transaction can still be settling locally.
@@ -1450,6 +1475,9 @@ class AuthorityDaemon:
                     await ready.wait()
                     if stopping:
                         break
+                    await retire_expired_requests()
+                    if stopping or not ready.is_set():
+                        continue
                     # A status poll cannot fill the waiting slot for a new
                     # reservation or block an installed fence acknowledgement.
                     # Alternate stream lifecycle work with ordinary work.
@@ -1550,6 +1578,8 @@ class AuthorityDaemon:
                     self.connected = True
                     continue
                 band = self.authority_request_band(message)
+                if sum(outstanding.values()) >= rpc_limit:
+                    await retire_expired_requests()
                 if not admit(band):
                     reply = self.authority_response(message, self.binding)
                     reply.update(status=429, error="Managed controller is busy")
