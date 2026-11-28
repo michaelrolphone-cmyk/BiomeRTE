@@ -768,6 +768,7 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_admission_services_recovery_and_an_aging_submission_at_capacity(self):
         first, release, done = (asyncio.Event() for _ in range(3))
+        clock = [100.0]
         sent, batches = {}, []
 
         async def dispatch(message):
@@ -790,17 +791,19 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                 def call(name, operation):
                     return wire({"type": "call", "id": name, "binding": B,
                                  "envelope": {"operation": operation}})
-                yield wire({"type": "registered", "rpc_limit": 9, "rpc_timeout_s": 0.02})
+                yield wire({"type": "registered", "rpc_limit": 9, "rpc_timeout_s": 20})
                 yield call("earlier", "cap.invoke")
                 await first.wait()
                 for i in range(4):
                     yield call("submit" + str(i), "cap.submit")
+                clock[0] += 1
                 yield call("open", "stream.open")
                 yield call("submit4", "cap.submit")
                 yield call("status", "cap.status")
                 yield call("claim", "provider.claim")
                 yield call("excess", "cap.submit")
-                await asyncio.sleep(0.015)
+                # Cross the aging threshold while staying inside the RPC window.
+                clock[0] += 15
                 release.set()
                 await done.wait()
                 self.closed = True
@@ -811,7 +814,8 @@ class ControllerDaemonTests(unittest.IsolatedAsyncioTestCase):
                     done.set()
 
         self.daemon.dispatch, self.daemon.dispatch_managed_reads = dispatch, dispatch_batch
-        await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
+        with patch("biomerte.service_daemon.time", types.SimpleNamespace(monotonic=lambda: clock[0])):
+            await asyncio.wait_for(self.daemon.serve_controller_socket(Socket()), 2)
         self.assertEqual(sent.pop("excess"), 429)
         self.assertEqual(set(sent.values()), {200})
         self.assertEqual(batches[1][:4], ["submit0", "submit1", "submit2", "submit3"])
